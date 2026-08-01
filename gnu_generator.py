@@ -906,18 +906,34 @@ class GnuplotGenerator:
                 except ValueError:
                     _fw_in, _fh_in = 0, 0
                 if _fw_in > 0 and _fh_in > 0:
-                    # [추가] 2줄 title/xlabel, tic 숫자 자릿수가 많을 때(큰 값/음수/
-                    # Scientific·Power10)도 절대 여백이 부족해 사라지는 것을 막는다.
-                    def _tick_digits(axis_name):
+                    # [수정] "자릿수(peak값 정수부 길이)"만 보던 이전 방식은 소수
+                    # tic(예: "0.09")나 음수 tic("-8500")의 실제 표시 폭을 과소평가
+                    # 했음(둘 다 부호/소수점 문자가 자릿수에는 안 잡힘) - y축 범위의
+                    # 실제 최소/최대/중간값을 gnuplot 기본 표기와 비슷하게 포맷해서
+                    # 실제 표시될 tic 라벨 문자열 길이를 직접 재고, legend에서 쓰는
+                    # 것과 같은 "폰트 크기당 문자 폭" 물리 공식으로 필요한 여백을
+                    # 구한다 - 내용에 따라 자연히 늘고 줄어드는 진짜 flexible margin.
+                    def _tick_label_chars(axis_name):
                         try:
                             nice = self._nice_axis_range(plotdef, axis_name)
                         except Exception:
                             nice = None
                         if not nice:
-                            return 3
+                            return 4
                         y_lo, y_hi, _ = nice
-                        peak = max(abs(y_lo), abs(y_hi))
-                        return len(f"{peak:.0f}") if peak >= 1 else 1
+                        max_len = 1
+                        for v in (y_lo, y_hi, (y_lo + y_hi) / 2.0):
+                            if abs(v) < 1e-9:
+                                s = "0"
+                            elif float(v).is_integer() and abs(v) < 1e15:
+                                s = f"{v:.0f}"
+                            else:
+                                s = f"{v:.3g}"
+                            max_len = max(max_len, len(s))
+                        return max_len
+
+                    _tick_char_width_in = (0.0055 if _is_print else 0.0049) * (9 * f_scale)
+                    _BASELINE_TICK_CHARS = 4  # 기존 lmargin/rmargin 기본값이 이미 감당하는 tic 폭
 
                     _xlabel_lines = 1 + (plotdef.xlabel or "").count("|")
                     _ylabel_lines = 1 + (plotdef.ylabel or "").count("|")
@@ -933,15 +949,15 @@ class GnuplotGenerator:
                         _bmargin_base = max(_bmargin_base, _need_bottom_in / _fh_in)
 
                     _need_left_in = 1.0 * f_scale + 0.5 * f_scale * (_ylabel_lines - 1) if plotdef.ylabel else 0.0
-                    _need_left_in += max(0, _tick_digits("y1") - 3) * 0.13 * f_scale
+                    _need_left_in += max(0, _tick_label_chars("y1") - _BASELINE_TICK_CHARS) * _tick_char_width_in
                     if _y1fmt_label == "Scientific": _need_left_in += 0.4 * f_scale
                     elif _y1fmt_label == "Power10": _need_left_in += 0.2 * f_scale
                     if _need_left_in > 0:
                         _lmargin_base = max(_lmargin_base, _need_left_in / _fw_in)
 
                     if uses_y2:
-                        _need_right_in = 1.0 * f_scale + 0.5 * f_scale * (_y2label_lines - 1) if getattr(plotdef, "y2label", "") else 0.0
-                        _need_right_in += max(0, _tick_digits("y2") - 3) * 0.13 * f_scale
+                        _need_right_in = 0.9 * f_scale + 0.5 * f_scale * (_y2label_lines - 1) if getattr(plotdef, "y2label", "") else 0.0
+                        _need_right_in += max(0, _tick_label_chars("y2") - _BASELINE_TICK_CHARS) * _tick_char_width_in
                         if _y2fmt_label == "Scientific": _need_right_in += 0.4 * f_scale
                         elif _y2fmt_label == "Power10": _need_right_in += 0.2 * f_scale
                         if _need_right_in > 0:
@@ -1061,11 +1077,13 @@ class GnuplotGenerator:
         # 호출자가 이미 계산해서 넘겨주고(axis_w_in), 단일 plot 등 안 넘어온
         # 경우 frame_width에서 좌우 margin을 대략 제외해 역산한다
         if axis_w_in is None:
-            # [수정] 기존엔 "frame_width - 1.5in" 식으로 대충 뺐는데, 실제 단일
-            # plot에서 쓰는 margin 비율(lmargin=0.15, rmargin=0.85~0.90)과 안
-            # 맞아서 legend box 계산이 부정확했음 - 실제 margin 비율로 정확히
-            # 계산한다. frame_auto인 경우 실제 interactive 터미널 기본 크기(5in)를
-            # 기준으로 한다.
+            # [수정] 기존엔 "lmargin=0.15 고정"이라고 가정하고 rmargin_frac에서
+            # 그만큼만 뺀 값으로 축 폭을 추정했는데, 위에서 ylabel/tic 폭에 맞춰
+            # lmargin을 실제로 더 늘리는 보정이 들어간 뒤로는 이 가정이 안 맞아
+            # 축 폭을 실제보다 넓게(=legend box를 좁게) 추정해서, legend 글자가
+            # box 밖으로 삐져나오는 문제가 있었음 - 방금 계산해 둔 실제
+            # lmargin/rmargin(_lmargin_base/_rmargin_base, is_multiplot=False일
+            # 때만 이 분기에 옴)으로 정확히 계산한다.
             try:
                 if not getattr(plotdef, "frame_auto", True):
                     fw = float((plotdef.frame_width or "5").strip() or 5.0)
@@ -1075,8 +1093,7 @@ class GnuplotGenerator:
                     fw = 1000.0 / 168  # interactive 기본 터미널 크기(1000px/168px_per_in)
             except ValueError:
                 fw = 5.0
-            _rmargin_frac = 0.85 if any(getattr(c, "axis", "y1") == "y2" for c in plotdef.curves) else 0.90
-            axis_w_in = max(fw * (_rmargin_frac - 0.15), 1.0)
+            axis_w_in = max((_rmargin_base - _lmargin_base) * fw, 0.5)
 
         # Legend box 테두리는 Frame(plot 외곽 border) 두께 이하여야 하므로,
         # 사용자가 더 크게 입력해도 Frame 두께로 제한한다
@@ -1194,8 +1211,19 @@ class GnuplotGenerator:
             lines.append("unset label")
             lines.append("unset arrow")
 
-    def _get_terminal_cmd(self, fmt, outfile, plotdef=None, size_override=None):
+    def _get_terminal_cmd(self, fmt, outfile, plotdef=None, size_override=None, panel_scale=1.0):
         fmt = fmt.lower()
+        # [추가] gnuplot은 ylabel/xlabel을 tic 숫자로부터 얼마나 띄울지 등의
+        # 자동 배치 계산에 (우리가 각 요소마다 개별 font로 덮어써도) 터미널
+        # 기본 font 크기를 기준 단위로 쓰는 것으로 실측 확인됨 - 터미널
+        # 기본폰트가 항상 11로 고정돼 있어서, panel_scale이 커질수록(예: 큰
+        # explicit frame) 실제 표시 폰트(예: 66pt)와 이 기준(11pt)이 크게
+        # 벌어져 ylabel/xlabel이 tic 숫자와 심하게 겹쳐 보이는 문제가 있었음
+        # (60x50cm에서 실측 확인, 터미널 기본폰트를 66로 바꾸면 해결됨) -
+        # 터미널 기본폰트도 같은 비율로 키워서 gnuplot의 자동 배치 계산이
+        # 실제 폰트 크기와 일치하게 한다.
+        _term_font_pt = max(int(round(11 * (panel_scale or 1.0))), 8)
+        _term_font = f"Malgun Gothic,{_term_font_pt}"
         def size_clause(default):
             if size_override: return f"size {size_override}"
             if plotdef is not None and not getattr(plotdef, "frame_auto", True):
@@ -1250,9 +1278,9 @@ class GnuplotGenerator:
             # 인쇄/저장 물리 크기는 서로 다른 목적이라 분리한다.
             return f"set terminal windows title '{title}' font 'Malgun Gothic,11' size 1000,700"
         elif fmt == "png":
-            return f"set terminal pngcairo {size_clause('size 11.7in,8.3in')} enhanced font 'Malgun Gothic,11'"
+            return f"set terminal pngcairo {size_clause('size 11.7in,8.3in')} enhanced font '{_term_font}'"
         elif fmt == "jpg":
-            return f"set terminal jpeg {size_clause_px('size 1600,900')} enhanced font 'Malgun Gothic,11'"
+            return f"set terminal jpeg {size_clause_px('size 1600,900')} enhanced font '{_term_font}'"
         elif fmt == "svg":
             # [수정] gnuplot의 svg 터미널은 size에 in/cm 같은 단위 접미사를 전혀
             # 받지 못함("undefined variable: cm/in" 에러로 스크립트 실행이 실패함) -
@@ -1261,49 +1289,63 @@ class GnuplotGenerator:
             # 스크립트를 계속 실행해버려서 결과 svg의 width/height가 완전히
             # 왜곡된 값(예: 10x480)으로 나오는 심각한 문제가 있었음. 다른 픽셀
             # 전용 터미널(windows/emf/jpeg)과 동일하게 픽셀 숫자로 환산해서 넘긴다.
-            return f"set terminal svg enhanced {size_clause_px('size 1123,797', px_per_in=96)} font 'Malgun Gothic,11'"
+            return f"set terminal svg enhanced {size_clause_px('size 1123,797', px_per_in=96)} font '{_term_font}'"
         elif fmt == "pdf":
-            return f"set terminal pdfcairo enhanced color font 'Malgun Gothic,11' {size_clause('size 11.7in,8.3in')}"
+            return f"set terminal pdfcairo enhanced color font '{_term_font}' {size_clause('size 11.7in,8.3in')}"
         elif fmt == "eps":
-            return f"set terminal postscript eps enhanced color font 'Malgun Gothic,11' {size_clause('')}"
+            return f"set terminal postscript eps enhanced color font '{_term_font}' {size_clause('')}"
         elif fmt == "emf":
             # emf 터미널은 windows 터미널과 마찬가지로 in/cm 단위를 못 받고 픽셀 숫자만 받음.
             # 인쇄 물리 크기가 정확해야 하므로 화면용 168px/in이 아니라 EMF_PX_PER_IN을 씀
-            return f"set terminal emf enhanced {size_clause_px('size 840,672', px_per_in=EMF_PX_PER_IN)} font 'Malgun Gothic,11'"
+            return f"set terminal emf enhanced {size_clause_px('size 840,672', px_per_in=EMF_PX_PER_IN)} font '{_term_font}'"
         else:
             raise ValueError(f"Unsupported output format : {fmt}")
 
     def _compute_size_scale(self, plotdef):
         """plot 내 폰트 크기가 Frame 크기에 비례해서 확대/축소되도록 스케일을
-        계산한다 (기준 10cm 대비 비율). Frame Size Auto면 기준 그대로(1.0)."""
+        계산한다 (기준 10x8cm 대비 비율). Frame Size Auto면 기준 그대로(1.0).
+        [수정] 예전엔 폭(width)만 기준으로 스케일을 정해서, 가로로 넓고 세로가
+        짧은 프레임(예: 30x8cm)에서 실제 세로 공간보다 훨씬 큰 폰트가 배정돼
+        ylabel/tic 숫자가 서로 겹쳐버리는 문제가 실측으로 확인됨 - multiplot의
+        panel_scale=min(1/cols,1/rows)와 같은 원리로, 폭 비율과 높이 비율 중
+        더 작은(더 좁은) 쪽을 따르게 해서 어느 한쪽이 짧아도 그 짧은 쪽 기준으로
+        폰트가 안전하게 줄어들게 한다."""
         REFERENCE_WIDTH_IN = 10.0 / 2.54  # 기준 10cm
+        REFERENCE_HEIGHT_IN = 8.0 / 2.54  # 기준 8cm
         if getattr(plotdef, "frame_auto", True):
             return 1.0
-        fw_str = (plotdef.frame_width or "").strip()
-        if not fw_str:
-            # frame_width가 비어있으면 기준(10cm)과 동일하게 취급 - 비율 1.0
-            return 1.0
-        try:
-            fw = float(fw_str)
-            if (getattr(plotdef, "frame_unit", "in") or "in") == "cm":
-                fw /= 2.54
-        except ValueError:
-            fw = REFERENCE_WIDTH_IN
-        return max(fw / REFERENCE_WIDTH_IN, 0.3)  # 너무 작아지지 않게 하한
+
+        unit = (getattr(plotdef, "frame_unit", "in") or "in")
+
+        def _to_in(val_str, default_in):
+            val_str = (val_str or "").strip()
+            if not val_str:
+                return default_in
+            try:
+                v = float(val_str)
+            except ValueError:
+                return default_in
+            return v / 2.54 if unit == "cm" else v
+
+        fw = _to_in(plotdef.frame_width, REFERENCE_WIDTH_IN)
+        fh = _to_in(plotdef.frame_height, REFERENCE_HEIGHT_IN)
+        width_ratio = fw / REFERENCE_WIDTH_IN
+        height_ratio = fh / REFERENCE_HEIGHT_IN
+        return max(min(width_ratio, height_ratio), 0.3)  # 너무 작아지지 않게 하한
 
     def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None):
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
 
+        _size_scale = self._compute_size_scale(plotdef)
         lines = [
             "set encoding utf8",
-            self._get_terminal_cmd(fmt, outfile, plotdef),
+            self._get_terminal_cmd(fmt, outfile, plotdef, panel_scale=_size_scale),
         ]
 
         if fmt.lower() != "interactive":
             lines.append(f"set output '{outfile.replace(chr(92), '/')}'")
 
-        _size_scale = self._compute_size_scale(plotdef)
         self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, panel_scale=_size_scale)
 
         if fmt.lower() == "interactive": lines.append("pause mouse close")
@@ -1451,24 +1493,37 @@ class GnuplotGenerator:
         # 잘리거나(왼쪽) title과 겹치던(오른쪽 Y2) 문제 - 실제 플롯들의 Y1/Y2
         # 범위를 미리 계산해서 필요한 자릿수를 추정하고, 기본 가정(3자리)보다
         # 많으면 그만큼 각각(Y1=왼쪽, Y2=오른쪽) 여백을 더 확보한다
-        max_y1_digits = 3
-        max_y2_digits = 3
+        # [수정] "자릿수(peak값 정수부 길이)"만 보면 소수 tic("0.09")나 음수
+        # tic("-8500")의 실제 표시 폭을 과소평가함(부호/소수점이 자릿수에는 안
+        # 잡힘) - 실제 최소/최대/중간값을 포맷해 tic 라벨 문자열 길이를 직접
+        # 재고, 문자 폭(font_panel_scale 기준) 물리 공식으로 여백을 구한다.
+        def _tick_label_chars_mp(plotdef_, axis_name):
+            try:
+                nice = self._nice_axis_range(plotdef_, axis_name)
+            except Exception:
+                nice = None
+            if not nice:
+                return 4
+            y_lo, y_hi, _ = nice
+            max_len = 1
+            for v in (y_lo, y_hi, (y_lo + y_hi) / 2.0):
+                if abs(v) < 1e-9:
+                    s = "0"
+                elif float(v).is_integer() and abs(v) < 1e15:
+                    s = f"{v:.0f}"
+                else:
+                    s = f"{v:.3g}"
+                max_len = max(max_len, len(s))
+            return max_len
+
+        max_y1_chars = 4
+        max_y2_chars = 4
         for p in plots:
-            for axis_name, digit_holder in (("y1", "y1"), ("y2", "y2")):
-                try:
-                    nice = self._nice_axis_range(p, axis_name)
-                except Exception:
-                    nice = None
-                if nice:
-                    y_lo, y_hi, _ = nice
-                    peak = max(abs(y_lo), abs(y_hi))
-                    digits = len(f"{peak:.0f}") if peak >= 1 else 1
-                    if digit_holder == "y1":
-                        max_y1_digits = max(max_y1_digits, digits)
-                    else:
-                        max_y2_digits = max(max_y2_digits, digits)
-        extra_left_margin_in = max(0, max_y1_digits - 3) * 0.09  # 자릿수 하나당 약 0.09in 추가
-        extra_right_margin_in = max(0, max_y2_digits - 3) * 0.09 if any_y2 else 0
+            max_y1_chars = max(max_y1_chars, _tick_label_chars_mp(p, "y1"))
+            max_y2_chars = max(max_y2_chars, _tick_label_chars_mp(p, "y2"))
+        _tick_char_width_in_mp = 0.0055 * (9 * font_panel_scale)
+        extra_left_margin_in = max(0, max_y1_chars - 4) * _tick_char_width_in_mp
+        extra_right_margin_in = max(0, max_y2_chars - 4) * _tick_char_width_in_mp if any_y2 else 0
         # [추가] Scientific("1.5e+03")/Power10("10^3") 형식은 일반 숫자와 길이가
         # 달라서, 자릿수 기반 계산과 별개로 형식에 따라 추가 여백을 더한다.
         # [수정] 이 함수는 plots 리스트(여러 plot)를 다루므로, 정의되지 않은
@@ -1633,7 +1688,7 @@ class GnuplotGenerator:
         size_override = f"{page_w:.3f}in,{page_h:.3f}in"
         lines = [
             "set encoding utf8",
-            self._get_terminal_cmd(fmt, outfile, None, size_override),
+            self._get_terminal_cmd(fmt, outfile, None, size_override, panel_scale=font_panel_scale),
             f"set output '{outfile.replace(chr(92), '/')}'"
         ]
         lines.append(f"set multiplot layout {rows},{cols}")
