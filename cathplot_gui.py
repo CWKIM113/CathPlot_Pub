@@ -2949,7 +2949,7 @@ class CathPlotGUI:
                 self.title_counters[safe_title] = next_id
 
             # 4. 플롯 정의 객체 생성
-            # Frame Size Auto가 켜진 채로 파일 출력(Batch/PRINT)하는 경우, 포맷마다
+            # Axis Frame Auto가 켜진 채로 파일 출력(Batch/PRINT)하는 경우, 포맷마다
             # 서로 다른 임의의 기본값을 쓰는 대신 Multi-Print의 1/p Auto와 동일한
             # 방식(A4 용지 - 절대 여백)으로 계산해서 일관되게 적용한다. 화면에 그냥
             # 띄우는 Interactive는 해당 없음(용지 개념이 없으므로 그대로 둠).
@@ -3233,7 +3233,7 @@ class CathPlotGUI:
             except ValueError:
                 final_frame_auto = True
 
-        # [수정] Layout이 "Auto"일 때는 Frame Size Auto 체크박스나 입력된
+        # [수정] Layout이 "Auto"일 때는 Axis Frame Auto 체크박스나 입력된
         # frame_width/height와 무관하게 항상 자동(A4 기반) 크기로 그린다 -
         # Auto 레이아웃은 굳이 frame 입력값에 맞출 필요 없이 알아서 적절히
         # 그리면 된다는 방향으로 정리함 (종횡비도 A4 기준으로 자유롭게 결정)
@@ -3854,7 +3854,7 @@ class CathPlotGUI:
     #    self.sorted_dat_cache.clear()
 
     def _compute_auto_frame_size_cm(self, for_print=True, orientation="portrait"):
-        """Frame Size Auto가 켜진 채로 파일 출력할 때 쓸 크기를, Multi-Print의
+        """Axis Frame Auto가 켜진 채로 파일 출력할 때 쓸 크기를, Multi-Print의
         1/p Auto와 동일한 방식(A4 용지 - 절대 여백)으로 계산한다. 포맷마다
         서로 다른 임의의 기본값을 쓰던 것 대신, 항상 일관된 크기가 나오게
         하기 위함. (cm, cm) 튜플의 문자열을 반환한다."""
