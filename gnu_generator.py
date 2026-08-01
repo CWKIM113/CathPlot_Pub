@@ -86,7 +86,15 @@ PRINT_BORDER_SCALE = 1.00   # 기존 1.50
 PRINT_TIC_MAJOR_SCALE = 1.0
 PRINT_TIC_MINOR_SCALE = 0.5
 
-MARGIN_LEFT_IN = 0.9          
+# gnuplot의 emf 터미널이 실제로 EMF 헤더(rclFrame)에 기록하는 기준 해상도.
+# gdi32.GetEnhMetaFileHeader로 알려진 픽셀 크기(예: 1000x800)의 EMF를 만들어
+# rclFrame(0.01mm 단위)을 역산해서 얻은 값(96.32px/in) - 표준 96dpi와 거의
+# 같지만 정확히 96은 아님. 인쇄(_print_emf_and_cleanup)가 이 rclFrame을 그대로
+# 물리 크기 기준으로 쓰므로, emf의 cm/in->px 환산은 반드시 이 값을 써야
+# 요청한 물리 크기(cm/in) 그대로 인쇄/저장된다.
+EMF_PX_PER_IN = 96.32
+
+MARGIN_LEFT_IN = 0.9
 MARGIN_RIGHT_IN = 0.3         
 MARGIN_RIGHT_LEGEND_IN = 1.8  
 MARGIN_RIGHT_Y2_IN = 0.6      
@@ -839,19 +847,16 @@ class GnuplotGenerator:
             if _y1fmt_label == "Scientific": _lmargin_base += 0.07
             elif _y1fmt_label == "Power10": _lmargin_base += 0.03
             if "|" in (plotdef.ylabel or ""): _lmargin_base += 0.05  # Y1 title 2줄 이상이면 여백 추가
-            lines.append(f"set lmargin at screen {_lmargin_base}")
             # [추가] Plot Title이 '|'로 2줄 이상이면 상단 여백을 추가로 확보
             # (Multi-Print는 이미 반영되어 있었는데 단일 plot은 빠져 있었음)
             _title_lines = 1 + (plotdef.title or "").count("|")
             _tmargin_ref = 0.88 if _is_print else 0.895  # 화면 여백을 조금 더 늘림(이전 증가분 대비 30% 추가)
             _tmargin_base = _tmargin_ref - 0.09 * (_title_lines - 1)
-            lines.append(f"set tmargin at screen {_tmargin_base}")
             _bmargin_base = 0.12 if _is_print else 0.16  # X title 아래 마진 0.16으로 재조정
             _xfmt_label = getattr(plotdef, "xfmt", "Normal")
             if _xfmt_label == "Scientific": _bmargin_base += 0.03
             elif _xfmt_label == "Power10": _bmargin_base += 0.015
             if "|" in (plotdef.xlabel or ""): _bmargin_base += 0.09  # X title 2줄 이상이면 여백 추가(0.05->0.09, 아랫줄 잘림 방지)
-            lines.append(f"set bmargin at screen {_bmargin_base}")
             if _is_print:
                 _rmargin_base = 0.85 if uses_y2 else 0.90
             else:
@@ -861,6 +866,46 @@ class GnuplotGenerator:
                 if _y2fmt_label == "Scientific": _rmargin_base -= 0.07
                 elif _y2fmt_label == "Power10": _rmargin_base -= 0.03
                 if "|" in (plotdef.y2label or ""): _rmargin_base -= 0.05  # Y2 title 2줄 이상이면 여백 추가
+
+            # [추가] 위 마진들은 전부 "화면 비율(fraction)"이라서, frame_auto를 끄고
+            # 작은 물리 크기(예: 10x8cm)를 직접 지정하면 같은 비율이라도 절대
+            # 여백(inch)이 줄어든다. gnuplot/pngcairo는 title/xlabel/ylabel이 이
+            # 절대 여백에 안 들어가면 clip이 아니라 통째로 안 그리는(사라지는)
+            # 것으로 실측 확인됨(예: 10x8cm에서 title/xlabel/ylabel이 전부
+            # 사라짐) - 흔히 쓰는 인쇄 크기에서 자주 발생하므로, 프레임이 작을
+            # 때만 폰트 크기(f_scale)에 비례한 최소 절대 여백을 보장한다(큰
+            # 프레임은 기존 fraction으로 이미 충분해서 영향 없음).
+            if not getattr(plotdef, "frame_auto", True):
+                try:
+                    _fw_in = float((plotdef.frame_width or "").strip() or 0)
+                    _fh_in = float((plotdef.frame_height or "").strip() or 0)
+                    if (plotdef.frame_unit or "in") == "cm":
+                        _fw_in, _fh_in = _fw_in / 2.54, _fh_in / 2.54
+                except ValueError:
+                    _fw_in, _fh_in = 0, 0
+                if _fw_in > 0 and _fh_in > 0:
+                    if plotdef.title:
+                        _need_top_in = 0.75 * f_scale * _title_lines
+                        _tmargin_base = min(_tmargin_base, 1 - _need_top_in / _fh_in)
+                    if plotdef.xlabel:
+                        _need_bottom_in = 0.85 * f_scale
+                        _bmargin_base = max(_bmargin_base, _need_bottom_in / _fh_in)
+                    if plotdef.ylabel:
+                        _need_left_in = 1.0 * f_scale
+                        _lmargin_base = max(_lmargin_base, _need_left_in / _fw_in)
+                    if uses_y2 and getattr(plotdef, "y2label", ""):
+                        _need_right_in = 1.0 * f_scale
+                        _rmargin_base = min(_rmargin_base, 1 - _need_right_in / _fw_in)
+                    # 극단적으로 작은 프레임에서 좌우/상하 마진이 서로 뒤집혀
+                    # 축 영역이 찌그러지거나 사라지는 것만 방지(최소 폭 확보)
+                    if _lmargin_base >= _rmargin_base:
+                        _rmargin_base = min(0.98, _lmargin_base + 0.05)
+                    if _tmargin_base <= _bmargin_base:
+                        _tmargin_base = max(_bmargin_base + 0.05, min(_tmargin_base, 0.98))
+
+            lines.append(f"set lmargin at screen {_lmargin_base}")
+            lines.append(f"set tmargin at screen {_tmargin_base}")
+            lines.append(f"set bmargin at screen {_bmargin_base}")
             lines.append(f"set rmargin at screen {_rmargin_base}")
 
         def _pct_to_frac(value, default=0.5):
@@ -1084,12 +1129,20 @@ class GnuplotGenerator:
                 if w and h: return f"size {w}{unit},{h}{unit}"
             return default
 
-        def size_clause_px(default_px):
-            # windows 터미널은 size에 in/cm 같은 단위를 못 받고 픽셀 숫자만 받으므로
+        def size_clause_px(default_px, px_per_in=168):
+            # windows/jpeg 터미널은 size에 in/cm 같은 단위를 못 받고 픽셀 숫자만 받으므로
             # (pdfcairo/svg 등 다른 터미널과 달리) 인치/cm 값을 환산해서 넘긴다.
             # 순수 96px/in로 하면 창이 너무 작게 나와서(예: 5in x 4in -> 480x384),
             # 화면에서 보기 좋은 크기가 되도록 1.75배(=168px/in) 키워서 적용.
-            PX_PER_IN = 168
+            # [수정] 이 168px/in은 화면 미리보기용 확대 배율일 뿐인데, emf 포맷도
+            # 그대로 재사용하고 있어서 실제 인쇄 물리 크기가 항상 요청한 값의
+            # 약 1.75배로 찍히는 문제가 있었음(EMF 헤더의 rclFrame을 gdi32로
+            # 직접 읽어 calibration한 결과, gnuplot의 emf 터미널은 항상 약
+            # 96.32px/in 기준으로 rclFrame을 기록함 - _print_emf_and_cleanup이
+            # 인쇄 시 이 rclFrame을 물리 크기의 기준으로 삼으므로, emf는 168이
+            # 아니라 이 값을 써야 요청한 cm/in 그대로 인쇄된다). 화면 전용
+            # 포맷(jpg 등)은 기존 168을 그대로 유지.
+            PX_PER_IN = px_per_in
             if size_override:
                 try:
                     w_str, h_str = size_override.split(",")
@@ -1131,8 +1184,9 @@ class GnuplotGenerator:
         elif fmt == "eps":
             return f"set terminal postscript eps enhanced color font 'Malgun Gothic,11' {size_clause('')}"
         elif fmt == "emf":
-            # emf 터미널은 windows 터미널과 마찬가지로 in/cm 단위를 못 받고 픽셀 숫자만 받음
-            return f"set terminal emf enhanced {size_clause_px('size 840,672')} font 'Malgun Gothic,11'"
+            # emf 터미널은 windows 터미널과 마찬가지로 in/cm 단위를 못 받고 픽셀 숫자만 받음.
+            # 인쇄 물리 크기가 정확해야 하므로 화면용 168px/in이 아니라 EMF_PX_PER_IN을 씀
+            return f"set terminal emf enhanced {size_clause_px('size 840,672', px_per_in=EMF_PX_PER_IN)} font 'Malgun Gothic,11'"
         else:
             raise ValueError(f"Unsupported output format : {fmt}")
 

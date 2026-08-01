@@ -407,7 +407,7 @@ class CathPlotGUI:
         frame_size_f.grid(row=2, column=3, columnspan=3, sticky="w", padx=3, pady=0)
 
         ttk.Checkbutton(
-            frame_size_f, text="Frame Size Auto", variable=self.frame_auto_var,
+            frame_size_f, text="Axis Frame Auto", variable=self.frame_auto_var,
             command=self.toggle_frame_size_state
         ).pack(side="left", padx=5)
 
