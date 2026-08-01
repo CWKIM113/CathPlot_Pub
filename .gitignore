@@ -12,6 +12,7 @@
 !gnu_generator.py
 !data_parser.py
 !.gitignore
+!*.docx
 *.zip
 # 남길 폴더 (하위 포함)
 #!templates/
