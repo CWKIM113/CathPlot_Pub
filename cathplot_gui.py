@@ -94,7 +94,14 @@ class CathPlotGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("CathPlot V1.0(Test) by C.W.Kim @2026.08.03")
-        self.root.geometry("1200x800")
+        # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
+        # 피드백으로 창 크기(아래 geometry)만 20% 키움 - 처음엔 글꼴/위젯
+        # 크기까지 같이 키우는 tk scaling도 적용해봤지만, 그러면 글자가 커져서
+        # 목록(DAT 파일/변수 선택 등)에 한 번에 보이는 줄 수가 줄어드는 부작용이
+        # 있어 되돌림. 창만 넓어지고 글꼴/여백은 그대로 유지된다.
+        # [수정] 가로는 대문자 8자 정도(-110px), 세로는 대문자 3~4자 정도(+70px)
+        # 조정해달라는 피드백 반영
+        self.root.geometry("1330x1030")
         self.root.tk.call('tk', 'windowingsystem')
 
         self.parser = CathenaDatParser()
@@ -398,7 +405,9 @@ class CathPlotGUI:
         ttk.Combobox(x_font_frame, textvariable=self.xlabel_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
         ttk.Combobox(x_font_frame, textvariable=self.xlabel_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
 
-        self.frame_auto_var = tk.BooleanVar(value=False)
+        # [수정] 기본값을 Auto로 변경 - 화면에서는 항상 검증된 scale=1.0 기준으로
+        # 뜨게 하고, 인쇄/저장 시 특정 물리 크기가 필요할 때만 꺼서 W/H를 쓰도록 함
+        self.frame_auto_var = tk.BooleanVar(value=True)
         self.frame_width_var = tk.StringVar(value="10")
         self.frame_height_var = tk.StringVar(value="8")
         self.frame_unit_var = tk.StringVar(value="cm")
@@ -620,12 +629,14 @@ class CathPlotGUI:
         self._bind_mousewheel(self.plot_container, self.plot_canvas)
 
         # [수정] PLOT/PRINT/SAVE 버튼 줄 바로 위에 생기던 빈 공간의 실제 원인은
-        # Plot Setting 캔버스가 아니라, 창 전체 고정 높이(1200x800)가 각 위젯들의
+        # Plot Setting 캔버스가 아니라, 창 전체 고정 높이(초기 지정값)가 각 위젯들의
         # 실제 필요 높이 합계보다 커서 남는 여백이었음. 모든 위젯을 배치한 뒤
         # 실제 필요한 높이로 창 크기를 다시 맞춰서 여백을 없앤다.
         self.root.update_idletasks()
         required_height = self.root.winfo_reqheight()
-        self.root.geometry(f"1200x{required_height}")
+        # [수정] 세로를 대문자 3~4자 정도(+70px) 더 여유 있게 달라는 피드백 -
+        # 실제 필요 높이에 딱 맞추는 대신 그만큼 더 크게 잡음
+        self.root.geometry(f"1330x{required_height + 70}")
 
     def _disable_combobox_wheel(self, combo):
         """콤보박스(Color/Style 등) 위에서 마우스 휠을 굴리면 그 콤보박스의 값이
@@ -2287,11 +2298,14 @@ class CathPlotGUI:
             ttk.Label(header_f, text="Y2", width=3, font=("Consolas",10,"bold")).pack(side="left")
             COLOR_COL_PX = 65   # 최장 옵션(Magenta/Purple/Orange, 7자) 기준
             STYLE_COL_PX = 70   # 최장 옵션(Short-Dash, 10자) 기준
-            color_hdr_f = tk.Frame(header_f, width=COLOR_COL_PX, height=18)
+            # [수정] height=18이 "Color"/"Style" 글자(Consolas 10 bold) 높이보다
+            # 낮아서 아래쪽이 잘리고 X/Y1/Y2보다 낮게 보이던 문제 - 데이터 행
+            # 셀(height=22)과 맞춰서 헤더도 22로 통일
+            color_hdr_f = tk.Frame(header_f, width=COLOR_COL_PX, height=22)
             color_hdr_f.pack_propagate(False)
             color_hdr_f.pack(side="left")
             ttk.Label(color_hdr_f, text="Color", font=("Consolas",10,"bold")).pack(side="left")
-            style_hdr_f = tk.Frame(header_f, width=STYLE_COL_PX, height=18)
+            style_hdr_f = tk.Frame(header_f, width=STYLE_COL_PX, height=22)
             style_hdr_f.pack_propagate(False)
             style_hdr_f.pack(side="left")
             ttk.Label(style_hdr_f, text="Style", font=("Consolas",10,"bold")).pack(side="left")
@@ -3821,6 +3835,15 @@ class CathPlotGUI:
         threading.Timer(60.0, _delayed_delete).start()
 
     def execute_save_dialog(self):
+        """SAVE도 PRINT처럼, 저장된(Interactive로 그렸던) plot이 있으면 무조건
+        현재 화면 설정으로만 저장하지 않고 어떤 것을 저장할지 먼저 물어본다
+        (_pick_plot_to_save_dialog 참고 - PRINT의 _pick_plot_to_print_dialog와
+        동일한 패턴이나, SAVE는 용지 방향 개념이 없어 그 부분만 없음)."""
+        chosen_plotdef = self._pick_plot_to_save_dialog()
+        if chosen_plotdef is False:
+            return  # 사용자가 취소함
+        # chosen_plotdef가 None이면 "현재 화면 설정"을 고른 것 - 아래 기존 방식 그대로 진행
+
         raw_title = self.filename_var.get().strip() or "CathPlot"
         next_id = self.title_counters.get(raw_title, 0) or 1
         safe_title = "".join([c for c in raw_title if c.isalnum() or c in ("_", "-")]).strip() or "CathPlot"
@@ -3839,7 +3862,64 @@ class CathPlotGUI:
 
         ext = os.path.splitext(selected_path)[1].lower().replace(".", "")
         fmt_map = {"pdf": "PDF", "png": "PNG", "svg": "SVG", "jpg": "JPG", "jpeg": "JPG", "emf": "EMF", "eps": "EPS"}
-        self.execute_plot_pipeline("Batch", custom_filepath=os.path.abspath(selected_path), custom_format=fmt_map.get(ext, "PDF"))
+        fmt = fmt_map.get(ext, "PDF")
+
+        if chosen_plotdef is None:
+            self.execute_plot_pipeline("Batch", custom_filepath=os.path.abspath(selected_path), custom_format=fmt)
+            return
+
+        # 캐시된(Interactive) plot을 골랐을 때 - 화면 전용이던 plotdef를 파일
+        # 출력용으로 변환해서 직접 생성한다 (execute_print_dialog의 캐시-선택
+        # 분기와 동일한 방식)
+        import dataclasses
+        save_plotdef = dataclasses.replace(chosen_plotdef, is_print_mode=True)
+        if save_plotdef.frame_auto:
+            w_cm, h_cm = self._compute_auto_frame_size_cm(for_print=False)
+            save_plotdef = dataclasses.replace(save_plotdef, frame_auto=False, frame_width=w_cm, frame_height=h_cm, frame_unit="cm")
+        try:
+            generator = GnuplotGenerator(self.plot_dir)
+            generator.create_script(save_plotdef, os.path.abspath(selected_path), fmt=fmt.lower(),
+                                     annotations=save_plotdef.annotations, arrows=save_plotdef.arrows)
+        except Exception as e:
+            messagebox.showerror("Save Error", f"파일 저장 중 오류가 발생했습니다:\n{e}")
+            return
+        self.update_plot_file_list()
+        messagebox.showinfo("Success", f"Saved: {os.path.basename(selected_path)}")
+
+    def _pick_plot_to_save_dialog(self):
+        """SAVE 버튼을 눌렀을 때 무엇을 저장할지 고르는 창 (PRINT의
+        _pick_plot_to_print_dialog와 동일한 패턴 - SAVE는 용지 방향 개념이
+        없어 그 선택만 뺐음).
+        반환값: None = '현재 화면 설정'을 고름(기존 방식), False = 취소,
+                그 외 = 선택된 PlotDefinition 객체"""
+        CURRENT_SCREEN_LABEL = "현재 화면 설정"
+        self._cleanup_stale_plot_cache()
+        names = [CURRENT_SCREEN_LABEL] + sorted(self.active_plots_cache.keys())
+
+        result = {"choice": False}
+        dlg = tk.Toplevel(self.root)
+        dlg.title("저장할 Plot 선택")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="저장할 대상을 선택하세요:").pack(padx=15, pady=(15, 5))
+        choice_var = tk.StringVar(value=CURRENT_SCREEN_LABEL)
+        ttk.Combobox(
+            dlg, textvariable=choice_var, values=names, width=35, state="readonly"
+        ).pack(padx=15, pady=5)
+
+        def do_ok():
+            picked = choice_var.get()
+            result["choice"] = None if picked == CURRENT_SCREEN_LABEL else self.active_plots_cache.get(picked)
+            dlg.destroy()
+
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(pady=10)
+        ttk.Button(btn_row, text="취소", command=dlg.destroy).pack(side="right", padx=5)
+        ttk.Button(btn_row, text="확인", command=do_ok).pack(side="right", padx=5)
+
+        self.root.wait_window(dlg)
+        return result["choice"]
 
     def set_active_entry(self, entry):
         self.active_entry = entry

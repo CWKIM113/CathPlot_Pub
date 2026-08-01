@@ -70,7 +70,11 @@ MARKER_SYMBOL_MAP = {
 # Legend 샘플선 위 마커 기호의 수직 보정치(ROW_H 배수, +면 위로/-면 아래로).
 # 세모류(△▲▽▼)는 잉크 무게중심이 위/아래로 치우쳐 있어 "center" 정렬만으로는
 # 샘플선 대비 어긋나 보임 - 실측(마커 전체 종류를 그려서 비교)으로 보정.
-MARKER_Y_OFFSET = {8: -0.15, 9: -0.10, 10: 0.15, 11: 0.10}
+MARKER_Y_OFFSET = {8: 0.08, 9: 0.08, 10: 0.10, 11: 0.18}
+# 화면(Interactive, windows 터미널)은 pngcairo와 텍스트 기준선 방향이 반대로
+# 확인됨(위쪽 세모가 화면에서는 아래로, 아래쪽 세모는 위로 나타남) - 부호를
+# 반대로 둔 화면 전용 보정치. 나머지 기호는 _screen_marker_bias(공통) 하나로 처리.
+MARKER_Y_OFFSET_SCREEN = {8: 0.15, 9: 0.10, 10: -0.15, 11: -0.10}
 # 위와 같은 이유로, 기호별 em-box 잉크 크기 차이를 보정하는 폰트 크기 배율
 # (1.0=그대로). "+"(pointtype 1)는 원/사각형/별표보다 훨씬 얇고 작게 그려져서
 # 눈에 띄게 작아 보인다는 피드백으로 확대.
@@ -542,7 +546,9 @@ class GnuplotGenerator:
         # 폰트 크기에 맞는 절대 줄 높이를 먼저 구하고, 그걸 graph 비율로 환산한다.
         ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * 1.35
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
-        ROW_MARGIN = 0.06 * ROW_H  # 박스 위/아래 내부 여백 (추가 축소)
+        # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
+        # 박스 테두리에 닿아 보인다는 피드백 - 여백을 크게 늘림
+        ROW_MARGIN = 0.3 * ROW_H
         FRAME_MARGIN = 0.35 * ROW_H  # plot 테두리(frame)와 박스 사이 여백 (major tic의 절반이었던 걸, major tic보다 조금 크게 조정)
 
         def _resolve_anchor(pos_raw):
@@ -595,7 +601,11 @@ class GnuplotGenerator:
         # 화면(Interactive)은 그대로 두고 Print/Save만 여유를 좀 더 준다
         char_width_in = (0.0055 if is_print_mode else 0.0049) * font_pt  # 문자 하나당 대략적인 폭(인치), 폰트 크기(pt)에 비례
         char_width_frac = char_width_in / max(axis_w_in, 0.5)
-        box_w = SAMPLE_W + char_width_frac * max(max_label_len - 2, 1) + 0.015  # 13자 기준 box 내 마진 2자 정도 축소
+        # [수정] 평균 문자 폭으로 추정하다 보니, 대문자·언더스코어가 많은 라벨
+        # (CATHENA 변수명 특성상 흔함, 예: "TANK_CLEV")은 실제 폭이 평균보다
+        # 넓어서 box보다 글자가 삐져나오는 문제가 있었음 - 여유 폭을 크게 잡음
+        # (17자 라벨 기준 1자 잘림 피드백으로 5.5->7, 이후 1자 더 요청받아 8로 재조정)
+        box_w = SAMPLE_W + char_width_frac * (max(max_label_len - 2, 1) + 8.0) + 0.015
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
 
         if "right" in corner:
@@ -652,7 +662,17 @@ class GnuplotGenerator:
                 # 치우쳐 있어서 그 기준으로는 샘플선 대비 위 또는 아래로 치우쳐
                 # 보이는 문제가 있었음(위쪽 세모는 위로, 아래쪽 세모는 아래로) -
                 # 기호별로 작은 보정치를 둬서 샘플선에 시각적으로 맞춘다.
-                symbol_y = row_y + MARKER_Y_OFFSET.get(marker_shape, 0.0) * ROW_H
+                # [추가] 화면(Interactive, windows 터미널)은 pngcairo와 텍스트
+                # 기준선 방향이 달라서, 위 보정치(pngcairo 기준)를 그대로 쓰면
+                # 세모가 반대로 어긋남(실측: 위쪽 세모가 화면에서는 오히려
+                # 아래로, 아래쪽 세모는 위로) - 화면에서는 세모류만 부호를
+                # 반대로 둔 MARKER_Y_OFFSET_SCREEN을 쓰고, 나머지 기호는
+                # 공통으로 위로 0.12만큼 보정한다.
+                if is_print_mode:
+                    _marker_offset = MARKER_Y_OFFSET.get(marker_shape, 0.0)
+                else:
+                    _marker_offset = MARKER_Y_OFFSET_SCREEN.get(marker_shape, 0.0) + 0.12
+                symbol_y = row_y + _marker_offset * ROW_H
                 # [추가] 유니코드 기호마다 글자 em-box 안에 그려지는 잉크 크기가
                 # 서로 달라서(예: "+"는 원/사각형보다 훨씬 작고 얇게 그려짐),
                 # 같은 font_pt로 찍어도 시각적 크기가 들쭥날쭥해 보이는 문제 -
@@ -669,7 +689,17 @@ class GnuplotGenerator:
                 f'{label_just} front font "{font_name},{int(font_pt)}" {lbl_enh}'
             )
 
-    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None):
+    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None):
+        # [추가] Interactive(화면) 창은 frame_auto/frame_width와 무관하게 항상
+        # 고정된 1000x700 캔버스로 뜬다(_get_terminal_cmd 참고) - 그런데 아래
+        # 절대 여백 보정(축소 시 title/label이 사라지는 것 방지 등)은 "캔버스가
+        # 실제로 frame_width/height 물리 크기와 같다"고 가정하고 계산해서,
+        # Axis Frame Auto를 끄고 작은 크기(예: 10x8cm)를 입력한 채 화면(PLOT)을
+        # 띄우면 실제 캔버스(약 5.95x4.17in)보다 훨씬 작은 크기를 기준으로 여백
+        # 비율을 구해 화면에서 마진이 과도하게 커지는 문제가 있었음(실측 확인) -
+        # Interactive는 이 보정 자체를 건너뛰어 기존(이미 적절히 튜닝된) 화면
+        # 여백 비율을 그대로 쓰게 한다.
+        _is_interactive = (fmt or "").lower() == "interactive"
 
         if getattr(plotdef, "is_print_mode", False):
             f_scale = PRINT_FONT_SCALE * panel_scale
@@ -864,21 +894,46 @@ class GnuplotGenerator:
             # [수정] 화면과 용지는 매체가 다르므로 마진을 분리한다 - 화면은
             # 절반으로 줄인 값(여유 있게), 인쇄는 원래(줄이기 전) 값을 사용
             _is_print = getattr(plotdef, "is_print_mode", False)
-            _lmargin_base = 0.15 if _is_print else 0.12
+            # [수정] 화면(1줄 label 기준)에서도 외부 여백이 여전히 조금 크다는
+            # 피드백으로, 좌측 여백을 10pt만큼 더 줄임(interactive 캔버스
+            # 1000px/168px_per_in=5.952in 기준, 10pt=10/72in -> 약 0.0233 비율).
+            # 2줄 label일 때 더해지는 증가분(_lmargin_base += 0.05 등)은 그대로
+            # 둬서, 기준값이 줄어든 만큼 2줄 경우도 자연히 비례해서 좁아짐.
+            _lmargin_base = 0.15 if _is_print else (0.12 - (10.0 / 72.0) / (1000.0 / 168.0))
             _y1fmt_label = getattr(plotdef, "y1fmt", "Normal")
             if _y1fmt_label == "Scientific": _lmargin_base += 0.07
             elif _y1fmt_label == "Power10": _lmargin_base += 0.03
-            if "|" in (plotdef.ylabel or ""): _lmargin_base += 0.05  # Y1 title 2줄 이상이면 여백 추가
+            # [수정] "전부 2줄"로 겹쳐 테스트하면 네 방향이 동시에 커져 체감상
+            # 과하다는 피드백으로, 화면에서는 2줄 증가분을 절반으로 줄임(print는
+            # 그대로 유지 - 이미 확인됨)
+            if "|" in (plotdef.ylabel or ""): _lmargin_base += 0.05 if _is_print else 0.025  # Y1 title 2줄 이상이면 여백 추가
             # [추가] Plot Title이 '|'로 2줄 이상이면 상단 여백을 추가로 확보
             # (Multi-Print는 이미 반영되어 있었는데 단일 plot은 빠져 있었음)
             _title_lines = 1 + (plotdef.title or "").count("|")
-            _tmargin_ref = 0.88 if _is_print else 0.895  # 화면 여백을 조금 더 늘림(이전 증가분 대비 30% 추가)
-            _tmargin_base = _tmargin_ref - 0.09 * (_title_lines - 1)
-            _bmargin_base = 0.12 if _is_print else 0.16  # X title 아래 마진 0.16으로 재조정
+            # [수정] 화면에서 title과 legend box 사이 간격이 너무 커 보인다는
+            # 피드백으로 0.895->0.925로 축소(이전에 30% 늘렸던 것을 다시 되돌리는
+            # 정도) - legend 자체 위치(FRAME_MARGIN)는 축 상단 기준이라 안 바뀌고,
+            # title이 축에 더 가까워져서 그 사이 간격이 줄어드는 효과. 단, 이
+            # 여백은 원래 "Y2 title/label이 창 경계에서 잘리는" 문제 때문에
+            # 늘려둔 것이라, 너무 줄이면 그 문제가 재발할 수 있어 화면에서
+            # Y2 라벨 잘림 여부도 같이 확인 필요.
+            # [추가] title 위쪽 여백을 10pt만큼 다시 더 줌(interactive 캔버스
+            # 700px/168px_per_in=4.167in 기준, 10pt=10/72in -> 약 0.0333 비율)
+            # [추가] 1줄 title은 여전히 여백이 작다는 피드백으로 화면에서만 다시
+            # 5pt 더 늘림(누적 15pt, 처음 요청은 10pt였으나 5pt로 축소 조정됨).
+            # 2줄 title은 이미 적절하다고 확인됐으므로, 줄당 감소분(0.09)도 같은
+            # 5pt만큼 같이 줄여서 2줄 결과값은 그대로 유지되게 한다(1줄만 커지고
+            # 2줄은 안 바뀜).
+            _pt_to_frac_v = lambda pt: (pt / 72.0) / (700.0 / 168.0)
+            _tmargin_ref = 0.88 if _is_print else (0.925 - _pt_to_frac_v(10.0) - _pt_to_frac_v(5.0))
+            _title_line_decrement = 0.09 if _is_print else 0.045  # 화면은 2줄 증가분 절반으로
+            _tmargin_base = _tmargin_ref - _title_line_decrement * (_title_lines - 1)
+            # [수정] 화면 하단 여백도 10pt만큼 줄임(위 lmargin과 동일한 이유/방식)
+            _bmargin_base = 0.12 if _is_print else (0.16 - (10.0 / 72.0) / (700.0 / 168.0))  # X title 아래 마진 0.16으로 재조정
             _xfmt_label = getattr(plotdef, "xfmt", "Normal")
             if _xfmt_label == "Scientific": _bmargin_base += 0.03
             elif _xfmt_label == "Power10": _bmargin_base += 0.015
-            if "|" in (plotdef.xlabel or ""): _bmargin_base += 0.09  # X title 2줄 이상이면 여백 추가(0.05->0.09, 아랫줄 잘림 방지)
+            if "|" in (plotdef.xlabel or ""): _bmargin_base += 0.09 if _is_print else 0.045  # X title 2줄 이상이면 여백 추가(화면은 절반)
             if _is_print:
                 _rmargin_base = 0.85 if uses_y2 else 0.90
             else:
@@ -887,7 +942,7 @@ class GnuplotGenerator:
             if uses_y2:
                 if _y2fmt_label == "Scientific": _rmargin_base -= 0.07
                 elif _y2fmt_label == "Power10": _rmargin_base -= 0.03
-                if "|" in (plotdef.y2label or ""): _rmargin_base -= 0.05  # Y2 title 2줄 이상이면 여백 추가
+                if "|" in (plotdef.y2label or ""): _rmargin_base -= 0.05 if _is_print else 0.025  # Y2 title 2줄 이상이면 여백 추가(화면은 절반)
 
             # [추가] 위 마진들은 전부 "화면 비율(fraction)"이라서, frame_auto를 끄고
             # 작은 물리 크기(예: 10x8cm)를 직접 지정하면 같은 비율이라도 절대
@@ -897,7 +952,7 @@ class GnuplotGenerator:
             # 사라짐) - 흔히 쓰는 인쇄 크기에서 자주 발생하므로, 프레임이 작을
             # 때만 폰트 크기(f_scale)에 비례한 최소 절대 여백을 보장한다(큰
             # 프레임은 기존 fraction으로 이미 충분해서 영향 없음).
-            if not getattr(plotdef, "frame_auto", True):
+            if not getattr(plotdef, "frame_auto", True) and not _is_interactive:
                 try:
                     _fw_in = float((plotdef.frame_width or "").strip() or 0)
                     _fh_in = float((plotdef.frame_height or "").strip() or 0)
@@ -985,7 +1040,7 @@ class GnuplotGenerator:
             # 비해 너무 좁아져 줄들이 겹쳐 보이는 문제의 원인이었음)
             if axis_h_in is None:
                 try:
-                    if not getattr(plotdef, "frame_auto", True):
+                    if not getattr(plotdef, "frame_auto", True) and not _is_interactive:
                         _fh_for_legend = float((plotdef.frame_height or "4").strip() or 4.0)
                         if (plotdef.frame_unit or "in") == "cm":
                             _fh_for_legend /= 2.54
@@ -1085,7 +1140,7 @@ class GnuplotGenerator:
             # lmargin/rmargin(_lmargin_base/_rmargin_base, is_multiplot=False일
             # 때만 이 분기에 옴)으로 정확히 계산한다.
             try:
-                if not getattr(plotdef, "frame_auto", True):
+                if not getattr(plotdef, "frame_auto", True) and not _is_interactive:
                     fw = float((plotdef.frame_width or "5").strip() or 5.0)
                     if (plotdef.frame_unit or "in") == "cm":
                         fw /= 2.54
@@ -1346,7 +1401,7 @@ class GnuplotGenerator:
         if fmt.lower() != "interactive":
             lines.append(f"set output '{outfile.replace(chr(92), '/')}'")
 
-        self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, panel_scale=_size_scale)
+        self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, panel_scale=_size_scale, fmt=fmt)
 
         if fmt.lower() == "interactive": lines.append("pause mouse close")
         else: lines.append("set output")
