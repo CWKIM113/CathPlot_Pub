@@ -1,0 +1,69 @@
+수정 사항: (cathplot_gui)
+1. 문법 오류 ? 주석 처리하다 만 make_x_toggle_cmd 및 그 안의 orphan 코드, 옛날 전역 X선택 방식의 중복/죽은 코드 전부 제거 - 반영
+2. _sorted_dat_cache/sorted_data_cache 이름 불일치 ? self.sorted_dat_cache 하나로 통일 (안 그러면 첫 실행에 AttributeError) - 반영
+3. get_temp_dir() 없음 ? 추가 (temp_sorted 폴더, CathPlot 종료 시 cleanup_sorted_cache가 정리) - 반영
+4. resorted_dat_file가 x_output_no를 무시하고 항상 0번 컬럼으로만 정렬 ? 
+실제로 지정된 컬럼으로 정렬하도록 수정, 캐시 키를 (파일, X변수) 튜플로 바꿔서 X 재선택 시 새 임시파일 생성, 
+임시파일명에도 _sortedX{번호} 붙임 (말씀하신 요청 그대로)  - 반영 불확실
+5. 핵심 버그: execute_plot_pipeline이 화면에 실제 표시되는 파일별 file_x_var가 아니라 죽은 전역 변수 self.selected_x_key를 읽고 있어서 
+X 선택이 항상 무시되고 있었음 → 첫 번째 커브가 속한 파일의 file_x_var를 읽도록 수정 -  - 반영 확인 필요
+6. gnu_generator.py에 re import 누락 ? 새로 추가하신 _nice_axis_range의 re.split이 NameError 나던 것  - 반영
+7. PNG/JPG일 때 픽셀로 환산하던 예전 버그가 되돌아와 있던 것 ? 다시 제거 (inch/cm로 통일)  - 반영
+8. **sync_axis_labels**도 첫 번째 로드된 파일의 X 선택 기준으로 X title을 잡도록 수정  - 반영 불확실
+
+아직 남은 것 (시간 관계상 이번엔 못 봄)
+JSON min/max 캐싱(dat 파일 폴더에 저장, BROWSE 시 덮어쓸지 확인, 변수 위에 커서 두면 min, max @x_변수 툴팁 표시) ? 
+execute_plot_pipeline이 예전에 통일해드렸던 create_multiplot_script 대신 다시 create_script(구식 방식)를 쓰도록 되돌아가 있는 것도 발견했는데, 
+이번 메시지 범위상 건드리지 않았습니다 -> 수정된 내용과 부합되게 깔끔하게 해야되지요?.
+
+각 dat file의 var min, max 등을 json에 넣고 auto scale의 x축변수(dat file이 2개 이상일 때)들의 통합 min, max를 고려하여 정하는지?
+그리고 선택된 y1, y2 축 변수들도 통합 min, max 를 기준으로 auto range 결정에 사용되고 있는지?
+
+문제점:
+- 첫번째 파일인 generic data file (sample.dat)은 요구한 x변수 (두번째 col, col no=1?) 기준으로 resort 되었고 sample_sortedX1.dat로 저장됨.
+ 두번째 파일인  CATHENA DAT('out111.dat')의 resorted file은  out111_sortedX1.dat인데 이는 선택한 x변수가 5번재 col (output No. or col. no=4)인데 
+이를 사용 안하고 col no=1로 첫번째 파일의 x col 으로 resort 하고 이를 사용함. 즉 처음 읽은 파일의  x에 해당하는  col  No를 후속 모두에 적용하고 
+이 x col 값을 기준으로 resorting 해 버림. 
+x값의 range도 먼저 선정한 x 값의 range를 고려함
+- auto scale에서 y1, y2는 변수들의 min/max를 모두 검토하여 최소값과 최대값을 기준으로 정하는데, x range는 첫번째 파일의 x 기준으로  range를 정하고 두번째 파일의 x값은 고려하지 않았는지? 
+-> 다른 dat file, x값 등을 try해 본 결과, 첫번째 파일의 x변수에 해당하는 변수(X1)에 대해서 만 sorting 함. 즉 두번째  파일이 y-col=4인데도 x1 (x4 가 아닌)을 기준으로 sorting 오류 발생 및 
+x-range도 여기서 추론 한 듯.
+
+CathPlot 화면에 var list에 Time 안나옴. Generic Dat 도 첫 col title(head)가 안 나옴. 더구나 Generic Dat 읽은 곳은 각 var title 대신 var_#로 나옴. 
+(본래 title 안 주어진 변수만 그렇게 해야 하는데...) 
+더 중요한 것은 time외 x변수 지정하면 file별로 x로 지정한 col이 같지 않은데 첫 file에서 지정한 x 변수 해당 col을  x값으로 읽어 버림. 
+즉 file 별로 y1 또는 y2를 한 경우, x를 선택해야 하는데 먼저 읽은 x값을 사용하고 있음. (y1, y2 모두 선택없으면 x는 선택안함)
+x값의 range도 먼저 선정한 x 값의 range만을 고려함
+더구나 지금은 y1 or y2 선택후 동일 변수를 x값으로 지정하면 x, y1(or y2) 둘다 체크됨. 모든 변수는 check가 안되거나 x, y1, y2 하나만 check 되어야 함.
+
+추가할 내용:
+1. plot창 이름이 현재 폴더에 존재할 때 (아마도 plot폴더?)는 덮어쓸지 #수를 더할지 물어봐야 함 ?
+2. 인쇄시 공통: 인쇄작업을 프린터로 전송하였다는 메시지 창이 뜨고나서 화면 하나가 떳다가 바로 사라지고 pdf 앱이 열림. 그리고 인쇄되고.... 
+(왜 굳이 이미지 관련 앱을 띄우는지, 혹 emf 등 프린터가 인식하는 임시 파일로는 전송할 수 없는지? 열수있는 앱이 없으면 오류 메시지가 날까?)
+3. 1장 PRINT 누르면 plot창 이름의 파일들이 list되게 하여 선택하게 할것, PRINT에서는 가로 종이 중앙에 인쇄됨 (크기가 예전크기로 나옴, 종이 전체에 맞게 키웠으면 함.) 
+SAVE에서는 acrobat 화면에 차도록 보여주고 print화면을 보면 중앙에 배치되고 크기가 예전크기로 나옴 - 수정 필요. (필요시 조정해 사용할테니 종이전체 아니라도 문제없어 보임)
+4. Multi-Print/Save 버튼
+Print 눌르면 처음엔 화면에 선택창이 겹쳐서 나타남. 그 다음부터는 1개씩 나타남 (마우스 민감도 때문인지 확인 필요)
+Print: 1plot Auto port -> 종이 중앙에 수정된 frame 크기로 가로로 인쇄됨. (port 선택과 불일치, land 선택해도 동일하게 출력)
+       2plot Auto port -> 수정된 frame 크기로 세로로 상하에 인쇄됨.OK
+       2plot Auto land -> 수정된 frame 크기로 세로로 상하에 인쇄됨.(portr와 구분 안됨. land로 좌우 크기를 조정하여 그릴것)
+       4plot Auto port -> 가로 종이에 2:2로 그려짐. 아래 land와 동일하게 그려짐.
+       4plot Auto land -> 가로 종이에 2:2로 그려 지는데, 상하 margin이 너무 큼. 마진을 30% 정도 줄여야 (즉 그림을 지금보다 20~25% 정도 키울 것)
+       6plot Auto port -> 세로 종이에 2:3로 그려짐. 여백이 너무 큼. plot간 상하여백 추가, 그리고 전체 크기를 지금보다 약 30% 더 크게 확대 필요.
+       6plot Auto land -> 세로로 그려짐 (port와 동일)
+       
+    -> Auto는 주어진 frame 크기에 맞추지 말고 알아서 적절히 그리면 됨.
+       
+       1plot 1/p port -> 지정된 수정 프레임 크기로 세로 인쇄 - OK
+       2plot 2/p (land) -> 지정된 수정 프레임 크기로 상하 세로 인쇄 - OK
+       4plot 4/p port -> 가로 종이에 2:2로 그려 지는데, 상하 margin이 너무 큼. 마진을 30% 정도 줄여야 (즉 그림을 지금보다 20% 정도 키울 것)= Auto
+       4plot 4/p land -> port와 동일함 = Auto
+       6plot Auto port -> 세로 종이에 세로3, 가로2로 그려짐. 여백이 너무 큼. Auto와 동일함
+       6plot Auto land -> 가로로 그려짐 (Auto와 다름) 그림 size는 port와 같이 조정 필요
+       
+기타 사항:
+curser를 변수 위에 두면 커서위치에 (min, max @x_변수 형태)로 나타내 주기.
+조금 더 진도 나가면, Template 읽기, 저장 버튼 필요 (현재로선 DAT files box title을 DAT FIles/Template/Batch 등으로 바꾸고 "+" 버튼을 Dat File 입력 box 앞이나 X 버튼 뒤로 옮기고 적절한 space 뒤에 Template 읽기, 저장 및 Batch/Interactive선택 등을 위치하면 좋겠음.??
+지금 plt 파일을 보면 DAT file path가 절대path인데 이를 현재 cwd기준 상대path로 바꾸었음 함.
+Template는 어떻게 구성해야 할까요? plt 형식일지 아닐지, 현재 창에서 작성하는 입력들을 기본으로 하되 DAT file내 x, y 변수 선택은 (var_no 개념으로, 0번 col ~ n번 col으로 나누고 template에 지정하는 방안? 등을 고려하고 입력이 없으면 먼저 정한 template의 값들을 상속.
+그리고 Batch 작업은 어떻게 할까요? 버튼을 누르면 template에서 지정한 순서로 back ground에서 plot하고 저장하는 것으로? Batch 작업시에는 cathplot 화면 입력을 freeze 시키는 방안?? 오류시는 창에 popup? 일반적인 방안을 줘봐요??

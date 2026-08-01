@@ -1,0 +1,404 @@
+확인된 버그 1: 멀티플롯에서 Frame Size(W/H) 입력이 완전히 무시됨
+execute_multi_plot_pipeline은 사용자가 입력한 Frame Size를 계산은 해두고(final_frame_width 등), 그걸 cache된 plotdef 객체에 직접 대입만 합니다. 그런데 create_multiplot_script의 페이지 크기는 그 값을 전혀 안 읽고 항상 _A4_SIZES[orientation](고정 A4)만 씁니다. 그래서 Frame Size를 뭘 넣든 멀티플롯에선 반영이 안 됩니다.
+게다가 이 mutation 방식 자체도 위험합니다 ? 캐시에 저장된 plotdef 객체를 직접 고쳐버려서, 나중에 그 plot을 다시 쓰거나 다른 조합으로 멀티플롯을 만들 때 이전 설정이 계속 남아있게 됩니다.
+gnu_generator.py ? Frame Size를 받아서 우선 적용, 없으면 A4로 fallback
+찾기:
+def create_multiplot_script(self, plots, outfile, fmt="pdf", layout_option="Auto", orientation="portrait", margins=(0.08, 0.94, 0.06, 0.94), spacing=(0.09, 0.10), keep_script=False):
+->
+def create_multiplot_script(self, plots, outfile, fmt="pdf", layout_option="Auto", orientation="portrait", margins=(0.08, 0.94, 0.06, 0.94), spacing=(0.09, 0.10), keep_script=False, frame_auto=True, frame_width="", frame_height="", frame_unit="in"):
+
+w, h = self._A4_SIZES.get(orientation, self._A4_SIZES["portrait"])
+        size_override = f"{w},{h}"
+->
+if not frame_auto and frame_width and frame_height:
+            # 사용자가 명시적으로 지정한 Frame Size가 있으면 그걸 우선 사용
+            if fmt.lower() in ("png", "jpg", "jpeg"):
+                size_override = f"{frame_width},{frame_height}"
+            else:
+                size_override = f"{frame_width}{frame_unit},{frame_height}{frame_unit}"
+        else:
+            w, h = self._A4_SIZES.get(orientation, self._A4_SIZES["portrait"])
+            size_override = f"{w},{h}"
+
+cathplot_gui.py ? 캐시 객체를 건드리지 않고, Frame Size를 직접 전달,찾기:
+for plotdef in selected_plot_defs:
+            plotdef.frame_auto = final_frame_auto
+            plotdef.frame_width = final_frame_width
+            plotdef.frame_height = final_frame_height
+            plotdef.frame_unit = final_frame_unit
+            plotdef.is_print_mode = (mode == "Batch")
+
+        generator = GnuplotGenerator(self.plot_dir)
+        generator.create_multiplot_script(
+            plots=selected_plot_defs, outfile=outfile, fmt=fmt,
+            layout_option=layout_opt, orientation=self.orientation_var.get(),
+            keep_script=(mode == "Save")
+        )
+->
+import dataclasses
+        # 캐시에 저장된 원본 plotdef를 직접 고치는 대신, 복사본을 만들어서 이번
+        # 실행에만 필요한 값(is_print_mode 등)을 적용한다. 이래야 나중에 같은
+        # plot을 다른 조합/설정으로 다시 쓸 때 이전 실행의 흔적이 안 남는다.
+        run_plot_defs = [
+            dataclasses.replace(pd, is_print_mode=(mode == "Batch"))
+            for pd in selected_plot_defs
+        ]
+
+        generator = GnuplotGenerator(self.plot_dir)
+        generator.create_multiplot_script(
+            plots=run_plot_defs, outfile=outfile, fmt=fmt,
+            layout_option=layout_opt, orientation=self.orientation_var.get(),
+            keep_script=(mode == "Save"),
+            frame_auto=final_frame_auto, frame_width=final_frame_width,
+            frame_height=final_frame_height, frame_unit=final_frame_unit
+        )
+
+확인된 버그 2: 선택한 plot 개수가 레이아웃 칸 수보다 많으면 겹침 발생 가능성 ? 유력한 원인
+2/p는 2칸, 4/p는 4칸, 6/p는 6칸입니다. 그런데 몇 개를 선택했는지에 대한 검증이 전혀 없어서, 예를 들어 2/p를 선택한 채로 plot을 3개 이상 고르면, gnuplot이 정해진 칸(2칸) 안에 억지로 3번째 plot을 이어서 그리려다 겹치거나 페이지 밖으로 밀려나는 현상이 생길 수 있습니다. "겹치고 위아래로 안 나뉜다"는 증상과 정확히 일치합니다.
+수정: 실행 전에 선택 개수와 칸 수를 비교해서, 넘으면 명확히 안내하고 막습니다.
+open_multi_plot_dialog의 on_execute 안, 찾기:
+selected_names = [available_names[i] for i in selected_indices]
+            selected_defs = [available_plots[i] for i in selected_indices]
+
+            layout = self.layout_var.get()
+            rows, cols = self.LAYOUT_GRID.get(layout, (1, 1))
+            orientation = self.orientation_var.get()
+->
+selected_names = [available_names[i] for i in selected_indices]
+            selected_defs = [available_plots[i] for i in selected_indices]
+
+            layout = self.layout_var.get()
+            rows, cols = self.LAYOUT_GRID.get(layout, (1, 1))
+            orientation = self.orientation_var.get()
+
+            if layout != "Auto" and len(selected_defs) > rows * cols:
+                messagebox.showwarning(
+                    "Warning",
+                    f"'{layout}' 레이아웃은 최대 {rows*cols}개까지만 담을 수 있습니다.\n"
+                    f"지금 {len(selected_defs)}개를 선택하셨습니다 - 개수를 줄이거나 "
+                    f"더 큰 레이아웃(또는 Auto)을 선택해주세요.",
+                    parent=dialog
+                )
+                return
+
+확인된 버그 3: 단일 plot 저장/인쇄에서 여백 부족 ? 우측 기본 여백 누락
+전에 상하좌우 여백을 추가했는데, legend가 오른쪽에 없는 경우엔 우측(rmargin) 기본값 자체가 아예 없어서 그쪽만 여전히 좁습니다.
+찾기:
+if getattr(plotdef, "is_print_mode", False) and not is_multiplot:
+            # 단일 plot을 인쇄/저장용 큰 캔버스(A4 등)에 그릴 때 내용이 가장자리에
+            # 붙어서 여백이 없어 보이던 문제 - 기본 여백을 확보한다.
+            lines.append("set lmargin at screen 0.10")
+            lines.append("set tmargin at screen 0.90")
+            lines.append("set bmargin at screen 0.12")
+->
+if getattr(plotdef, "is_print_mode", False) and not is_multiplot:
+            # 단일 plot을 인쇄/저장용 큰 캔버스(A4 등)에 그릴 때 내용이 가장자리에
+            # 붙어서 여백이 없어 보이던 문제 - 기본 여백을 확보한다.
+            # rmargin은 기본값만 여기서 잡고, legend가 오른쪽에 있으면 아래
+            # legend 처리 부분에서 이 값을 덮어써서 legend 공간을 추가로 확보한다.
+            lines.append("set lmargin at screen 0.10")
+            lines.append("set tmargin at screen 0.90")
+            lines.append("set bmargin at screen 0.12")
+            lines.append("set rmargin at screen 0.95")
+
+Frame Size, default 5x4 in
+self.frame_auto_var = tk.BooleanVar(value=True)
+        self.frame_width_var = tk.StringVar(value="")
+        self.frame_height_var = tk.StringVar(value="")
+        self.frame_unit_var = tk.StringVar(value="in")
+->
+self.frame_auto_var = tk.BooleanVar(value=False)
+        self.frame_width_var = tk.StringVar(value="5")
+        self.frame_height_var = tk.StringVar(value="4")
+        self.frame_unit_var = tk.StringVar(value="in")
+
+Print시 에러 메시지 추가 (옵션)
+def execute_print_dialog(self):
+    idx = 1
+    while True:
+        temp_pdf = os.path.join(self.plot_dir, f"Print_Job_Temp_{idx}.pdf")
+        if not os.path.exists(temp_pdf):
+            break
+        idx += 1
+
+    try:
+        success_path = self.execute_plot_pipeline("Batch", custom_filepath=temp_pdf, custom_format="PDF")
+    except Exception as e:
+        messagebox.showerror("Print Error", f"PDF 생성 중 오류가 발생했습니다:\n{e}")
+        return
+
+    if success_path and os.path.exists(success_path):
+        threading.Thread(
+            target=self._print_and_cleanup, args=(success_path,), daemon=True
+        ).start()
+
+**** 여기부터         
+        lines.append(f"set xtics {plotdef.xtics if plotdef.xtics else 'auto'}")
+        lines.append(f"set ytics {plotdef.ytics if plotdef.ytics else 'auto'}")
+-> 
+tic_font_size = int(9 * f_scale) if 'f_scale' in dir() else 9
+? 이 부분은 f_scale이 아직 이 시점엔 정의 전이라 순서 조정이 필요합니다. 
+대신 아래처럼 tic 폰트 설정을 f_scale 계산 이후로 옮겨서 추가하겠습니다.
+
+f_scale = 1.8 if getattr(plotdef, "is_print_mode", False) else 1.0
+-> (뒷부분과 확인)
+f_scale = 1.8 if getattr(plotdef, "is_print_mode", False) else 1.0
+
+        tic_size = int(9 * f_scale)
+        lines.append(f"set xtics font '{plotdef.xlabel_font},{tic_size}'")
+        lines.append(f"set ytics font '{plotdef.ylabel_font},{tic_size}'")
+        lines.append(f"set y2tics font '{plotdef.y2label_font},{tic_size}'")
+        
+그리고 legend 테두리도 인쇄 모드에서 두껍게 ? 찾기:
+.append(f'set key enhanced {pos} {box} {opaque} font "{plotdef.xlabel_font},{int(9*f_scale)}" samplen 2.5 spacing 1.2')
+->
+key_lw = 1.5 * f_scale
+        lines.append(f'set key enhanced {pos} {box} {opaque} font "{plotdef.xlabel_font},{int(9*f_scale)}" samplen 2.5 spacing 1.2 linewidth {key_lw}')        
+        
+create_multiplot_script 전체 교체        
+def create_multiplot_script(self, plots, outfile, fmt="pdf", layout_option="Auto", orientation="portrait", margins=(0.08, 0.94, 0.06, 0.94), spacing=(0.09, 0.10)):
+        plot_dir = os.path.dirname(os.path.abspath(outfile))
+        os.makedirs(plot_dir, exist_ok=True)
+
+        nplot = len(plots)
+        rows, cols = 1, 1
+        
+        if layout_option == "Auto":
+            if nplot <= 1: rows, cols = 1, 1
+            elif nplot == 2: rows, cols = (1, 2) if orientation == "landscape" else (2, 1)
+            elif nplot <= 4: rows, cols = 2, 2
+            else: rows, cols = 3, 2
+        elif layout_option in ["1/p", "1"]: rows, cols = 1, 1
+        elif "2/p" in layout_option: rows, cols = 2, 1
+        elif "4/p" in layout_option: rows, cols = 2, 2
+        elif "6/p" in layout_option: rows, cols = 3, 2
+
+        w, h = self._A4_SIZES.get(orientation, self._A4_SIZES["portrait"])
+        size_override = f"{w},{h}"
+
+        lines = [
+            "set encoding utf8",
+            self._get_terminal_cmd(fmt, outfile, None, size_override),
+            f"set output '{outfile.replace(chr(92), '/')}'"
+        ]
+
+        l, r, b, t = margins
+        sx, sy = spacing
+
+        if rows * cols > 1:
+            lines.append(f"set multiplot layout {rows},{cols} margins {l},{r},{b},{t} spacing {sx},{sy}")
+        else:
+            lines.append(f"set multiplot layout {rows},{cols}")
+
+        for i, plotdef in enumerate(plots):
+            # 다중 플롯 시 앞선 그림의 잔상(축/margin)이 남아 겹치거나 밀리는 현상 방지
+            if i > 0:
+                lines.append("unset title")
+                lines.append("set xtics auto")
+                lines.append("set ytics auto")
+                lines.append("set y2tics auto")
+            lines.append("set lmargin")
+            lines.append("set rmargin")
+            lines.append("set tmargin")
+            lines.append("set bmargin")
+            self._build_plot_commands(plotdef, lines, is_multiplot=True)
+
+        lines.append("unset multiplot")
+        lines.append("set output")
+
+        script_path = outfile.rsplit(".", 1)[0] + ".plt"
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+        try:
+            gnuplot_exe = _resolve_gnuplot_exe()
+            subprocess.run([gnuplot_exe, script_path], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        finally:
+            if os.path.exists(script_path):
+                os.remove(script_path)
+
+        return outfile
+->
+def create_multiplot_script(self, plots, outfile, fmt="pdf", layout_option="Auto", orientation="portrait", margins=(0.08, 0.94, 0.06, 0.94), spacing=(0.09, 0.10), keep_script=False, frame_auto=True, frame_width="", frame_height="", frame_unit="in"):
+        plot_dir = os.path.dirname(os.path.abspath(outfile))
+        os.makedirs(plot_dir, exist_ok=True)
+
+        nplot = len(plots)
+        rows, cols = 1, 1
+
+        if layout_option == "Auto":
+            if nplot <= 1: rows, cols = 1, 1
+            elif nplot == 2: rows, cols = (1, 2) if orientation == "landscape" else (2, 1)
+            elif nplot <= 4: rows, cols = 2, 2
+            else: rows, cols = 3, 2
+        elif layout_option in ["1/p", "1"]: rows, cols = 1, 1
+        elif "2/p" in layout_option: rows, cols = 2, 1
+        elif "4/p" in layout_option: rows, cols = 2, 2
+        elif "6/p" in layout_option: rows, cols = 3, 2
+
+        if not frame_auto and frame_width and frame_height:
+            if fmt.lower() in ("png", "jpg", "jpeg"):
+                size_override = f"{frame_width},{frame_height}"
+            else:
+                size_override = f"{frame_width}{frame_unit},{frame_height}{frame_unit}"
+        else:
+            w, h = self._A4_SIZES.get(orientation, self._A4_SIZES["portrait"])
+            size_override = f"{w},{h}"
+
+        lines = [
+            "set encoding utf8",
+            self._get_terminal_cmd(fmt, outfile, None, size_override),
+            f"set output '{outfile.replace(chr(92), '/')}'"
+        ]
+
+        # margins/spacing를 "set multiplot layout" 한 줄에 같이 주는 방식은
+        # gnuplot 버전에 따라 파싱이 안 될 수 있고, 그러면 layout 자체가
+        # 무효화되어 모든 subplot이 분할 없이 전체 화면에 겹쳐 그려진다.
+        # 대신 각 칸의 위치를 여기서 직접 계산해서 매 subplot마다
+        # lmargin/rmargin/tmargin/bmargin을 절대좌표(at screen)로 지정한다.
+        # 이 방식은 gnuplot 버전과 무관하게 항상 동작하는 표준적인 방법이다.
+        l, r, b, t = margins
+        sx, sy = spacing
+
+        total_w = r - l
+        total_h = t - b
+        cell_w = (total_w - sx * (cols - 1)) / cols
+        cell_h = (total_h - sy * (rows - 1)) / rows
+
+        lines.append(f"set multiplot layout {rows},{cols}")
+
+        for i, plotdef in enumerate(plots):
+            row_idx = i // cols
+            col_idx = i % cols
+
+            cell_left = l + col_idx * (cell_w + sx)
+            cell_right = cell_left + cell_w
+            cell_top = t - row_idx * (cell_h + sy)
+            cell_bottom = cell_top - cell_h
+
+            if i > 0:
+                lines.append("unset title")
+                lines.append("set xtics auto")
+                lines.append("set ytics auto")
+                lines.append("set y2tics auto")
+
+            lines.append(f"set lmargin at screen {cell_left:.4f}")
+            lines.append(f"set rmargin at screen {cell_right:.4f}")
+            lines.append(f"set tmargin at screen {cell_top:.4f}")
+            lines.append(f"set bmargin at screen {cell_bottom:.4f}")
+
+            self._build_plot_commands(plotdef, lines, is_multiplot=True)
+
+        lines.append("unset multiplot")
+        lines.append("set output")
+
+        script_path = outfile.rsplit(".", 1)[0] + ".plt"
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+        gnuplot_exe = _resolve_gnuplot_exe()
+        result = subprocess.run(
+            [gnuplot_exe, script_path],
+            capture_output=True, text=True
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"gnuplot 실행 실패 (스크립트 보존됨: {script_path})\n"
+                f"{result.stderr.strip()}"
+            )
+
+        if not keep_script and os.path.exists(script_path):
+            os.remove(script_path)
+
+        return outfile
+
+눈금 폰트 크기 + Legend 테두리 두께 ? _build_plot_commands 안, f_scale 정의 바로 다음에 추가:
+찾기: 
+# 1.4 -> 1.8 or 2.2 etc
+        f_scale = 1.8 if getattr(plotdef, "is_print_mode", False) else 1.0
+
+        title_size = int(float(plotdef.title_size) * f_scale)
+-> 앞 부분과 확인
+# 1.4 -> 1.8 or 2.2 etc
+        f_scale = 1.8 if getattr(plotdef, "is_print_mode", False) else 1.0
+
+        tic_size = int(9 * f_scale)
+        lines.append(f"set xtics font '{plotdef.xlabel_font},{tic_size}'")
+        lines.append(f"set ytics font '{plotdef.ylabel_font},{tic_size}'")
+        if uses_y2:
+            lines.append(f"set y2tics font '{plotdef.y2label_font},{tic_size}'")
+
+        title_size = int(float(plotdef.title_size) * f_scale)
+
+찾기
+lines.append(f'set key enhanced {pos} {box} {opaque} font "{plotdef.xlabel_font},{int(9*f_scale)}" samplen 2.5 spacing 1.2')
+->
+key_lw = 1.5 * f_scale
+            lines.append(f'set key enhanced {pos} {box} {opaque} font "{plotdef.xlabel_font},{int(9*f_scale)}" samplen 2.5 spacing 1.2 linewidth {key_lw}')
+
+Frame Size 기본값 5×4in ? cathplot_gui.py, create_widgets 안:
+찾기:
+self.frame_auto_var = tk.BooleanVar(value=True)
+        self.frame_width_var = tk.StringVar(value="")
+        self.frame_height_var = tk.StringVar(value="")
+        self.frame_unit_var = tk.StringVar(value="in")
+->
+self.frame_auto_var = tk.BooleanVar(value=False)
+        self.frame_width_var = tk.StringVar(value="5")
+        self.frame_height_var = tk.StringVar(value="4")
+        self.frame_unit_var = tk.StringVar(value="in")
+
+execute_multi_plot_pipeline이 캐시 객체를 직접 고치던 것 + Frame Size 전달 안 되던 것 ? 같이 수정
+찾기:
+for plotdef in selected_plot_defs:
+            plotdef.frame_auto = final_frame_auto
+            plotdef.frame_width = final_frame_width
+            plotdef.frame_height = final_frame_height
+            plotdef.frame_unit = final_frame_unit
+            plotdef.is_print_mode = (mode == "Batch")
+
+        generator = GnuplotGenerator(self.plot_dir)
+        generator.create_multiplot_script(
+            plots=selected_plot_defs, outfile=outfile, fmt=fmt,
+            layout_option=layout_opt, orientation=self.orientation_var.get()
+        )
+
+        self.update_plot_file_list()
+        return outfile
+->
+import dataclasses
+        # 캐시에 저장된 원본 plotdef를 직접 고치는 대신 복사본을 만들어 적용한다.
+        run_plot_defs = [
+            dataclasses.replace(pd, is_print_mode=(mode == "Batch"))
+            for pd in selected_plot_defs
+        ]
+
+        generator = GnuplotGenerator(self.plot_dir)
+        generator.create_multiplot_script(
+            plots=run_plot_defs, outfile=outfile, fmt=fmt,
+            layout_option=layout_opt, orientation=self.orientation_var.get(),
+            keep_script=(mode == "Save"),
+            frame_auto=final_frame_auto, frame_width=final_frame_width,
+            frame_height=final_frame_height, frame_unit=final_frame_unit
+        )
+
+        self.update_plot_file_list()
+        return outfile
+
+안전 문제 ? show_multiplot_dialog가 삭제된 메서드를 아직 호출 중 (실제로 안 쓰는 다이얼로그지만, 호출되면 바로 AttributeError)
+찾기:
+if mode != "Save":
+                try:
+                    if os.path.exists(filepath):
+                        self._print_emf_and_cleanup(filepath, "CathPlot Multi Plot")
+                except Exception as e:
+                    messagebox.showerror("Print Error", f"인쇄 창을 띄우지 못했습니다: {e}", parent=dialog)
+->
+if mode != "Save":
+                if os.path.exists(filepath):
+                    threading.Thread(
+                        target=self._print_and_cleanup, args=(filepath,), daemon=True
+                    ).start()
+
+            

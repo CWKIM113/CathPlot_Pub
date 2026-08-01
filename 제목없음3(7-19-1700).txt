@@ -1,0 +1,241 @@
+7/19, 17:00
+
+1. Title이 비어도 파일명은 "PlotTitle" 대신 별도 File Name 입력창 사용
+cathplot_gui.py ? Row 0에 File Name 입력창 추가
+->
+# Row 0
+        ttk.Label(self.plot_frame, text="Plot Title").grid(row=0, column=0, padx=5, pady=2, sticky="w")
+        self.title_entry = ttk.Entry(self.plot_frame, textvariable=self.title_var, width=30)
+        self.title_entry.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        self.title_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.title_entry))
+#추가?
+        self.filename_var = tk.StringVar(value="CathPlot")
+        ttk.Label(self.plot_frame, text="File Name").grid(row=0, column=6, padx=(15, 5), pady=2, sticky="w")
+        self.filename_entry = ttk.Entry(self.plot_frame, textvariable=self.filename_var, width=16)
+        self.filename_entry.grid(row=0, column=7, padx=5, pady=2, sticky="w")
+
+첫 dat 파일 로드 시 File Name 기본값 채우기
+def update_title_from_first_file(self):
+        valid_files = [info for info in self.file_rows if info["filename"] and info["meta"]]
+        if valid_files:
+            first_filename = valid_files[0]["filename"]
+            base_name = os.path.splitext(os.path.basename(first_filename))[0]
+            self.title_var.set(base_name)
+        else:
+            self.title_var.set("CathPlot")
+->
+def update_title_from_first_file(self):
+        valid_files = [info for info in self.file_rows if info["filename"] and info["meta"]]
+        if valid_files:
+            first_filename = valid_files[0]["filename"]
+            base_name = os.path.splitext(os.path.basename(first_filename))[0]
+            self.title_var.set(base_name)
+            self.filename_var.set(base_name)
+        else:
+            self.title_var.set("CathPlot")
+            self.filename_var.set("CathPlot")
+
+execute_plot_pipeline에서 파일명/카운터를 File Name 기준으로
+def execute_plot_pipeline(self, mode, custom_filepath=None, custom_format=None):
+        os.makedirs(self.plot_dir, exist_ok=True)
+        raw_title = self.title_var.get().strip() or "Plot Title"
+
+        if mode == "Interactive":
+            if raw_title not in self.title_counters:
+                self.title_counters[raw_title] = 0
+            self.title_counters[raw_title] += 1
+            curr_id = self.title_counters[raw_title]
+        else:
+            # Save/Print(Batch)는 카운터를 증가시키지 않고, 마지막으로 그려진
+            # plot 창 번호를 그대로 따라간다 (아직 하나도 안 그렸으면 1)
+            curr_id = self.title_counters.get(raw_title, 0) or 1
+
+        safe_title = "".join([c for c in raw_title if c.isalnum() or c in ("_", "-")]).strip() or "Plot Title"
+->
+def execute_plot_pipeline(self, mode, custom_filepath=None, custom_format=None):
+        os.makedirs(self.plot_dir, exist_ok=True)
+        raw_title = self.filename_var.get().strip() or "CathPlot"
+
+        if mode == "Interactive":
+            if raw_title not in self.title_counters:
+                self.title_counters[raw_title] = 0
+            self.title_counters[raw_title] += 1
+            curr_id = self.title_counters[raw_title]
+        else:
+            curr_id = self.title_counters.get(raw_title, 0) or 1
+
+        safe_title = "".join([c for c in raw_title if c.isalnum() or c in ("_", "-")]).strip() or "CathPlot"
+
+execute_save_dialog도 동일하게
+def execute_save_dialog(self):
+        raw_title = self.title_var.get().strip() or "Plot Title"
+        next_id = self.title_counters.get(raw_title, 0) or 1
+        safe_title = "".join([c for c in raw_title if c.isalnum() or c in ("_", "-")]).strip() or "Plot Title"
+->
+def execute_save_dialog(self):
+        raw_title = self.filename_var.get().strip() or "CathPlot"
+        next_id = self.title_counters.get(raw_title, 0) or 1
+        safe_title = "".join([c for c in raw_title if c.isalnum() or c in ("_", "-")]).strip() or "CathPlot"
+
+2. PermissionError ? _Temp 제거의 부작용
+해결: 스크립트(.plt)는 화면에 보여줄 필요가 없는 임시 파일이니, Batch(Save/Print) 모드일 때는 결과 파일명과 무관하게 완전히 고유한 임시 이름을 쓰도록 분리
+
+gnu_generator.py 맨 위, 찾기:
+import os
+import shutil
+import subprocess
+import uuid    #추가
+
+create_script 안, 찾기
+script_path = outfile.rsplit(".", 1)[0] + ".plt"
+
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+        try:
+            gnuplot_exe = _resolve_gnuplot_exe()
+            if fmt.lower() == "interactive":
+                self.last_process = subprocess.Popen([gnuplot_exe, "-persist", script_path], cwd=plot_dir)
+            else:
+                subprocess.run([gnuplot_exe, script_path], check=True)
+        finally:
+            if fmt.lower() != "interactive" and os.path.exists(script_path):
+                os.remove(script_path)
+
+        return outfile
+->
+if fmt.lower() == "interactive":
+            # Interactive는 화면/목록에 보여줄 이름이 필요하므로 outfile 기준 이름 유지
+            script_path = outfile.rsplit(".", 1)[0] + ".plt"
+        else:
+            # Batch(Save/Print)는 사용자에게 안 보이는 임시 스크립트라, outfile
+            # 이름과 절대 겹치지 않는 고유 이름을 쓴다. (같은 제목으로 이미
+            # 열려있는 Interactive 창이 그 .plt 파일을 -persist로 붙잡고 있으면
+            # 같은 이름으로 쓰다가 PermissionError가 났었다)
+            script_path = os.path.join(plot_dir, f".cathplot_tmp_{uuid.uuid4().hex}.plt")
+
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+        try:
+            gnuplot_exe = _resolve_gnuplot_exe()
+            if fmt.lower() == "interactive":
+                self.last_process = subprocess.Popen([gnuplot_exe, "-persist", script_path], cwd=plot_dir)
+            else:
+                subprocess.run([gnuplot_exe, script_path], check=True)
+        finally:
+            if fmt.lower() != "interactive" and os.path.exists(script_path):
+                os.remove(script_path)
+
+        return outfile
+
+4. Close All Plots ? 취소 + "닫을 창 없음" 정확히 표시
+- 내용이 다름
+if mode == "system_all":
+                subprocess.run(["taskkill", "/F", "/IM", "gnuplot_qt.exe"], capture_output=True)
+                subprocess.run(["taskkill", "/F", "/IM", "gnuplot.exe"], capture_output=True)
+                self.plot_processes = []
+                messagebox.showinfo("Close All Plots", "시스템의 모든 gnuplot 창을 닫았습니다.")
+                return
+->
+if mode == "system_all":
+                check = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq gnuplot.exe"],
+                    capture_output=True, text=True
+                )
+                has_any = "gnuplot.exe" in check.stdout
+
+                subprocess.run(["taskkill", "/F", "/IM", "gnuplot_qt.exe"], capture_output=True)
+                subprocess.run(["taskkill", "/F", "/IM", "gnuplot.exe"], capture_output=True)
+                self.plot_processes = []
+
+                if has_any:
+                    messagebox.showinfo("Close All Plots", "시스템의 모든 gnuplot 창을 닫았습니다.")
+                else:
+                    messagebox.showinfo("Close All Plots", "닫을 gnuplot 창이 없습니다.")
+                return
+
+5. 저장 파일 폰트/선굵기/여백이 너무 작음(또는 더 키움)
+f_scale = 1.8 if getattr(plotdef, "is_print_mode", False) else 1.0  # <-1.4
+
+lines.append("set mouse")
+        lines.append("set border lw 1.5")
+->
+lines.append("set mouse")
+        lines.append(f"set border lw {1.5 * (1.5 if getattr(plotdef, 'is_print_mode', False) else 1.0)}")
+
+        if getattr(plotdef, "is_print_mode", False) and not is_multiplot:
+            # 단일 plot을 인쇄/저장용 큰 캔버스(A4 등)에 그릴 때 내용이 가장자리에
+            # 붙어서 여백이 없어 보이던 문제 - 기본 여백을 확보한다.
+            lines.append("set lmargin at screen 0.10")
+            lines.append("set tmargin at screen 0.90")
+            lines.append("set bmargin at screen 0.12")
+
+****
+인쇄오류 (pywin32관련) - 상기한 것 저장 확인 후 try
+cathplot_gui.py
+def execute_print_dialog(self):
+        idx = 1
+        while True:
+            #temp_emf = os.path.join(self.plot_dir, f"Print_Job_Temp_{idx}.emf")
+            temp_emf = os.path.join(self.plot_dir, f"Print_Job_{idx}.emf")
+            if not os.path.exists(temp_emf):
+                break
+            idx += 1
+        # The native dialog must run on Tk's main thread; no viewer process is used.
+        success_path = self.execute_plot_pipeline("Batch", custom_filepath=temp_emf, custom_format="EMF")
+        if success_path and os.path.exists(success_path):
+            self._print_emf_and_cleanup(success_path, "CathPlot Plot")
+    def _print_emf_and_cleanup(self, filepath, document_name):
+        """Show the native print dialog and spool an EMF without a PDF viewer."""
+        try:
+            dialog = win32ui.CreatePrintDialog(0)
+            if dialog.DoModal() != win32con.IDOK:
+                return False
+            dc = dialog.GetPrinterDC()
+            emf = None
+            try:
+                emf = win32gui.GetEnhMetaFile(os.path.abspath(filepath))
+                width = dc.GetDeviceCaps(win32con.HORZRES)
+                height = dc.GetDeviceCaps(win32con.VERTRES)
+                dc.StartDoc(document_name)
+                dc.StartPage()
+                win32gui.PlayEnhMetaFile(dc.GetSafeHdc(), emf, (0, 0, width, height))
+                dc.EndPage()
+                dc.EndDoc()
+            finally:
+                if emf:
+                    win32gui.DeleteEnhMetaFile(emf)
+                if dc:
+                    dc.DeleteDC()
+            return True
+        finally:
+            # No viewer has the EMF open, so cleanup is immediate and reliable.
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            except OSError:
+                pass
+->
+def execute_print_dialog(self):
+        idx = 1
+        while True:
+            temp_pdf = os.path.join(self.plot_dir, f"Print_Job_Temp_{idx}.pdf")
+            if not os.path.exists(temp_pdf):
+                break
+            idx += 1
+
+        success_path = self.execute_plot_pipeline("Batch", custom_filepath=temp_pdf, custom_format="PDF")
+
+        if success_path and os.path.exists(success_path):
+            threading.Thread(
+                target=self._print_and_cleanup, args=(success_path,), daemon=True
+            ).start()
+
+: 파일 위쪽에 import win32ui, import win32gui, import win32con이 있다면 이제 안 쓰이니 지우셔도 되고, 그냥 둬도 에러는 안 납니다 (사용 안 하는 import는 무해합니다).
+
+정리하면 세 가지 선택지입니다
+1)지금처럼 ShellExecute+PDF 유지 (안전, 검증됨, 화질은 벡터로 동일)
+2)직접 GDI 인쇄 재도전 (Tkinter로 프린터 목록 직접 만들고 win32gui로 그리기 ? gnuplot과 가장 비슷한 방식이지만 pywin32 문제가 다시 나올 수 있음)
+3) Python 버전을 3.12/3.13으로 내려서 pywin32가 확실히 안정적인 환경에서 2번 방식을 다시 시도
+

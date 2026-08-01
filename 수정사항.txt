@@ -1,0 +1,159 @@
+__init__ 안, 
+        self.create_widgets()
+        self.root.after(10, self.update_plot_file_list)
+        
+del_win.destroy()
+                #self.update_plot_file_list()
+->
+del_win.destroy()
+                self.update_plot_file_list()
+        
+Clean Past Plots 안
+            self.active_plots_cache.clear()
+            self.title_counters.clear()
+            #self.update_plot_file_list()
+->
+            self.active_plots_cache.clear()
+            self.title_counters.clear()
+            self.update_plot_file_list()
+
+execute_plot_pipeline 안
+safe_title = "".join([c for c in raw_title if c.isalnum() or c in ("_", "-")]).strip() or "Plot Title"
+        outfile = os.path.join(self.plot_dir, f"{safe_title}_{curr_id}.gnu" if mode == "Interactive" else f"{safe_title}_Temp_{curr_id}.gnu")
+->
+safe_title = "".join([c for c in raw_title if c.isalnum() or c in ("_", "-")]).strip() or "Plot Title"
+
+        if custom_filepath:
+            outfile = custom_filepath
+        else:
+            outfile = os.path.join(self.plot_dir, f"{safe_title}_{curr_id}.gnu" if mode == "Interactive" else f"{safe_title}_Temp_{curr_id}.gnu")
+            
+generator.create_script(...) 호출
+generator = GnuplotGenerator()
+        generator.create_script(
+            plotdef,
+            outfile,
+            fmt=mode
+        )
+
+#    def update_plot_file_list(self):
+#        if not hasattr(self, 'plot_dir') or not self.plot_dir: return
+#        files = glob.glob(os.path.join(self.plot_dir, "*.gnu"))
+#        files.sort(key=os.path.getctime)
+#        if hasattr(self, 'file_listbox'):
+#            self.file_listbox.delete(0, 'end')
+#            for f in files: self.file_listbox.insert('end', os.path.basename(f))
+
+->
+        if mode == "Interactive":
+            gnuplot_fmt = "interactive"
+        else:
+            gnuplot_fmt = (custom_format or "pdf").lower()
+
+        generator = GnuplotGenerator(self.plot_dir)
+        generator.create_script(
+            plotdef,
+            outfile,
+            fmt=gnuplot_fmt
+        )
+
+        self.update_plot_file_list()
+
+        return outfile
+
+
+    def update_plot_file_list(self):
+        if not hasattr(self, 'plot_dir') or not self.plot_dir: return
+        files = glob.glob(os.path.join(self.plot_dir, "*.gnu"))
+        files.sort(key=os.path.getctime)
+        if hasattr(self, 'file_listbox'):
+            self.file_listbox.delete(0, 'end')
+            for f in files: self.file_listbox.insert('end', os.path.basename(f))
+
+
+
+추가로
+1. plot창 task bar?에 나오던 가위 #... 특정 부분 누르면 plot창에서 해당 curve가 on/off됨. 살려두자!!!
+2. PDF legend box와 title 사이 여백 필요 (첫글자를 자름) - 처음 plot창도 그랬는데 지금은 수정되었으나 저장된 이미지는 수정안되었음 
+   하지만 PRINT 실행시 저장된이미지 파일(pdf)는 여백이 확보되어 있음. 여기엔 Y1 좌표 글자는 정상?인 듯한데y2(x 축은 확인필요) 글자는 작음.
+   PRINT이든 SAVE 이든  y1축 제목은 bold로 보이나 Plot, x, y2 축 제목은 bold 아닌 듯
+3. PRINT, SAVE 둘다 Legend box 크기가 창plot 대비 너무 작음 (반 정도?) font size 키우면 커 지려나? 그리고 Frame과 여백이 너무 작음
+4. y축 title은 2줄까지 가능하게, 한칸에 2번째 줄입력 안되나?       
+5. PRINT 시 WinError 32 다른 프로세스가 파일을 사용 중...
+   "d:\\cathplot\\plot\\Print_Job_Temp.pdf" plot을print할때 기 저장된 동일 파일의 이름이 존재하기 때문. 
+   (제대로 print 성공하면 삭제될 파일임. 이름을 titlename_# 해도 좋으나 save 할때 파일이랑 중복가능. Print_Job_Temp_#.ext 식으로는 가능.)
+   한컴PDF에서 Print_Job_Temp.pdf로 저장할지 물어옴. 파일이름 수정해서 저장하면
+   "잘못설치된 글꼴이나 시스템에 없는 글꼴을 PDF로 생성할 경우 일부 글자가 제대로 출력 안될 수 있다"는 메시지 창나옴. 
+   화면에 PDF 출력 (세로 페이지에 90도 회전하여 전체 크기로 나옴. 물론 글자크기는 작고...)
+6. Enable Grid check 해도 plot에 grid 표기 안됨
+   
+Exception in Tkinter callback
+Traceback (most recent call last):
+  File "C:\Users\kepco-enc\AppData\Local\Programs\Python\Python314\Lib\tkinter\__init__.py", line 2093, in __call__
+    return self.func(*args)
+           ~~~~~~~~~^^^^^^^
+  File "D:\CathPlot\cathplot_gui.py", line 1178, in execute_save_dialog
+    self.execute_plot_pipeline("Batch", custom_filepath=os.path.abspath(selected_path), custom_format=fmt_map.get(ext, "PDF"))
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\CathPlot\cathplot_gui.py", line 1141, in execute_plot_pipeline
+    generator.create_script(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        plotdef,
+        ^^^^^^^^
+        outfile,
+        ^^^^^^^^
+        fmt=gnuplot_fmt
+        ^^^^^^^^^^^^^^^
+    )
+    ^
+  File "D:\CathPlot\gnu_generator.py", line 484, in create_script
+    os.remove(script_path)
+    ~~~~~~~~~^^^^^^^^^^^^^
+PermissionError: [WinError 32] 다른 프로세스가 파일을 사용 중이기 때문에 
+프로세스가 액세스 할 수 없습니다: 'D:\\CathPlot\\plot\\out111_4.plt
+
+
+BG로 gnuplot.exe, gnuplot_qt.exe가 매우 많이 돌고 있음.
+
+?  3. PRINT/SAVE 누르면 파일 하나만 선택하게 뜸.? file list 창이 뜨고 선택한 것들을 페이지당 개수를 선택하게 해야지요?
+
+? ?4. PRINT 시 default 파일이 사용중?이라 뜨고 Print_Job_Temp.pdf로 묻고 파일을 저장/취소만 나옴. 
+      즉 다중 선택 후 페이지당 plot 정한 후 인쇄창이 떠야 정상. 굳이 저장하고 이미지 파일을 열 필요 없음.
+
+
+권장 버전: Gnuplot 5.2, 5.4 또는 6.0 이상, 최소 5.0
+
+"Clear All": color/linestyle도 Auto로
+
+빈title로 바뀐경우에도 창/파일이름을 처음title_#(Defalt)로 정하자. 지금은 PlotTitle_#.  
+-> file이름 지정 box를 만들어서 사용 (Default는 그대로 첫번째 지정된 Dat filename_#)
+  (PlotTitle은 많이 안쓰지만 길게 쓰는 경우도 있어서...)
+  
+계속 PLOT 시: (Plot Title=blank 후Plot 누를때마다)
+Exception in Tkinter callback
+Traceback (most recent call last):
+  File "C:\Users\kepco-enc\AppData\Local\Programs\Python\Python314\Lib\tkinter\__init__.py", line 2093, in __call__
+    return self.func(*args)
+           ~~~~~~~~~^^^^^^^
+  File "D:\CathPlot\cathplot_gui.py", line 1477, in execute_save_dialog
+    self.execute_plot_pipeline("Batch", custom_filepath=os.path.abspath(selected_path), custom_format=fmt_map.get(ext, "PDF"))
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\CathPlot\cathplot_gui.py", line 1252, in execute_plot_pipeline
+    generator.create_script(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        plotdef=plotdef,
+        ^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+        arrows=self._collect_arrows()
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "D:\CathPlot\gnu_generator.py", line 493, in create_script
+    os.remove(script_path)
+    ~~~~~~~~~^^^^^^^^^^^^^
+PermissionError: [WinError 32] 다른 프로세스가 파일을 사용 중이기 때문에 
+프로세스가 액세스 할 수 없습니다: 'D:\\CathPlot\\plot\\PlotTitle_1.plt' 
+(<- Plot Title = blank일때 PlotTitle_#.plt으로 지정되기 때문).
+
+Plot Title을 'Test'로 바꿔도 유사 오류 뜸. (plot창 이름은 'Test_1'인데 Test_1.plt 등은 안생김.
+

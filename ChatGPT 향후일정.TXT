@@ -1,0 +1,53 @@
+① data_parser.py
+CATHENA Parser
+General DAT Parser
+JSON 생성
+JSON 읽기
+DAT 변경 시 JSON 자동 재생성
+Min/Max, Row Min/Max 저장
+② cathplot_gui.py
+DAT 선택 시 JSON 우선 사용
+JSON 없으면 Parser 수행
+Tooltip(Variable Info)
+Variable 정보 API 추가
+③ gnu_generator.py
+_nice_axis_range()에서 DAT 직접 읽기 제거
+JSON 기반 Auto Scale
+Auto Tick 개선
+Y2 Auto 문제 수정
+④ Release Version
+
+CathPlot V1.0
+
+
+제가 작업할 내용은 이미 정리되어 있습니다.
+
+? data_parser.py
+
+JSON 생성
+JSON 읽기
+Row Min/Max 저장
+General DAT 지원
+
+? cathplot_gui.py
+
+JSON 우선 사용
+Tooltip
+Variable Info
+
+? gnu_generator.py
+
+JSON 기반 Auto Scale
+Y2 문제 수정
+Tick 개선
+
+
+그 이후 Version 1.1에서는 기능 확장을 진행하면 좋겠습니다. 예를 들면,
+
+Annotation(Graph/Data 좌표 선택)
+Arrow 기능 확장
+도형(Box, Circle 등)
+범례(Legend) 드래그 위치 저장
+템플릿 저장/불러오기
+Plot 설정 저장(Project 기능)
+기타 사용 편의 기능 (다중의 plot 자동화및 image(dedfault=PDF) 자동 저장의 일괄 수행)

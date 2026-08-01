@@ -1,0 +1,463 @@
+1. "각도" 선택 시 X버튼이 이상한 위치로 가는 문제 ? pack 순서 버그
+
+2. Comment/Arrow 구분 혼동 + 좌표/각도 선택 위치 + Len% 의미 불명확 + Enable 배치
+
+cathplot_gui.py
+1) 버튼/Enable 영역 재배치 + 기존 죽은 입력 삭제
+btn_f = ttk.Frame(self.anno_frame)
+        btn_f.pack(fill="x", pady=0)
+        ttk.Button(btn_f, text="+ Add Comment", command=self.add_comment_row).pack(side="left", padx=5)
+        ttk.Button(btn_f, text="+ Add Line/Arrow", command=self.add_arrow_row).pack(side="left", padx=5)
+
+        self.comment_on_var = tk.BooleanVar(value=False)
+        self.comment_text_var = tk.StringVar()
+        self.comment_x_var = tk.StringVar()
+        self.comment_y_var = tk.StringVar()
+
+        c_frame = ttk.Frame(self.anno_frame)
+        c_frame.pack(fill="x", padx=5, pady=0)
+        ttk.Checkbutton(c_frame, text="Enable Comment", variable=self.comment_on_var).pack(side="left", padx=5)
+        ttk.Label(c_frame, text="Text:").pack(side="left", padx=2)
+        self.c_entry = ttk.Entry(c_frame, textvariable=self.comment_text_var, width=30)
+        self.c_entry.pack(side="left", padx=5)
+        self.c_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.c_entry))
+
+        ttk.Label(c_frame, text="X(%Frame):").pack(side="left", padx=2)
+        ttk.Entry(c_frame, textvariable=self.comment_x_var, width=8).pack(side="left", padx=2)
+        ttk.Label(c_frame, text="Y1(%Frame):").pack(side="left", padx=2)
+        ttk.Entry(c_frame, textvariable=self.comment_y_var, width=8).pack(side="left", padx=2)
+
+        self.arrow_on_var = tk.BooleanVar(value=False)
+        self.arrow_mode_var = tk.StringVar(value="coord") 
+        self.arrow_x1_var = tk.StringVar()
+        self.arrow_y1_var = tk.StringVar()
+        self.arrow_x2_var = tk.StringVar()
+        self.arrow_y2_var = tk.StringVar()
+        self.arrow_len_var = tk.StringVar()   
+        self.arrow_ang_var = tk.StringVar()   
+        self.arrow_dir_var = tk.StringVar(value="nohead")
+
+        a_frame = ttk.Frame(self.anno_frame)
+        a_frame.pack(fill="x", padx=5, pady=0)
+        ttk.Checkbutton(a_frame, text="Enable Line/Arrow", variable=self.arrow_on_var).grid(row=0, column=0, sticky="w", padx=5)
+
+        ttk.Radiobutton(a_frame, text="좌표 기준 지정", value="coord", variable=self.arrow_mode_var, command=self.toggle_arrow_entry_state).grid(row=0, column=1, padx=5, sticky="w")
+        ttk.Radiobutton(a_frame, text="각도/길이 기준 지정", value="angle", variable=self.arrow_mode_var, command=self.toggle_arrow_entry_state).grid(row=0, column=2, padx=5, sticky="w")
+
+        inputs_f = ttk.Frame(a_frame)
+        inputs_f.grid(row=1, column=0, columnspan=4, sticky="ew", padx=5, pady=0)
+
+        ttk.Label(inputs_f, text="Start X1(%X_frame):").pack(side="left", padx=2)
+        ttk.Entry(inputs_f, textvariable=self.arrow_x1_var, width=7).pack(side="left", padx=2)
+        ttk.Label(inputs_f, text="Y1(%Y_frame):").pack(side="left", padx=2)
+        ttk.Entry(inputs_f, textvariable=self.arrow_y1_var, width=7).pack(side="left", padx=2)
+
+        self.coord_container = ttk.Frame(inputs_f)
+        self.coord_container.pack(side="left")
+        ttk.Label(self.coord_container, text="  →  End X2(%X_frame):").pack(side="left", padx=2)
+        ttk.Entry(self.coord_container, textvariable=self.arrow_x2_var, width=7).pack(side="left", padx=2)
+        ttk.Label(self.coord_container, text="Y2(%Y_frame):").pack(side="left", padx=2)
+        ttk.Entry(self.coord_container, textvariable=self.arrow_y2_var, width=7).pack(side="left", padx=2)
+
+        self.angle_container = ttk.Frame(inputs_f)
+        ttk.Label(self.angle_container, text="  →  Length:").pack(side="left", padx=2)
+        ttk.Entry(self.angle_container, textvariable=self.arrow_len_var, width=7).pack(side="left", padx=2)
+        ttk.Label(self.angle_container, text="Angle(°):").pack(side="left", padx=2)
+        ttk.Entry(self.angle_container, textvariable=self.arrow_ang_var, width=7).pack(side="left", padx=2)
+
+        ttk.Label(inputs_f, text="   Type:").pack(side="left", padx=5)
+        arrow_types = [("선 (No Arrow)", "nohead"), ("순방향 (→)", "head"), ("역방향 (←)", "backhead"), ("양방향 (↔)", "heads")]
+        a_type_combo = ttk.Combobox(inputs_f, textvariable=self.arrow_dir_var, values=[t[1] for t in arrow_types], width=10, state="readonly")
+        a_type_combo.pack(side="left", padx=2)
+-> 
+
+self.comment_on_var = tk.BooleanVar(value=True)
+        self.arrow_on_var = tk.BooleanVar(value=True)
+
+        btn_f = ttk.Frame(self.anno_frame)
+        btn_f.pack(fill="x", pady=0)
+
+        comment_btn_col = ttk.Frame(btn_f)
+        comment_btn_col.pack(side="left", padx=5)
+        ttk.Button(comment_btn_col, text="+ Add Comment", command=self.add_comment_row).pack(side="top", anchor="w")
+        ttk.Checkbutton(comment_btn_col, text="Enable Comments", variable=self.comment_on_var).pack(side="top", anchor="w")
+
+        arrow_btn_col = ttk.Frame(btn_f)
+        arrow_btn_col.pack(side="left", padx=15)
+        ttk.Button(arrow_btn_col, text="+ Add Line/Arrow", command=self.add_arrow_row).pack(side="top", anchor="w")
+        ttk.Checkbutton(arrow_btn_col, text="Enable Arrows", variable=self.arrow_on_var).pack(side="top", anchor="w")
+
+2) add_comment_row에 구분용 라벨 추가
+def add_comment_row(self):
+        row = ttk.Frame(self.c_list_frame)
+        row.pack(fill="x", pady=2)
+
+        data = {'txt': tk.StringVar(), 'x': tk.StringVar(), 'y': tk.StringVar(), 'frame': row}
+        self.comment_list.append(data)
+
+        ttk.Label(row, text="Txt:").pack(side="left")
+        ttk.Entry(row, textvariable=data['txt'], width=20).pack(side="left", padx=2)
+        ttk.Label(row, text="X%:").pack(side="left")
+        ttk.Entry(row, textvariable=data['x'], width=6).pack(side="left", padx=2)
+        ttk.Label(row, text="Y%:").pack(side="left")
+        ttk.Entry(row, textvariable=data['y'], width=6).pack(side="left", padx=2)
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.comment_list, row)).pack(side="left", padx=5)
+->
+def add_comment_row(self):
+        row = ttk.Frame(self.c_list_frame)
+        row.pack(fill="x", pady=2)
+
+        data = {'txt': tk.StringVar(), 'x': tk.StringVar(), 'y': tk.StringVar(), 'frame': row}
+        self.comment_list.append(data)
+
+        ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
+        ttk.Label(row, text="Txt:").pack(side="left")
+        ttk.Entry(row, textvariable=data['txt'], width=20).pack(side="left", padx=2)
+        ttk.Label(row, text="X(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['x'], width=6).pack(side="left", padx=2)
+        ttk.Label(row, text="Y(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['y'], width=6).pack(side="left", padx=2)
+        # side="right"로 고정 - 왼쪽에 뭐가 추가/제거되든 항상 맨 오른쪽에 유지됨
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.comment_list, row)).pack(side="right", padx=5)
+
+3) add_arrow_row ? X버튼 위치 고정, 좌표/각도 선택을 오른쪽으로, Len% 의미 명확화
+def add_arrow_row(self):
+        row = ttk.Frame(self.a_list_frame)
+        row.pack(fill="x", pady=2)
+
+        data = {'x1': tk.StringVar(), 'y1': tk.StringVar(), 'x2': tk.StringVar(), 'y2': tk.StringVar(),
+                'mode': tk.StringVar(value="coord"), 'len': tk.StringVar(), 'ang': tk.StringVar(),
+                'type': tk.StringVar(value="head"), 'frame': row}
+        self.arrow_list.append(data)
+
+        ttk.Label(row, text="X1%:").pack(side="left")
+        ttk.Entry(row, textvariable=data['x1'], width=5).pack(side="left", padx=1)
+        ttk.Label(row, text="Y1%:").pack(side="left")
+        ttk.Entry(row, textvariable=data['y1'], width=5).pack(side="left", padx=1)
+
+        coord_c = ttk.Frame(row)
+        ttk.Label(coord_c, text="→ X2%:").pack(side="left")
+        ttk.Entry(coord_c, textvariable=data['x2'], width=5).pack(side="left", padx=1)
+        ttk.Label(coord_c, text="Y2%:").pack(side="left")
+        ttk.Entry(coord_c, textvariable=data['y2'], width=5).pack(side="left", padx=1)
+
+        angle_c = ttk.Frame(row)
+        ttk.Label(angle_c, text="→ Len%:").pack(side="left")
+        ttk.Entry(angle_c, textvariable=data['len'], width=5).pack(side="left", padx=1)
+        ttk.Label(angle_c, text="Angle(0~360°):").pack(side="left")
+        ttk.Entry(angle_c, textvariable=data['ang'], width=5).pack(side="left", padx=1)
+
+        def toggle_row_mode():
+            if data['mode'].get() == "coord":
+                angle_c.pack_forget()
+                coord_c.pack(side="left")
+            else:
+                coord_c.pack_forget()
+                angle_c.pack(side="left")
+
+        ttk.Radiobutton(row, text="좌표", value="coord", variable=data['mode'], command=toggle_row_mode).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(row, text="각도", value="angle", variable=data['mode'], command=toggle_row_mode).pack(side="left")
+
+        coord_c.pack(side="left")
+
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.arrow_list, row)).pack(side="left", padx=5)
+
+->
+def add_arrow_row(self):
+        row = ttk.Frame(self.a_list_frame)
+        row.pack(fill="x", pady=2)
+
+        data = {'x1': tk.StringVar(), 'y1': tk.StringVar(), 'x2': tk.StringVar(), 'y2': tk.StringVar(),
+                'mode': tk.StringVar(value="coord"), 'len': tk.StringVar(), 'ang': tk.StringVar(),
+                'type': tk.StringVar(value="head"), 'frame': row}
+        self.arrow_list.append(data)
+
+        # 삭제 버튼을 먼저 side="right"로 고정 pack - 이후 좌표/각도 입력창이
+        # 바뀌어도(pack_forget/재pack) 항상 맨 오른쪽에 그대로 남는다.
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.arrow_list, row)).pack(side="right", padx=5)
+
+        ttk.Label(row, text="[Arrow]", foreground="darkred").pack(side="left", padx=(0, 5))
+
+        ttk.Label(row, text="X1(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['x1'], width=5).pack(side="left", padx=1)
+        ttk.Label(row, text="Y1(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['y1'], width=5).pack(side="left", padx=1)
+
+        coord_c = ttk.Frame(row)
+        ttk.Label(coord_c, text="→ X2(0~100%):").pack(side="left")
+        ttk.Entry(coord_c, textvariable=data['x2'], width=5).pack(side="left", padx=1)
+        ttk.Label(coord_c, text="Y2(0~100%):").pack(side="left")
+        ttk.Entry(coord_c, textvariable=data['y2'], width=5).pack(side="left", padx=1)
+
+        angle_c = ttk.Frame(row)
+        # Len: 전체 plot 가로/세로폭(0~100)을 기준으로 한 이동 거리.
+        # 예: Len=100, Angle=0 이면 X1에서 오른쪽으로 전체 폭만큼(=plot 오른쪽 끝까지) 이동.
+        ttk.Label(angle_c, text="→ Len(0~100=전체폭):").pack(side="left")
+        ttk.Entry(angle_c, textvariable=data['len'], width=5).pack(side="left", padx=1)
+        ttk.Label(angle_c, text="Angle(0~360°):").pack(side="left")
+        ttk.Entry(angle_c, textvariable=data['ang'], width=5).pack(side="left", padx=1)
+
+        def toggle_row_mode():
+            if data['mode'].get() == "coord":
+                angle_c.pack_forget()
+                coord_c.pack(side="left", before=mode_selector)
+            else:
+                coord_c.pack_forget()
+                angle_c.pack(side="left", before=mode_selector)
+
+        mode_selector = ttk.Frame(row)
+        ttk.Radiobutton(mode_selector, text="좌표", value="coord", variable=data['mode'], command=toggle_row_mode).pack(side="left")
+        ttk.Radiobutton(mode_selector, text="각도", value="angle", variable=data['mode'], command=toggle_row_mode).pack(side="left")
+        mode_selector.pack(side="left", padx=(8, 0))
+
+        coord_c.pack(side="left", before=mode_selector)
+
+gnu_generator.py
+Comment에 회전 각도(rotate by) 추가
+if annotations:
+            for i, ann in enumerate(annotations):
+                ann_text, ann_enh = self._render_text(ann["text"])
+                gx = _pct_to_frac(ann["x"])
+                gy = _pct_to_frac(ann["y"])
+                lines.append(f'set label {i+1} "{ann_text}" at graph {gx},graph {gy} {ann_enh}')
+
+        if arrows:
+            head_map = {"No head": "nohead", "Forward": "head", "Backhead": "backhead", "Both heads": "heads"}
+            for i, arr in enumerate(arrows):
+                head = head_map.get(arr.get("head", "Forward"), "head")
+                gx1 = _pct_to_frac(arr["x1"], 0.1)
+                gy1 = _pct_to_frac(arr["y1"], 0.1)
+                gx2 = _pct_to_frac(arr["x2"], 0.5)
+                gy2 = _pct_to_frac(arr["y2"], 0.5)
+                lines.append(
+                    f'set arrow {i+1} '
+                    f'from graph {gx1},graph {gy1} '
+                    f'to graph {gx2},graph {gy2} {head}'
+                )
+->
+if annotations:
+            for i, ann in enumerate(annotations):
+                ann_text, ann_enh = self._render_text(ann["text"])
+                gx = _pct_to_frac(ann["x"])
+                gy = _pct_to_frac(ann["y"])
+                try:
+                    angle_val = float(ann.get("angle", "0") or 0)
+                except (TypeError, ValueError):
+                    angle_val = 0
+                rotate_clause = f"rotate by {angle_val}" if angle_val else "norotate"
+                lines.append(
+                    f'set label {i+1} "{ann_text}" '
+                    f'at graph {gx},graph {gy} {rotate_clause} {ann_enh}'
+                )
+
+        if arrows:
+            head_map = {"No head": "nohead", "Forward": "head", "Backhead": "backhead", "Both heads": "heads"}
+            for i, arr in enumerate(arrows):
+                head = head_map.get(arr.get("head", "Forward"), "head")
+                gx1 = _pct_to_frac(arr["x1"], 0.1)
+                gy1 = _pct_to_frac(arr["y1"], 0.1)
+                gx2 = _pct_to_frac(arr["x2"], 0.5)
+                gy2 = _pct_to_frac(arr["y2"], 0.5)
+                lines.append(
+                    f'set arrow {i+1} '
+                    f'from graph {gx1},graph {gy1} '
+                    f'to graph {gx2},graph {gy2} {head}'
+                )
+
+cathplot_gui.py
+1) Comment 행에 Angle(0~360°) 입력 추가
+def add_comment_row(self):
+        row = ttk.Frame(self.c_list_frame)
+        row.pack(fill="x", pady=2)
+
+        data = {'txt': tk.StringVar(), 'x': tk.StringVar(), 'y': tk.StringVar(), 'frame': row}
+        self.comment_list.append(data)
+
+        ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
+        ttk.Label(row, text="Txt:").pack(side="left")
+        ttk.Entry(row, textvariable=data['txt'], width=20).pack(side="left", padx=2)
+        ttk.Label(row, text="X(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['x'], width=6).pack(side="left", padx=2)
+        ttk.Label(row, text="Y(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['y'], width=6).pack(side="left", padx=2)
+        # side="right"로 고정 - 왼쪽에 뭐가 추가/제거되든 항상 맨 오른쪽에 유지됨
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.comment_list, row)).pack(side="right", padx=5)
+->
+def add_comment_row(self):
+        row = ttk.Frame(self.c_list_frame)
+        row.pack(fill="x", pady=2)
+
+        data = {'txt': tk.StringVar(), 'x': tk.StringVar(), 'y': tk.StringVar(), 'ang': tk.StringVar(value="0"), 'frame': row}
+        self.comment_list.append(data)
+
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.comment_list, row)).pack(side="right", padx=5)
+
+        ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
+        ttk.Label(row, text="Txt:").pack(side="left")
+        ttk.Entry(row, textvariable=data['txt'], width=20).pack(side="left", padx=2)
+        ttk.Label(row, text="X(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['x'], width=6).pack(side="left", padx=2)
+        ttk.Label(row, text="Y(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['y'], width=6).pack(side="left", padx=2)
+        ttk.Label(row, text="Angle(0~360°):").pack(side="left")
+        ttk.Entry(row, textvariable=data['ang'], width=6).pack(side="left", padx=2)
+
+2) _collect_annotations에 angle 전달
+def _collect_annotations(self):
+        if not self.comment_on_var.get():
+            return []
+        annotations = []
+        for item in self.comment_list:
+            text = item['txt'].get().strip()
+            x = item['x'].get().strip()
+            y = item['y'].get().strip()
+            if text and x and y:
+                annotations.append({"text": text, "x": x, "y": y})
+        return annotations
+->
+def _collect_annotations(self):
+        if not self.comment_on_var.get():
+            return []
+        annotations = []
+        for item in self.comment_list:
+            text = item['txt'].get().strip()
+            x = item['x'].get().strip()
+            y = item['y'].get().strip()
+            angle = item['ang'].get().strip() or "0"
+            if text and x and y:
+                annotations.append({"text": text, "x": x, "y": y, "angle": angle})
+        return annotations
+
+3) Arrow ? 각도/길이 방식 제거, 좌표만 남김
+def add_arrow_row(self):
+        row = ttk.Frame(self.a_list_frame)
+        row.pack(fill="x", pady=2)
+
+        data = {'x1': tk.StringVar(), 'y1': tk.StringVar(), 'x2': tk.StringVar(), 'y2': tk.StringVar(),
+                'mode': tk.StringVar(value="coord"), 'len': tk.StringVar(), 'ang': tk.StringVar(),
+                'type': tk.StringVar(value="head"), 'frame': row}
+        self.arrow_list.append(data)
+
+        # 삭제 버튼을 먼저 side="right"로 고정 pack - 이후 좌표/각도 입력창이
+        # 바뀌어도(pack_forget/재pack) 항상 맨 오른쪽에 그대로 남는다.
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.arrow_list, row)).pack(side="right", padx=5)
+
+        ttk.Label(row, text="[Arrow]", foreground="darkred").pack(side="left", padx=(0, 5))
+
+        ttk.Label(row, text="X1(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['x1'], width=5).pack(side="left", padx=1)
+        ttk.Label(row, text="Y1(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['y1'], width=5).pack(side="left", padx=1)
+
+        coord_c = ttk.Frame(row)
+        ttk.Label(coord_c, text="→ X2(0~100%):").pack(side="left")
+        ttk.Entry(coord_c, textvariable=data['x2'], width=5).pack(side="left", padx=1)
+        ttk.Label(coord_c, text="Y2(0~100%):").pack(side="left")
+        ttk.Entry(coord_c, textvariable=data['y2'], width=5).pack(side="left", padx=1)
+
+        angle_c = ttk.Frame(row)
+        # Len: 전체 plot 가로/세로폭(0~100)을 기준으로 한 이동 거리.
+        # 예: Len=100, Angle=0 이면 X1에서 오른쪽으로 전체 폭만큼(=plot 오른쪽 끝까지) 이동.
+        ttk.Label(angle_c, text="→ Len(0~100=전체폭):").pack(side="left")
+        ttk.Entry(angle_c, textvariable=data['len'], width=5).pack(side="left", padx=1)
+        ttk.Label(angle_c, text="Angle(0~360°):").pack(side="left")
+        ttk.Entry(angle_c, textvariable=data['ang'], width=5).pack(side="left", padx=1)
+
+        def toggle_row_mode():
+            if data['mode'].get() == "coord":
+                angle_c.pack_forget()
+                coord_c.pack(side="left", before=mode_selector)
+            else:
+                coord_c.pack_forget()
+                angle_c.pack(side="left", before=mode_selector)
+
+        mode_selector = ttk.Frame(row)
+        ttk.Radiobutton(mode_selector, text="좌표", value="coord", variable=data['mode'], command=toggle_row_mode).pack(side="left")
+        ttk.Radiobutton(mode_selector, text="각도", value="angle", variable=data['mode'], command=toggle_row_mode).pack(side="left")
+        mode_selector.pack(side="left", padx=(8, 0))
+
+        coord_c.pack(side="left", before=mode_selector)
+->
+def add_arrow_row(self):
+        row = ttk.Frame(self.a_list_frame)
+        row.pack(fill="x", pady=2)
+
+        data = {'x1': tk.StringVar(), 'y1': tk.StringVar(), 'x2': tk.StringVar(), 'y2': tk.StringVar(),
+                'type': tk.StringVar(value="head"), 'frame': row}
+        self.arrow_list.append(data)
+
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.arrow_list, row)).pack(side="right", padx=5)
+
+        ttk.Label(row, text="[Arrow]", foreground="darkred").pack(side="left", padx=(0, 5))
+
+        ttk.Label(row, text="X1(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['x1'], width=5).pack(side="left", padx=1)
+        ttk.Label(row, text="Y1(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['y1'], width=5).pack(side="left", padx=1)
+        ttk.Label(row, text="→ X2(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['x2'], width=5).pack(side="left", padx=1)
+        ttk.Label(row, text="Y2(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['y2'], width=5).pack(side="left", padx=1)
+
+4) _collect_arrows ? 각도 모드 계산 로직 제거, 좌표만
+def _collect_arrows(self):
+        if not self.arrow_on_var.get():
+            return []
+
+        import math
+
+        head_label_map = {
+            "nohead": "No head", "head": "Forward",
+            "backhead": "Backhead", "heads": "Both heads"
+        }
+        arrows = []
+        for item in self.arrow_list:
+            x1 = item['x1'].get().strip()
+            y1 = item['y1'].get().strip()
+            if not (x1 and y1):
+                continue
+
+            if item['mode'].get() == "angle":
+                length = item['len'].get().strip()
+                angle = item['ang'].get().strip()
+                if not (length and angle):
+                    continue
+                try:
+                    x1f, y1f = float(x1), float(y1)
+                    len_f, ang_f = float(length), float(angle)
+                except ValueError:
+                    continue
+                x2 = str(x1f + len_f * math.cos(math.radians(ang_f)))
+                y2 = str(y1f + len_f * math.sin(math.radians(ang_f)))
+            else:
+                x2 = item['x2'].get().strip()
+                y2 = item['y2'].get().strip()
+                if not (x2 and y2):
+                    continue
+
+            head = head_label_map.get(item['type'].get(), "Forward")
+            arrows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "head": head})
+        return arrows
+->
+def _collect_arrows(self):
+        if not self.arrow_on_var.get():
+            return []
+
+        head_label_map = {
+            "nohead": "No head", "head": "Forward",
+            "backhead": "Backhead", "heads": "Both heads"
+        }
+        arrows = []
+        for item in self.arrow_list:
+            x1 = item['x1'].get().strip()
+            y1 = item['y1'].get().strip()
+            x2 = item['x2'].get().strip()
+            y2 = item['y2'].get().strip()
+            if not (x1 and y1 and x2 and y2):
+                continue
+
+            head = head_label_map.get(item['type'].get(), "Forward")
+            arrows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "head": head})
+        return arrows
+
+

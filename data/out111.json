@@ -1,0 +1,180 @@
+{
+    "filename": "out111.dat",
+    "date_line": " 18-Jun-2026  08:23  3.5.6.1                                               w2_SDCS_cooldn1_ss.inp",
+    "title_lines": [
+        " --  WOLSONG 234 MULTIPLE AVERAGE CHANNEL CIRCUIT MODEL FOR THE MODIFIED 37M FUEL ö-",
+        " --- COOL DOWN SS CALCULATION from POWER DOWN SS w/ SDCS for 9500 EFPD ----------"
+    ],
+    "format_line": "     (1X,F8.2,1X,3(F7.3,1X),2(E10.4,1X),5(F8.5,1X),2(F6.1,1X))",
+    "n_outputs": 12,
+    "variables": [
+        {
+            "output_no": 0,
+            "data_column": 1,
+            "signals": [
+                {
+                    "name": "Time",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 1,
+            "data_column": 2,
+            "signals": [
+                {
+                    "name": "TANK_LEV:PRSTNK",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 2,
+            "data_column": 3,
+            "signals": [
+                {
+                    "name": "PLC",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 3,
+            "data_column": 4,
+            "signals": [
+                {
+                    "name": "LPSET",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 4,
+            "data_column": 5,
+            "signals": [
+                {
+                    "name": "PRESS:PRSTNK(1)",
+                    "multiplier": 1e-06
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 5,
+            "data_column": 6,
+            "signals": [
+                {
+                    "name": "QRPRS",
+                    "multiplier": 1e-06
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 6,
+            "data_column": 7,
+            "signals": [
+                {
+                    "name": "PWRDWNI",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 7,
+            "data_column": 8,
+            "signals": [
+                {
+                    "name": "PWRDWNB",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 8,
+            "data_column": 9,
+            "signals": [
+                {
+                    "name": "PWRDWN",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 9,
+            "data_column": 10,
+            "signals": [
+                {
+                    "name": "PJC",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 10,
+            "data_column": 11,
+            "signals": [
+                {
+                    "name": "PB",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 11,
+            "data_column": 12,
+            "signals": [
+                {
+                    "name": "MFLO:R-FWP1>L-SSP1",
+                    "multiplier": 1.0
+                },
+                {
+                    "name": "MFLO:R-FWP2>L-SSP2",
+                    "multiplier": 1.0
+                },
+                {
+                    "name": "MFLO:R-FWP3>L-SSP3",
+                    "multiplier": 1.0
+                },
+                {
+                    "name": "MFLO:R-FWP4>L-SSP4",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 12,
+            "data_column": 13,
+            "signals": [
+                {
+                    "name": "MFLO:R-SDRT1>L-STLF1",
+                    "multiplier": 1.0
+                },
+                {
+                    "name": "MFLO:R-SDRT2>L-STLF2",
+                    "multiplier": 1.0
+                },
+                {
+                    "name": "MFLO:R-SDRT3>L-STLF3",
+                    "multiplier": 1.0
+                },
+                {
+                    "name": "MFLO:R-SDRT4>L-STLF4",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        }
+    ],
+    "data_start_line": 55
+}

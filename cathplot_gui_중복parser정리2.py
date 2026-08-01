@@ -1,0 +1,1313 @@
+# -*- coding: utf-8 -*-
+
+import tkinter as tk
+import os
+import subprocess
+import threading
+import time
+import glob
+import re
+
+from tkinter import ttk
+from tkinter import filedialog
+from tkinter import messagebox
+from pathlib import Path
+
+import win32api
+import pythoncom
+        
+from data_parser import CathenaDatParser, save_json
+from gnu_generator import PlotDefinition, CurveDefinition, GnuplotGenerator
+
+COLOR_MAP = {
+    "Auto": "",
+    "Black": "black",
+    "Red": "red",
+    "Blue": "blue",
+    "Green": "green",
+    "Magenta": "magenta",
+    "Cyan": "cyan",
+    "Orange": "orange",
+    "Brown": "brown",
+    "Purple": "purple",
+    "Gray": "gray",
+}
+
+STYLE_MAP = {
+    "Auto": "",
+    "Solid": "solid",
+    "Dash": "dash",
+    "Dot": "dot",
+    "Dash-Dot": "dashdot",
+    "Short Dash": "shortdash",
+    "Dash-Dot-Dot": "dashdotdot",
+}
+
+COLOR_LIST = list(COLOR_MAP.keys())
+STYLE_LIST = list(STYLE_MAP.keys())
+
+class CathPlotGUI:
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("CathPlot V1.0e ... By C. W. Kim @2026.07.24 ")
+        self.root.geometry("1200x800")
+        self.root.tk.call('tk', 'windowingsystem')
+
+        self.parser = CathenaDatParser()
+        self.file_rows = []
+        self.comment_list = []
+        self.arrow_list = []
+
+        self.selected_x_key = tk.StringVar(value="")
+        self.prev_x_key = ""
+
+        self.sorted_dat_cache = {}
+
+        self.selected_y1_vars = {}
+        self.selected_y2_vars = {}
+        self.legend_vars = {}
+        self.xshift_vars = {}
+            
+        self.color_vars = {}
+        self.linestyle_vars = {}
+        self.linewidth_vars = {}
+
+        self.active_entry = None
+        self.last_opened_dir = None
+        self.title_counters = {}
+        self.multi_counters = {}
+        self.active_plots_cache = {}
+        self.plot_processes = []
+        self.history_plots = []
+
+        self.y1_title_auto = True
+        self.y2_title_auto = True
+        self.x_title_auto = True
+
+        self._updating_y1 = False
+        self._updating_y2 = False
+        self._updating_x = False
+
+        self.layout_var = tk.StringVar(value="Auto")
+        self.orientation_var = tk.StringVar(value="portrait")
+
+        self.cwd = os.getcwd()
+        self.plot_dir = os.path.join(self.cwd, "plot")
+        os.makedirs(self.plot_dir, exist_ok=True)
+
+        self.create_widgets()
+        self.root.after(10, self.update_plot_file_list)
+
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def create_widgets(self):
+        self.file_frame = ttk.LabelFrame(self.root, text="DAT Files")
+        self.file_frame.pack(fill="x", padx=10, pady=0)
+
+        self.file_canvas = tk.Canvas(self.file_frame, height=75, width=120)
+        self.file_scrollbar = ttk.Scrollbar(
+            self.file_frame, orient="vertical", command=self.file_canvas.yview
+        )
+        self.file_scrollable_frame = ttk.Frame(self.file_canvas)
+
+        self.file_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.file_canvas.configure(
+                scrollregion=self.file_canvas.bbox("all")
+            )
+        )
+        self.file_canvas.create_window(
+            (0, 0), window=self.file_scrollable_frame, anchor="nw"
+        )
+        self.file_canvas.configure(yscrollcommand=self.file_scrollbar.set)
+
+        self.file_canvas.pack(side="left", fill="both", expand=True, padx=5, pady=0)
+        self.file_scrollbar.pack(side="right", fill="y")
+
+        self.add_file_btn = ttk.Button(
+            self.file_frame, text="+", width=3, command=self.add_file_row
+        )
+        self.add_file_btn.pack(side="right", padx=5, pady=0)
+
+        btn_container = ttk.Frame(self.root)
+        btn_container.pack(fill="x", padx=10, pady=0)
+
+        self.var_symbol_btn = ttk.Button(
+            btn_container, text=chr(937), width=5,
+            command=self.open_permanent_symbol_window
+        )
+        self.var_symbol_btn.pack(side="right", padx=5)
+
+        self.var_frame = ttk.LabelFrame(self.root, text="Available Variables Selection")
+        self.var_frame.pack(fill="x", expand=False, padx=10, pady=0)
+
+        self.canvas = tk.Canvas(self.var_frame, height=280)
+        self.scrollbar = ttk.Scrollbar(
+            self.var_frame, orient="vertical", command=self.canvas.yview
+        )
+        self.scrollable_frame = ttk.Frame(self.canvas)
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+        self.canvas.create_window(
+            (0, 0), window=self.scrollable_frame, anchor="nw"
+        )
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        self.plot_container = ttk.LabelFrame(self.root, text="Plot Setting")
+        self.plot_container.pack(fill="x", padx=10, pady=0)
+
+        self.plot_canvas = tk.Canvas(self.plot_container, height=300, highlightthickness=0)
+        self.plot_canvas.pack(side="left", fill="both", expand=True)
+
+        self.plot_scrollbar = ttk.Scrollbar(self.plot_container, orient="vertical", command=self.plot_canvas.yview)
+        self.plot_scrollbar.pack(side="right", fill="y")
+        self.plot_canvas.configure(yscrollcommand=self.plot_scrollbar.set)
+
+        self.plot_frame = ttk.Frame(self.plot_canvas)
+        self.canvas_window = self.plot_canvas.create_window((0, 0), window=self.plot_frame, anchor="nw")
+
+        self.plot_frame.bind(
+            "<Configure>",
+            lambda e: self.plot_canvas.configure(scrollregion=self.plot_canvas.bbox("all"))
+        )
+        self.plot_canvas.bind(
+            "<Configure>",
+            lambda e: self.plot_canvas.itemconfig(self.canvas_window, width=e.width)
+        )
+
+        self.title_var = tk.StringVar(value="Plot Title")
+        self.xlabel_var = tk.StringVar(value="")
+        self.ylabel_var = tk.StringVar(value="")
+        self.y2label_var = tk.StringVar(value="")
+
+        self.xauto_var = tk.BooleanVar(value=True)
+        self.yauto_var = tk.BooleanVar(value=True)
+        self.y2auto_var = tk.BooleanVar(value=True)
+
+        self.legend_on_var = tk.BooleanVar(value=True)
+        self.legend_box_var = tk.BooleanVar(value=True)
+        self.legend_pos_var = tk.StringVar(value="right top")
+
+        self.linewidth_var = tk.StringVar(value="1.5")
+
+        self.title_font_var = tk.StringVar(value="Malgun Gothic")
+        self.title_size_var = tk.StringVar(value="14")
+        self.xlabel_font_var = tk.StringVar(value="Malgun Gothic")
+        self.xlabel_size_var = tk.StringVar(value="11")
+        self.ylabel_font_var = tk.StringVar(value="Malgun Gothic")
+        self.ylabel_size_var = tk.StringVar(value="11")
+        self.y2label_font_var = tk.StringVar(value="Malgun Gothic")
+        self.y2label_size_var = tk.StringVar(value="11")
+
+        font_list = ["Malgun Gothic", "Arial", "Times New Roman", "Courier New", "Consolas"]
+        size_list = ["6", "8", "9", "10", "11", "12", "14", "16", "18", "20"]
+        linewidth_list = ["0.8","1.0","1.2","1.5","2.0","2.5","3.0","4.0"]
+
+        # Row 0
+        ttk.Label(self.plot_frame, text="Plot Title").grid(row=0, column=0, padx=5, pady=2, sticky="w")
+        self.title_entry = ttk.Entry(self.plot_frame, textvariable=self.title_var, width=30)
+        self.title_entry.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        self.title_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.title_entry))
+
+        t_font_frame = ttk.Frame(self.plot_frame)
+        t_font_frame.grid(row=0, column=2, padx=5, pady=2, sticky="w")
+        ttk.Combobox(t_font_frame, textvariable=self.title_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
+        ttk.Combobox(t_font_frame, textvariable=self.title_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
+
+        legend_frame = ttk.Frame(self.plot_frame)
+        legend_frame.grid(row=0, column=3, columnspan=3, padx=15, pady=2, sticky="w")
+        ttk.Checkbutton(legend_frame, text="Legend On", variable=self.legend_on_var).pack(side="left", padx=5)
+        ttk.Checkbutton(legend_frame, text="Legend Box", variable=self.legend_box_var).pack(side="left", padx=5)
+        ttk.Label(legend_frame, text="Pos:").pack(side="left", padx=2)
+        pos_list = ["right top", "right bottom", "left top", "left bottom", "center top", "center bottom", "center center", "outside right"]
+        ttk.Combobox(legend_frame, textvariable=self.legend_pos_var, values=pos_list, width=14, state="readonly").pack(side="left", padx=2)
+
+        ttk.Label(legend_frame, text="Width:").pack(side="left", padx=(12,2))
+        ttk.Combobox(legend_frame, textvariable=self.linewidth_var, values=linewidth_list, width=5, state="readonly").pack(side="left", padx=2)
+
+        # Row 1
+        ttk.Label(self.plot_frame, text="X Axis Title").grid(row=1, column=0, padx=5, pady=2, sticky="w")
+        self.xlabel_entry = ttk.Entry(self.plot_frame, textvariable=self.xlabel_var, width=30)
+        self.xlabel_entry.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+        self.xlabel_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.xlabel_entry))
+
+        x_font_frame = ttk.Frame(self.plot_frame)
+        x_font_frame.grid(row=1, column=2, padx=5, pady=2, sticky="w")
+        ttk.Combobox(x_font_frame, textvariable=self.xlabel_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
+        ttk.Combobox(x_font_frame, textvariable=self.xlabel_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
+
+        self.frame_auto_var = tk.BooleanVar(value=False)
+        self.frame_width_var = tk.StringVar(value="5")
+        self.frame_height_var = tk.StringVar(value="4")
+        self.frame_unit_var = tk.StringVar(value="in")
+
+        frame_size_f = ttk.Frame(self.plot_frame)
+        frame_size_f.grid(row=1, column=3, columnspan=3, sticky="w", padx=15, pady=2)
+
+        ttk.Checkbutton(
+            frame_size_f, text="Frame Size Auto", variable=self.frame_auto_var,
+            command=self.toggle_frame_size_state
+        ).pack(side="left", padx=5)
+
+        ttk.Label(frame_size_f, text="W:").pack(side="left", padx=(8, 2))
+        self.frame_width_entry = ttk.Entry(frame_size_f, textvariable=self.frame_width_var, width=6)
+        self.frame_width_entry.pack(side="left")
+
+        ttk.Label(frame_size_f, text="H:").pack(side="left", padx=(6, 2))
+        self.frame_height_entry = ttk.Entry(frame_size_f, textvariable=self.frame_height_var, width=6)
+        self.frame_height_entry.pack(side="left")
+
+        self.frame_unit_combo = ttk.Combobox(
+            frame_size_f, textvariable=self.frame_unit_var,
+            values=["in", "cm"], width=2, state="readonly"
+        )
+        self.frame_unit_combo.pack(side="left", padx=(6, 0))
+        self.toggle_frame_size_state()
+
+        # Row 2
+        ttk.Label(self.plot_frame, text="Y Left Title (Y1)").grid(row=2, column=0, padx=5, pady=2, sticky="w")
+        self.ylabel_entry = ttk.Entry(self.plot_frame, textvariable=self.ylabel_var, width=30)
+        self.ylabel_entry.grid(row=2, column=1, padx=5, pady=2, sticky="w")
+        self.ylabel_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.ylabel_entry))
+
+        y_font_frame = ttk.Frame(self.plot_frame)
+        y_font_frame.grid(row=2, column=2, padx=5, pady=2, sticky="w")
+        ttk.Combobox(y_font_frame, textvariable=self.ylabel_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
+        ttk.Combobox(y_font_frame, textvariable=self.ylabel_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
+
+        # Row 3
+        ttk.Label(self.plot_frame, text="Y Right Title (Y2)").grid(row=3, column=0, padx=5, pady=2, sticky="w")
+        self.y2label_entry = ttk.Entry(self.plot_frame, textvariable=self.y2label_var, width=30)
+        self.y2label_entry.grid(row=3, column=1, padx=5, pady=2, sticky="w")
+        self.y2label_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.y2label_entry))
+
+        y2_font_frame = ttk.Frame(self.plot_frame)
+        y2_font_frame.grid(row=3, column=2, padx=5, pady=2, sticky="w")
+        ttk.Combobox(y2_font_frame, textvariable=self.y2label_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
+        ttk.Combobox(y2_font_frame, textvariable=self.y2label_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
+
+        self.filename_var = tk.StringVar(value="CathPlot")
+        ttk.Label(self.plot_frame, text="Plot File Name").grid(row=2, column=3, padx=(20, 2), pady=2, sticky="w")
+        self.filename_entry = ttk.Entry(self.plot_frame, textvariable=self.filename_var, width=20)
+        self.filename_entry.grid(row=2, column=3, padx=(115, 5), pady=2, sticky="w")
+
+        # Row 4
+        ttk.Checkbutton(self.plot_frame, text="Auto X Range", variable=self.xauto_var).grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        ttk.Checkbutton(self.plot_frame, text="Auto Y Left (Y1)", variable=self.yauto_var).grid(row=4, column=2, sticky="w", padx=5, pady=2)
+        ttk.Checkbutton(self.plot_frame, text="Auto Y Right (Y2)", variable=self.y2auto_var).grid(row=4, column=4, sticky="w", padx=5, pady=2)
+
+        # Row 5
+        ttk.Label(self.plot_frame, text="X Min/Max").grid(row=5, column=0, sticky="w", padx=5, pady=2)
+        self.xmin_var = tk.StringVar()
+        self.xmax_var = tk.StringVar()
+        x_limit_f = ttk.Frame(self.plot_frame)
+        x_limit_f.grid(row=5, column=1, sticky="w", padx=5)
+        ttk.Entry(x_limit_f, textvariable=self.xmin_var, width=9).pack(side="left")
+        ttk.Label(x_limit_f, text="~").pack(side="left", padx=2)
+        ttk.Entry(x_limit_f, textvariable=self.xmax_var, width=9).pack(side="left")
+
+        ttk.Label(self.plot_frame, text="Y Left (Y1) Min/Max").grid(row=5, column=2, sticky="w", padx=5, pady=0)
+        self.ymin_var = tk.StringVar()
+        self.ymax_var = tk.StringVar()
+        y1_limit_f = ttk.Frame(self.plot_frame)
+        y1_limit_f.grid(row=5, column=3, sticky="w", padx=5)
+        ttk.Entry(y1_limit_f, textvariable=self.ymin_var, width=9).pack(side="left")
+        ttk.Label(y1_limit_f, text="~").pack(side="left", padx=2)
+        ttk.Entry(y1_limit_f, textvariable=self.ymax_var, width=9).pack(side="left")
+
+        ttk.Label(self.plot_frame, text="Y Right (Y2) Min/Max").grid(row=5, column=4, sticky="w", padx=5, pady=2)
+        self.y2min_var = tk.StringVar()
+        self.y2max_var = tk.StringVar()
+        y2_limit_f = ttk.Frame(self.plot_frame)
+        y2_limit_f.grid(row=5, column=5, sticky="w", padx=5)
+        ttk.Entry(y2_limit_f, textvariable=self.y2min_var, width=9).pack(side="left")
+        ttk.Label(y2_limit_f, text="~").pack(side="left", padx=2)
+        ttk.Entry(y2_limit_f, textvariable=self.y2max_var, width=9).pack(side="left")
+
+        # Row 6
+        ttk.Label(self.plot_frame, text="X Tics/Minor").grid(row=6, column=0, sticky="w", padx=5, pady=2)
+        self.xtics_var = tk.StringVar()
+        self.mxtics_var = tk.StringVar()
+        x_tick_f = ttk.Frame(self.plot_frame)
+        x_tick_f.grid(row=6, column=1, sticky="w", padx=5)
+        ttk.Entry(x_tick_f, textvariable=self.xtics_var, width=9).pack(side="left")
+        ttk.Entry(x_tick_f, textvariable=self.mxtics_var, width=5).pack(side="left", padx=(5, 0))
+
+        ttk.Label(self.plot_frame, text="Y Left (Y1) Tics").grid(row=6, column=2, sticky="w", padx=5, pady=2)
+        self.ytics_var = tk.StringVar()
+        self.mytics_var = tk.StringVar()
+        y1_tick_f = ttk.Frame(self.plot_frame)
+        y1_tick_f.grid(row=6, column=3, sticky="w", padx=5)
+        ttk.Entry(y1_tick_f, textvariable=self.ytics_var, width=9).pack(side="left")
+        ttk.Entry(y1_tick_f, textvariable=self.mytics_var, width=5).pack(side="left", padx=(5, 0))
+
+        ttk.Label(self.plot_frame, text="Y Right (Y2) Tics").grid(row=6, column=4, sticky="w", padx=5, pady=2)
+        self.y2tics_var = tk.StringVar()
+        self.my2tics_var = tk.StringVar()
+        y2_tick_f = ttk.Frame(self.plot_frame)
+        y2_tick_f.grid(row=6, column=5, sticky="w", padx=5)
+        ttk.Entry(y2_tick_f, textvariable=self.y2tics_var, width=9).pack(side="left")
+        ttk.Entry(y2_tick_f, textvariable=self.my2tics_var, width=5).pack(side="left", padx=(5, 0))
+
+        # Row 7
+        self.major_grid_var = tk.BooleanVar(value=True)
+        self.minor_grid_var = tk.BooleanVar(value=False)
+
+        grid_checks_f = ttk.Frame(self.plot_frame)
+        grid_checks_f.grid(row=7, column=0, columnspan=2, sticky="w", padx=5, pady=2)
+
+        ttk.Checkbutton(
+            grid_checks_f, text="Major Grid", variable=self.major_grid_var,
+            command=self.on_major_grid_toggled
+        ).pack(side="left")
+
+        self.minor_grid_check = ttk.Checkbutton(
+            grid_checks_f, text="Minor Grid", variable=self.minor_grid_var
+        )
+        self.minor_grid_check.pack(side="left", padx=(8, 0))
+
+        # Annotations Area
+        self.anno_frame = ttk.LabelFrame(self.plot_frame, text="Multi Annotations")
+        self.anno_frame.grid(row=8, column=0, columnspan=6, sticky="ew", padx=5, pady=2)
+
+        self.c_list_frame = ttk.Frame(self.anno_frame)
+        self.c_list_frame.pack(fill="x", padx=5)
+        self.a_list_frame = ttk.Frame(self.anno_frame)
+        self.a_list_frame.pack(fill="x", padx=5)
+
+        self.comment_on_var = tk.BooleanVar(value=True)
+        self.arrow_on_var = tk.BooleanVar(value=True)
+
+        btn_f = ttk.Frame(self.anno_frame)
+        btn_f.pack(fill="x", pady=0)
+
+        comment_btn_col = ttk.Frame(btn_f)
+        comment_btn_col.pack(side="left", padx=5)
+        ttk.Button(comment_btn_col, text="+ Add Comment", command=self.add_comment_row).pack(side="top", anchor="w")
+        ttk.Checkbutton(comment_btn_col, text="Enable Comments", variable=self.comment_on_var).pack(side="top", anchor="w")
+
+        arrow_btn_col = ttk.Frame(btn_f)
+        arrow_btn_col.pack(side="left", padx=15)
+        ttk.Button(arrow_btn_col, text="+ Add Line/Arrow", command=self.add_arrow_row).pack(side="top", anchor="w")
+        ttk.Checkbutton(arrow_btn_col, text="Enable Arrows", variable=self.arrow_on_var).pack(side="top", anchor="w")
+
+        self.button_frame = ttk.Frame(self.root)
+        self.button_frame.pack(side="bottom", fill="x", padx=10, pady=10)
+
+        ttk.Button(self.button_frame, text="PLOT", command=lambda: self.execute_plot_pipeline("Interactive")).pack(side="left")
+        ttk.Button(self.button_frame, text="PRINT", command=self.execute_print_dialog).pack(side="left", padx=5)
+        ttk.Button(self.button_frame, text="SAVE", command=self.execute_save_dialog).pack(side="left", padx=5)
+        ttk.Button(self.button_frame, text="Close All Plots", command=self.close_all_plot_windows).pack(side="right", padx=5)
+        ttk.Button(self.button_frame, text="Multi Print/Save...", command=self.open_multi_plot_dialog).pack(side="left", padx=15)
+        ttk.Button(self.button_frame, text="Clean Past Plots", command=self.open_delete_dialog).pack(side="right", padx=5)
+
+        self.add_file_row()
+
+        self.ylabel_var.trace_add("write", lambda *args: self.on_y1_title_changed(*args))
+        self.y2label_var.trace_add("write", lambda *args: self.on_y2_title_changed(*args))
+        self.xlabel_var.trace_add("write", lambda *args: self.on_x_title_changed(*args))
+
+    def set_active_entry(self, entry):
+        self.active_entry = entry
+
+    def open_permanent_symbol_window(self):
+        sym_win = tk.Toplevel(self.root)
+        sym_win.title("Special Symbols")
+        sym_win.geometry("300x200")
+        sym_win.transient(self.root)
+
+        symbols = ["°", "±", "×", "÷", "≤", "≥", "≠", "?", "∞", "μ", "Ω", "Δ", "Σ", "α", "β", "γ"]
+        
+        frame = ttk.Frame(sym_win, padding=10)
+        frame.pack(fill="both", expand=True)
+
+        for i, sym in enumerate(symbols):
+            r, c = divmod(i, 4)
+            btn = ttk.Button(
+                frame, text=sym, width=4,
+                command=lambda s=sym: self.insert_symbol(s)
+            )
+            btn.grid(row=r, column=c, padx=3, pady=3)
+
+    def insert_symbol(self, sym):
+        if self.active_entry and isinstance(self.active_entry, (tk.Entry, ttk.Entry)):
+            try:
+                idx = self.active_entry.index(tk.INSERT)
+                self.active_entry.insert(idx, sym)
+            except Exception:
+                self.active_entry.insert(tk.END, sym)
+
+    def update_plot_file_list(self):
+        pass
+
+    def on_closing(self):
+        self.root.destroy()
+
+    def execute_print_dialog(self):
+        filepath = os.path.join(self.plot_dir, "CathPlot_Print_Temp.pdf")
+        self.execute_plot_pipeline("Batch", custom_filepath=filepath, custom_format="pdf")
+        if os.path.exists(filepath):
+            threading.Thread(target=self._print_and_cleanup, args=(filepath,), daemon=True).start()
+
+    def _print_and_cleanup(self, filepath):
+        try:
+            if os.name == 'nt':
+                os.startfile(filepath, "print")
+            else:
+                subprocess.run(["lp", filepath])
+        except Exception as e:
+            print(f"Print execution error: {e}")
+
+    def execute_save_dialog(self):
+        file_types = [
+            ("Portable Document Format (*.pdf)", "*.pdf"),
+            ("PNG Image (*.png)", "*.png"),
+            ("SVG Vector Graphic (*.svg)", "*.svg"),
+            ("JPEG Image (*.jpg)", "*.jpg"),
+            ("Enhanced Metafile (*.emf)", "*.emf"),
+            ("Encapsulated PostScript (*.eps)", "*.eps"),
+        ]
+        raw_title = self.filename_var.get().strip() or "CathPlot"
+        safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
+
+        filepath = filedialog.asksaveasfilename(
+            initialdir=self.plot_dir,
+            initialfile=safe_title,
+            defaultextension=".pdf",
+            filetypes=file_types,
+            title="Save Plot As..."
+        )
+        if not filepath:
+            return
+        fmt = os.path.splitext(filepath)[1].replace(".", "").lower()
+        self.execute_plot_pipeline("Batch", custom_filepath=filepath, custom_format=fmt)
+        messagebox.showinfo("Success", f"Plot saved successfully:\n{os.path.basename(filepath)}")
+
+    def open_delete_dialog(self):
+        files = glob.glob(os.path.join(self.plot_dir, "*.plt"))
+        if not files:
+            messagebox.showinfo("Clean Info", "No past plot files found.")
+            return
+
+        del_win = tk.Toplevel(self.root)
+        del_win.title("Delete Plot Files")
+        del_win.geometry("400x300")
+
+        listbox = tk.Listbox(del_win, selectmode=tk.EXTENDED)
+        listbox.pack(fill="both", expand=True, padx=10, pady=10)
+        for f in files:
+            listbox.insert(tk.END, os.path.basename(f))
+
+        def confirm_delete():
+            selected_indices = listbox.curselection()
+            if not selected_indices: return
+            if messagebox.askyesno("Confirm", "Selected files will be deleted. Proceed?"):
+                failed = []
+                for i in selected_indices:
+                    filename = listbox.get(i)
+                    try:
+                        os.remove(os.path.join(self.plot_dir, filename))
+                    except Exception as e:
+                        failed.append(f"{filename}: {e}")
+                del_win.destroy()
+                self.update_plot_file_list()
+                if failed:
+                    messagebox.showerror(
+                        "Delete Error",
+                        "일부 파일을 삭제하지 못했습니다:\n" + "\n".join(failed)
+                    )
+
+        ttk.Button(del_win, text="Delete Selected", command=confirm_delete).pack(pady=5)
+
+    def on_major_grid_toggled(self):
+        if self.major_grid_var.get():
+            self.minor_grid_check.config(state="normal")
+        else:
+            self.minor_grid_var.set(False)
+            self.minor_grid_check.config(state="disabled")
+
+    LAYOUT_GRID = {
+        "1/p": (1, 1),
+        "2/p": (2, 1),
+        "4/p": (2, 2),
+        "6/p": (3, 2),
+    }
+    LAYOUT_FIXED_ORIENTATION = {
+        "Auto": None,
+        "1/p": None,
+        "2/p": "portrait",
+        "4/p": None,
+        "6/p": None,
+    }
+    LAYOUT_DEFAULT_ORIENTATION = {
+        "Auto": "portrait",
+        "1/p": "portrait",
+        "2/p": "portrait",
+        "4/p": "landscape",
+        "6/p": "portrait",
+    }
+
+    def open_multi_plot_dialog(self):
+        if not self.active_plots_cache:
+            messagebox.showinfo(
+                "Multi Print/Save",
+                "먼저 PLOT으로 그림을 하나 이상 그려주세요."
+            )
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Multi Print / Save")
+        dialog.geometry("420x520")
+        dialog.transient(self.root)
+
+        ttk.Label(dialog, text="Select plots:").pack(anchor="w", padx=10, pady=(10, 0))
+
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        plot_listbox = tk.Listbox(list_frame, selectmode=tk.EXTENDED, exportselection=False)
+        scroll = ttk.Scrollbar(list_frame, orient="vertical", command=plot_listbox.yview)
+        plot_listbox.config(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        plot_listbox.pack(side="left", fill="both", expand=True)
+
+        available_names = sorted(self.active_plots_cache.keys())
+        available_plots = [self.active_plots_cache[name] for name in available_names]
+        for name in available_names:
+            plot_listbox.insert("end", name)
+
+        ttk.Label(dialog, text="Layout:").pack(anchor="w", padx=10, pady=(10, 0))
+        layout_combo = ttk.Combobox(
+            dialog, textvariable=self.layout_var,
+            values=["Auto", "1/p", "2/p", "4/p", "6/p"], state="readonly"
+        )
+        layout_combo.pack(fill="x", padx=10, pady=5)
+
+        orient_row = ttk.Frame(dialog)
+        orient_row.pack(fill="x", padx=10, pady=(0, 5))
+        ttk.Label(orient_row, text="Orientation:").pack(side="left")
+        orient_combo = ttk.Combobox(
+            orient_row, textvariable=self.orientation_var,
+            values=["portrait", "landscape"], state="readonly", width=12
+        )
+        orient_combo.pack(side="left", padx=(8, 0))
+
+        def on_layout_changed(*_):
+            layout = self.layout_var.get()
+            fixed = self.LAYOUT_FIXED_ORIENTATION.get(layout)
+            if fixed:
+                self.orientation_var.set(fixed)
+                orient_combo.config(state="disabled")
+            else:
+                self.orientation_var.set(self.LAYOUT_DEFAULT_ORIENTATION.get(layout, "portrait"))
+                orient_combo.config(state="readonly")
+
+        layout_combo.bind("<<ComboboxSelected>>", on_layout_changed)
+        on_layout_changed()
+
+        def on_execute(mode):
+            selected_indices = plot_listbox.curselection()
+            if not selected_indices:
+                messagebox.showwarning("Warning", "Please select at least one plot from the list.", parent=dialog)
+                return
+
+            selected_names = [available_names[i] for i in selected_indices]
+            selected_defs = [available_plots[i] for i in selected_indices]
+
+            layout = self.layout_var.get()
+            rows, cols = self.LAYOUT_GRID.get(layout, (1, 1))
+            orientation = self.orientation_var.get()
+
+            if layout != "Auto" and len(selected_defs) > rows * cols:
+                messagebox.showwarning(
+                    "Warning",
+                    f"'{layout}' 레이아웃은 최대 {rows*cols}개까지만 담을 수 있습니다.",
+                    parent=dialog
+                )
+                return
+
+            base_title = re.sub(r"_\d+$", "", selected_names[0])
+            self.multi_counters[base_title] = self.multi_counters.get(base_title, 0) + 1
+            base_name = f"{base_title}_mul_{self.multi_counters[base_title]}"
+
+            if mode == "Save":
+                file_types = [
+                    ("Portable Document Format (*.pdf)", "*.pdf"),
+                    ("PNG Image (*.png)", "*.png"),
+                    ("SVG Vector Graphic (*.svg)", "*.svg"),
+                    ("JPEG Image (*.jpg)", "*.jpg"),
+                ]
+                filepath = filedialog.asksaveasfilename(
+                    parent=dialog,
+                    initialdir=self.plot_dir,
+                    initialfile=base_name,
+                    defaultextension=".pdf",
+                    filetypes=file_types,
+                    title="Save Multiplot As..."
+                )
+                if not filepath:
+                    return
+
+                fmt = os.path.splitext(filepath)[1].replace(".", "").lower()
+                self.execute_multi_plot_pipeline(selected_defs, mode, filepath, fmt)
+                dialog.destroy()
+                messagebox.showinfo("Success", f"Saved: {os.path.basename(filepath)}")
+            else:
+                idx = 1
+                while True:
+                    temp_pdf = os.path.join(self.plot_dir, f"MultiPlot_Print_{idx}.pdf")
+                    if not os.path.exists(temp_pdf):
+                        break
+                    idx += 1
+
+                dialog.destroy()
+                try:
+                    self.execute_multi_plot_pipeline(selected_defs, "Batch", temp_pdf, "pdf")
+                    if os.path.exists(temp_pdf):
+                        threading.Thread(
+                            target=self._print_and_cleanup, args=(temp_pdf,), daemon=True
+                        ).start()
+                except Exception as e:
+                    messagebox.showerror("Print Error", str(e))
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill="x", pady=15)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side="right", padx=15)
+        ttk.Button(btn_frame, text="Save...", command=lambda: on_execute("Save")).pack(side="right", padx=5)
+        ttk.Button(btn_frame, text="Print", command=lambda: on_execute("Print")).pack(side="right", padx=5)
+
+    def execute_multi_plot_pipeline(self, plot_defs, mode, filepath, fmt):
+        generator = GnuplotGenerator(self.plot_dir)
+        layout = self.layout_var.get()
+        rows, cols = self.LAYOUT_GRID.get(layout, (1, 1))
+        
+        generator.create_multi_script(
+            plot_defs=plot_defs,
+            outfile=filepath,
+            fmt=fmt,
+            rows=rows,
+            cols=cols,
+            orientation=self.orientation_var.get()
+        )
+
+    def close_all_plot_windows(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Close All Plots")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="어떻게 닫으시겠습니까?", padding=15).pack()
+
+        def do_close(mode):
+            dlg.destroy()
+            if mode == "cancel":
+                return
+            if mode == "system_all":
+                subprocess.run(["taskkill", "/F", "/IM", "gnuplot_qt.exe"], capture_output=True)
+                subprocess.run(["taskkill", "/F", "/IM", "gnuplot.exe"], capture_output=True)
+                self.plot_processes = []
+                messagebox.showinfo("Close All Plots", "시스템의 모든 gnuplot 창을 닫았습니다.")
+                return
+
+            targets = list(self.plot_processes)
+            closed = 0
+            for proc in targets:
+                if proc.poll() is not None:
+                    continue
+                try:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+                    closed += 1
+                except Exception:
+                    pass
+            self.plot_processes.clear()
+            messagebox.showinfo("Close All Plots", f"{closed}개의 plot 창을 닫았습니다.")
+
+        btn_f = ttk.Frame(dlg, padding=10)
+        btn_f.pack(fill="x")
+        ttk.Button(btn_f, text="이 프로그램에서 연 창 전부 닫기", command=lambda: do_close("all_mine")).pack(fill="x", pady=2)
+        ttk.Button(btn_f, text="시스템의 모든 gnuplot 창 닫기", command=lambda: do_close("system_all")).pack(fill="x", pady=2)
+        ttk.Button(btn_f, text="취소", command=lambda: do_close("cancel")).pack(fill="x", pady=(8, 2))
+
+    def toggle_frame_size_state(self):
+        state = "disabled" if self.frame_auto_var.get() else "normal"
+        self.frame_width_entry.config(state=state)
+        self.frame_height_entry.config(state=state)
+
+    def add_file_row(self):
+        var = tk.StringVar()
+        file_x_var = tk.StringVar(value="")
+        row = ttk.Frame(self.file_scrollable_frame)
+        info = {
+            "frame": row, "var": var, "filename": "", "meta": None,
+            "x_var": file_x_var
+        }
+        self.file_rows.append(info)
+        row.pack(fill="x", padx=5, pady=0)
+
+        ttk.Entry(row, textvariable=var, width=60).pack(side="left", padx=5)
+        ttk.Button(
+            row, text="Browse",
+            command=lambda v=var, r_info=info: self.load_dat_file(v, r_info)
+        ).pack(side="left")
+
+        ttk.Button(
+            row, text="X", width=2,
+            command=lambda r_info=info: self.delete_dat_file_row(r_info)
+        ).pack(side="left", padx=3)
+
+    def load_dat_file(self, var, r_info):
+        init_dir = self.last_opened_dir if (hasattr(self, 'last_opened_dir') and self.last_opened_dir) else self.cwd
+
+        filename = filedialog.askopenfilename(
+            initialdir=init_dir, title="Select DAT File",
+            filetypes=[("DAT files", "*.dat"), ("All files", "*.*")]
+        )
+        if not filename:
+            return
+        filename = os.path.abspath(filename)
+        self.last_opened_dir = os.path.dirname(filename)
+
+        datfile = r_info["filename"]
+        prefix = f"{datfile}||"
+
+        for d in (
+            self.legend_vars, self.selected_y1_vars, self.selected_y2_vars,
+            self.xshift_vars, self.color_vars, self.linestyle_vars, self.linewidth_vars,
+        ):
+            for key in list(d.keys()):
+                if key.startswith(prefix):
+                    del d[key]
+
+        if r_info["x_var"].get().startswith(prefix):
+            r_info["x_var"].set("")
+
+        var.set(filename)
+        r_info["filename"] = filename
+        r_info["meta"] = self.parser.parse(filename)
+
+        jsonfile = Path(filename).with_suffix(".json")
+        save_json(r_info["meta"], jsonfile)
+
+        self.load_variables_to_ui(filename, r_info["meta"])
+        self.update_title_from_first_file()
+        self.show_variables()
+
+    def load_variables_to_ui(self, dat_filepath, dat_info=None):
+        if dat_info is None:
+            parser = CathenaDatParser()
+            dat_info = parser.parse(dat_filepath)
+
+        if hasattr(self, 'var_listbox') and self.var_listbox:
+            self.var_listbox.delete(0, tk.END)
+            for var in dat_info.variables:
+                col_no = getattr(var, 'output_no', getattr(var, 'data_column', 0))
+                name_str = "Time" if col_no == 0 else f"OUTPUT {col_no}"
+                if hasattr(var, 'display_name') and var.display_name and not var.display_name.startswith("var_"):
+                    name_str = var.display_name
+                elif hasattr(var, 'signals') and var.signals and var.signals[0].name:
+                    name_str = var.signals[0].name
+                self.var_listbox.insert(tk.END, f"[{col_no}] {name_str}")
+                                
+    def delete_dat_file_row(self, r_info):
+        if "frame" in r_info and r_info["frame"].winfo_exists():
+            r_info["frame"].destroy()
+        if r_info in self.file_rows:
+            self.file_rows.remove(r_info)
+
+        datfile = r_info["filename"]
+        prefix = f"{datfile}||"
+
+        for d in (self.legend_vars, self.selected_y1_vars, self.selected_y2_vars, self.xshift_vars):
+            for key in list(d.keys()):
+                if key.startswith(prefix):
+                    del d[key]
+
+        if r_info["x_var"].get().startswith(prefix):
+            r_info["x_var"].set("")
+
+        self.update_title_from_first_file()
+        self.show_variables()
+
+    def update_title_from_first_file(self):
+        valid_files = [info for info in self.file_rows if info["filename"] and info["meta"]]
+        if valid_files:
+            first_filename = valid_files[0]["filename"]
+            base_name = os.path.splitext(os.path.basename(first_filename))[0]
+            self.title_var.set(base_name)
+            self.filename_var.set(base_name)
+        else:
+            self.title_var.set("CathPlot")
+            self.filename_var.set("CathPlot")
+
+    def add_comment_row(self):
+        row = ttk.Frame(self.c_list_frame)
+        row.pack(fill="x", pady=2)
+
+        data = {'txt': tk.StringVar(), 'x': tk.StringVar(), 'y': tk.StringVar(), 'ang': tk.StringVar(value="0"), 'frame': row}
+        self.comment_list.append(data)
+
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.comment_list, row)).pack(side="right", padx=5)
+        ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
+        ttk.Label(row, text="Txt:").pack(side="left")
+        ttk.Entry(row, textvariable=data['txt'], width=20).pack(side="left", padx=2)
+        ttk.Label(row, text="X(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['x'], width=6).pack(side="left", padx=2)
+        ttk.Label(row, text="Y(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['y'], width=6).pack(side="left", padx=2)
+        ttk.Label(row, text="Angle(0~360°):").pack(side="left")
+        ttk.Entry(row, textvariable=data['ang'], width=6).pack(side="left", padx=2)
+
+    ARROW_HEAD_DISPLAY_MAP = {
+        "No Head": "nohead",
+        "ForwHead": "head",
+        "BackHead": "backhead",
+        "Both Heads": "heads",
+    }
+
+    def add_arrow_row(self):
+        row = ttk.Frame(self.a_list_frame)
+        row.pack(fill="x", pady=2)
+
+        data = {'x1': tk.StringVar(), 'y1': tk.StringVar(), 'x2': tk.StringVar(), 'y2': tk.StringVar(),
+                'type': tk.StringVar(value="head"), 'frame': row}
+        self.arrow_list.append(data)
+
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.arrow_list, row)).pack(side="right", padx=5)
+
+        head_display_var = tk.StringVar(value="ForwHead")
+        def on_head_changed(*_):
+            data['type'].set(self.ARROW_HEAD_DISPLAY_MAP.get(head_display_var.get(), "head"))
+
+        head_combo = ttk.Combobox(
+            row, textvariable=head_display_var,
+            values=list(self.ARROW_HEAD_DISPLAY_MAP.keys()),
+            width=9, state="readonly"
+        )
+        head_combo.pack(side="right", padx=(10, 2))
+        head_combo.bind("<<ComboboxSelected>>", on_head_changed)
+
+        ttk.Label(row, text="[Arrow]", foreground="darkred").pack(side="left", padx=(0, 5))
+        ttk.Label(row, text="X1(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['x1'], width=5).pack(side="left", padx=1)
+        ttk.Label(row, text="Y1(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['y1'], width=5).pack(side="left", padx=1)
+        ttk.Label(row, text="→ X2(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['x2'], width=5).pack(side="left", padx=1)
+        ttk.Label(row, text="Y2(0~100%):").pack(side="left")
+        ttk.Entry(row, textvariable=data['y2'], width=5).pack(side="left", padx=1)
+
+    def remove_row(self, target_list, frame):
+        frame.destroy()
+        for item in target_list:
+            if item['frame'] == frame:
+                target_list.remove(item)
+                break
+
+    def clear_file_selections(self, target_df):
+        for k in list(self.selected_y1_vars.keys()):
+            if k.startswith(target_df):
+                was_selected = self.selected_y1_vars[k].get() or self.selected_y2_vars[k].get()
+                self.selected_y1_vars[k].set(False)
+                self.selected_y2_vars[k].set(False)
+                if was_selected:
+                    if k in self.color_vars:
+                        self.color_vars[k].set("Auto")
+                    if k in self.linestyle_vars:
+                        self.linestyle_vars[k].set("Auto")
+        if self.selected_x_key.get().startswith(target_df):
+            self.selected_x_key.set("")
+            self.prev_x_key = ""
+        self.sync_axis_labels()
+
+    def show_variables(self):
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        container = ttk.Frame(self.scrollable_frame)
+        container.pack(fill="both", expand=True, padx=0)
+
+        valid_file_count = 0
+        for idx, info in enumerate(self.file_rows):
+            if info["meta"] is None:
+                continue
+            datfile = info["filename"]
+            meta = info["meta"]
+            file_x_var = info["x_var"]
+
+            frame = ttk.LabelFrame(container, text=os.path.basename(datfile))
+            frame.grid(row=valid_file_count // 3, column=valid_file_count % 3, sticky="nw", padx=2, pady=2)
+            valid_file_count += 1
+
+            header_f = ttk.Frame(frame)
+            header_f.pack(fill="x", padx=2)
+            ttk.Label(header_f, text="No.  Variable", font=("Arial", 9, "bold"), width=24).pack(side="left")
+            ttk.Label(header_f, text="X", width=2, font=("Consolas",10,"bold")).pack(side="left")
+            ttk.Label(header_f, text="Y1", width=3, font=("Consolas",10,"bold")).pack(side="left")
+            ttk.Label(header_f, text="Y2", width=3, font=("Consolas",10,"bold")).pack(side="left")
+            ttk.Label(header_f, text="Shift", width=5, font=("Consolas",10,"bold")).pack(side="left")
+            ttk.Label(header_f, text="Color", width=6, font=("Consolas",10,"bold")).pack(side="left")
+            ttk.Label(header_f, text="Style", width=5, font=("Consolas",10,"bold")).pack(side="left")
+
+            for pv in meta.variables:
+                title = pv.signals[0].name if pv.signals else f"OUTPUT {pv.output_no}"
+                key_str = f"{datfile}||{pv.output_no}"
+
+                if key_str not in self.color_vars:
+                    self.color_vars[key_str] = tk.StringVar(value="Auto")
+                if key_str not in self.linestyle_vars:
+                    self.linestyle_vars[key_str] = tk.StringVar(value="Auto")
+                if key_str not in self.legend_vars:
+                    self.legend_vars[key_str] = tk.StringVar(value=title)
+                if key_str not in self.selected_y1_vars:
+                    self.selected_y1_vars[key_str] = tk.BooleanVar(value=False)
+                if key_str not in self.selected_y2_vars:
+                    self.selected_y2_vars[key_str] = tk.BooleanVar(value=False)
+                if key_str not in self.xshift_vars:
+                    self.xshift_vars[key_str] = tk.StringVar(value="0.0")
+                if key_str not in self.linewidth_vars:
+                    self.linewidth_vars[key_str] = tk.DoubleVar(value=1.5)
+
+                row_frame = ttk.Frame(frame)
+                row_frame.pack(anchor="w", fill="x", padx=0, pady=0)
+
+                ttk.Label(row_frame, text=f"{pv.output_no:>2}", width=3, anchor="e").pack(side="left")
+                entry = ttk.Entry(row_frame, textvariable=self.legend_vars[key_str], width=20)
+                entry.pack(side="left", padx=(1,0))
+                entry.bind("<FocusIn>", lambda e, ent=entry: self.set_active_entry(ent))
+
+                def make_x_cmd(target_key=key_str, f_x_var=file_x_var):
+                    def x_handler():
+                        if f_x_var.get() == target_key:
+                            self.selected_y1_vars[target_key].set(False)
+                            self.selected_y2_vars[target_key].set(False)
+                        self.sync_axis_labels()
+                    return x_handler
+
+                def on_x_radio_click(event, target_key=key_str, f_x_var=file_x_var):
+                    if f_x_var.get() == target_key:
+                        f_x_var.set("")
+                        self.sync_axis_labels()
+                        return "break"
+                        
+                def make_y_excl_cmd(target_key=key_str, clicked_axis="Y1", f_x_var=file_x_var):
+                    def y_excl_handler():
+                        if clicked_axis == "Y1":
+                            if self.selected_y1_vars[target_key].get():
+                                self.selected_y2_vars[target_key].set(False)
+                                if f_x_var.get() == target_key:
+                                    f_x_var.set("")
+                        elif clicked_axis == "Y2":
+                            if self.selected_y2_vars[target_key].get():
+                                self.selected_y1_vars[target_key].set(False)
+                                if f_x_var.get() == target_key:
+                                    f_x_var.set("")
+                        self.sync_axis_labels()
+                    return y_excl_handler
+
+                r_x = ttk.Radiobutton(row_frame, value=key_str, variable=file_x_var, command=make_x_cmd(key_str, file_x_var))
+                r_x.bind("<Button-1>", on_x_radio_click)
+
+                c_y1 = ttk.Checkbutton(row_frame, variable=self.selected_y1_vars[key_str], command=make_y_excl_cmd(key_str, "Y1", file_x_var))
+                c_y2 = ttk.Checkbutton(row_frame, variable=self.selected_y2_vars[key_str], command=make_y_excl_cmd(key_str, "Y2", file_x_var))
+
+                r_x.pack(side="left", padx=0)
+                c_y1.pack(side="left", padx=0)
+                c_y2.pack(side="left", padx=0)
+
+                ttk.Entry(row_frame, textvariable=self.xshift_vars[key_str], width=5).pack(side="left", padx=0)
+                ttk.Combobox(row_frame, textvariable=self.color_vars[key_str], values=COLOR_LIST, width=3, state="readonly").pack(side="left", padx=(2,0))
+                ttk.Combobox(row_frame, textvariable=self.linestyle_vars[key_str], values=STYLE_LIST, width=3, state="readonly").pack(side="left", padx=(2,0))
+
+            clear_btn_f = ttk.Frame(frame)
+            clear_btn_f.pack(fill="x", anchor="e", padx=5)
+            ttk.Button(clear_btn_f, text="Clear All", command=lambda tf=datfile: self.clear_file_selections(tf)).pack(side="right", pady=2)
+
+        self.scrollable_frame.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.sync_axis_labels()
+
+    def on_x_title_changed(self, *args):
+        if self._updating_x: return
+        self.x_title_auto = (self.xlabel_var.get().strip() == "")
+
+    def on_y1_title_changed(self, *args):
+        if self._updating_y1: return
+        self.y1_title_auto = (self.ylabel_var.get().strip() == "")
+
+    def on_y2_title_changed(self, *args):
+        if self._updating_y2: return
+        self.y2_title_auto = (self.y2label_var.get().strip() == "")
+
+    def sync_axis_labels(self):
+        x_key = ""
+        for info in self.file_rows:
+            if info.get("filename") and info.get("meta") is not None:
+                candidate = info["x_var"].get()
+                if candidate:
+                    x_key = candidate
+                    break
+
+        if self.x_title_auto:
+            self._updating_x = True
+            self.xlabel_var.set(self.legend_vars[x_key].get() if x_key in self.legend_vars else "")
+            self._updating_x = False
+
+        y1_selected = [self.legend_vars[k].get() for k, v in self.selected_y1_vars.items() if v.get()]
+        y2_selected = [self.legend_vars[k].get() for k, v in self.selected_y2_vars.items() if v.get()]
+
+        if self.y1_title_auto:
+            self._updating_y1 = True
+            self.ylabel_var.set(y1_selected[0] if y1_selected else "")
+            self._updating_y1 = False
+
+        if self.y2_title_auto:
+            self._updating_y2 = True
+            self.y2label_var.set(y2_selected[0] if y2_selected else "")
+            self._updating_y2 = False
+
+    def resort_dat_file(self, dat_file, x_col):
+        if not os.path.exists(dat_file):
+            return dat_file
+
+        temp_dir = os.path.join(self.plot_dir, "temp_sorted")
+        os.makedirs(temp_dir, exist_ok=True)
+
+        base_name = os.path.basename(dat_file)
+        name_root, ext = os.path.splitext(base_name)
+        sorted_filepath = os.path.join(temp_dir, f"{name_root}_sortedX{x_col}{ext}")
+
+        if os.path.exists(sorted_filepath):
+            return sorted_filepath
+
+        try:
+            dat_info = self.parser.parse(dat_file)
+            with open(dat_file, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+
+            head_titles = []
+            for pv in dat_info.variables:
+                title = pv.signals[0].name if (pv.signals and pv.signals[0].name) else f"OUTPUT {pv.output_no}"
+                head_titles.append(title)
+
+            data_rows = []
+            for line in lines[dat_info.data_start_line:]:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                parts = re.split(r'[,\s]+', stripped)
+                try:
+                    vals = [
+                        float(p.replace("D", "E").replace("d", "e").replace(",", ""))
+                        for p in parts
+                    ]
+                    data_rows.append(vals)
+                except ValueError:
+                    continue
+
+            if not data_rows:
+                return dat_file
+
+            if 0 <= x_col < len(data_rows[0]):
+                data_rows.sort(key=lambda r: r[x_col])
+
+            with open(sorted_filepath, 'w', encoding='utf-8') as f_out:
+                f_out.write("\t".join(head_titles) + "\n")
+                for r in data_rows:
+                    f_out.write("\t".join(map(str, r)) + "\n")
+
+            return sorted_filepath
+        except Exception:
+            return dat_file
+
+    def _collect_annotations(self):
+        if not self.comment_on_var.get():
+            return []
+        annotations = []
+        for item in self.comment_list:
+            text = item['txt'].get().strip()
+            x = item['x'].get().strip()
+            y = item['y'].get().strip()
+            angle = item['ang'].get().strip() or "0"
+            if text and x and y:
+                annotations.append({"text": text, "x": x, "y": y, "angle": angle})
+        return annotations
+
+    def _collect_arrows(self):
+        if not self.arrow_on_var.get():
+            return []
+        head_label_map = {
+            "nohead": "No head", "head": "Forward",
+            "backhead": "Backhead", "heads": "Both heads"
+        }
+        arrows = []
+        for item in self.arrow_list:
+            x1 = item['x1'].get().strip()
+            y1 = item['y1'].get().strip()
+            x2 = item['x2'].get().strip()
+            y2 = item['y2'].get().strip()
+            if not (x1 and y1 and x2 and y2):
+                continue
+            head = head_label_map.get(item['type'].get(), "Forward")
+            arrows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "head": head})
+        return arrows
+
+    def execute_plot_pipeline(self, mode="Interactive", custom_filepath=None, custom_format=None):
+        now = time.monotonic()
+        if now - getattr(self, "_last_plot_time", 0) < 0.7:
+            return
+        self._last_plot_time = now
+
+        try:	
+            active_y1_keys = [k for k, var in self.selected_y1_vars.items() if var.get()]
+            active_y2_keys = [k for k, var in self.selected_y2_vars.items() if var.get()]
+            
+            if not active_y1_keys and not active_y2_keys:
+                messagebox.showwarning("Warning", "Please select at least one Y variable to plot.")
+                return
+
+            curves = []
+            temp_curves_info = []
+
+            for key in active_y1_keys:
+                d_file, out_no = key.split("||")
+                temp_curves_info.append((d_file, int(out_no), self.legend_vars[key].get(), "y1", key))
+
+            for key in active_y2_keys:
+                d_file, out_no = key.split("||")
+                temp_curves_info.append((d_file, int(out_no), self.legend_vars[key].get(), "y2", key))
+
+            for d_file, out_no, title, axis, key in temp_curves_info:
+                file_x_output_no = 0  
+                if hasattr(self, 'file_rows'):
+                    for info in self.file_rows:
+                        if info.get("filename") == d_file:
+                            x_var_obj = info.get("x_var")
+                            if x_var_obj and hasattr(x_var_obj, 'get'):
+                                x_key_val = x_var_obj.get()
+                                if x_key_val and "||" in x_key_val:
+                                    _, x_out_no_str = x_key_val.split("||")
+                                    try:
+                                        file_x_output_no = int(x_out_no_str)
+                                    except (ValueError, AttributeError):
+                                        file_x_output_no = 0
+                            break
+
+                target_dat_file = d_file
+                if file_x_output_no > 0 and hasattr(self, 'resort_dat_file'):
+                    try:
+                        target_dat_file = self.resort_dat_file(d_file, file_x_output_no)
+                    except Exception:
+                        target_dat_file = d_file
+
+                curves.append(CurveDefinition(
+                    dat_file=target_dat_file, 
+                    output_no=out_no, 
+                    title=title, 
+                    axis=axis,
+                    x_shift=float(self.xshift_vars[key].get() or 0.0), 
+                    color=COLOR_MAP.get(self.color_vars[key].get(), None),
+                    linestyle=STYLE_MAP.get(self.linestyle_vars[key].get(), None), 
+                    linewidth=float(self.linewidth_vars[key].get() if key in self.linewidth_vars else 1.5),
+                    x_output_no=file_x_output_no
+                ))
+
+            if self.xauto_var.get():
+                all_x_vals = []
+                for curve in curves:
+                    x_idx = curve.x_output_no if curve.x_output_no is not None else 0
+                    try:
+                        with open(curve.dat_file, 'r', encoding='utf-8', errors='ignore') as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line or line.startswith('#'):
+                                    continue
+                                parts = line.split()
+                                if len(parts) > x_idx:
+                                    try:
+                                        all_x_vals.append(float(parts[x_idx]) + curve.x_shift)
+                                    except ValueError:
+                                        continue
+                    except Exception:
+                        pass
+             
+                if all_x_vals:
+                    min_v, max_v = min(all_x_vals), max(all_x_vals)
+                    margin = (max_v - min_v) * 0.05 if max_v != min_v else 1.0
+                    self.xmin_var.set(str(min_v - margin))
+                    self.xmax_var.set(str(max_v + margin))
+
+            os.makedirs(self.plot_dir, exist_ok=True)
+            target = "screen" if mode == "Interactive" else "file"
+            fmt = (custom_format or "pdf").lower() if target == "file" else "interactive"
+
+            raw_title = self.filename_var.get().strip() or "CathPlot"
+            safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
+
+            if custom_filepath:
+                outfile = custom_filepath
+            else:
+                next_id = self.title_counters.get(safe_title, 0) + 1
+                self.title_counters[safe_title] = next_id
+                base_name = f"{safe_title}_{next_id}"
+                outfile = os.path.join(
+                    self.plot_dir,
+                    f"{base_name}.plt" if target == "screen" else f"{base_name}.{fmt}"
+                )
+
+            plotdef = PlotDefinition(
+                title=self.title_var.get(),
+                xlabel=self.xlabel_var.get(),
+                ylabel=self.ylabel_var.get(),
+                y2label=self.y2label_var.get(),
+                output_format=mode,
+                xauto=self.xauto_var.get(),
+                yauto=self.yauto_var.get(),
+                y2auto=self.y2auto_var.get(),
+                xmin=self.xmin_var.get(), xmax=self.xmax_var.get(),
+                ymin=self.ymin_var.get(), ymax=self.ymax_var.get(),
+                y2min=self.y2min_var.get(), y2max=self.y2max_var.get(),
+                xtics=self.xtics_var.get(), ytics=self.ytics_var.get(), y2tics=self.y2tics_var.get(),
+                mxtics=self.mxtics_var.get(), mytics=self.mytics_var.get(), my2tics=self.my2tics_var.get(),
+                major_grid=self.major_grid_var.get(), minor_grid=self.minor_grid_var.get(),
+                legend_on=self.legend_on_var.get(), legend_box=self.legend_box_var.get(), legend_pos=self.legend_pos_var.get(),
+                curves=curves,
+                annotations=self._collect_annotations(),
+                arrows=self._collect_arrows(),
+                is_print_mode=(mode == "Batch"),
+            )
+
+            generator = GnuplotGenerator(self.plot_dir)
+            generator.create_script(
+                plotdef, outfile, fmt=fmt,
+                annotations=plotdef.annotations, arrows=plotdef.arrows
+            )
+
+            curr_id = getattr(self, 'current_dataset_id', 'default')
+            display_title = "".join(c for c in self.title_var.get() if c.isalnum() or c in (' ', '_', '-')).rstrip()
+
+            if mode == "Interactive" and generator.last_process is not None:
+                self.plot_processes.append(generator.last_process)
+                self.active_plots_cache[f"{display_title}_{curr_id}"] = plotdef
+
+            if plotdef not in self.history_plots:
+                self.history_plots.append(plotdef)
+
+            self.update_plot_file_list()
+            return outfile
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to execute plot pipeline: {e}")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = CathPlotGUI(root)
+    root.mainloop()

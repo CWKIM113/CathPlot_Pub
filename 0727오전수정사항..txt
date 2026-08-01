@@ -1,0 +1,41 @@
+1. 저장된 sorted file을 보면 sort 안된 상태로 저장됨. 즉 같은 DAT file 경우 x값이 달라도 내용이 동일함.(파일명은 바뀌지만)
+   어떤 파일에서 x변수 선택 없어도 그려짐(아마도 resort안된 경우? 무선택=time?) 
+   data file은 resort안되었는데 x auto scale(화면에 찍어주는 값 = plot후에 replace)은 x 변수에서 잡고 그림은 지그재그로 나옴.
+   y1만 그렸는데 y2 maj tic 간격이 y1과 다른 (킨수가 2배) 경우도 있음
+   x축 title은 y1 (y2)처럼 선택에 따라 맨 먼저 오는  title을 따라야 하는데, 첫 파일에서 x무선택이면 먼저 선택했던 첫 파일의 title이 그대로 사용됨. 
+   첫 파일의 x선택을 바꾸면 title이 바뀜 -> y축 처럼 바꾸어야
+2. Legend box 의 y2간격은 이전보다 2배 정도 인데 1.5정도로, x-top과는 2.1배 정도 커졌는데 y2축 간격과 같게
+3. 창 화면의 마진이 plot size (plot의 title 유무, 2줄 경우 포함) 무관하게 일정한지? (plot 크기는 margin에 따라 축소/확대?)
+   아니면 plot size 연동인지?에 따라  좌우상하 여백을 유동적으로 줘야해서...
+
+
+1. Tic관련: Mtic/Minor check 안한 상태에서 y1만 그릴 때, y2 축은 1y과 같은 Mtic/Minor 라야 하는데, 
+major tic은 같으나 minor tic이 y1과 달리 1개 기본으로 잡힘.그리고 grid 안 그려도 tic은 만들어 지는데 (OK), 
+ y2축 Mtic/Minor 입력에 따라 tic이 생성됨 (y1무관, 큰문제 없음), 문제는 이를 지우고(blank) 다시 그리면 
+ major tic은 이전 값으로 나오고 minor는 기본 1개로 잡혀서 y1축과 상이한 결과를 나타냄. 
+ x, y1은 모두 입력해서 plot 후 blank로 하여 다시 plot하면 Major tic은 reset 되나 minor tic은 1개로 그려짐.
+2. slow font initialization 위닝이 가끔 나타나는데, 어떤 경우엔 계속 나타나서 plot이 안되는 경우가 있음. 
+ (13번째 plot에서 무한 루프...)
+ cathplot 강제로 kill해도 cmd에서는 워닝 계속도미. (gnuplot_qt.exe가 BG에서 작동중)
+ 
+Gnuplot 프로세스를 매번 띄우지 않고, 하나의 영구적인 프로세스를 유지한 채 파이프(stdin)를 통해 명령어 스크립트만 연속해서 밀어 넣는 구조(Persistent Process 구조)로 전환하는 방안을 적용해야 합니다.
+이 방식의 핵심 구조는 다음과 같습니다:
+프로세스 재사용 (Persistent Session)
+배치 작업이 시작될 때 단 한 번 Gnuplot 프로세스(subprocess.Popen(['gnuplot', '-persist'], stdin=subprocess.PIPE, ...) 등)를 엽니다.
+여러 개의 플롯을 순회할 때마다 새로운 프로세스를 띄우는 대신, 열려 있는 파이프 객체(p.stdin.write(...))에 스크립트 내용을 계속 써넣습니다.
+안전한 자원 관리 (Context Manager 또는 명시적 종료)
+모든 배치가 완료되거나 예외(에러)가 발생했을 때 확실하게 프로세스를 닫아줄 수 있도록 구조화합니다(p.stdin.close(), p.wait()).
+이를 통해 강제로 프로그램을 꺼도 백그라운드에 gnuplot_qt.exe 좀비 프로세스가 매달려 파이프를 독점하는 현상을 원천 차단할 수 있습니다.
+
+
+1 Legend box top margin (legend box와 frame 사이) 이 너무 큼, 반정도로 줄여 줘
+1.y2변수가 없을 때,  y2축에 majnor tic span이 반으로 줄어서 tic이 2배로 많음. y2 major tic 바꾸어도 처음에서 바뀌지 않음. Minor도 입력 바꿔도 변경 없음.
+즉 y2 축 tid는 Major tic이 두배로 많고 입력줘도 바뀌지 않음. y1의 major/minor 바꾸어도 y2는 처음 그대로, 그러나 y1축은 바뀜.
+
+Error
+FAiled to execute piot pipeline cannot access local variable 
+'gnuplot.exe' where it tis not associated with a value
+
+Claude:
+set terminal qt enhanced title 'sample_1' font 'Malgun Gothic,11' size 5in,4in                                                                       ^
+"D:\CathPlot\Claude_files\plot\sample_1.plt" line 2: size requires 'width,heigth'

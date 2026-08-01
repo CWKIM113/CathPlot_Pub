@@ -1,0 +1,101 @@
+{
+    "filename": "PZR_Para.dat",
+    "date_line": " 23-Jun-2026  08:02  3.5.6.1                                                 w2_SDCS_cooldn1d.inp",
+    "title_lines": [
+        " --  WOLSONG 234 MULTIPLE AVERAGE CHANNEL CIRCUIT MODEL FOR THE MODIFIED 37M FUEL ö-",
+        " --- POWER DOWN CALCULATION from SS w/ SDCS AT 103%FP for 9500 EFPD -------------"
+    ],
+    "format_line": "     (1X,F8.2,1X,7(F7.2,1X))",
+    "n_outputs": 7,
+    "variables": [
+        {
+            "output_no": 0,
+            "data_column": 1,
+            "signals": [
+                {
+                    "name": "Time",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 1,
+            "data_column": 2,
+            "signals": [
+                {
+                    "name": "PLC",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 2,
+            "data_column": 3,
+            "signals": [
+                {
+                    "name": "TANK_LEV:PRSTNK",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 3,
+            "data_column": 4,
+            "signals": [
+                {
+                    "name": "TANK_CLEV:PRSTNK",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 4,
+            "data_column": 5,
+            "signals": [
+                {
+                    "name": "LPSET",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 5,
+            "data_column": 6,
+            "signals": [
+                {
+                    "name": "PRESS:PRSTNK(1)",
+                    "multiplier": 1e-06
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 6,
+            "data_column": 7,
+            "signals": [
+                {
+                    "name": "QRPRS",
+                    "multiplier": 1e-06
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 7,
+            "data_column": 8,
+            "signals": [
+                {
+                    "name": "TEMPF:PRSTNK(1)",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        }
+    ],
+    "data_start_line": 34
+}
