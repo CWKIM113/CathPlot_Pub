@@ -67,6 +67,14 @@ MARKER_SYMBOL_MAP = {
     1: "+",            # Cross
     3: "★",            # Star
 }
+# Legend 샘플선 위 마커 기호의 수직 보정치(ROW_H 배수, +면 위로/-면 아래로).
+# 세모류(△▲▽▼)는 잉크 무게중심이 위/아래로 치우쳐 있어 "center" 정렬만으로는
+# 샘플선 대비 어긋나 보임 - 실측(마커 전체 종류를 그려서 비교)으로 보정.
+MARKER_Y_OFFSET = {8: -0.15, 9: -0.10, 10: 0.15, 11: 0.10}
+# 위와 같은 이유로, 기호별 em-box 잉크 크기 차이를 보정하는 폰트 크기 배율
+# (1.0=그대로). "+"(pointtype 1)는 원/사각형/별표보다 훨씬 얇고 작게 그려져서
+# 눈에 띄게 작아 보인다는 피드백으로 확대.
+MARKER_SIZE_SCALE = {1: 1.8}
 
 #----------------------------------------------------------
 # Interactive
@@ -517,7 +525,7 @@ class GnuplotGenerator:
 
     def _render_legend_box(self, lines, curves, pos_raw, box_on, thick_val, id_offset,
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
-                            axis_w_in=5.0, legend_size=None):
+                            axis_w_in=5.0, legend_size=None, axis_h_in=4.0):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -526,7 +534,14 @@ class GnuplotGenerator:
         if not curves:
             return
 
-        ROW_H = 0.048 * (PRINT_FONT_SCALE if is_print_mode else SCREEN_FONT_SCALE) * panel_scale
+        font_pt = (legend_size if legend_size else 9) * f_scale
+        # [수정] ROW_H가 축 높이와 무관하게 그냥 graph 비율(0.048*panel_scale)로
+        # 고정돼 있어서, explicit frame으로 작은 물리 크기를 지정하면 실제 폰트
+        # 크기(font_pt)에 비해 줄 간격이 너무 좁아져 legend 줄들이 서로 겹쳐
+        # 보이는 문제가 있었음 - 축의 실제 물리적 높이(axis_h_in)를 기준으로
+        # 폰트 크기에 맞는 절대 줄 높이를 먼저 구하고, 그걸 graph 비율로 환산한다.
+        ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * 1.35
+        ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         ROW_MARGIN = 0.06 * ROW_H  # 박스 위/아래 내부 여백 (추가 축소)
         FRAME_MARGIN = 0.35 * ROW_H  # plot 테두리(frame)와 박스 사이 여백 (major tic의 절반이었던 걸, major tic보다 조금 크게 조정)
 
@@ -576,7 +591,6 @@ class GnuplotGenerator:
         # 실제 폭)으로 나눠 그래프 비율로 환산한다 - 기존엔 축 크기를 무시한 채
         # 고정 비율로 추정해서, 축이 큰 명시적 레이아웃에서 title이 실제보다
         # 넓은데도 좁게 계산되어 box를 벗어나는 문제가 있었다.
-        font_pt = (legend_size if legend_size else 9) * f_scale
         # [수정] Print/Save에서 18자 제목 기준 살짝 선 밖으로 나온다는 피드백 -
         # 화면(Interactive)은 그대로 두고 Print/Save만 여유를 좀 더 준다
         char_width_in = (0.0055 if is_print_mode else 0.0049) * font_pt  # 문자 하나당 대략적인 폭(인치), 폰트 크기(pt)에 비례
@@ -633,13 +647,21 @@ class GnuplotGenerator:
             marker_shape = getattr(curve, "marker_shape", None)
             if marker_shape in MARKER_SYMBOL_MAP:
                 sample_mid_x = (sample_x1 + sample_x2) / 2
-                # [수정] 기호 폰트의 수직 정렬 기준점이 일반 텍스트보다 낮아서
-                # row_y 그대로 쓰면 살짝 아래로 찍혀 보이는 문제 - 위로 살짝 보정
-                symbol_y = row_y  # 샘플선과 정확히 같은 높이 (ROW_H가 커지면서 이전 보정 오프셋이 과도해짐)
+                # [수정] "center" 정렬은 폰트의 cap-height 기준 중심에 맞추는데,
+                # 세모(△▲▽▼) 같은 기호는 실제 잉크(도형)의 무게중심이 위/아래로
+                # 치우쳐 있어서 그 기준으로는 샘플선 대비 위 또는 아래로 치우쳐
+                # 보이는 문제가 있었음(위쪽 세모는 위로, 아래쪽 세모는 아래로) -
+                # 기호별로 작은 보정치를 둬서 샘플선에 시각적으로 맞춘다.
+                symbol_y = row_y + MARKER_Y_OFFSET.get(marker_shape, 0.0) * ROW_H
+                # [추가] 유니코드 기호마다 글자 em-box 안에 그려지는 잉크 크기가
+                # 서로 달라서(예: "+"는 원/사각형보다 훨씬 작고 얇게 그려짐),
+                # 같은 font_pt로 찍어도 시각적 크기가 들쭥날쭥해 보이는 문제 -
+                # 기호별 배율을 둬서 시각적 크기를 서로 맞춘다.
+                symbol_pt = font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0)
                 lines.append(
                     f'set label {id_offset + 5000 + row_i + 1} "{MARKER_SYMBOL_MAP[marker_shape]}" '
                     f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front '
-                    f'font "{font_name},{int(font_pt)}" textcolor rgb "{color}"'
+                    f'font "{font_name},{int(round(symbol_pt))}" textcolor rgb "{color}"'
                 )
             lbl_text, lbl_enh = self._render_text(curve.title)
             lines.append(
@@ -647,7 +669,7 @@ class GnuplotGenerator:
                 f'{label_just} front font "{font_name},{int(font_pt)}" {lbl_enh}'
             )
 
-    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, panel_scale=1.0, axis_w_in=None):
+    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None):
 
         if getattr(plotdef, "is_print_mode", False):
             f_scale = PRINT_FONT_SCALE * panel_scale
@@ -884,24 +906,78 @@ class GnuplotGenerator:
                 except ValueError:
                     _fw_in, _fh_in = 0, 0
                 if _fw_in > 0 and _fh_in > 0:
+                    # [추가] 2줄 title/xlabel, tic 숫자 자릿수가 많을 때(큰 값/음수/
+                    # Scientific·Power10)도 절대 여백이 부족해 사라지는 것을 막는다.
+                    def _tick_digits(axis_name):
+                        try:
+                            nice = self._nice_axis_range(plotdef, axis_name)
+                        except Exception:
+                            nice = None
+                        if not nice:
+                            return 3
+                        y_lo, y_hi, _ = nice
+                        peak = max(abs(y_lo), abs(y_hi))
+                        return len(f"{peak:.0f}") if peak >= 1 else 1
+
+                    _xlabel_lines = 1 + (plotdef.xlabel or "").count("|")
+                    _ylabel_lines = 1 + (plotdef.ylabel or "").count("|")
+                    _y2label_lines = 1 + (getattr(plotdef, "y2label", "") or "").count("|")
+
                     if plotdef.title:
                         _need_top_in = 0.75 * f_scale * _title_lines
                         _tmargin_base = min(_tmargin_base, 1 - _need_top_in / _fh_in)
                     if plotdef.xlabel:
-                        _need_bottom_in = 0.85 * f_scale
+                        _need_bottom_in = 0.85 * f_scale + 0.35 * f_scale * (_xlabel_lines - 1)
+                        if _xfmt_label == "Scientific": _need_bottom_in += 0.15 * f_scale
+                        elif _xfmt_label == "Power10": _need_bottom_in += 0.08 * f_scale
                         _bmargin_base = max(_bmargin_base, _need_bottom_in / _fh_in)
-                    if plotdef.ylabel:
-                        _need_left_in = 1.0 * f_scale
+
+                    _need_left_in = 1.0 * f_scale + 0.5 * f_scale * (_ylabel_lines - 1) if plotdef.ylabel else 0.0
+                    _need_left_in += max(0, _tick_digits("y1") - 3) * 0.13 * f_scale
+                    if _y1fmt_label == "Scientific": _need_left_in += 0.4 * f_scale
+                    elif _y1fmt_label == "Power10": _need_left_in += 0.2 * f_scale
+                    if _need_left_in > 0:
                         _lmargin_base = max(_lmargin_base, _need_left_in / _fw_in)
-                    if uses_y2 and getattr(plotdef, "y2label", ""):
-                        _need_right_in = 1.0 * f_scale
-                        _rmargin_base = min(_rmargin_base, 1 - _need_right_in / _fw_in)
-                    # 극단적으로 작은 프레임에서 좌우/상하 마진이 서로 뒤집혀
-                    # 축 영역이 찌그러지거나 사라지는 것만 방지(최소 폭 확보)
-                    if _lmargin_base >= _rmargin_base:
-                        _rmargin_base = min(0.98, _lmargin_base + 0.05)
-                    if _tmargin_base <= _bmargin_base:
-                        _tmargin_base = max(_bmargin_base + 0.05, min(_tmargin_base, 0.98))
+
+                    if uses_y2:
+                        _need_right_in = 1.0 * f_scale + 0.5 * f_scale * (_y2label_lines - 1) if getattr(plotdef, "y2label", "") else 0.0
+                        _need_right_in += max(0, _tick_digits("y2") - 3) * 0.13 * f_scale
+                        if _y2fmt_label == "Scientific": _need_right_in += 0.4 * f_scale
+                        elif _y2fmt_label == "Power10": _need_right_in += 0.2 * f_scale
+                        if _need_right_in > 0:
+                            _rmargin_base = min(_rmargin_base, 1 - _need_right_in / _fw_in)
+
+                    # [추가] 2줄 title+2줄 xlabel처럼 위/아래(또는 좌/우) 여백
+                    # 요구가 동시에 겹치면, 위 로직이 각각은 "사라지지 않게"
+                    # 보장하더라도 그 사이에 남는 축(plot) 영역 자체가 거의
+                    # 0에 가깝게 쪼그라들어(예: 8cm 중 0.45in만 남음) tic
+                    # 숫자들이 서로 겹쳐 보이는 문제가 있었음 - title/xlabel이
+                    # 조금 빡빡해지는 것을 감수하고, 축 영역이 최소한 프레임의
+                    # 35%는 유지되도록 최종적으로 한 번 더 보정한다.
+                    _MIN_AXIS_FRAC = 0.35
+                    if _tmargin_base - _bmargin_base < _MIN_AXIS_FRAC:
+                        _mid = (_tmargin_base + _bmargin_base) / 2
+                        _tmargin_base = min(0.98, _mid + _MIN_AXIS_FRAC / 2)
+                        _bmargin_base = max(0.02, _mid - _MIN_AXIS_FRAC / 2)
+                    if _rmargin_base - _lmargin_base < _MIN_AXIS_FRAC:
+                        _mid = (_rmargin_base + _lmargin_base) / 2
+                        _rmargin_base = min(0.98, _mid + _MIN_AXIS_FRAC / 2)
+                        _lmargin_base = max(0.02, _mid - _MIN_AXIS_FRAC / 2)
+
+            # Legend box 줄 높이 계산에 쓸 축의 실제 물리적 "높이"(인치) - axis_w_in과
+            # 같은 이유로 필요(작은 explicit frame에서 legend 줄 간격이 폰트 크기에
+            # 비해 너무 좁아져 줄들이 겹쳐 보이는 문제의 원인이었음)
+            if axis_h_in is None:
+                try:
+                    if not getattr(plotdef, "frame_auto", True):
+                        _fh_for_legend = float((plotdef.frame_height or "4").strip() or 4.0)
+                        if (plotdef.frame_unit or "in") == "cm":
+                            _fh_for_legend /= 2.54
+                    else:
+                        _fh_for_legend = 700.0 / 168  # interactive 기본 터미널 높이(700px/168px_per_in)
+                except ValueError:
+                    _fh_for_legend = 4.0
+                axis_h_in = max((_tmargin_base - _bmargin_base) * _fh_for_legend, 0.3)
 
             lines.append(f"set lmargin at screen {_lmargin_base}")
             lines.append(f"set tmargin at screen {_tmargin_base}")
@@ -1178,7 +1254,14 @@ class GnuplotGenerator:
         elif fmt == "jpg":
             return f"set terminal jpeg {size_clause_px('size 1600,900')} enhanced font 'Malgun Gothic,11'"
         elif fmt == "svg":
-            return f"set terminal svg enhanced {size_clause('size 11.7in,8.3in')} font 'Malgun Gothic,11'"
+            # [수정] gnuplot의 svg 터미널은 size에 in/cm 같은 단위 접미사를 전혀
+            # 받지 못함("undefined variable: cm/in" 에러로 스크립트 실행이 실패함) -
+            # size_clause(단위 접미사 버전)를 쓰고 있어서, frame_auto 여부와
+            # 무관하게 항상 이 에러가 나고 있었고, gnuplot이 에러 후에도 남은
+            # 스크립트를 계속 실행해버려서 결과 svg의 width/height가 완전히
+            # 왜곡된 값(예: 10x480)으로 나오는 심각한 문제가 있었음. 다른 픽셀
+            # 전용 터미널(windows/emf/jpeg)과 동일하게 픽셀 숫자로 환산해서 넘긴다.
+            return f"set terminal svg enhanced {size_clause_px('size 1123,797', px_per_in=96)} font 'Malgun Gothic,11'"
         elif fmt == "pdf":
             return f"set terminal pdfcairo enhanced color font 'Malgun Gothic,11' {size_clause('size 11.7in,8.3in')}"
         elif fmt == "eps":
@@ -1417,6 +1500,22 @@ class GnuplotGenerator:
         title_margin_base = MARGIN_TOP_IN if any_title else MARGIN_TOP_NO_TITLE_IN
         margin_top = (title_margin_base + MARGIN_TOP_PER_EXTRA_LINE_IN * (max_title_lines - 1)) * margin_scale
         margin_bottom = MARGIN_BOTTOM_IN * margin_scale + extra_bottom_margin_in
+
+        # [추가] margin_top/bottom은 margin_scale(=font_panel_scale**0.65)로 완만하게
+        # 커지는데, 실제 title/xlabel 폰트는 font_panel_scale에 선형으로 비례해서
+        # 커진다(_build_plot_commands의 f_scale=panel_scale 그대로) - Auto 레이아웃에서
+        # 칸이 늘어날수록(font_panel_scale이 커질수록) 이 둘의 간극이 벌어져서,
+        # 위/아래로 붙은 옆 칸의 title/xlabel 텍스트가 서로 겹쳐 보이는 문제가
+        # 있었음(6/p 등에서 실측 확인) - 실제 폰트 크기 기준 최소 절대 여백을
+        # 보장한다.
+        if any_title:
+            _max_title_size = max((float(p.title_size or 14) for p in plots if (p.title or "").strip()), default=14.0)
+            _need_top_in = 0.75 * font_panel_scale * (_max_title_size / 14.0) * max_title_lines
+            margin_top = max(margin_top, _need_top_in)
+        if any((p.xlabel or "").strip() for p in plots):
+            _max_xlabel_size = max((float(p.xlabel_size or 11) for p in plots if (p.xlabel or "").strip()), default=11.0)
+            _need_bottom_in = 0.85 * font_panel_scale * (_max_xlabel_size / 11.0) + (0.35 if _any_x_2line else 0)
+            margin_bottom = max(margin_bottom, _need_bottom_in)
         spacing_in = CELL_SPACING_IN * layout_scale
 
         if frame_auto:
@@ -1476,12 +1575,22 @@ class GnuplotGenerator:
             # 커 보이는 문제가 있었음 - margin(제목/tic 라벨 자리, 폰트 크기와
             # 맞물려 있어 그대로 둬야 함)은 고정하고, axis와 spacing을 함께
             # 비례 축소하도록 재계산해서 간격 비율을 유지하고 plot 자체도 더 크게 나오게 함
+            # [핵심 수정] 위 k_w/k_h는 "margin은 고정, axis+spacing만 줄인다"는
+            # 가정으로 유도된 식(분자에서 margin*cols를 미리 빼둠)인데, 바로
+            # 아래에서 font_panel_scale에 이 scale을 다시 곱해 margin_left/right/
+            # top/bottom을 재계산하고 있어서 margin이 "고정"이 아니라 사실상
+            # scale만큼 한 번 더 줄어들고 있었음 - 그 결과 실제 그려지는 grid가
+            # 필요한 것보다 더 작아져서, 용지 안에 남는 공백(마진)이 의도한 것보다
+            # 훨씬 커 보이는 문제가 있었음("절대 마진이 비율로 한 번 더 추가된"
+            # 효과). margin도 axis/spacing과 함께 scale만큼 줄어드는 것을 전제로,
+            # cell 전체(axis+margin) x cols/rows + spacing이 printable 영역에
+            # 정확히 맞도록 scale을 다시 유도한다.
             scale = 1.0
             if axis_w > 0:
-                k_w = (printable_w - (margin_left + margin_right) * cols) / (axis_w * cols + spacing_in * (cols - 1))
+                k_w = printable_w / (cell_w_in * cols + spacing_in * (cols - 1))
                 scale = min(scale, max(k_w, 0.1))
             if axis_h > 0:
-                k_h = (printable_h - (margin_top + margin_bottom) * rows) / (axis_h * rows + spacing_in * (rows - 1))
+                k_h = printable_h / (cell_h_in * rows + spacing_in * (rows - 1))
                 scale = min(scale, max(k_h, 0.1))
 
             if scale < 0.999:
@@ -1553,6 +1662,7 @@ class GnuplotGenerator:
                 annotations=getattr(plotdef, "annotations", None),
                 arrows=getattr(plotdef, "arrows", None),
                 axis_w_in=axis_right_in - axis_left_in,
+                axis_h_in=axis_top_in - axis_bottom_in,
             )
 
         lines.append("unset multiplot")
