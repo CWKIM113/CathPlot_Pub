@@ -164,7 +164,7 @@ class CathPlotGUI:
         self.file_frame = ttk.LabelFrame(self.root, text="DAT Files")
         self.file_frame.pack(fill="x", padx=10, pady=0)
 
-        self.file_canvas = tk.Canvas(self.file_frame, height=75, width=120)
+        self.file_canvas = tk.Canvas(self.file_frame, height=85, width=120)
         self.file_scrollbar = ttk.Scrollbar(
             self.file_frame, orient="vertical", command=self.file_canvas.yview
         )
@@ -214,7 +214,7 @@ class CathPlotGUI:
         self.var_frame = ttk.LabelFrame(self.root, text="Available Variables Selection")
         self.var_frame.pack(fill="x", expand=False, padx=10, pady=0)
 
-        self.canvas = tk.Canvas(self.var_frame, height=280)
+        self.canvas = tk.Canvas(self.var_frame, height=290)
         self.scrollbar = ttk.Scrollbar(
             self.var_frame, orient="vertical", command=self.canvas.yview
         )
@@ -236,7 +236,7 @@ class CathPlotGUI:
         self.plot_container = ttk.LabelFrame(self.root, text="Plot Setting")
         self.plot_container.pack(fill="x", padx=10, pady=0)
 
-        self.plot_canvas = tk.Canvas(self.plot_container, height=300, highlightthickness=0)
+        self.plot_canvas = tk.Canvas(self.plot_container, height=330, highlightthickness=0)
         self.plot_canvas.pack(side="left", fill="both", expand=True)
 
         self.plot_scrollbar = ttk.Scrollbar(self.plot_container, orient="vertical", command=self.plot_canvas.yview)
@@ -594,7 +594,7 @@ class CathPlotGUI:
         ttk.Checkbutton(arrow_btn_col, text="Enable Arrows", variable=self.arrow_on_var).pack(side="top", anchor="w")
 
         # 고급: raw gnuplot 명령어 직접 입력 (여기 적은 내용은 생성되는 .plt 파일에 그대로 삽입됨)
-        self.raw_gnuplot_frame = ttk.LabelFrame(self.plot_frame, text="Advanced: Raw gnuplot commands (optional, inserted as-is before 'plot')")
+        self.raw_gnuplot_frame = ttk.LabelFrame(self.plot_frame, text="Advanced: Raw gnuplot commands")
         self.raw_gnuplot_frame.grid(row=9, column=0, columnspan=6, sticky="ew", padx=5, pady=2)
         self.raw_gnuplot_text = tk.Text(self.raw_gnuplot_frame, height=3, wrap="none")
         self.raw_gnuplot_text.pack(fill="x", padx=5, pady=3)
@@ -615,12 +615,12 @@ class CathPlotGUI:
         self.y2label_var.trace_add("write", lambda *args: self.on_y2_title_changed(*args))
         self.xlabel_var.trace_add("write", lambda *args: self.on_x_title_changed(*args))
 
-        # [수정] Plot Setting 캔버스 높이가 고정값(300)이라 실제 내용물보다 넉넉하면
-        # PLOT/PRINT/SAVE 버튼 줄 바로 위에 불필요한 빈 공간이 생기던 문제 -
-        # 내용물 실제 높이에 맞춰(최대 300까지) 캔버스 높이를 다시 지정
-        self.plot_frame.update_idletasks()
-        content_height = self.plot_frame.winfo_reqheight()
-        self.plot_canvas.configure(height=min(content_height, 300))
+        # [수정] content_height(Text 위젯이 포함된 raw_gnuplot_frame 때문에
+        # winfo_reqheight()가 실제보다 작게 잡히는 경우가 있어, 맨 아래 행
+        # (Advanced: Raw gnuplot commands)이 절반만 보이고 잘리는 문제가 있었음
+        # ("세로가 문제임") - 더 이상 content_height로 축소하지 않고, 항상
+        # 이 고정 높이를 그대로 사용한다(여유 공간이 남아도 감수).
+        self.plot_canvas.configure(height=390)
 
         # [기능 추가] 스크롤바에 마우스를 직접 올리지 않아도, 해당 스크롤 영역(파일 목록/
         # 변수 선택/Plot Setting) 위에서 마우스 휠을 굴리면 바로 스크롤되도록 바인딩
@@ -634,9 +634,11 @@ class CathPlotGUI:
         # 실제 필요한 높이로 창 크기를 다시 맞춰서 여백을 없앤다.
         self.root.update_idletasks()
         required_height = self.root.winfo_reqheight()
-        # [수정] 세로를 대문자 3~4자 정도(+70px) 더 여유 있게 달라는 피드백 -
-        # 실제 필요 높이에 딱 맞추는 대신 그만큼 더 크게 잡음
-        self.root.geometry(f"1330x{required_height + 70}")
+        # [수정] Plot Setting 캔버스를 고정 높이(390)로 키운 뒤로는 이 required_height
+        # 자체가 이미 그만큼 커져서, 예전처럼 추가 버퍼(+70px)를 더하면 PLOT 버튼
+        # 위에 불필요한 빈 공간이 남았음("PLOT 버튼 위가 3줄 정도 빔") - 버퍼 없이
+        # 필요한 높이 그대로 사용한다.
+        self.root.geometry(f"1330x{required_height}")
 
     def _disable_combobox_wheel(self, combo):
         """콤보박스(Color/Style 등) 위에서 마우스 휠을 굴리면 그 콤보박스의 값이
@@ -3256,9 +3258,14 @@ class CathPlotGUI:
             final_frame_width, final_frame_height, final_frame_unit = "", "", ""
 
         import dataclasses
+        # [수정] is_print_mode는 "실제 프린터로 보내는지"가 아니라 "화면(screen) vs
+        # 파일출력(print/save)" 폰트·마진·legend 산정 방식을 가르는 값인데, mode=="Batch"
+        # (Multi Print)만 True로 처리하고 mode=="Save"(Multi Save)는 빠져 있어서
+        # Save 결과가 화면용 legend 크기 공식으로 그려져 legend box가 과도하게
+        # 커지는 문제가 있었음 - Interactive(화면)만 False, 나머지(Batch/Save)는 True로 처리
         # 캐시에 저장된 원본 plotdef를 직접 고치는 대신 복사본을 만들어 적용한다.
         run_plot_defs = [
-            dataclasses.replace(pd, is_print_mode=(mode == "Batch"))
+            dataclasses.replace(pd, is_print_mode=(mode != "Interactive"))
             for pd in selected_plot_defs
         ]
 
@@ -3331,20 +3338,30 @@ class CathPlotGUI:
             import dataclasses
 
             def _apply_orientation_to_plotdef(pd, orientation):
-                """PRINT 시 선택한 용지 방향에 맞춰 plot의 frame 가로/세로 비율을
-                실제로 맞춘다. 예전엔 orientation이 용지 회전(DEVMODE)에만 쓰이고
-                콘텐츠(EMF) 자체는 항상 고정된 모양으로 생성돼서, 용지만 돌고
-                내용은 그대로라 "방향을 바꿔도 똑같이 나온다"는 문제가 있었다."""
-                try:
-                    w = float((pd.frame_width or "5").strip() or 5.0)
-                    h = float((pd.frame_height or "4").strip() or 4.0)
-                except ValueError:
-                    w, h = 5.0, 4.0
-                is_landscape_shape = w >= h
-                wants_landscape = (orientation == "landscape")
-                if is_landscape_shape != wants_landscape:
-                    w, h = h, w
-                return dataclasses.replace(pd, frame_auto=False, frame_width=str(w), frame_height=str(h))
+                """PRINT 시 실제 인쇄될 frame 크기를 정한다.
+                [수정] 화면(Interactive)은 frame 설정이 렌더링에 아무 영향도 없어
+                (캔버스가 항상 1000x700 고정) 캐시된 plot이 들고 있는 frame_auto/
+                width/height는 그 plot을 그릴 때 의도적으로 고른 값이 아니라 그
+                시점 GUI에 우연히 남아있던 값일 수 있음 - "크기는 항상 인쇄
+                시점의 현재 GUI Frame 설정을 따른다"로 통일한다(Multi-Print/
+                Save, '현재 화면 설정'과 동일 원칙). 고른 plot은 내용(curve 등)만
+                제공하고, 크기는 pd가 아니라 현재 GUI 상태에서 가져온다."""
+                if self.frame_auto_var.get():
+                    w_str, h_str = self._compute_auto_frame_size_cm(for_print=True, orientation=orientation)
+                    w, h = float(w_str), float(h_str)
+                    unit = "cm"
+                else:
+                    try:
+                        w = float((self.frame_width_var.get() or "10").strip() or 10.0)
+                        h = float((self.frame_height_var.get() or "8").strip() or 8.0)
+                    except ValueError:
+                        w, h = 10.0, 8.0
+                    unit = self.frame_unit_var.get()
+                    is_landscape_shape = w >= h
+                    wants_landscape = (orientation == "landscape")
+                    if is_landscape_shape != wants_landscape:
+                        w, h = h, w
+                return dataclasses.replace(pd, frame_auto=False, frame_width=str(w), frame_height=str(h), frame_unit=unit)
 
             if chosen_plotdef is not None:
                 print_plotdef = dataclasses.replace(chosen_plotdef, is_print_mode=True)
@@ -3359,22 +3376,36 @@ class CathPlotGUI:
                 _orig_auto = self.frame_auto_var.get()
                 _orig_w = self.frame_width_var.get()
                 _orig_h = self.frame_height_var.get()
-                try:
-                    w = float((_orig_w or "5").strip() or 5.0) if not _orig_auto else 5.0
-                    h = float((_orig_h or "4").strip() or 4.0) if not _orig_auto else 4.0
-                except ValueError:
-                    w, h = 5.0, 4.0
+                _orig_unit = self.frame_unit_var.get()
+                # [수정] Auto가 켜져 있으면 여기서 5x4in라는 임의의 작은 고정값으로
+                # 대체해버려서, 실제 용지를 거의 다 채워야 할 Auto 인쇄가 그보다
+                # 훨씬 작게(약 1/3 크기) 나오는 문제가 있었음 - Multi-Print의 1/p
+                # Auto/Save의 Auto와 동일하게 _compute_auto_frame_size_cm으로
+                # 용지 크기 기준 값을 계산해서 써야 함
+                if _orig_auto:
+                    w_str, h_str = self._compute_auto_frame_size_cm(for_print=True, orientation=orientation)
+                    w, h = float(w_str), float(h_str)
+                    unit = "cm"
+                else:
+                    try:
+                        w = float((_orig_w or "10").strip() or 10.0)
+                        h = float((_orig_h or "8").strip() or 8.0)
+                    except ValueError:
+                        w, h = 10.0, 8.0
+                    unit = _orig_unit
                 if (w >= h) != (orientation == "landscape"):
                     w, h = h, w
                 self.frame_auto_var.set(False)
                 self.frame_width_var.set(str(w))
                 self.frame_height_var.set(str(h))
+                self.frame_unit_var.set(unit)
                 try:
                     success_path = self.execute_plot_pipeline("Batch", custom_filepath=temp_emf, custom_format="EMF")
                 finally:
                     self.frame_auto_var.set(_orig_auto)
                     self.frame_width_var.set(_orig_w)
                     self.frame_height_var.set(_orig_h)
+                    self.frame_unit_var.set(_orig_unit)
         except Exception as e:
             messagebox.showerror("Print Error", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
             return
@@ -3836,10 +3867,10 @@ class CathPlotGUI:
 
     def execute_save_dialog(self):
         """SAVE도 PRINT처럼, 저장된(Interactive로 그렸던) plot이 있으면 무조건
-        현재 화면 설정으로만 저장하지 않고 어떤 것을 저장할지 먼저 물어본다
-        (_pick_plot_to_save_dialog 참고 - PRINT의 _pick_plot_to_print_dialog와
-        동일한 패턴이나, SAVE는 용지 방향 개념이 없어 그 부분만 없음)."""
-        chosen_plotdef = self._pick_plot_to_save_dialog()
+        현재 화면 설정으로만 저장하지 않고 어떤 것을 + 어떤 용지 방향으로
+        저장할지 먼저 물어본다 (_pick_plot_to_save_dialog 참고 - PRINT의
+        _pick_plot_to_print_dialog와 동일한 패턴)."""
+        chosen_plotdef, orientation = self._pick_plot_to_save_dialog()
         if chosen_plotdef is False:
             return  # 사용자가 취소함
         # chosen_plotdef가 None이면 "현재 화면 설정"을 고른 것 - 아래 기존 방식 그대로 진행
@@ -3865,17 +3896,64 @@ class CathPlotGUI:
         fmt = fmt_map.get(ext, "PDF")
 
         if chosen_plotdef is None:
-            self.execute_plot_pipeline("Batch", custom_filepath=os.path.abspath(selected_path), custom_format=fmt)
+            # 현재 화면 설정 - PRINT와 동일하게, 선택한 방향에 맞춰 GUI의 frame
+            # 값을 잠깐 덮어써서 생성한 뒤 원래 값으로 되돌린다
+            import dataclasses
+            _orig_auto = self.frame_auto_var.get()
+            _orig_w = self.frame_width_var.get()
+            _orig_h = self.frame_height_var.get()
+            _orig_unit = self.frame_unit_var.get()
+            if _orig_auto:
+                w_cm, h_cm = self._compute_auto_frame_size_cm(for_print=False, orientation=orientation)
+                w, h = float(w_cm), float(h_cm)
+                unit = "cm"
+            else:
+                try:
+                    w = float((_orig_w or "10").strip() or 10.0)
+                    h = float((_orig_h or "8").strip() or 8.0)
+                except ValueError:
+                    w, h = 10.0, 8.0
+                if (w >= h) != (orientation == "landscape"):
+                    w, h = h, w
+                unit = _orig_unit
+            self.frame_auto_var.set(False)
+            self.frame_width_var.set(str(w))
+            self.frame_height_var.set(str(h))
+            self.frame_unit_var.set(unit)
+            try:
+                self.execute_plot_pipeline("Batch", custom_filepath=os.path.abspath(selected_path), custom_format=fmt)
+            finally:
+                self.frame_auto_var.set(_orig_auto)
+                self.frame_width_var.set(_orig_w)
+                self.frame_height_var.set(_orig_h)
+                self.frame_unit_var.set(_orig_unit)
             return
 
         # 캐시된(Interactive) plot을 골랐을 때 - 화면 전용이던 plotdef를 파일
         # 출력용으로 변환해서 직접 생성한다 (execute_print_dialog의 캐시-선택
-        # 분기와 동일한 방식)
+        # 분기와 동일한 방식) - 선택한 용지 방향에 맞춰 W/H를 정한다
+        # [수정] chosen_plotdef.frame_auto/width/height 대신 항상 현재 GUI의
+        # Frame 설정을 쓴다 - 화면에는 frame 크기가 아무 영향이 없어서, 캐시된
+        # plot이 들고 있는 값은 의도적으로 고른 값이 아닐 수 있기 때문("크기는
+        # 항상 저장 시점의 현재 GUI 설정을 따른다"로 PRINT와 통일).
         import dataclasses
-        save_plotdef = dataclasses.replace(chosen_plotdef, is_print_mode=True)
-        if save_plotdef.frame_auto:
-            w_cm, h_cm = self._compute_auto_frame_size_cm(for_print=False)
-            save_plotdef = dataclasses.replace(save_plotdef, frame_auto=False, frame_width=w_cm, frame_height=h_cm, frame_unit="cm")
+        if self.frame_auto_var.get():
+            w_cm, h_cm = self._compute_auto_frame_size_cm(for_print=False, orientation=orientation)
+            w, h = float(w_cm), float(h_cm)
+            unit_out = "cm"
+        else:
+            try:
+                w = float((self.frame_width_var.get() or "10").strip() or 10.0)
+                h = float((self.frame_height_var.get() or "8").strip() or 8.0)
+            except ValueError:
+                w, h = 10.0, 8.0
+            unit_out = self.frame_unit_var.get()
+            if (w >= h) != (orientation == "landscape"):
+                w, h = h, w
+        save_plotdef = dataclasses.replace(
+            chosen_plotdef, is_print_mode=True, frame_auto=False,
+            frame_width=str(w), frame_height=str(h), frame_unit=unit_out,
+        )
         try:
             generator = GnuplotGenerator(self.plot_dir)
             generator.create_script(save_plotdef, os.path.abspath(selected_path), fmt=fmt.lower(),
@@ -3887,16 +3965,17 @@ class CathPlotGUI:
         messagebox.showinfo("Success", f"Saved: {os.path.basename(selected_path)}")
 
     def _pick_plot_to_save_dialog(self):
-        """SAVE 버튼을 눌렀을 때 무엇을 저장할지 고르는 창 (PRINT의
-        _pick_plot_to_print_dialog와 동일한 패턴 - SAVE는 용지 방향 개념이
-        없어 그 선택만 뺐음).
-        반환값: None = '현재 화면 설정'을 고름(기존 방식), False = 취소,
-                그 외 = 선택된 PlotDefinition 객체"""
+        """SAVE 버튼을 눌렀을 때 무엇을 + 어떤 용지 방향으로 저장할지 고르는 창
+        (PRINT의 _pick_plot_to_print_dialog와 동일한 패턴).
+        반환값: (choice, orientation) 튜플.
+          choice: None = '현재 화면 설정'을 고름(기존 방식), False = 취소,
+                  그 외 = 선택된 PlotDefinition 객체
+          orientation: "portrait" 또는 "landscape" (취소 시 의미 없음)"""
         CURRENT_SCREEN_LABEL = "현재 화면 설정"
         self._cleanup_stale_plot_cache()
         names = [CURRENT_SCREEN_LABEL] + sorted(self.active_plots_cache.keys())
 
-        result = {"choice": False}
+        result = {"choice": False, "orientation": self.orientation_var.get()}
         dlg = tk.Toplevel(self.root)
         dlg.title("저장할 Plot 선택")
         dlg.transient(self.root)
@@ -3908,9 +3987,16 @@ class CathPlotGUI:
             dlg, textvariable=choice_var, values=names, width=35, state="readonly"
         ).pack(padx=15, pady=5)
 
+        ttk.Label(dlg, text="용지 방향:").pack(padx=15, pady=(5, 2))
+        orient_var = tk.StringVar(value=self.orientation_var.get())
+        ttk.Combobox(
+            dlg, textvariable=orient_var, values=["portrait", "landscape"], width=15, state="readonly"
+        ).pack(padx=15, pady=5)
+
         def do_ok():
             picked = choice_var.get()
             result["choice"] = None if picked == CURRENT_SCREEN_LABEL else self.active_plots_cache.get(picked)
+            result["orientation"] = orient_var.get()
             dlg.destroy()
 
         btn_row = ttk.Frame(dlg)
@@ -3919,7 +4005,7 @@ class CathPlotGUI:
         ttk.Button(btn_row, text="확인", command=do_ok).pack(side="right", padx=5)
 
         self.root.wait_window(dlg)
-        return result["choice"]
+        return result["choice"], result["orientation"]
 
     def set_active_entry(self, entry):
         self.active_entry = entry
@@ -3934,21 +4020,17 @@ class CathPlotGUI:
     #    self.sorted_dat_cache.clear()
 
     def _compute_auto_frame_size_cm(self, for_print=True, orientation="portrait"):
-        """Axis Frame Auto가 켜진 채로 파일 출력할 때 쓸 크기를, Multi-Print의
-        1/p Auto와 동일한 방식(A4 용지 - 절대 여백)으로 계산한다. 포맷마다
-        서로 다른 임의의 기본값을 쓰던 것 대신, 항상 일관된 크기가 나오게
-        하기 위함. (cm, cm) 튜플의 문자열을 반환한다."""
-        aw, ah = GnuplotGenerator._A4_SIZES.get(orientation, GnuplotGenerator._A4_SIZES["portrait"])
-        page_w_in = float(aw.replace("in", ""))
-        page_h_in = float(ah.replace("in", ""))
-        if for_print:
-            pm_l, pm_r = GnuplotGenerator.PAGE_MARGIN_LEFT_IN, GnuplotGenerator.PAGE_MARGIN_RIGHT_IN
-            pm_t, pm_b = GnuplotGenerator.PAGE_MARGIN_TOP_IN, GnuplotGenerator.PAGE_MARGIN_BOTTOM_IN
-        else:
-            pm_l = pm_r = pm_t = pm_b = GnuplotGenerator.SAVE_PAGE_MARGIN_IN
-        w_in = max(page_w_in - pm_l - pm_r, 1.0)
-        h_in = max(page_h_in - pm_t - pm_b, 1.0)
-        return f"{w_in * 2.54:.2f}", f"{h_in * 2.54:.2f}"
+        """Axis Frame Auto가 켜진 채로 1장짜리 PRINT/SAVE를 할 때 쓸 크기.
+        [수정] 이전엔 "A4 용지 - 절대 여백"으로 페이지를 꽉 채우는 크기를 썼는데,
+        그러면 종이 모양(세로로 긴 비율)에 축(x:y)이 그대로 맞춰져 심하게
+        왜곡됐음("Auto size는 좌우상하 비율을 너무 많이 왜곡시킴") - 대신 항상
+        기본(Default) 크기(10x8cm, frame_width/height 입력칸의 기본값과 동일)를
+        그대로 쓰고, 선택한 용지 방향에 맞춰 가로/세로만 맞바꿔서 비율을
+        유지한다. (cm, cm) 튜플의 문자열을 반환한다."""
+        w, h = 10.0, 8.0
+        if (w >= h) != (orientation == "landscape"):
+            w, h = h, w
+        return f"{w:.2f}", f"{h:.2f}"
 
     @staticmethod
     def _resolve_marker_shape(shape_label, fill_on):

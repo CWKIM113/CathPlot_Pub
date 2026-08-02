@@ -74,7 +74,7 @@ MARKER_Y_OFFSET = {8: 0.08, 9: 0.08, 10: 0.10, 11: 0.18}
 # 화면(Interactive, windows 터미널)은 pngcairo와 텍스트 기준선 방향이 반대로
 # 확인됨(위쪽 세모가 화면에서는 아래로, 아래쪽 세모는 위로 나타남) - 부호를
 # 반대로 둔 화면 전용 보정치. 나머지 기호는 _screen_marker_bias(공통) 하나로 처리.
-MARKER_Y_OFFSET_SCREEN = {8: 0.15, 9: 0.10, 10: -0.15, 11: -0.10}
+MARKER_Y_OFFSET_SCREEN = {8: 0.05, 9: 0.00, 10: -0.15, 11: -0.10}  # 위쪽 세모(8,9) 추가로 더 내림(동일 폭만큼 재조정)
 # 위와 같은 이유로, 기호별 em-box 잉크 크기 차이를 보정하는 폰트 크기 배율
 # (1.0=그대로). "+"(pointtype 1)는 원/사각형/별표보다 훨씬 얇고 작게 그려져서
 # 눈에 띄게 작아 보인다는 피드백으로 확대.
@@ -98,6 +98,16 @@ PRINT_BORDER_SCALE = 1.00   # 기존 1.50
 PRINT_TIC_MAJOR_SCALE = 1.0
 PRINT_TIC_MINOR_SCALE = 0.5
 
+#----------------------------------------------------------
+# Page (physical paper) absolute margins - PRINT/SAVE 공통
+# (나중에 조정하기 쉽도록 파일 앞쪽에 파라미터로 배치)
+#----------------------------------------------------------
+PAGE_MARGIN_LEFT_CM = 2.0
+PAGE_MARGIN_RIGHT_CM = 1.0
+PAGE_MARGIN_TOP_CM = 3.0
+PAGE_MARGIN_BOTTOM_CM = 2.0
+SAVE_PAGE_MARGIN_CM = 0.3  # Save(파일 저장)는 물리적 인쇄 불가 영역 제약이 없어 최소 여백만 사용
+
 # gnuplot의 emf 터미널이 실제로 EMF 헤더(rclFrame)에 기록하는 기준 해상도.
 # gdi32.GetEnhMetaFileHeader로 알려진 픽셀 크기(예: 1000x800)의 EMF를 만들어
 # rclFrame(0.01mm 단위)을 역산해서 얻은 값(96.32px/in) - 표준 96dpi와 거의
@@ -109,7 +119,8 @@ EMF_PX_PER_IN = 96.32
 MARGIN_LEFT_IN = 0.9
 MARGIN_RIGHT_IN = 0.3         
 MARGIN_RIGHT_LEGEND_IN = 1.8  
-MARGIN_RIGHT_Y2_IN = 0.6      
+MARGIN_RIGHT_Y2_IN = 0.6
+MARGIN_RIGHT_Y2_NO_LABEL_IN = 0.2  # y2 축은 있지만 y2label 문자열이 없을 때(tic 숫자만)
 MARGIN_TOP_IN = 0.6           
 MARGIN_TOP_NO_TITLE_IN = 0.08 
 MARGIN_TOP_PER_EXTRA_LINE_IN = 0.35  
@@ -529,7 +540,7 @@ class GnuplotGenerator:
 
     def _render_legend_box(self, lines, curves, pos_raw, box_on, thick_val, id_offset,
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
-                            axis_w_in=5.0, legend_size=None, axis_h_in=4.0):
+                            axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -544,12 +555,45 @@ class GnuplotGenerator:
         # 크기(font_pt)에 비해 줄 간격이 너무 좁아져 legend 줄들이 서로 겹쳐
         # 보이는 문제가 있었음 - 축의 실제 물리적 높이(axis_h_in)를 기준으로
         # 폰트 크기에 맞는 절대 줄 높이를 먼저 구하고, 그걸 graph 비율로 환산한다.
-        ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * 1.35
+        # [수정] "legend 안 curve간 위아래 간격이 너무 큼" - 줄간격 배수를
+        # 1.35 -> 1.15 -> 1.0으로 계속 줄임(더 줄여달라는 후속 요청).
+        ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * 1.0
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
-        # 박스 테두리에 닿아 보인다는 피드백 - 여백을 크게 늘림
-        ROW_MARGIN = 0.3 * ROW_H
-        FRAME_MARGIN = 0.35 * ROW_H  # plot 테두리(frame)와 박스 사이 여백 (major tic의 절반이었던 걸, major tic보다 조금 크게 조정)
+        # 박스 테두리에 닿아 보인다는 피드백으로 화면에서 크게 늘렸는데(0.3),
+        # 이걸 print/save에도 그대로 적용해서 이번엔 "여분이 너무 크다"는
+        # 반대 피드백이 나왔음 - print/save는 원래 값에 가깝게 되돌리고
+        # 화면만 크게 유지한다
+        # [수정] "legend box 테두리와 첫/끝 줄 글자 사이 여백도 줄여달라"는
+        # 요청으로 print 쪽 계수를 0.12 -> 0.08로 축소(화면은 그대로 유지).
+        ROW_MARGIN = (0.08 if is_print_mode else 0.3) * ROW_H
+        # [수정] "문자 하나당 대략적인 폭(인치)"을 legend 라벨 폭 추정뿐 아니라
+        # legend box와 axis frame 사이 간격(1자 정도)에도 재사용한다 - font_pt에
+        # 비례하는 절대(인치) 값을 먼저 구하고, 가로/세로는 각각 axis_w_in/
+        # axis_h_in으로 나눠 graph 비율로 환산해야 실제 물리적 간격이 가로세로
+        # 동일해진다. 예전엔 ROW_H(세로 기준 비율)를 가로에도 그대로 썼어서,
+        # 축의 가로세로 비율이 1:1이 아니면(거의 항상 그럼) 가로/세로 실제
+        # 간격이 서로 달라지는 문제가 있었음(화면 전용으로 1000/700 비율을
+        # 어림으로 보정하던 땜질도 이 근본 문제 때문이었음 - 이제 필요 없어짐).
+        # [수정] 0.0065는 실측(PyMuPDF로 렌더링된 PDF의 실제 글자 폭 측정)해보니
+        # 순수 대문자(가장 넓은 경우, 예: "ABCDEFGHIJKLMNOPQRST")조차 실제보다
+        # 커서, 그 오차가 라벨 길이만큼 누적되어(20자면 20배) legend box 왼쪽에
+        # 큰 빈 공간이 남는 원인이었음 - 실측 기준(대문자 1자 폭)으로 재보정.
+        char_width_in = (0.0055 if is_print_mode else 0.0049) * font_pt  # 문자 하나당 대략적인 폭(인치, 대문자 기준 실측), 폰트 크기(pt)에 비례
+        # [수정] legend box와 plot 테두리(frame) 사이 간격은 major tic 길이의
+        # 1.5배로 맞춘다("major tic 길이의 1.3~1.5배로" 요청). gnuplot이 실제
+        # 그리는 major tic 길이를 Python에서 직접 조회할 수는 없어서, 렌더링된
+        # PDF를 실측(PyMuPDF)해 font_pt 대비 비율로 역산한 근사 계수를 쓴다
+        # (실측: is_print_mode 기준 font_pt=7.2일 때 major tic 길이 ≈ 0.0443in
+        # → 계수 ≈ 0.00615/font_pt). tic 길이 자체가 font_pt에 비례해 커지므로,
+        # 이 간격도 legend 폰트가 커지면 같이 커진다.
+        TIC_LEN_IN = 0.00615 * font_pt
+        # [되돌림] "legend box가 axis frame에 붙어버림" - 2글자만큼 줄이는
+        # 시도가 과했음(그 "2글자" 요청은 실은 Auto 2/p 등의 plot간 좌우 간격
+        # 얘기였던 것으로 확인). 원래(1.5*tic 길이) 값으로 되돌림.
+        FRAME_GAP_IN = 1.5 * TIC_LEN_IN
+        FRAME_MARGIN_X = FRAME_GAP_IN / max(axis_w_in, 0.5)  # plot 테두리(frame)와 박스 사이 가로 간격
+        FRAME_MARGIN_Y = FRAME_GAP_IN / max(axis_h_in, 0.3)  # 세로 간격(동일한 물리 거리)
 
         def _resolve_anchor(pos_raw):
             pos_raw = (pos_raw or "").strip()
@@ -572,17 +616,11 @@ class GnuplotGenerator:
                 ay = float(nums[1]) if len(nums) > 1 else 0.05
                 return ax, ay, "left bottom"
             if pos_raw == "outside right":
-                return 1.0 - FRAME_MARGIN + 0.02, 0.5, "left top"
+                return 1.0 - FRAME_MARGIN_X + 0.02, 0.5, "left top"
             h = "right" if "right" in pos_raw else ("left" if "left" in pos_raw else "center")
             v = "top" if "top" in pos_raw else ("bottom" if "bottom" in pos_raw else "center")
-            # [추가] 화면(Interactive) 창은 1000x700(가로가 더 긴 비율)이라, 같은
-            # 비율의 FRAME_MARGIN이라도 세로 방향 실제 픽셀 여백이 가로보다
-            # 작게 보이는 문제가 있었음 - 세로 전용 마진에 창 비율(10:7≈1.43배)을
-            # 보정해서 실제 픽셀 여백이 가로와 비슷하게 보이도록 함 (인쇄/저장은
-            # 사용자가 지정하는 Frame 비율이 제각각이라 보정하지 않음)
-            _frame_margin_v = FRAME_MARGIN * (1000.0 / 700.0) if not is_print_mode else FRAME_MARGIN
-            ax = (1.0 - FRAME_MARGIN) if h == "right" else (FRAME_MARGIN if h == "left" else 0.5)
-            ay = (1.0 - _frame_margin_v) if v == "top" else (_frame_margin_v if v == "bottom" else 0.5)
+            ax = (1.0 - FRAME_MARGIN_X) if h == "right" else (FRAME_MARGIN_X if h == "left" else 0.5)
+            ay = (1.0 - FRAME_MARGIN_Y) if v == "top" else (FRAME_MARGIN_Y if v == "bottom" else 0.5)
             corner = f"{h} {v}".strip() if not (h == "center" and v == "center") else "center"
             return ax, ay, corner
 
@@ -591,21 +629,35 @@ class GnuplotGenerator:
         # 실제 ax(0~1) 값으로 좌/우를 직접 판단해서 미러링 방향을 정한다
         is_right_side = ax >= 0.5
 
-        SAMPLE_W = 1.3 * ROW_H  # style(샘플선) 크기 추가 축소(1.6->1.3)
-        max_label_len = max((len(c.title or "") for c in curves), default=1)
-        # [수정] 글자 폭 추정을 실제 물리 단위(인치)로 계산한 뒤 axis_w_in(축의
-        # 실제 폭)으로 나눠 그래프 비율로 환산한다 - 기존엔 축 크기를 무시한 채
-        # 고정 비율로 추정해서, 축이 큰 명시적 레이아웃에서 title이 실제보다
-        # 넓은데도 좁게 계산되어 box를 벗어나는 문제가 있었다.
-        # [수정] Print/Save에서 18자 제목 기준 살짝 선 밖으로 나온다는 피드백 -
-        # 화면(Interactive)은 그대로 두고 Print/Save만 여유를 좀 더 준다
-        char_width_in = (0.0055 if is_print_mode else 0.0049) * font_pt  # 문자 하나당 대략적인 폭(인치), 폰트 크기(pt)에 비례
+        SAMPLE_W = 1.3 * 1.3 * ROW_H  # style(샘플선) 길이가 너무 짧다는 피드백으로 1.3배 확대
+        SAMPLE_W -= 1.5 * (char_width_in / max(axis_w_in, 0.5))  # 다시 대문자 1.5자만큼 축소 요청
+        # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
+        # 그냥 len()으로 세면 숫자/콜론/대시처럼 대문자보다 좁은 문자가 많은
+        # 라벨(CATHENA 변수명 특성상 흔함, 예: "MFLO:R-SDRT1>L-STLF1")은 실제
+        # 폭보다 훨씬 넓게 box가 잡혀 라벨 앞에 불필요한 빈 공간이 남았음
+        # ("우측(순수 대문자)은 괜찮은데 좌측(콜론/대시 섞인 라벨)은 너무 넓음")
+        # - 문자별로 폭 비중을 달리해서(좁은 문자는 0.65자 취급) 실측 폭에 더
+        # 가깝게 라벨 길이를 추정한다(대문자 20자 vs "MFLO:..." 실측 비율로 보정).
+        _NARROW_CHARS = set("0123456789:.,-_+*/=()[]{}!?;'\"<>")
+
+        def _weighted_label_len(title):
+            return sum(0.65 if ch in _NARROW_CHARS else 1.0 for ch in (title or "")) or 1.0
+
+        max_label_len = max((_weighted_label_len(c.title) for c in curves), default=1.0)
         char_width_frac = char_width_in / max(axis_w_in, 0.5)
-        # [수정] 평균 문자 폭으로 추정하다 보니, 대문자·언더스코어가 많은 라벨
-        # (CATHENA 변수명 특성상 흔함, 예: "TANK_CLEV")은 실제 폭이 평균보다
-        # 넓어서 box보다 글자가 삐져나오는 문제가 있었음 - 여유 폭을 크게 잡음
-        # (17자 라벨 기준 1자 잘림 피드백으로 5.5->7, 이후 1자 더 요청받아 8로 재조정)
-        box_w = SAMPLE_W + char_width_frac * (max(max_label_len - 2, 1) + 8.0) + 0.015
+        # [수정] screen(화면)은 print와 같은 "+1.7자" 여유로는 라벨(18~19자 기준)이
+        # 3자 정도 잘렸음 - screen의 char_width_in 계수(0.0049)는 이번 session에
+        # print처럼 실측 재보정을 하지 않은 값이라 실제 폭을 과소평가하는 듯함 -
+        # 화면에서만 여유를 4자 더(+1.7->+5.7) 준다.
+        # [수정] "legend box 좌우 길이도 줄여야지요" - print의 여유분을
+        # 1.7자에서 0.7자로 줄임(화면은 그대로 유지). 이후 "2/p는 1자 늘리고
+        # 4/p,6/p는 2자 더 줄여달라"는 요청으로 호출자가 override를 넘기면
+        # (multiplot에서 total_cells 기준으로) 그 값을 우선한다.
+        if box_w_extra_chars_override is not None and is_print_mode:
+            _box_w_extra_chars = box_w_extra_chars_override
+        else:
+            _box_w_extra_chars = 0.7 if is_print_mode else 6.7
+        box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + 0.015
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
 
         if "right" in corner:
@@ -689,7 +741,7 @@ class GnuplotGenerator:
                 f'{label_just} front font "{font_name},{int(font_pt)}" {lbl_enh}'
             )
 
-    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None):
+    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None, legend_scale_boost=1.0, legend_width_extra_chars=None):
         # [추가] Interactive(화면) 창은 frame_auto/frame_width와 무관하게 항상
         # 고정된 1000x700 캔버스로 뜬다(_get_terminal_cmd 참고) - 그런데 아래
         # 절대 여백 보정(축소 시 title/label이 사라지는 것 방지 등)은 "캔버스가
@@ -779,14 +831,20 @@ class GnuplotGenerator:
 
         lines.append(f"set xtics {plotdef.xtics if plotdef.xtics else 'auto'}")
 
-        def _tic_fmt_clause(fmt_label):
+        def _tic_fmt_clause(fmt_label, is_log=False):
             if fmt_label == "Scientific":
                 return "%.1e"
             elif fmt_label == "Power10":
-                return "10^{%L}"
+                # [수정] "10^{%L}"의 %L(로그 특성값)은 log축 tic 값 기준으로만
+                # 의미가 있음 - 이걸 선형(linear) 축에 그대로 쓰면, 같은 자릿수
+                # 구간(예: 250~350)의 tic들이 전부 log10(v)를 내림한 같은 정수로
+                # 뭉개져서 "10^2"가 계속 반복되는(실제 값과 무관하게 똑같이
+                # 보이는) 문제가 있었음 - log축이 아니면 Scientific과 동일하게
+                # 처리한다(실제 값이 tic마다 구분되게 보이도록).
+                return "10^{%L}" if is_log else "%.1e"
             return None  # Normal - 별도 지정 안 함(기본 표시)
 
-        _xfmt = _tic_fmt_clause(getattr(plotdef, "xfmt", "Normal"))
+        _xfmt = _tic_fmt_clause(getattr(plotdef, "xfmt", "Normal"), getattr(plotdef, "xlog", False))
         if _xfmt:
             lines.append(f'set format x "{_xfmt}"')
 
@@ -801,7 +859,7 @@ class GnuplotGenerator:
             lines.append(f"set ytics {self._format_number(y1_auto_tics)}")
         else:
             lines.append("set ytics auto")
-        _y1fmt = _tic_fmt_clause(getattr(plotdef, "y1fmt", "Normal"))
+        _y1fmt = _tic_fmt_clause(getattr(plotdef, "y1fmt", "Normal"), getattr(plotdef, "y1log", False))
         if _y1fmt:
             lines.append(f'set format y "{_y1fmt}"')
         if uses_y2:
@@ -813,7 +871,7 @@ class GnuplotGenerator:
                 lines.append(f"set y2tics {self._format_number(y2_auto_tics)}")
             else:
                 lines.append("set y2tics auto")
-            _y2fmt = _tic_fmt_clause(getattr(plotdef, "y2fmt", "Normal"))
+            _y2fmt = _tic_fmt_clause(getattr(plotdef, "y2fmt", "Normal"), getattr(plotdef, "y2log", False))
             if _y2fmt:
                 lines.append(f'set format y2 "{_y2fmt}"')
         else:
@@ -961,79 +1019,22 @@ class GnuplotGenerator:
                 except ValueError:
                     _fw_in, _fh_in = 0, 0
                 if _fw_in > 0 and _fh_in > 0:
-                    # [수정] "자릿수(peak값 정수부 길이)"만 보던 이전 방식은 소수
-                    # tic(예: "0.09")나 음수 tic("-8500")의 실제 표시 폭을 과소평가
-                    # 했음(둘 다 부호/소수점 문자가 자릿수에는 안 잡힘) - y축 범위의
-                    # 실제 최소/최대/중간값을 gnuplot 기본 표기와 비슷하게 포맷해서
-                    # 실제 표시될 tic 라벨 문자열 길이를 직접 재고, legend에서 쓰는
-                    # 것과 같은 "폰트 크기당 문자 폭" 물리 공식으로 필요한 여백을
-                    # 구한다 - 내용에 따라 자연히 늘고 줄어드는 진짜 flexible margin.
-                    def _tick_label_chars(axis_name):
-                        try:
-                            nice = self._nice_axis_range(plotdef, axis_name)
-                        except Exception:
-                            nice = None
-                        if not nice:
-                            return 4
-                        y_lo, y_hi, _ = nice
-                        max_len = 1
-                        for v in (y_lo, y_hi, (y_lo + y_hi) / 2.0):
-                            if abs(v) < 1e-9:
-                                s = "0"
-                            elif float(v).is_integer() and abs(v) < 1e15:
-                                s = f"{v:.0f}"
-                            else:
-                                s = f"{v:.3g}"
-                            max_len = max(max_len, len(s))
-                        return max_len
-
-                    _tick_char_width_in = (0.0055 if _is_print else 0.0049) * (9 * f_scale)
-                    _BASELINE_TICK_CHARS = 4  # 기존 lmargin/rmargin 기본값이 이미 감당하는 tic 폭
-
-                    _xlabel_lines = 1 + (plotdef.xlabel or "").count("|")
-                    _ylabel_lines = 1 + (plotdef.ylabel or "").count("|")
-                    _y2label_lines = 1 + (getattr(plotdef, "y2label", "") or "").count("|")
-
-                    if plotdef.title:
-                        _need_top_in = 0.75 * f_scale * _title_lines
-                        _tmargin_base = min(_tmargin_base, 1 - _need_top_in / _fh_in)
-                    if plotdef.xlabel:
-                        _need_bottom_in = 0.85 * f_scale + 0.35 * f_scale * (_xlabel_lines - 1)
-                        if _xfmt_label == "Scientific": _need_bottom_in += 0.15 * f_scale
-                        elif _xfmt_label == "Power10": _need_bottom_in += 0.08 * f_scale
-                        _bmargin_base = max(_bmargin_base, _need_bottom_in / _fh_in)
-
-                    _need_left_in = 1.0 * f_scale + 0.5 * f_scale * (_ylabel_lines - 1) if plotdef.ylabel else 0.0
-                    _need_left_in += max(0, _tick_label_chars("y1") - _BASELINE_TICK_CHARS) * _tick_char_width_in
-                    if _y1fmt_label == "Scientific": _need_left_in += 0.4 * f_scale
-                    elif _y1fmt_label == "Power10": _need_left_in += 0.2 * f_scale
-                    if _need_left_in > 0:
-                        _lmargin_base = max(_lmargin_base, _need_left_in / _fw_in)
-
-                    if uses_y2:
-                        _need_right_in = 0.9 * f_scale + 0.5 * f_scale * (_y2label_lines - 1) if getattr(plotdef, "y2label", "") else 0.0
-                        _need_right_in += max(0, _tick_label_chars("y2") - _BASELINE_TICK_CHARS) * _tick_char_width_in
-                        if _y2fmt_label == "Scientific": _need_right_in += 0.4 * f_scale
-                        elif _y2fmt_label == "Power10": _need_right_in += 0.2 * f_scale
-                        if _need_right_in > 0:
-                            _rmargin_base = min(_rmargin_base, 1 - _need_right_in / _fw_in)
-
-                    # [추가] 2줄 title+2줄 xlabel처럼 위/아래(또는 좌/우) 여백
-                    # 요구가 동시에 겹치면, 위 로직이 각각은 "사라지지 않게"
-                    # 보장하더라도 그 사이에 남는 축(plot) 영역 자체가 거의
-                    # 0에 가깝게 쪼그라들어(예: 8cm 중 0.45in만 남음) tic
-                    # 숫자들이 서로 겹쳐 보이는 문제가 있었음 - title/xlabel이
-                    # 조금 빡빡해지는 것을 감수하고, 축 영역이 최소한 프레임의
-                    # 35%는 유지되도록 최종적으로 한 번 더 보정한다.
-                    _MIN_AXIS_FRAC = 0.35
-                    if _tmargin_base - _bmargin_base < _MIN_AXIS_FRAC:
-                        _mid = (_tmargin_base + _bmargin_base) / 2
-                        _tmargin_base = min(0.98, _mid + _MIN_AXIS_FRAC / 2)
-                        _bmargin_base = max(0.02, _mid - _MIN_AXIS_FRAC / 2)
-                    if _rmargin_base - _lmargin_base < _MIN_AXIS_FRAC:
-                        _mid = (_rmargin_base + _lmargin_base) / 2
-                        _rmargin_base = min(0.98, _mid + _MIN_AXIS_FRAC / 2)
-                        _lmargin_base = max(0.02, _mid - _MIN_AXIS_FRAC / 2)
+                    # [수정 - 개념 정정] "Frame(Axis) 크기는 axis 자체의 크기" -
+                    # _fw_in/_fh_in(frame_width/height)은 axis 크기이고, 실제
+                    # 페이지(터미널) 크기는 axis + 이 마진들을 더한 값이다
+                    # (create_script가 _get_terminal_cmd를 호출하기 전에 이미 같은
+                    # 계산으로 그 페이지 크기를 정해뒀음 - 반드시 같은 값을 써야
+                    # 하므로 _compute_manual_margins_in()을 공유한다). 그래서 여기
+                    # 마진은 "axis 크기 대비 fraction"이 아니라 "axis+마진(=페이지)
+                    # 대비 fraction"으로 구해야 한다.
+                    _need_left_in, _need_right_in, _need_top_in, _need_bottom_in = \
+                        self._compute_manual_margins_in(plotdef, f_scale, _is_print, uses_y2)
+                    _total_w_in = _fw_in + _need_left_in + _need_right_in
+                    _total_h_in = _fh_in + _need_top_in + _need_bottom_in
+                    _lmargin_base = _need_left_in / _total_w_in
+                    _rmargin_base = 1.0 - _need_right_in / _total_w_in
+                    _tmargin_base = 1.0 - _need_top_in / _total_h_in
+                    _bmargin_base = _need_bottom_in / _total_h_in
 
             # Legend box 줄 높이 계산에 쓸 축의 실제 물리적 "높이"(인치) - axis_w_in과
             # 같은 이유로 필요(작은 explicit frame에서 legend 줄 간격이 폰트 크기에
@@ -1041,14 +1042,17 @@ class GnuplotGenerator:
             if axis_h_in is None:
                 try:
                     if not getattr(plotdef, "frame_auto", True) and not _is_interactive:
-                        _fh_for_legend = float((plotdef.frame_height or "4").strip() or 4.0)
+                        # [수정] frame_height는 이제 axis 크기 그 자체이므로
+                        # (fraction과 다시 곱할 필요 없이) 그대로 쓴다.
+                        axis_h_in = float((plotdef.frame_height or "4").strip() or 4.0)
                         if (plotdef.frame_unit or "in") == "cm":
-                            _fh_for_legend /= 2.54
+                            axis_h_in /= 2.54
                     else:
                         _fh_for_legend = 700.0 / 168  # interactive 기본 터미널 높이(700px/168px_per_in)
+                        axis_h_in = max((_tmargin_base - _bmargin_base) * _fh_for_legend, 0.3)
                 except ValueError:
-                    _fh_for_legend = 4.0
-                axis_h_in = max((_tmargin_base - _bmargin_base) * _fh_for_legend, 0.3)
+                    axis_h_in = 4.0
+                axis_h_in = max(axis_h_in, 0.3)
 
             lines.append(f"set lmargin at screen {_lmargin_base}")
             lines.append(f"set tmargin at screen {_tmargin_base}")
@@ -1141,14 +1145,16 @@ class GnuplotGenerator:
             # 때만 이 분기에 옴)으로 정확히 계산한다.
             try:
                 if not getattr(plotdef, "frame_auto", True) and not _is_interactive:
-                    fw = float((plotdef.frame_width or "5").strip() or 5.0)
+                    # [수정] frame_width는 이제 axis 크기 그 자체이므로 그대로 쓴다.
+                    axis_w_in = float((plotdef.frame_width or "5").strip() or 5.0)
                     if (plotdef.frame_unit or "in") == "cm":
-                        fw /= 2.54
+                        axis_w_in /= 2.54
                 else:
                     fw = 1000.0 / 168  # interactive 기본 터미널 크기(1000px/168px_per_in)
+                    axis_w_in = max((_rmargin_base - _lmargin_base) * fw, 0.5)
             except ValueError:
-                fw = 5.0
-            axis_w_in = max((_rmargin_base - _lmargin_base) * fw, 0.5)
+                axis_w_in = 5.0
+            axis_w_in = max(axis_w_in, 0.5)
 
         # Legend box 테두리는 Frame(plot 외곽 border) 두께 이하여야 하므로,
         # 사용자가 더 크게 입력해도 Frame 두께로 제한한다
@@ -1159,9 +1165,10 @@ class GnuplotGenerator:
             legend_thick_val = min(float(getattr(plotdef, "legend_thick", "1.5") or 1.5), _frame_border_lw)
             self._render_legend_box(
                 lines, group1_curves, plotdef.legend_pos, plotdef.legend_box,
-                legend_thick_val, 8000, f_scale, line_scale, panel_scale,
+                legend_thick_val, 8000, f_scale * legend_scale_boost, line_scale, panel_scale,
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
-                axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9)
+                axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
+                box_w_extra_chars_override=legend_width_extra_chars
             )
 
         group2_curves = [c for c in plotdef.curves if getattr(c, "legend_group", 1) == 2]
@@ -1169,9 +1176,10 @@ class GnuplotGenerator:
             legend2_thick_val = min(float(getattr(plotdef, "legend2_thick", "1.5") or 1.5), _frame_border_lw)
             self._render_legend_box(
                 lines, group2_curves, plotdef.legend2_pos, getattr(plotdef, "legend2_box", True),
-                legend2_thick_val, 9000, f_scale, line_scale, panel_scale,
+                legend2_thick_val, 9000, f_scale * legend_scale_boost, line_scale, panel_scale,
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
-                axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9)
+                axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
+                box_w_extra_chars_override=legend_width_extra_chars
             )
 
 
@@ -1333,7 +1341,11 @@ class GnuplotGenerator:
             # 인쇄/저장 물리 크기는 서로 다른 목적이라 분리한다.
             return f"set terminal windows title '{title}' font 'Malgun Gothic,11' size 1000,700"
         elif fmt == "png":
-            return f"set terminal pngcairo {size_clause('size 11.7in,8.3in')} enhanced font '{_term_font}'"
+            # [수정] size_clause(단위 접미사, 예: "10cm,8cm")를 쓰면 pngcairo가
+            # 그 크기를 72dpi 기준으로 래스터화해서(예: 10cm -> 283px) 텍스트가
+            # 뭉개지고("두꺼운 문자") 그림 자체가 잘 안 보일 정도로 해상도가
+            # 낮았음 - 인쇄 품질(300dpi) 픽셀 수로 직접 지정한다.
+            return f"set terminal pngcairo {size_clause_px('size 3508,2481', px_per_in=300)} enhanced font '{_term_font}'"
         elif fmt == "jpg":
             return f"set terminal jpeg {size_clause_px('size 1600,900')} enhanced font '{_term_font}'"
         elif fmt == "svg":
@@ -1384,18 +1396,114 @@ class GnuplotGenerator:
 
         fw = _to_in(plotdef.frame_width, REFERENCE_WIDTH_IN)
         fh = _to_in(plotdef.frame_height, REFERENCE_HEIGHT_IN)
+        # [수정] baseline(10x8cm)은 가로가 더 긴 모양인데, 이걸 portrait로 회전해서
+        # 8x10으로 쓰면 기준(REF)은 그대로 "10 가로/8 세로"라서 같은 baseline을
+        # 회전한 것뿐인데도 스케일이 달라짐(portrait가 더 작게 나옴, 0.8배) -
+        # landscape에서 legend/폰트가 상대적으로 더 크게 나오던 문제의 원인.
+        # 요청한 frame의 가로세로 모양(landscape/portrait)에 맞춰 REF도 같이
+        # 돌려써서, 같은 baseline을 회전만 한 경우 항상 scale=1.0이 나오게 한다.
+        if fw < fh:
+            REFERENCE_WIDTH_IN, REFERENCE_HEIGHT_IN = REFERENCE_HEIGHT_IN, REFERENCE_WIDTH_IN
         width_ratio = fw / REFERENCE_WIDTH_IN
         height_ratio = fh / REFERENCE_HEIGHT_IN
         return max(min(width_ratio, height_ratio), 0.3)  # 너무 작아지지 않게 하한
+
+    def _compute_manual_margins_in(self, plotdef, f_scale, is_print_mode, uses_y2):
+        """[추가] "Frame(Axis) 크기 = 좌표축(axis) 자체의 크기" - Manual(frame_auto=
+        꺼짐)일 때 frame_width/height는 axis 크기이고, 실제 출력 페이지(칸) 크기는
+        axis + 이 마진들을 더한 값이어야 한다(예전엔 반대로 frame_width/height를
+        페이지 전체로 보고 axis를 그 안에서 빼서 구했음 - "Axis Frame"이라는 이름과
+        맞지 않는 설계였음). title/xlabel/ylabel/y2label 존재 여부와 무관하게 항상
+        의미 있는 최소값을 반환한다(없으면 tic 숫자만을 위한 작은 여백).
+        _build_plot_commands의 fraction 변환 로직과 반드시 같은 값을 써야 하므로
+        (터미널 크기를 먼저 정하고 나중에 그 크기 기준 fraction으로 환산), 이
+        메서드 하나만 두 군데(create_script, _build_plot_commands)에서 공유한다."""
+        xfmt = getattr(plotdef, "xfmt", "Normal")
+        y1fmt = getattr(plotdef, "y1fmt", "Normal")
+        y2fmt = getattr(plotdef, "y2fmt", "Normal")
+        title_lines = 1 + (plotdef.title or "").count("|")
+        xlabel_lines = 1 + (plotdef.xlabel or "").count("|")
+        ylabel_lines = 1 + (plotdef.ylabel or "").count("|")
+        y2label_lines = 1 + (getattr(plotdef, "y2label", "") or "").count("|")
+
+        def _tick_label_chars(axis_name):
+            try:
+                nice = self._nice_axis_range(plotdef, axis_name)
+            except Exception:
+                nice = None
+            if not nice:
+                return 4
+            y_lo, y_hi, _ = nice
+            max_len = 1
+            for v in (y_lo, y_hi, (y_lo + y_hi) / 2.0):
+                if abs(v) < 1e-9:
+                    s = "0"
+                elif float(v).is_integer() and abs(v) < 1e15:
+                    s = f"{v:.0f}"
+                else:
+                    s = f"{v:.3g}"
+                max_len = max(max_len, len(s))
+            return max_len
+
+        tick_char_width_in = (0.0055 if is_print_mode else 0.0049) * (9 * f_scale)
+        BASELINE_TICK_CHARS = 4
+
+        if plotdef.title:
+            need_top_in = 0.375 * f_scale * title_lines + 5.0 / 72.0
+        else:
+            need_top_in = 0.1 * f_scale
+
+        if plotdef.xlabel:
+            need_bottom_in = 0.425 * f_scale + 0.175 * f_scale * (xlabel_lines - 1)
+            if xfmt == "Scientific": need_bottom_in += 0.075 * f_scale
+            elif xfmt == "Power10": need_bottom_in += 0.04 * f_scale
+            need_bottom_in += 6.0 / 72.0
+        else:
+            need_bottom_in = 0.1 * f_scale
+
+        need_left_in = 0.5 * f_scale + 0.25 * f_scale * (ylabel_lines - 1) if plotdef.ylabel else 0.15 * f_scale
+        need_left_in += max(0, _tick_label_chars("y1") - BASELINE_TICK_CHARS) * tick_char_width_in
+        if y1fmt == "Scientific": need_left_in += 0.2 * f_scale
+        elif y1fmt == "Power10": need_left_in += 0.1 * f_scale
+        need_left_in += 3.0 / 72.0
+
+        if uses_y2:
+            # [수정] "Manual-1plot에서 y2label을 넣으면 실제로 안 보임(잘림)" -
+            # 0.45배는 y2tics 숫자 + 회전된 y2label 텍스트를 함께 담기엔 부족했음
+            # (실측: 1.2배부터 정상 표시됨) - 여유를 두고 1.4배로 올린다.
+            need_right_in = 0.63 * f_scale + 0.25 * f_scale * (y2label_lines - 1) if getattr(plotdef, "y2label", "") else 0.2 * f_scale
+            need_right_in += max(0, _tick_label_chars("y2") - BASELINE_TICK_CHARS) * tick_char_width_in
+            if y2fmt == "Scientific": need_right_in += 0.2 * f_scale
+            elif y2fmt == "Power10": need_right_in += 0.1 * f_scale
+        else:
+            need_right_in = 0.15 * f_scale
+
+        return need_left_in, need_right_in, need_top_in, need_bottom_in
 
     def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None):
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
 
         _size_scale = self._compute_size_scale(plotdef)
+        _manual_size_override = None
+        if not getattr(plotdef, "frame_auto", True) and fmt.lower() != "interactive":
+            try:
+                _axis_w_in = float((plotdef.frame_width or "").strip() or 0)
+                _axis_h_in = float((plotdef.frame_height or "").strip() or 0)
+                if (plotdef.frame_unit or "in") == "cm":
+                    _axis_w_in, _axis_h_in = _axis_w_in / 2.54, _axis_h_in / 2.54
+            except ValueError:
+                _axis_w_in, _axis_h_in = 0, 0
+            if _axis_w_in > 0 and _axis_h_in > 0:
+                _uses_y2 = any(getattr(c, "axis", "y1") == "y2" for c in plotdef.curves)
+                _is_print = getattr(plotdef, "is_print_mode", False)
+                _nl, _nr, _nt, _nb = self._compute_manual_margins_in(plotdef, _size_scale, _is_print, _uses_y2)
+                _total_w_in = _axis_w_in + _nl + _nr
+                _total_h_in = _axis_h_in + _nt + _nb
+                _manual_size_override = f"{_total_w_in:.4f}in,{_total_h_in:.4f}in"
         lines = [
             "set encoding utf8",
-            self._get_terminal_cmd(fmt, outfile, plotdef, panel_scale=_size_scale),
+            self._get_terminal_cmd(fmt, outfile, plotdef, size_override=_manual_size_override, panel_scale=_size_scale),
         ]
 
         if fmt.lower() != "interactive":
@@ -1472,8 +1580,18 @@ class GnuplotGenerator:
         self.last_size_warning = None  # 이전 호출에서 남은 경고가 있으면 초기화
 
         # [추가] Print(물리적 프린터 인쇄)는 큰 여백(좌2/우1/상3/하2cm)이 필요하지만,
-        # Save(파일 저장)는 그런 물리적 제약이 없으므로 작은 여백만 사용한다
-        if for_print:
+        # Save(파일 저장)는 그런 물리적 제약이 없으므로 작은 여백만 사용한다.
+        # [수정] Auto(칸 크기를 페이지에 맞춰 알아서 채우는 모드)는 인쇄용 물리
+        # 여백을 강제로 크게 두지 않고, 최소 여백만 두고 자동으로 채운다("여백을
+        # 강제하지 말고 자동에 맡기는" 사용자 요청) - Print/Save든 동일하게 최소
+        # 여백만 사용
+        if frame_auto:
+            # [수정] Auto는 절대 여백을 전혀 적용하지 않는다("Auto size에는 적용하지
+            # 말 것") - 페이지를 실제로 다 채우는 건 어차피 plot 자체 여백
+            # (margin_left 등, title/tic 라벨 자리)뿐이므로, 여기서 별도로 더할
+            # 필요가 없음
+            pm_left = pm_right = pm_top = pm_bottom = 0.0
+        elif for_print:
             pm_left, pm_right = self.PAGE_MARGIN_LEFT_IN, self.PAGE_MARGIN_RIGHT_IN
             pm_top, pm_bottom = self.PAGE_MARGIN_TOP_IN, self.PAGE_MARGIN_BOTTOM_IN
         else:
@@ -1496,53 +1614,138 @@ class GnuplotGenerator:
         total_cells = rows * cols
         any_legend_outside = any(p.legend_on and p.legend_pos == "outside right" for p in plots)
         any_y2 = any(any(getattr(c, "axis", "y1") == "y2" for c in p.curves) for p in plots)
+        any_y2label = any((getattr(p, "y2label", "") or "").strip() for p in plots)
         any_title = any((p.title or "").strip() for p in plots)
         max_title_lines = max((1 + (p.title or "").count("|")) for p in plots) if plots else 1
 
-        panel_scale = min(1.0 / cols, 1.0 / rows)
+        aw, ah = self._A4_SIZES.get(orientation, self._A4_SIZES["portrait"])
+        page_w, page_h = float(aw.replace("in", "")), float(ah.replace("in", ""))
+        printable_w = page_w - pm_left - pm_right
+        printable_h = page_h - pm_top - pm_bottom
 
-        # [핵심 재설계] "1/p, 2/p, 4/p, 6/p는 개별 plot 크기(폰트/여백 포함)가
-        # 전부 동일해야 하고, 배치(및 페이지에 안 들어갈 때의 부득이한 축소)만
-        # 다르다"는 요구사항 반영. Auto 레이아웃은 정반대로 "한 페이지에 맞춰
-        # 알아서 채우는" 목적이므로 기존처럼 panel_scale로 계속 나눠서 줄인다.
-        # → 즉 폰트/여백 스케일을 frame_auto 여부에 따라 다르게 가져간다:
-        #   - Auto: panel_scale 기반(칸이 많을수록 작아짐, 하한선 있음)
-        #   - 명시적 레이아웃: 항상 1.0 고정 (칸 수와 무관하게 동일한 폰트/여백)
-        # [수정] Auto 레이아웃 폰트가 칸 수가 늘수록 너무 작아진다는 피드백
-        # ("plot이 절반으로 줄면 폰트도 절반 정도여야 하는데 1/4 수준으로 줄어듦")
-        # - 원인은 MULTIPLOT_FONT_BOOST를 total_cells==1에만 적용하고 그 외에는
-        # 하한선(MIN_FONT_PANEL_SCALE)만 적용해서, 1칸일 때만 유독 커 보이고
-        # 나머지는 상대적으로 훨씬 작아 보였던 것 - 이제 모든 칸 수에 동일한
-        # 배율을 곱해서(panel_scale에 선형 비례) 1칸 대비 비율이 일관되게 함
-        MULTIPLOT_FONT_BOOST = 2.6
-        if not frame_auto:
-            # [추가] "plot 크기에 비례해서 폰트/마커도 확대·축소" 원칙을 명시적
-            # 레이아웃에도 적용 - 기존엔 1.0 고정이라 1/p=2/p 크기는 동일하게
-            # 유지됐지만, 사용자가 지정한 실제 Frame 크기(기준 10cm 대비)에는
-            # 비례하지 않고 있었음
-            REFERENCE_WIDTH_IN = 10.0 / 2.54
-            if frame_width:
-                try:
-                    _fw_for_scale = float(frame_width)
-                    if (frame_unit or "in") == "cm":
-                        _fw_for_scale /= 2.54
-                except ValueError:
-                    _fw_for_scale = REFERENCE_WIDTH_IN
-            else:
-                # frame_width가 비어있으면(axis_w_ref의 기본값과 동일하게) 기준(10cm)과
-                # 같은 것으로 취급 - 비율 1.0
-                _fw_for_scale = REFERENCE_WIDTH_IN
-            font_panel_scale = max(_fw_for_scale / REFERENCE_WIDTH_IN, 0.3)
-            margin_scale = 1.0
-            layout_scale = 1.0  # margin/spacing에 쓸 스케일도 고정
+        # [핵심 재설계] "frame 크기 = legend까지 포함한 낱장 이미지(칸) 전체 크기"로
+        # Auto/Manual을 통일한다. 기존엔 Auto는 "칸=이미지 전체"였지만 Manual은
+        # "frame_width/height=축(axis)만"이라, 사용자가 입력한 크기보다 실제
+        # 출력물이 여백만큼 더 커지고 그 여백이 입력 크기 대비 상대적으로 과도하게
+        # 크게 보이는 문제(예: "10x8cm 2/p인데 좌우 마진/간격/legend가 너무 큼")가
+        # 있었음. 이제 두 경우 모두 "칸(이미지 한 장) 전체 크기 vs 기준(10x8cm)의
+        # 비율"로 폰트/여백/간격을 함께 정하고(한 장의 이미지처럼 확대/축소),
+        # 축 크기는 칸에서 여백을 뺀 나머지로 역산한다(단일 plot의 frame 개념과 통일).
+        REF_W_IN = 10.0 / 2.54
+        REF_H_IN = 8.0 / 2.54
+
+        # [추가] Manual+grow 경로와 동일하게, 칸이 많을 때(4/p 이상)는 용지를
+        # 100% 꽉 채우면 바깥쪽이 딱 붙어 보이므로 살짜 못 미치게(가로 95%,
+        # 세로 90%) 채운다. 칸이 적을 때(1/p, 2/p)는 비율 유지(contain-fit)
+        # 자체가 이미 여유를 만들어주므로 그대로 100% 기준을 쓴다.
+        _auto_fill_w = 0.95 if total_cells >= 4 else 1.0
+        _auto_fill_h = 0.90 if total_cells >= 4 else 1.0
+        if frame_auto:
+            cell_w_in = (printable_w * _auto_fill_w - CELL_SPACING_IN * (cols - 1)) / cols
+            cell_h_in = (printable_h * _auto_fill_h - CELL_SPACING_IN * (rows - 1)) / rows
+        elif frame_width and frame_height:
+            try:
+                cell_w_in, cell_h_in = float(frame_width), float(frame_height)
+            except ValueError:
+                cell_w_in, cell_h_in = REF_W_IN, REF_H_IN
+            if (frame_unit or "in") == "cm":
+                cell_w_in /= 2.54
+                cell_h_in /= 2.54
         else:
-            font_panel_scale = panel_scale * MULTIPLOT_FONT_BOOST
-            # [추가] 여백이 폰트 부스트를 그대로 따라가면 칸이 많은 Auto
-            # 레이아웃에서 여백이 축 크기 대비 과도하게 커 보이는 문제가 있었음
-            # - 폰트는 선형으로 키우되(가독성), 여백은 그보다 완만하게(제곱근에
-            # 가깝게) 커지도록 분리
-            margin_scale = font_panel_scale ** 0.65
-            layout_scale = panel_scale
+            cell_w_in, cell_h_in = REF_W_IN, REF_H_IN
+
+        # [수정] 단일 plot과 동일한 이유로, 칸(cell)이 portrait 모양(세로>가로)이면
+        # 기준(REF)도 같이 돌려써서 baseline을 회전만 한 경우 항상 scale=1.0이
+        # 나오게 한다(안 그러면 landscape 칸이 더 크게 스케일되어 legend/폰트가
+        # 상대적으로 커 보이는 문제가 있었음).
+        _ref_w, _ref_h = (REF_H_IN, REF_W_IN) if cell_w_in < cell_h_in else (REF_W_IN, REF_H_IN)
+        # [수정 - 캡 철회] "x:y 비율은 유지하되, Auto는 용지 최대치까지 확대해서
+        # 쓰자" - 1.0 상한을 두면 칸이 커져도 폰트/마진이 기준(10x8) 크기에
+        # 고정돼 축만 커지고 글자/legend는 비율에 안 맞게 작아 보임. 대신 비율
+        # 유지(contain-fit, 아래 total_cells<=2 블록)로 칸 자체를 기준 비율에
+        # 맞추고 나면, 그 커진 칸에 맞춰 폰트/마진도 함께(선형) 커지게 둔다.
+        size_scale = max(min(cell_w_in / _ref_w, cell_h_in / _ref_h), 0.3)
+        font_panel_scale = size_scale
+        # [참고] "작은 Manual 칸(예: 8x6cm)에서 legend/여백이 과도하게 커서 실제
+        # axis가 쪼그라든다" - 간격(spacing)을 0으로 해봐도 거의 안 바뀌는 것으로
+        # 실측 확인(원인은 spacing이 아니라 margin/legend 자체) - 폰트(글자
+        # legibility)는 size_scale에 선형으로 유지하되, margin과 칸 사이 간격은
+        # 작은 칸일수록 더 적극적으로(비율 이상으로) 줄어들게 한다.
+        # [수정] "1/p, 2/p는 지정 크기를 가급적 그대로 지키고, 4/p, 6/p는 칸이
+        # 작아지는 만큼 공간 활용을 위해 더 적극적으로 줄이자" - 칸 수가 많을
+        # 때만(4/p 이상) 이 적극적인 축소를 적용하고, 1/p, 2/p는 원래(선형)
+        # 방식을 그대로 쓴다.
+        # [수정 - 버그] size_scale>=1(칸이 기준보다 큰 경우 - Auto 레이아웃은
+        # 보통 이럼)에서 세제곱을 그대로 적용하면 마진이 오히려 폭발적으로
+        # 커져서(예: size_scale=2 -> margin_scale=8) 축이 거의 안 남는 심각한
+        # 문제가 있었음(Auto 4/p 실측: 축 h=38pt까지 쪼그라듦) - 이 적극적 축소는
+        # "칸이 기준보다 작을 때(size_scale<1)"에만 의미가 있으므로, 그 경우에만
+        # 적용하고 그 외(size_scale>=1)에는 선형을 유지한다.
+        _margin_aggr = 3.0 if total_cells >= 4 else 1.0
+        margin_scale = size_scale ** _margin_aggr if size_scale < 1.0 else size_scale
+        layout_scale = size_scale ** _margin_aggr if size_scale < 1.0 else size_scale
+        # [수정] "plot간 여백/간격이 너무 큼, 좌우 여백도 최소화(절대마진
+        # 미적용)" - 폰트/legend(size_scale, font_panel_scale)는 용지가 큰 만큼
+        # 커지게 두지만, margin/간격은 그와 같은 비율로 같이 커지면 두 칸의
+        # 마진+간격이 합쳐져 눈에 보이는 여백이 지나치게 커진다. Auto는
+        # margin_scale/layout_scale만 1.0으로 상한을 둬서 여백/간격은 기준
+        # 크기 그대로 유지하고, 남는 공간은 전부 axis(실제 그림 영역)로 가도록
+        # 한다 (Manual은 사용자가 지정한 크기이므로 그대로 비례 유지).
+        # [수정] 이 캡을 1/p, 2/p에만 걸어뒀었는데, 4/p, 6/p도 size_scale>=1이면
+        # (페이지가 기준보다 큰 보통의 경우) 똑같이 margin이 과도하게 커져서
+        # "4/p, 6/p도 plot간 간격이 너무 큼" 문제가 재현됐음 - 칸 수 상관없이
+        # Auto 전체에 적용한다.
+        if frame_auto:
+            margin_scale = min(margin_scale, 1.0)
+            layout_scale = min(layout_scale, 1.0)
+            # [수정 - 되돌림] "4/p, 6/p도 plot간 간격을 최소한으로" 요청으로
+            # margin_scale에 추가로 *0.5를 걸었었는데, y1/y2 label(회전 텍스트)
+            # 폭에는 이 margin_scale을 더 줄이는 것과 무관한 최소 필요 크기가
+            # 있어서 - 그보다 더 줄이면 옆 칸 label과 겹쳐버림(실측 확인: "Pressure
+            # (MPa)"/"Temperature (C)"가 옆 칸과 겹침). 대신 아래(margin_left/
+            # right 계산부)에 top/bottom과 똑같은 방식의 floor(최소 절대 여백)를
+            # 추가해서, 겹치지 않는 한도까지만 최대한 줄어들게 한다.
+            if total_cells >= 4:
+                margin_scale *= 0.5
+                layout_scale *= 0.5
+        spacing_in = CELL_SPACING_IN * layout_scale
+        # [추가] "Auto는 plot간 아래위 간격을 키우고, 좌우 간격은 title 대문자
+        # 기준 약 2자 폭이 되도록만 늘려달라" - 지금까지 spacing_in은 가로/세로
+        # 공통이었는데, 방향별로 다르게 늘리기 위해 분리한다(Manual은 요청
+        # 대상이 아니므로 그대로 동일하게 둔다).
+        _extra_bottom_in = 0.0
+        if frame_auto:
+            _max_title_size_sp = max((float(p.title_size or 14) for p in plots if (p.title or "").strip()), default=14.0)
+            _title_pt_sp = _max_title_size_sp * font_panel_scale
+            _title_char_w_in = (0.0055 if for_print else 0.0049) * _title_pt_sp
+            _title_char_h_in = _title_pt_sp / 72.0  # 대문자 1자 "높이"(요청대로 폭이 아니라 높이)
+            spacing_h_in = spacing_in * 3.0
+            spacing_w_in = 2 * _title_char_w_in
+            # [수정] "2/p 상하 간격을 title 대문자 1자 높이만큼 줄이고, 이를
+            # bottom 마진에 넣어달라" - margin_top은 그대로 두고 margin_bottom
+            # 에만 더한다(뒤에서 margin_bottom 계산 후 반영, 여기선 줄일 양/
+            # 더할 양만 기록). margin_top/bottom을 "똑같이" 늘리면 간격이
+            # 상쇄돼버렸던 이전 버그와 달리, bottom에만 넣으면 위쪽 칸-아래쪽
+            # 칸 사이 간격은 실제로 줄고 아래쪽 바깥 여백(마지막 행의 bottom)만
+            # 커진다.
+            if total_cells == 2:
+                spacing_h_in = max(spacing_h_in - _title_char_h_in, 0.0)
+                _extra_bottom_in = _title_char_h_in
+        else:
+            spacing_h_in = spacing_w_in = spacing_in
+        if frame_auto:
+            # 위에서 base(미scale) spacing으로 어림잡았던 칸 크기를, 실제
+            # spacing_in(scale 적용)으로 다시 나눠 정확히 재계산한다
+            cell_w_in = (printable_w * _auto_fill_w - spacing_w_in * (cols - 1)) / cols
+            cell_h_in = (printable_h * _auto_fill_h - spacing_h_in * (rows - 1)) / rows
+            # [수정 - 개념 정정] "x:y 비율"은 칸(cell, 마진/legend 포함 전체)이
+            # 아니라 좌표축(axis) 자체의 가로:세로 비율을 말하는 것임(그래서
+            # 체크박스도 "Axis Frame Auto") - 예전엔 여기서 칸 자체를 기준(10x8)
+            # 비율로 contain-fit했는데, 마진이 가로/세로에 비대칭으로 붙어서
+            # (특히 legend가 있는 오른쪽, title이 있는 위쪽) 실제로 보이는 axis
+            # 박스는 그 비율과 다르게 나왔음. 마진을 먼저 구한 뒤(아래) axis
+            # 자체를 기준 비율로 맞추는 것으로 이동함 - axis_w/axis_h 계산부
+            # (아래 "axis_w = max(cell_w_in - margin_left - ...")를 참조.
 
         # [추가] Y축 tic 숫자 자릿수가 많을수록(예: 10000 이상) 여백이 부족해
         # 잘리거나(왼쪽) title과 겹치던(오른쪽 Y2) 문제 - 실제 플롯들의 Y1/Y2
@@ -1606,139 +1809,218 @@ class GnuplotGenerator:
         if _any_x_2line: extra_bottom_margin_in += 0.35  # X title 2줄 이상 (아랫줄 잘림 방지로 확대)
 
         margin_left = MARGIN_LEFT_IN * margin_scale + extra_left_margin_in
-        margin_right = (MARGIN_RIGHT_IN + (MARGIN_RIGHT_LEGEND_IN if any_legend_outside else 0) + (MARGIN_RIGHT_Y2_IN if any_y2 else 0)) * margin_scale + extra_right_margin_in
+        # [수정] "y2 title이 없으면 마진도 줄어야 함" - 단일 plot(_compute_manual_
+        # margins_in)과 동일하게, y2 축은 있지만 y2label 문자열이 없으면(tic
+        # 숫자만) 더 작은 여백만 쓰도록 함(예전엔 y2 축만 있으면 label 유무와
+        # 무관하게 항상 MARGIN_RIGHT_Y2_IN을 다 썼음).
+        _y2_margin_in = (MARGIN_RIGHT_Y2_IN if any_y2label else MARGIN_RIGHT_Y2_NO_LABEL_IN) if any_y2 else 0
+        margin_right = (MARGIN_RIGHT_IN + (MARGIN_RIGHT_LEGEND_IN if any_legend_outside else 0) + _y2_margin_in) * margin_scale + extra_right_margin_in
         title_margin_base = MARGIN_TOP_IN if any_title else MARGIN_TOP_NO_TITLE_IN
         margin_top = (title_margin_base + MARGIN_TOP_PER_EXTRA_LINE_IN * (max_title_lines - 1)) * margin_scale
         margin_bottom = MARGIN_BOTTOM_IN * margin_scale + extra_bottom_margin_in
 
-        # [추가] margin_top/bottom은 margin_scale(=font_panel_scale**0.65)로 완만하게
-        # 커지는데, 실제 title/xlabel 폰트는 font_panel_scale에 선형으로 비례해서
-        # 커진다(_build_plot_commands의 f_scale=panel_scale 그대로) - Auto 레이아웃에서
-        # 칸이 늘어날수록(font_panel_scale이 커질수록) 이 둘의 간극이 벌어져서,
-        # 위/아래로 붙은 옆 칸의 title/xlabel 텍스트가 서로 겹쳐 보이는 문제가
-        # 있었음(6/p 등에서 실측 확인) - 실제 폰트 크기 기준 최소 절대 여백을
-        # 보장한다.
+        # [추가] margin_top/bottom과 실제 title/xlabel 폰트 크기 사이 간극으로
+        # 옆 칸끼리 텍스트가 겹치는 문제 방지 - 실제 폰트 크기 기준 최소 절대
+        # 여백을 보장한다(6/p 등에서 실측 확인된 문제).
+        # [수정] 이 최소 절대 여백이 font_panel_scale(선형, 축소 안 됨) 기준이면
+        # margin_scale을 줄여도 여기서 다시 큰 값으로 덮어써서, 작은 Manual
+        # 칸에서 상하 마진이 전혀 안 줄어드는 문제가 있었음(좌우는 이런 절대
+        # 바닥값이 없어서 잘 줄어듦) - "1/p, 2/p는 지정 크기를 최대한 지키고
+        # (font_panel_scale 기준 그대로 - 겹침 방지 우선), 4/p, 6/p는 공간
+        # 활용을 위해 이 바닥값도 margin_scale만큼 같이 줄어들게(옆 칸과 살짝
+        # 빡빡해질 수 있음을 감수)" 한다.
+        # [수정] "Auto 1/p, 2/p에서 세로축이 너무 짧고 plot간 간격이 너무 큼" -
+        # margin_scale/layout_scale은 위에서 이미 1.0으로 상한을 뒀는데, 이
+        # 겹침방지 바닥값(_need_top_in/_need_bottom_in)이 여전히 상한 없는
+        # font_panel_scale(예: 1.84)을 그대로 써서 margin_top/bottom을 다시
+        # 크게 되돌려버렸음(캡을 우회하는 결과) - Auto에서 실측: 칸 높이
+        # 5.8in인데 상하 여백만 2.94in을 먹어서 축이 2.85in로 쪼그라듦.
+        # [수정] 1.0으로 딱 잘라 캡을 걸었더니 반대로 칸이 아주 커서
+        # font_panel_scale이 큰 경우(예: 1/p landscape, 2.6배)엔 실제 title/
+        # xlabel 폰트가 그만큼 커졌는데도 여백은 1.0배로 고정돼 xlabel가 페이지
+        # 밖으로 밀려 안 보이는 문제가 생김 - 1.0 밑으로는 그대로(선형, "작은
+        # plot은 여백도 줄어야") 두고, 1.0 위로는 제곱근(sqrt)으로 완만하게만
+        # 커지게 한다(실제 폰트 크기에 맞춰 클리핑은 막으면서도, 선형보다는
+        # 덜 커져서 여백이 과하게 크지도 않게).
+        _floor_scale = margin_scale if total_cells >= 4 else (
+            font_panel_scale if font_panel_scale <= 1.0 else font_panel_scale ** 0.5
+        )
         if any_title:
             _max_title_size = max((float(p.title_size or 14) for p in plots if (p.title or "").strip()), default=14.0)
-            _need_top_in = 0.75 * font_panel_scale * (_max_title_size / 14.0) * max_title_lines
+            _need_top_in = 0.75 * _floor_scale * (_max_title_size / 14.0) * max_title_lines
             margin_top = max(margin_top, _need_top_in)
         if any((p.xlabel or "").strip() for p in plots):
             _max_xlabel_size = max((float(p.xlabel_size or 11) for p in plots if (p.xlabel or "").strip()), default=11.0)
-            _need_bottom_in = 0.85 * font_panel_scale * (_max_xlabel_size / 11.0) + (0.35 if _any_x_2line else 0)
+            _need_bottom_in = 0.85 * _floor_scale * (_max_xlabel_size / 11.0) + (0.35 if _any_x_2line else 0)
             margin_bottom = max(margin_bottom, _need_bottom_in)
-        spacing_in = CELL_SPACING_IN * layout_scale
+        margin_bottom += _extra_bottom_in
+        # [추가] "4/p Auto에서 옆 칸끼리 y1/y2 label(회전 텍스트)이 겹침" -
+        # margin_left/right를 top/bottom과 동일한 이유로 줄이면서도(4/p, 6/p는
+        # margin_scale에 추가 축소까지 걸림) 좌우에는 top/bottom 같은 최소
+        # 절대 여백(floor)이 없어서, label 폭보다 마진이 더 좁아지면 옆 칸
+        # 글자와 그대로 겹쳐버렸음 - 위와 같은 _floor_scale 기준으로 최소
+        # 여백을 보장한다.
+        # [수정] "그래도 옆 칸끼리 겹침" - label 자체의 회전폭(_floor_scale
+        # 기준, 적극적으로 줄어듦)만 보장했더니 여전히 겹쳤음. 실제로는 margin_
+        # left/right 안에 y1/y2 "tic 숫자"도 같이 들어가야 하는데(라벨보다 먼저
+        # 차지), tic 폰트는 font_panel_scale(캡 없음)로 그리면서 이 floor는
+        # tic 몫을 전혀 안 보고 있었음 - tic 숫자 최소 4자리 폭은 축소 없이
+        # (실제 그려지는 크기 그대로) 항상 더해서, 진짜 겹치지 않을 최소값을 보장한다.
+        # [수정] 4자리 고정 가정 대신 실제 tic 문자 수(max_y1_chars/max_y2_chars,
+        # 이미 위에서 실측)를 써서, 짧은 숫자(예: "0","1")일 때는 floor도 더
+        # 작게(간격을 더 좁게) 잡히도록 한다.
+        _min_left_tic_in = max(1, max_y1_chars) * _tick_char_width_in_mp + 0.03
+        _min_right_tic_in = max(1, max_y2_chars) * _tick_char_width_in_mp + 0.03
+        if any((p.ylabel or "").strip() for p in plots):
+            _max_ylabel_size = max((float(p.ylabel_size or 11) for p in plots if (p.ylabel or "").strip()), default=11.0)
+            _need_left_in = 0.5 * _floor_scale * (_max_ylabel_size / 11.0) + (0.2 if _any_y1_2line else 0) + _min_left_tic_in
+            margin_left = max(margin_left, _need_left_in)
+        if any_y2 and any_y2label:
+            _max_y2label_size = max((float(p.y2label_size or 11) for p in plots if (getattr(p, "y2label", "") or "").strip()), default=11.0)
+            _need_right_in = 0.5 * _floor_scale * (_max_y2label_size / 11.0) + (0.2 if _any_y2_2line else 0) + _min_right_tic_in
+            margin_right = max(margin_right, _need_right_in)
 
-        if frame_auto:
-            aw, ah = self._A4_SIZES.get(orientation, self._A4_SIZES["portrait"])
-            page_w, page_h = float(aw.replace("in", "")), float(ah.replace("in", ""))
-            # [재수정] "종이 여백 = 축(axis) 시작점까지의 거리"로 해석했다가, title/
-            # tic 라벨처럼 축보다 바깥쪽에 있는 요소가 오히려 지정한 여백보다 더
-            # 바깥으로(심하면 용지 밖으로) 밀려나는 문제가 있었음 - Word 등 일반적인
-            # 문서 여백 개념과 동일하게, "종이 여백 = 가장 바깥쪽 보이는 요소(제목,
-            # tic 숫자 등을 포함한 셀 전체)까지의 거리"로 되돌린다. 축 자체는 그
-            # 안쪽에서 자연스럽게 시작된다(margin_left/top만큼 더 안쪽).
-            printable_w = page_w - pm_left - pm_right
-            printable_h = page_h - pm_top - pm_bottom
-            cell_w_in = (printable_w - spacing_in * (cols - 1)) / cols
-            cell_h_in = (printable_h - spacing_in * (rows - 1)) / rows
-            axis_w = max(cell_w_in - margin_left - margin_right, 0.5)
-            axis_h = max(cell_h_in - margin_top - margin_bottom, 0.5)
+        # [수정 - 개념 정정] "Frame(Axis) 크기는 좌표축(axis) 자체의 크기임 -
+        # 처음부터 그렇게 강조했음" - Manual에서 frame_width/height는 칸(cell,
+        # 마진+legend 포함 전체)이 아니라 axis 자체의 크기다. 그래서 cell_w_in/
+        # cell_h_in(지금까지 frame_width/height를 그대로 담고 있던 변수)을 axis
+        # 크기로 보고, 마진을 더해서 실제 칸(전체 이미지) 크기를 새로 구한다
+        # (이후 아래 shrink-to-fit/grow 단계가 이 "축+마진 = 칸" 크기를 기준으로
+        # 용지에 맞추도록, margin 계산 직후/shrink-to-fit 이전에 반영한다).
+        axis_w = axis_h = None
+        if not frame_auto:
+            axis_w = cell_w_in
+            axis_h = cell_h_in
             cell_w_in = axis_w + margin_left + margin_right
             cell_h_in = axis_h + margin_top + margin_bottom
 
-            grid_left = pm_left
-            grid_top = page_h - pm_top
-            cell_positions_in = []
-            for i in range(total_cells):
-                row_idx, col_idx = i // cols, i % cols
-                cell_left_in = grid_left + col_idx * (cell_w_in + spacing_in)
-                cell_top_in = grid_top - row_idx * (cell_h_in + spacing_in)
-                cell_positions_in.append((cell_left_in, cell_left_in + cell_w_in, cell_top_in, cell_top_in - cell_h_in))
-        else:
-            axis_w_ref, axis_h_ref = (float(frame_width), float(frame_height)) if (frame_width and frame_height) else (10.0 / 2.54, 8.0 / 2.54)
-            if frame_unit == "cm":
-                axis_w_ref /= 2.54
-                axis_h_ref /= 2.54
-            # [핵심 수정] 전엔 여기서 axis_w_ref에 panel_scale을 곱해 칸이 많을수록
-            # 개별 plot이 계속 작아졌음(1/p와 2/p 크기가 달라지는 원인) - 이제
-            # 요청한 frame 크기를 칸 수와 무관하게 그대로 사용하고, 페이지에
-            # 안 들어갈 때만 부득이하게 축소(+경고)한다
-            axis_w, axis_h = axis_w_ref, axis_h_ref
+        # [수정] "지정 Axis size에서도 지정마진에 plot 자체 마진이 추가되어
+        # 마진이 너무 커짐" - 절대(페이지) 여백 pm_*과 plot 자체 여백(margin_*,
+        # title/tic 라벨 자리)이 더해져(pm_left + margin_left) 쌓이던 문제.
+        # 절대 여백은 plot 자체 여백을 이미 포함하는 것으로 처리한다 - 즉 둘 중
+        # 더 큰 쪽만 실제로 적용되고(더하지 않음), 절대 여백이 plot 자체 여백보다
+        # 큰 만큼(pm_* - margin_*)만 별도의 바깥쪽 여유로 추가된다.
+        pad_left = max(pm_left - margin_left, 0)
+        pad_right = max(pm_right - margin_right, 0)
+        pad_top = max(pm_top - margin_top, 0)
+        pad_bottom = max(pm_bottom - margin_bottom, 0)
+        printable_w = page_w - pad_left - pad_right
+        printable_h = page_h - pad_top - pad_bottom
 
-            # [수정] 1/p, 2/p 등 명시적 레이아웃은 frame 크기를 기준으로 그리되,
-            # 항상 표준 용지(orientation에 맞는 A4) 안에 고정 여백(좌2/우1/상3/하2cm)을
-            # 두고 들어가야 한다. 여백이 부족하거나 아예 없어지면(요청한 크기가
-            # 용지보다 크면) 경고를 남기고 종횡비를 유지한 채 자동으로 축소한다.
-            aw, ah = self._A4_SIZES.get(orientation, self._A4_SIZES["portrait"])
-            page_w, page_h = float(aw.replace("in", "")), float(ah.replace("in", ""))
-            # [재수정] Auto 브랜치와 동일하게, 종이 여백은 셀(title/tic 라벨 포함
-            # 가장 바깥 요소)까지의 거리로 되돌린다 - 축만 여백에 맞추면 title/tic
-            # 라벨이 그보다 더 바깥으로 밀려나는 문제가 있었음
-            printable_w = page_w - pm_left - pm_right
-            printable_h = page_h - pm_top - pm_bottom
-
-            cell_w_in = axis_w + margin_left + margin_right
-            cell_h_in = axis_h + margin_top + margin_bottom
-
-            # [수정] 축소가 필요할 때 axis_w/axis_h만 줄이고 spacing(칸 사이 간격)은
-            # 그대로 둬서, 축소가 클수록 간격이 plot 크기 대비 상대적으로 훨씬
-            # 커 보이는 문제가 있었음 - margin(제목/tic 라벨 자리, 폰트 크기와
-            # 맞물려 있어 그대로 둬야 함)은 고정하고, axis와 spacing을 함께
-            # 비례 축소하도록 재계산해서 간격 비율을 유지하고 plot 자체도 더 크게 나오게 함
-            # [핵심 수정] 위 k_w/k_h는 "margin은 고정, axis+spacing만 줄인다"는
-            # 가정으로 유도된 식(분자에서 margin*cols를 미리 빼둠)인데, 바로
-            # 아래에서 font_panel_scale에 이 scale을 다시 곱해 margin_left/right/
-            # top/bottom을 재계산하고 있어서 margin이 "고정"이 아니라 사실상
-            # scale만큼 한 번 더 줄어들고 있었음 - 그 결과 실제 그려지는 grid가
-            # 필요한 것보다 더 작아져서, 용지 안에 남는 공백(마진)이 의도한 것보다
-            # 훨씬 커 보이는 문제가 있었음("절대 마진이 비율로 한 번 더 추가된"
-            # 효과). margin도 axis/spacing과 함께 scale만큼 줄어드는 것을 전제로,
-            # cell 전체(axis+margin) x cols/rows + spacing이 printable 영역에
-            # 정확히 맞도록 scale을 다시 유도한다.
-            scale = 1.0
-            if axis_w > 0:
-                k_w = printable_w / (cell_w_in * cols + spacing_in * (cols - 1))
-                scale = min(scale, max(k_w, 0.1))
-            if axis_h > 0:
-                k_h = printable_h / (cell_h_in * rows + spacing_in * (rows - 1))
-                scale = min(scale, max(k_h, 0.1))
-
-            if scale < 0.999:
-                _margin_desc = "여백(좌2/우1/상3/하2cm)" if for_print else "여백(사방 0.3cm)"
-                self.last_size_warning = (
-                    f"요청한 Frame 크기({axis_w_ref:.2f}x{axis_h_ref:.2f}{frame_unit})로는 "
-                    f"용지({orientation})에 {_margin_desc}을 두고 들어가지 않아, "
-                    f"플롯 크기를 약 {scale*100:.0f}%로 줄여서 출력했습니다."
-                )
-                axis_w *= scale
-                axis_h *= scale
-                spacing_in *= scale
-                # [수정] 축(axis)만 줄이고 폰트/margin은 그대로 두면, 좁아진 축
-                # 안에 원래 크기의 글자·tic들이 그대로 들어가려다 서로 겹쳐서
-                # "깨진" 것처럼 보이는 문제가 있었음 - 폰트도 축소 비율만큼
-                # 같이 줄이고, margin(글자 크기에 맞물려 있음)도 다시 계산한다
-                font_panel_scale *= scale
-                extra_left_margin_in *= scale
-                extra_right_margin_in *= scale
-                extra_bottom_margin_in *= scale
-                margin_left = MARGIN_LEFT_IN * font_panel_scale + extra_left_margin_in
-                margin_right = (MARGIN_RIGHT_IN + (MARGIN_RIGHT_LEGEND_IN if any_legend_outside else 0) + (MARGIN_RIGHT_Y2_IN if any_y2 else 0)) * font_panel_scale + extra_right_margin_in
-                margin_top = (title_margin_base + MARGIN_TOP_PER_EXTRA_LINE_IN * (max_title_lines - 1)) * font_panel_scale
-                margin_bottom = MARGIN_BOTTOM_IN * font_panel_scale + extra_bottom_margin_in
-                cell_w_in = axis_w + margin_left + margin_right
-                cell_h_in = axis_h + margin_top + margin_bottom
-
-            # [복원] 좌상단 고정 배치에서 다시 가운데 정렬로 되돌림 (사용자 요청)
+        # [추가] Manual(명시적 frame 크기) 지정 시, 칸(이미지 한 장) 전체가 페이지에
+        # 안 들어가면 - 가로세로 비율을 바꾸는 게 아니라 - 칸 전체(폰트/여백/간격
+        # 포함, "legend 포함 이미지 개념")를 하나의 배율로 균일하게 축소한다.
+        # Auto는 애초에 페이지 칸 수로 나눠 계산했으므로 항상 꼭 맞아 축소가 필요 없다.
+        if not frame_auto:
             grid_w = cell_w_in * cols + spacing_in * (cols - 1)
             grid_h = cell_h_in * rows + spacing_in * (rows - 1)
-            origin_left = pm_left + max(0, (printable_w - grid_w) / 2)
-            origin_top = (page_h - pm_top) - max(0, (printable_h - grid_h) / 2)
-            cell_positions_in = []
-            for i in range(total_cells):
-                row_idx, col_idx = i // cols, i % cols
-                cell_left_in = origin_left + col_idx * (cell_w_in + spacing_in)
-                cell_top_in = origin_top - row_idx * (cell_h_in + spacing_in)
-                cell_positions_in.append((cell_left_in, cell_left_in + cell_w_in, cell_top_in, cell_top_in - cell_h_in))
+            shrink = 1.0
+            if grid_w > 0:
+                shrink = min(shrink, max(printable_w / grid_w, 0.1))
+            if grid_h > 0:
+                shrink = min(shrink, max(printable_h / grid_h, 0.1))
+            if shrink < 0.999:
+                _margin_desc = "여백(좌2/우1/상3/하2cm)" if for_print else "여백(사방 0.3cm)"
+                self.last_size_warning = (
+                    f"요청한 Frame 크기({cell_w_in * 2.54:.2f}x{cell_h_in * 2.54:.2f}cm)로는 "
+                    f"용지({orientation})에 {_margin_desc}을 두고 들어가지 않아, "
+                    f"플롯 크기를 약 {shrink*100:.0f}%로 줄여서 출력했습니다."
+                )
+                cell_w_in *= shrink
+                cell_h_in *= shrink
+                axis_w *= shrink
+                axis_h *= shrink
+                spacing_in *= shrink
+                size_scale *= shrink
+                font_panel_scale *= shrink
+                margin_scale *= shrink
+                margin_left *= shrink
+                margin_right *= shrink
+                margin_top *= shrink
+                margin_bottom *= shrink
+
+            # [추가] "1/p, 2/p는 지정 크기를 그대로, 4/p, 6/p는 공간을 활용해서
+            # plot이 너무 작아지는 걸 방지" - 칸이 많을 때(4/p 이상)는 grid가
+            # 용지보다 작게 남으면(용지 중앙에 큰 바깥 여백만 남고 plot은 작게
+            # 유지) 오히려 반대로 용지를 채우도록 grid 전체를 키운다(비율 유지,
+            # 위 축소와 동일한 방식의 반대 방향). 1/p, 2/p는 지정 크기를 그대로
+            # 존중하므로 이 확대는 적용하지 않는다.
+            if total_cells >= 4:
+                grid_w = cell_w_in * cols + spacing_in * (cols - 1)
+                grid_h = cell_h_in * rows + spacing_in * (rows - 1)
+                # [수정] 100%까지 꽉 채우면 용지에 딱 붙어 보인다는 피드백
+                # (landscape 좌우, portrait 상하) - 채우는 목표를 낮춰서 바깥쪽에
+                # 약간의 숨 쉴 틈을 남긴다. 4/p는 상하가 특히 더 빡빡하다는
+                # 추가 피드백으로 세로 쪽 목표를 조금 더 낮춤(가로 95%, 세로 90%).
+                _fill_frac_w = 0.95
+                _fill_frac_h = 0.90
+                grow = None
+                if grid_w > 0 and grid_h > 0:
+                    grow = min(printable_w * _fill_frac_w / grid_w, printable_h * _fill_frac_h / grid_h)
+                if grow and grow > 1.001:
+                    cell_w_in *= grow
+                    cell_h_in *= grow
+                    axis_w *= grow
+                    axis_h *= grow
+                    spacing_in *= grow
+                    size_scale *= grow
+                    font_panel_scale *= grow
+                    margin_scale *= grow
+                    margin_left *= grow
+                    margin_right *= grow
+                    margin_top *= grow
+                    margin_bottom *= grow
+
+        # [수정] "4/p는 3개만, 2/p는 1개만 저장됨" - margin이 칸 크기보다 커서 axis가
+        # 0.5in 바닥에 걸리면, 이 축소된 axis에 margin을 다시 더해 cell_w_in/h_in을
+        # "키우고" 있었음. Manual은 이렇게 키운 뒤 바로 위의 균일 shrink 단계에서
+        # 다시 페이지에 맞춰 축소되니 안전하지만, Auto는 cell 크기가 처음부터
+        # "페이지를 cols x rows로 정확히 나눈 값"이어야 한다는 전제가 깨져서, 칸이
+        # 커진 만큼 그리드 전체가 용지 밖으로 밀려나고(특히 원점에서 먼 마지막 칸일수록
+        # 심함) gnuplot이 화면 밖(0~1 범위 밖) margin을 받아 그 칸을 못 그리는
+        # 문제가 있었음 - Auto는 cell 크기를 그대로 두고 axis만(margin이 넘치면
+        # 매우 좁아지더라도) 그 안에서 줄인다.
+        # [수정] Manual은 axis_w/axis_h를 이미 위에서(margin 계산 직후) 원래
+        # 지정한 axis 크기로 설정해뒀음(그 뒤 shrink/grow도 같이 반영됨) - 여기서
+        # cell에서 다시 빼서 덮어쓰면 안 됨(같은 값이 나오는 게 정상이지만,
+        # Manual의 "axis = 지정값 그대로"라는 원칙을 코드로도 명확히 하기 위해
+        # frame_auto일 때만 이 방식(cell에서 margin을 뺌)으로 axis를 구한다.
+        if frame_auto:
+            axis_w = max(cell_w_in - margin_left - margin_right, 0.05)
+            axis_h = max(cell_h_in - margin_top - margin_bottom, 0.05)
+        else:
+            axis_w = max(axis_w, 0.5)
+            axis_h = max(axis_h, 0.5)
+        # [추가] "Multi-plot Auto로 1~2개만 그릴 때 용지 모양(A4 비율) 그대로
+        # 늘어나서 x:y(axis 자체의 가로:세로 비율)가 왜곡된다" - 단일 plot
+        # Auto와 같은 원칙으로, 칸이 적을 때(1/p, 2/p)는 axis(margin을 뺀 실제
+        # 그림 영역) 자체를 기준(10x8) 비율로 맞추고(contain-fit), 칸이 많을 때
+        # (4/p 이상)는 지금처럼 용지를 최대로 채운다(비율 무시). margin을 뺀
+        # 뒤의 axis를 기준으로 맞춰야, 가로/세로에 비대칭으로 붙는 마진(legend가
+        # 있는 오른쪽, title이 있는 위쪽) 때문에 axis 비율이 어긋나는 문제가 없다.
+        if frame_auto and total_cells <= 2:
+            _ref_w2, _ref_h2 = (REF_H_IN, REF_W_IN) if axis_w < axis_h else (REF_W_IN, REF_H_IN)
+            _target_ratio = _ref_w2 / _ref_h2
+            if axis_w / axis_h > _target_ratio:
+                axis_w = axis_h * _target_ratio
+            else:
+                axis_h = axis_w / _target_ratio
+            cell_w_in = axis_w + margin_left + margin_right
+            cell_h_in = axis_h + margin_top + margin_bottom
+        elif not frame_auto:
+            cell_w_in = axis_w + margin_left + margin_right
+            cell_h_in = axis_h + margin_top + margin_bottom
+
+        grid_w = cell_w_in * cols + spacing_w_in * (cols - 1)
+        grid_h = cell_h_in * rows + spacing_h_in * (rows - 1)
+        origin_left = pad_left + max(0, (printable_w - grid_w) / 2)
+        origin_top = (page_h - pad_top) - max(0, (printable_h - grid_h) / 2)
+        cell_positions_in = []
+        for i in range(total_cells):
+            row_idx, col_idx = i // cols, i % cols
+            cell_left_in = origin_left + col_idx * (cell_w_in + spacing_w_in)
+            cell_top_in = origin_top - row_idx * (cell_h_in + spacing_h_in)
+            cell_positions_in.append((cell_left_in, cell_left_in + cell_w_in, cell_top_in, cell_top_in - cell_h_in))
 
         size_override = f"{page_w:.3f}in,{page_h:.3f}in"
         lines = [
@@ -1762,17 +2044,35 @@ class GnuplotGenerator:
             # 곧바로 덮어써짐. 각 패널의 커스텀 title/축 설정을 잃어버릴 위험도
             # 없었지만(항상 그 패널 고유 값으로 재설정되므로), 혼동을 줄 수 있어 제거함.
 
-            lines.append(f"set lmargin at screen {axis_left_in / page_w:.4f}")
-            lines.append(f"set rmargin at screen {axis_right_in / page_w:.4f}")
-            lines.append(f"set tmargin at screen {axis_top_in / page_h:.4f}")
-            lines.append(f"set bmargin at screen {axis_bottom_in / page_h:.4f}")
+            # [추가] 마진 계산이 어떤 경로로든 [0,1] 화면 비율을 벗어나면(예: 그리드가
+            # 용지 밖으로 밀려남) gnuplot이 해당 칸을 그리지 못해 "4/p인데 3개만,
+            # 2/p인데 1개만 저장됨" 같은 문제가 생겼음 - 원인(위의 cell 크기 재계산)을
+            # 고쳤지만, 방어적으로 여기서도 항상 유효한 [0,1] 범위 안으로 clamp한다.
+            lm = max(0.0, min(axis_left_in / page_w, 0.98))
+            rm = max(lm + 0.01, min(axis_right_in / page_w, 1.0))
+            tm = max(0.02, min(axis_top_in / page_h, 1.0))
+            bm = max(0.0, min(axis_bottom_in / page_h, tm - 0.01))
+            lines.append(f"set lmargin at screen {lm:.4f}")
+            lines.append(f"set rmargin at screen {rm:.4f}")
+            lines.append(f"set tmargin at screen {tm:.4f}")
+            lines.append(f"set bmargin at screen {bm:.4f}")
 
+            # [추가] "6/p 기준 legend를 조금 더 키워달라" - margin/간격을 많이
+            # 줄이면서 axis가 커진 만큼, legend(font_panel_scale 그대로)는 상대적으로
+            # 작아 보임 - 칸이 많을 때(4/p 이상)만 legend 글자 크기를 별도로
+            # 살짜 키운다(축/제목/tic 폰트는 그대로 유지).
+            _legend_boost = 1.3 if total_cells >= 4 else 1.0
+            # [수정] "2/p는 legend box 좌우길이를 1자 정도 키우고, 4/p, 6/p는
+            # 2자 줄이고" - print 기준 여유분(0.7자)에서 레이아웃별로 가감한다.
+            _legend_w_extra = (0.7 + 1.0) if total_cells <= 2 else (0.7 - 2.0)
             self._build_plot_commands(
                 plotdef, lines, is_multiplot=True, panel_scale=font_panel_scale,
                 annotations=getattr(plotdef, "annotations", None),
                 arrows=getattr(plotdef, "arrows", None),
                 axis_w_in=axis_right_in - axis_left_in,
                 axis_h_in=axis_top_in - axis_bottom_in,
+                legend_scale_boost=_legend_boost,
+                legend_width_extra_chars=_legend_w_extra,
             )
 
         lines.append("unset multiplot")
