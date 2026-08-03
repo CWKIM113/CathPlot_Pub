@@ -13,6 +13,7 @@
 !data_parser.py
 !.gitignore
 !*.docx
+!*.pptx
 *.zip
 # 남길 폴더 (하위 포함)
 #!templates/
