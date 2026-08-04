@@ -819,8 +819,8 @@ class CathPlotGUI:
 
             if mode == "Save":
                 file_types = [
-                    ("Portable Document Format (*.pdf)", "*.pdf"),
                     ("PNG Image (*.png)", "*.png"),
+                    ("Portable Document Format (*.pdf)", "*.pdf"),
                     ("SVG Vector Graphic (*.svg)", "*.svg"),
                     ("JPEG Image (*.jpg)", "*.jpg"),
                     ("Enhanced Metafile (*.emf)", "*.emf"),
@@ -830,7 +830,7 @@ class CathPlotGUI:
                     parent=dialog,
                     initialdir=self.plot_dir,
                     initialfile=base_name,
-                    defaultextension=".pdf",
+                    defaultextension=".png",
                     filetypes=file_types,
                     title="Save Multiplot As..."
                 )
@@ -1365,9 +1365,9 @@ class CathPlotGUI:
         ttk.Button(btn_row, text="▼", width=3, command=lambda: move(1)).pack(side="left", padx=2)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
-        fmt_var = tk.StringVar(value="pdf")
+        fmt_var = tk.StringVar(value="png")
         ttk.Combobox(
-            btn_row, textvariable=fmt_var, values=["pdf", "png", "svg", "eps", "emf"],
+            btn_row, textvariable=fmt_var, values=["png", "pdf", "svg", "eps", "emf"],
             width=6, state="readonly"
         ).pack(side="left")
 
@@ -1697,9 +1697,9 @@ class CathPlotGUI:
         ttk.Button(btn_row, text="Template Load", command=self.load_template).pack(side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
-        fmt_var = tk.StringVar(value="pdf")
+        fmt_var = tk.StringVar(value="png")
         ttk.Combobox(
-            btn_row, textvariable=fmt_var, values=["pdf", "png", "svg", "eps", "emf"],
+            btn_row, textvariable=fmt_var, values=["png", "pdf", "svg", "eps", "emf"],
             width=6, state="readonly"
         ).pack(side="left")
 
@@ -2932,7 +2932,7 @@ class CathPlotGUI:
             # 3. 출력 대상/포맷 및 출력 파일 경로 결정 (execute_multi_plot_pipeline과 동일한 방식)
             os.makedirs(self.plot_dir, exist_ok=True)
             target = "screen" if mode == "Interactive" else "file"
-            fmt = (custom_format or "pdf").lower() if target == "file" else "interactive"
+            fmt = (custom_format or "png").lower() if target == "file" else "interactive"
 
             raw_title = self.filename_var.get().strip() or "CathPlot"
             safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
@@ -3119,7 +3119,7 @@ class CathPlotGUI:
             messagebox.showerror("Error", f"Failed to execute plot pipeline: {e}")
 
 
-    def show_multiplot_dialog(self, mode="Batch", default_format="pdf"):
+    def show_multiplot_dialog(self, mode="Batch", default_format="png"):
         dialog = tk.Toplevel(self.root)  # self -> self.root 교정
         dialog.title("Multi-Plot Layout Settings")
         dialog.geometry("450x400")
@@ -3158,7 +3158,7 @@ class CathPlotGUI:
             fmt = default_format
 
             if mode == "Save":
-                file_types = [("PDF cairo", "*.pdf"), ("PNG image", "*.png"), ("SVG vector", "*.svg")]
+                file_types = [("PNG image", "*.png"), ("PDF cairo", "*.pdf"), ("SVG vector", "*.svg")]
                 filepath = filedialog.asksaveasfilename(parent=dialog, defaultextension=f".{default_format}", filetypes=file_types, title="Save Multiplot File")
                 if not filepath: return
                 fmt = os.path.splitext(filepath)[1].replace(".", "").lower()
@@ -3208,7 +3208,7 @@ class CathPlotGUI:
 
         os.makedirs(self.plot_dir, exist_ok=True)
         target = "screen" if mode == "Interactive" else "file"
-        fmt = (custom_format or "pdf").lower() if target == "file" else "interactive"
+        fmt = (custom_format or "png").lower() if target == "file" else "interactive"
 
         if custom_filepath:
             outfile = custom_filepath
@@ -3881,19 +3881,19 @@ class CathPlotGUI:
         default_name = f"{safe_title}_{next_id}"
 
         file_types = [
-            ("Portable Document Format (*.pdf)", "*.pdf"),
             ("PNG Image (*.png)", "*.png"),
+            ("Portable Document Format (*.pdf)", "*.pdf"),
             ("SVG Vector Graphic (*.svg)", "*.svg"),
             ("JPEG Image (*.jpg)", "*.jpg"),
             ("Enhanced Metafile (*.emf)", "*.emf"),
             ("Encapsulated PostScript (*.eps)", "*.eps"),
         ]
-        selected_path = filedialog.asksaveasfilename(initialdir=self.plot_dir, initialfile=default_name, title="Save Plot As...", filetypes=file_types, defaultextension=".pdf")
+        selected_path = filedialog.asksaveasfilename(initialdir=self.plot_dir, initialfile=default_name, title="Save Plot As...", filetypes=file_types, defaultextension=".png")
         if not selected_path: return
 
         ext = os.path.splitext(selected_path)[1].lower().replace(".", "")
         fmt_map = {"pdf": "PDF", "png": "PNG", "svg": "SVG", "jpg": "JPG", "jpeg": "JPG", "emf": "EMF", "eps": "EPS"}
-        fmt = fmt_map.get(ext, "PDF")
+        fmt = fmt_map.get(ext, "PNG")
 
         if chosen_plotdef is None:
             # 현재 화면 설정 - PRINT와 동일하게, 선택한 방향에 맞춰 GUI의 frame
