@@ -684,7 +684,13 @@ class GnuplotGenerator:
         # 공식을 그대로 공유한다. 간격 자체도 실측(위 13자 라벨 기준) 대비
         # 크게 줄임.
         LABEL_GAP_FRAC = 0.4 * char_width_frac   # 샘플선 <-> curve title 간격
-        BOX_EDGE_GAP_FRAC = 0.3 * char_width_frac  # 박스 테두리 <-> 샘플선 간격
+        # [수정] "screen에서 박스 테두리와 샘플선이 붙어 보인다"는 재확인 피드백.
+        # 계산해보면 print/screen 공통 계수(0.3)는 기본 legend_size(9pt) 기준
+        # 물리 간격이 0.013in 안팎(≈2px)에 불과해, 샘플선 자체의 굵기(lw)나
+        # 화면 렌더링의 안티에일리어싱만으로도 시각적으로 거의 사라지는 크기였음.
+        # print/save는 아직 문제 제기가 없었으므로 그대로 두고(0.3), 실제
+        # 문제가 보고된 screen(is_print_mode=False)만 계수를 키운다.
+        BOX_EDGE_GAP_FRAC = (0.3 if is_print_mode else 0.7) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
         # [수정] "screen 창에서도 마진이 너무 넓다(5자 이상 줄여야 함)" - 예전엔
         # screen의 char_width_in 계수(0.0049)가 실측 재보정이 안 돼 실제 폭을
         # 과소평가한다는 이유로 여유분을 6.7자까지 늘려뒀었는데, 그 결과 라벨이

@@ -645,12 +645,14 @@ class CathPlotGUI:
         # 자체가 이미 그만큼 커져서, 예전처럼 추가 버퍼(+70px)를 더하면 PLOT 버튼
         # 위에 불필요한 빈 공간이 남았음("PLOT 버튼 위가 3줄 정도 빔") - 버퍼 없이
         # 필요한 높이 그대로 사용한다.
-        # [수정] "가로 길이가 너무 크다(Marker 입력칸 끝보다 조금 더 크게 줄여달라)" -
-        # 예전엔 실제 내용 너비와 무관한 고정값(1330)을 썼는데, 높이와 동일한
-        # 방식(winfo_reqwidth)으로 실제 필요한 가로 폭을 구해서 사용한다. 스크롤바
-        # 테두리 등에 눌려 위젯이 딱 붙어 보이지 않도록 아주 작은 여유(10px)만 둔다.
-        required_width = self.root.winfo_reqwidth() + 10
-        self.root.geometry(f"{required_width}x{required_height}")
+        # [되돌림] "가로 길이가 너무 크다"는 요청으로 winfo_reqwidth() 기반 자동
+        # 계산을 시도했는데, 실제로는 가로폭이 절반으로 줄어들며 우측 내용이
+        # 통째로 잘리는 심각한 문제가 발생함(실측 확인) - file/var 목록이
+        # 가로 스크롤 가능한 캔버스라 reqwidth가 실제 필요한 편안한 너비보다
+        # 훨씬 작게 잡히는 것으로 추정됨(세로는 이런 스크롤 캔버스가 없어
+        # winfo_reqheight가 문제없이 동작했던 것과 대조적). 검증된 고정값으로
+        # 되돌린다 - 가로폭을 줄이는 건 별도로 안전하게 다시 검토 필요.
+        self.root.geometry(f"1330x{required_height}")
 
     def _disable_combobox_wheel(self, combo):
         """콤보박스(Color/Style 등) 위에서 마우스 휠을 굴리면 그 콤보박스의 값이
@@ -2871,6 +2873,28 @@ class CathPlotGUI:
             w.bind("<Leave>", on_leave)
 
     FALLBACK_FONT = "Arial"  # 지정된 폰트가 시스템에 없을 때 대체할 폰트(Windows에 기본 내장)
+    # [수정] "일본 문자처럼 깨져 보인다"는 피드백 확인 결과, 실제로는 코드에
+    # 일본어 텍스트가 있던 게 아니라 이 대화 창(화면)에서 내가 설명한 내용에
+    # 관한 얘기였음("코드 문제가 아니고 화면에 구상한 이야기") - 즉 대체
+    # 로직 자체는 문제가 아니었고, 사용자도 "Arial 등으로 대체하는 방식은
+    # 괜찮다, 한글은 고딕/바탕체 등으로"라고 확인해줌. 다만 원래 FALLBACK_FONT를
+    # 무조건 Arial로만 쓰면 Arial엔 한글 글리프가 없어 한글 라벨이 깨지므로,
+    # 대체 대상 텍스트에 한글이 섞여 있으면 한글 지원 폰트(맑은 고딕/굴림/바탕
+    # 등)를 우선 후보로 시도한다.
+    _HANGUL_RE = re.compile(r"[가-힣ㄱ-ㆎ]")
+    _KOREAN_FALLBACK_CANDIDATES = ["맑은 고딕", "Malgun Gothic", "굴림", "Gulim", "바탕", "Batang", "돋움", "Dotum"]
+
+    def _pick_fallback_font(self, installed, sample_text):
+        """installed(설치된 폰트 이름 소문자 집합)에서 sample_text 표시에 쓸
+        대체 폰트를 고른다. sample_text에 한글이 있으면 한글 지원 폰트 후보를
+        먼저 찾고, 못 찾으면(설치 목록 조회가 신뢰 못 할 수도 있으므로) 그래도
+        가장 흔한 한글 폰트(맑은 고딕)를 기본값으로 쓴다. 한글이 없으면 Arial."""
+        if self._HANGUL_RE.search(sample_text or ""):
+            for cand in self._KOREAN_FALLBACK_CANDIDATES:
+                if cand.lower() in installed:
+                    return cand
+            return self._KOREAN_FALLBACK_CANDIDATES[0]
+        return self.FALLBACK_FONT
 
     def _get_installed_font_names(self):
         """설치된 폰트 이름 집합을 반환한다(세션 중 최초 1회만 조회해서 캐싱).
@@ -2889,27 +2913,33 @@ class CathPlotGUI:
 
     def _check_and_fix_fonts(self, plotdef):
         """plotdef에 지정된 폰트(Title/X/Y/Y2 label, Legend)가 실제로 설치돼
-        있는지 확인해서, 없는 폰트는 FALLBACK_FONT로 대체한 복사본과 경고
-        메시지 목록을 함께 반환한다."""
+        있는지 확인해서, 없는 폰트는 대체 폰트(한글 텍스트면 한글 지원 폰트,
+        아니면 Arial)로 바꾼 복사본과 경고 메시지 목록을 함께 반환한다."""
         installed = self._get_installed_font_names()
         if not installed:
             return plotdef, []
 
         import dataclasses
+        legend_sample = " ".join((c.title or "") for c in getattr(plotdef, "curves", []) or [])
         font_fields = [
-            ("title_font", "Title"), ("xlabel_font", "X Label"), ("ylabel_font", "Y Label"),
-            ("y2label_font", "Y2 Label"), ("legend_font", "Legend"),
+            ("title_font", "Title", getattr(plotdef, "title", "")),
+            ("xlabel_font", "X Label", getattr(plotdef, "xlabel", "")),
+            ("ylabel_font", "Y Label", getattr(plotdef, "ylabel", "")),
+            ("y2label_font", "Y2 Label", getattr(plotdef, "y2label", "")),
+            ("legend_font", "Legend", legend_sample),
         ]
         changes = {}
         warnings = []
         reported = set()
-        for field, label in font_fields:
+        for field, label, sample_text in font_fields:
             name = (getattr(plotdef, field, "") or "").strip()
             if name and name.lower() not in installed:
-                changes[field] = self.FALLBACK_FONT
-                if name not in reported:
-                    warnings.append(f"'{name}' 폰트를 찾을 수 없어 '{self.FALLBACK_FONT}'(으)로 대체했습니다. ({label})")
-                    reported.add(name)
+                fallback = self._pick_fallback_font(installed, sample_text)
+                changes[field] = fallback
+                key = (name, field)
+                if key not in reported:
+                    warnings.append(f"'{name}' 폰트를 찾을 수 없어 '{fallback}'(으)로 대체했습니다. ({label})")
+                    reported.add(key)
 
         if changes:
             plotdef = dataclasses.replace(plotdef, **changes)
