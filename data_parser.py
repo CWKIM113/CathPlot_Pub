@@ -258,7 +258,7 @@ class CathenaDatParser:
                 for j in range(i - 1, -1, -1):
                     prev_line = lines[j].strip()
                     
-                    if not prev_line or "---" in prev_line or "===" in prev_line:
+                    if not prev_line or "---" in prev_line or "===" in prev_line or "**" in prev_line:
                         continue
                     if self._is_numeric_row(prev_line):
                         continue
@@ -276,7 +276,7 @@ class CathenaDatParser:
         if header_line:
             # 쉼표나 공백 단위로 쪼개서 유효한 단어들만 수집
             tokens = re.split(r'[,\s]+', header_line.strip())
-            raw_headers = [t.strip() for t in tokens if t.strip() and t.strip() != "---"]
+            raw_headers = [t.strip() for t in tokens if t.strip() and t.strip() not in ("---", "**")]
 
         # 4. PlotVariable 생성 (헤더 순서대로 앞에서부터 매칭, 부족하면 var_# 사용)
         variables = []
@@ -307,7 +307,7 @@ class CathenaDatParser:
     @staticmethod
     def _is_numeric_row(line):
         txt = line.strip()
-        if not txt or "---" in txt or "===" in txt: 
+        if not txt or "---" in txt or "===" in txt or "**" in txt:
             return False
         try:
             parts = re.split(r'[,\s]+', txt)
