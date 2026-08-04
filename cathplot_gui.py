@@ -93,7 +93,7 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0(Test) by C.W.Kim @2026.08.03")
+        self.root.title("CathPlot V1.0(Test) by C.W.Kim @2026.08.05")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움 - 처음엔 글꼴/위젯
         # 크기까지 같이 키우는 tk scaling도 적용해봤지만, 그러면 글자가 커져서
@@ -592,6 +592,13 @@ class CathPlotGUI:
         arrow_btn_col.pack(side="left", padx=15)
         ttk.Button(arrow_btn_col, text="+ Add Line/Arrow", command=self.add_arrow_row).pack(side="top", anchor="w")
         ttk.Checkbutton(arrow_btn_col, text="Enable Arrows", variable=self.arrow_on_var).pack(side="top", anchor="w")
+
+        # [수정] "Comment/Arrow 입력창이 안 보임 - 항상 빈 칸이 하나씩 나오게
+        # 해야 함(어차피 안 지워지는 빈 칸이니 기본으로 둠)" - 시작할 때 매번
+        # "+"를 눌러 추가하지 않아도 바로 입력할 수 있게, 빈 행을 하나씩
+        # 미리 만들어둔다(모두 지웠을 때도 remove_row에서 다시 하나 채워줌).
+        self.add_comment_row()
+        self.add_arrow_row()
 
         # 고급: raw gnuplot 명령어 직접 입력 (여기 적은 내용은 생성되는 .plt 파일에 그대로 삽입됨)
         self.raw_gnuplot_frame = ttk.LabelFrame(self.plot_frame, text="Advanced: Raw gnuplot commands")
@@ -2214,6 +2221,13 @@ class CathPlotGUI:
             if item['frame'] == frame:
                 target_list.remove(item)
                 break
+        # [수정] "모두 지우면 처음처럼 빈 입력칸이 하나씩 보이게" - 목록이
+        # 완전히 비면 빈 행을 하나 다시 채워준다.
+        if not target_list:
+            if target_list is self.comment_list:
+                self.add_comment_row()
+            elif target_list is self.arrow_list:
+                self.add_arrow_row()
 
     #def remove_row(self, target_list, frame):
     #    container = frame.master  # c_list_frame 또는 a_list_frame
