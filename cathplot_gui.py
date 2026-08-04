@@ -102,7 +102,7 @@ class CathPlotGUI:
         # 있어 되돌림. 창만 넓어지고 글꼴/여백은 그대로 유지된다.
         # [수정] 가로는 대문자 8자 정도(-110px), 세로는 대문자 3~4자 정도(+70px)
         # 조정해달라는 피드백 반영
-        self.root.geometry("1100x1030")
+        self.root.geometry("1150x1030")
         self.root.tk.call('tk', 'windowingsystem')
 
         self.parser = CathenaDatParser()
@@ -652,8 +652,8 @@ class CathPlotGUI:
         # 훨씬 작게 잡히는 것으로 추정됨(세로는 이런 스크롤 캔버스가 없어
         # winfo_reqheight가 문제없이 동작했던 것과 대조적). 자동 계산 대신
         # 검증된 고정값을 쓰되, "가로 길이를 줄여달라"는 요청으로 1330 ->
-        # 1100으로 낮춤(초기 self.root.geometry 호출과 동일한 값으로 유지).
-        self.root.geometry(f"1100x{required_height}")
+        # 1150으로 낮춤(초기 self.root.geometry 호출과 동일한 값으로 유지).
+        self.root.geometry(f"1150x{required_height}")
 
     def _disable_combobox_wheel(self, combo):
         """콤보박스(Color/Style 등) 위에서 마우스 휠을 굴리면 그 콤보박스의 값이
