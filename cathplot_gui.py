@@ -593,6 +593,12 @@ class CathPlotGUI:
         ttk.Button(arrow_btn_col, text="+ Add Line/Arrow", command=self.add_arrow_row).pack(side="top", anchor="w")
         ttk.Checkbutton(arrow_btn_col, text="Enable Arrows", variable=self.arrow_on_var).pack(side="top", anchor="w")
 
+        # [추가] "추가 후 삭제해도 남던 빈 공간" 대신, 처음부터 빈 Comment/Arrow
+        # 줄을 하나씩 보여준다 - 목록이 다 지워져 비었을 때도(remove_row) 이
+        # 빈 줄 하나를 다시 채워 넣어 항상 최소 한 줄은 남아있게 한다.
+        self.add_comment_row()
+        self.add_arrow_row()
+
         # 고급: raw gnuplot 명령어 직접 입력 (여기 적은 내용은 생성되는 .plt 파일에 그대로 삽입됨)
         self.raw_gnuplot_frame = ttk.LabelFrame(self.plot_frame, text="Advanced: Raw gnuplot commands")
         self.raw_gnuplot_frame.grid(row=9, column=0, columnspan=6, sticky="ew", padx=5, pady=2)
@@ -1141,6 +1147,13 @@ class CathPlotGUI:
                     self.add_comment_row(initial=c)
                 for a in data.get("arrows", []):
                     self.add_arrow_row(initial=a)
+
+                # 템플릿에 저장된 annotation/arrow가 하나도 없으면(빈 리스트),
+                # 목록이 완전히 비지 않도록 기본 빈 줄을 하나씩 채워 넣는다.
+                if not self.comment_list:
+                    self.add_comment_row()
+                if not self.arrow_list:
+                    self.add_arrow_row()
 
                 self.comment_on_var.set(data.get("comment_on", self.comment_on_var.get()))
                 self.arrow_on_var.set(data.get("arrow_on", self.arrow_on_var.get()))
@@ -2206,6 +2219,14 @@ class CathPlotGUI:
             if item['frame'] == frame:
                 target_list.remove(item)
                 break
+
+        # [추가] Comment/Arrow를 전부 지워서 목록이 완전히 비면, 빈 공간 대신
+        # 처음 화면처럼 빈 줄 하나를 다시 채워 넣는다.
+        if not target_list:
+            if target_list is self.comment_list:
+                self.add_comment_row()
+            elif target_list is self.arrow_list:
+                self.add_arrow_row()
 
     #def remove_row(self, target_list, frame):
     #    container = frame.master  # c_list_frame 또는 a_list_frame
