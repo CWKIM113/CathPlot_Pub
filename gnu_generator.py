@@ -47,6 +47,28 @@ def _resolve_gnuplot_exe():
     _gnuplot_exe_cache = found or "gnuplot"
     return _gnuplot_exe_cache
 
+# pngcairo는 size에 단위(in/cm)를 주면 항상 72dpi로 래스터화한다(gnuplot
+# 매뉴얼 명시) - PDF/SVG와 완전히 같은 비율로 그리기 위해 png도 "in" 단위로
+# 물리 크기를 그대로 준 뒤(_get_terminal_cmd의 "png" 분기 참고), 그 결과로
+# 나온 72dpi(저해상도) 이미지를 여기서 인쇄 품질(300dpi)로 업스케일한다.
+_PNG_TARGET_DPI = 300.0
+_PNG_NATIVE_DPI = 72.0
+
+def _upscale_png_dpi(png_path):
+    """72dpi로 그려진 png를 _PNG_TARGET_DPI/_PNG_NATIVE_DPI배 확대해서 저장한다.
+    Pillow가 없으면 조용히 건너뛴다(비율은 이미 정확하고 해상도만 낮게 남음)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return
+    try:
+        scale = _PNG_TARGET_DPI / _PNG_NATIVE_DPI
+        with Image.open(png_path) as im:
+            new_size = (max(1, round(im.width * scale)), max(1, round(im.height * scale)))
+            im.resize(new_size, Image.LANCZOS).save(png_path)
+    except Exception:
+        pass  # 업스케일 실패해도 원본(저해상도지만 비율은 정확한) 파일은 이미 저장돼 있음
+
 DEFAULT_COLORS = ["black", "red", "blue", "green", "magenta", "cyan", "orange", "brown", "purple", "gray"]
 DEFAULT_LINESTYLES = ["solid", "dash", "dot", "dashdot", "shortdash", "dashdotdot"]
 DASH_PATTERNS = {
@@ -540,8 +562,7 @@ class GnuplotGenerator:
 
     def _render_legend_box(self, lines, curves, pos_raw, box_on, thick_val, id_offset,
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
-                            axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None,
-                            text_scale_boost=1.0):
+                            axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -551,13 +572,13 @@ class GnuplotGenerator:
             return
 
         font_pt = (legend_size if legend_size else 9) * f_scale
-        # [추가] png는 터미널 단에서 fontscale(300/72)로 실제 렌더링되는 글자를
-        # 키우는데(pngcairo가 72dpi 기준으로 폰트를 그리는 문제 보정), 그건
-        # gnuplot이 알아서 하는 것이라 font_pt(실제 font 절 값)는 그대로 둬야
-        # 이중으로 커지지 않는다 - 다만 여기 아래 "글자 폭/줄 높이 추정"(box
-        # 크기 계산용)은 실제로 커진 렌더링 크기를 반영해야 box가 글자를
-        # 담기에 충분히 커지므로, 추정 전용 "가상 font_pt"만 별도로 키운다.
-        _est_font_pt = font_pt * (text_scale_boost or 1.0)
+        # [주의] pngcairo가 pdfcairo보다 legend 글자를 아주 약간 더 크게 그리는
+        # 경향이 실측됐지만(동일 스크립트, 터미널만 다르게 비교), 보정 계수가
+        # panel_scale/legend_size에 따라 비선형으로 달라져 신뢰할 수 있는 고정
+        # 공식을 찾지 못했음 - 잘못된 계수로 legend box가 과도하게 커지는 쪽이
+        # 더 나쁜 실패라 보정 없이 pdfcairo와 동일한 추정을 그대로 쓴다. 아주 큰
+        # 명시적 Frame + 큰 legend 폰트 조합에서는 글자가 box 테두리에 살짝
+        # 닿아 보일 수 있음(후속 조사 필요, png뿐 아니라 pdf에도 있는 기존 이슈).
         # [수정] ROW_H가 축 높이와 무관하게 그냥 graph 비율(0.048*panel_scale)로
         # 고정돼 있어서, explicit frame으로 작은 물리 크기를 지정하면 실제 폰트
         # 크기(font_pt)에 비해 줄 간격이 너무 좁아져 legend 줄들이 서로 겹쳐
@@ -565,7 +586,7 @@ class GnuplotGenerator:
         # 폰트 크기에 맞는 절대 줄 높이를 먼저 구하고, 그걸 graph 비율로 환산한다.
         # [수정] "legend 안 curve간 위아래 간격이 너무 큼" - 줄간격 배수를
         # 1.35 -> 1.15 -> 1.0으로 계속 줄임(더 줄여달라는 후속 요청).
-        ROW_LINE_HEIGHT_IN = (_est_font_pt / 72.0) * 1.0
+        ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * 1.0
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
         # 박스 테두리에 닿아 보인다는 피드백으로 화면에서 크게 늘렸는데(0.3),
@@ -587,7 +608,7 @@ class GnuplotGenerator:
         # 순수 대문자(가장 넓은 경우, 예: "ABCDEFGHIJKLMNOPQRST")조차 실제보다
         # 커서, 그 오차가 라벨 길이만큼 누적되어(20자면 20배) legend box 왼쪽에
         # 큰 빈 공간이 남는 원인이었음 - 실측 기준(대문자 1자 폭)으로 재보정.
-        char_width_in = (0.0055 if is_print_mode else 0.0049) * _est_font_pt  # 문자 하나당 대략적인 폭(인치, 대문자 기준 실측), 폰트 크기(pt)에 비례
+        char_width_in = (0.0055 if is_print_mode else 0.0049) * font_pt  # 문자 하나당 대략적인 폭(인치, 대문자 기준 실측), 폰트 크기(pt)에 비례
         # [수정] legend box와 plot 테두리(frame) 사이 간격은 major tic 길이의
         # 1.5배로 맞춘다("major tic 길이의 1.3~1.5배로" 요청). gnuplot이 실제
         # 그리는 major tic 길이를 Python에서 직접 조회할 수는 없어서, 렌더링된
@@ -595,7 +616,7 @@ class GnuplotGenerator:
         # (실측: is_print_mode 기준 font_pt=7.2일 때 major tic 길이 ≈ 0.0443in
         # → 계수 ≈ 0.00615/font_pt). tic 길이 자체가 font_pt에 비례해 커지므로,
         # 이 간격도 legend 폰트가 커지면 같이 커진다.
-        TIC_LEN_IN = 0.00615 * _est_font_pt
+        TIC_LEN_IN = 0.00615 * font_pt
         # [되돌림] "legend box가 axis frame에 붙어버림" - 2글자만큼 줄이는
         # 시도가 과했음(그 "2글자" 요청은 실은 Auto 2/p 등의 plot간 좌우 간격
         # 얘기였던 것으로 확인). 원래(1.5*tic 길이) 값으로 되돌림.
@@ -773,23 +794,6 @@ class GnuplotGenerator:
         # Interactive는 이 보정 자체를 건너뛰어 기존(이미 적절히 튜닝된) 화면
         # 여백 비율을 그대로 쓰게 한다.
         _is_interactive = (fmt or "").lower() == "interactive"
-        # [추가] "PDF랑 완전히 다르다, title/legend 폰트가 너무 작다" - png는
-        # _get_terminal_cmd에서 fontscale/linewidth/pointscale을 300/72배
-        # 키워서 렌더링한다(pngcairo가 단위 없는 size는 항상 72dpi 기준으로
-        # 폰트를 그리기 때문 - 그대로 두면 300dpi 캔버스에 폰트만 작게
-        # 그려짐). 그런데 legend box 폭/높이 추정(char_width_in, ROW_H 등)은
-        # 기존 PDF 실측 기준 계수를 그대로 쓰므로, 실제로 커진 글자 크기를
-        # 반영하지 못해 글자가 box 밖으로 삐져나옴 - _render_legend_box에
-        # text_scale_boost로 넘겨서 "추정 전용" font_pt만 키운다. 이 값은
-        # fontscale과 같은 300/72(≈4.17)를 그대로 쓰면 box가 오히려 실제
-        # 필요한 것보다 커져서(기존 추정 계수 자체가 PDF 대비 이미 여유있게
-        # 잡혀 있었던 탓) 렌더링 실측으로 맞춘 값 - 순수 이론값이 아니라
-        # png 렌더링 결과를 직접 보고 보정한 경험적 계수임.
-        # [주의] _get_terminal_cmd와 마찬가지로, Axis Frame Auto를 끈 명시적
-        # 크기는 이 보정을 적용하지 않는다(터미널 쪽 fontscale도 그 경우엔
-        # 꺼지므로, 여기서도 같이 꺼야 서로 어긋나지 않는다).
-        _is_png = (fmt or "").lower() == "png" and getattr(plotdef, "frame_auto", True)
-        _png_dpi_scale = 1.3 if _is_png else 1.0
 
         if getattr(plotdef, "is_print_mode", False):
             f_scale = PRINT_FONT_SCALE * panel_scale
@@ -1066,7 +1070,7 @@ class GnuplotGenerator:
                     # 마진은 "axis 크기 대비 fraction"이 아니라 "axis+마진(=페이지)
                     # 대비 fraction"으로 구해야 한다.
                     _need_left_in, _need_right_in, _need_top_in, _need_bottom_in = \
-                        self._compute_manual_margins_in(plotdef, f_scale, _is_print, uses_y2)
+                        self._compute_manual_margins_in(plotdef, f_scale, _is_print, uses_y2, fmt=fmt)
                     _total_w_in = _fw_in + _need_left_in + _need_right_in
                     _total_h_in = _fh_in + _need_top_in + _need_bottom_in
                     _lmargin_base = _need_left_in / _total_w_in
@@ -1206,7 +1210,7 @@ class GnuplotGenerator:
                 legend_thick_val, 8000, f_scale * legend_scale_boost, line_scale, panel_scale,
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
                 axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
-                box_w_extra_chars_override=legend_width_extra_chars, text_scale_boost=_png_dpi_scale
+                box_w_extra_chars_override=legend_width_extra_chars
             )
 
         group2_curves = [c for c in plotdef.curves if getattr(c, "legend_group", 1) == 2]
@@ -1217,7 +1221,7 @@ class GnuplotGenerator:
                 legend2_thick_val, 9000, f_scale * legend_scale_boost, line_scale, panel_scale,
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
                 axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
-                box_w_extra_chars_override=legend_width_extra_chars, text_scale_boost=_png_dpi_scale
+                box_w_extra_chars_override=legend_width_extra_chars
             )
 
 
@@ -1379,38 +1383,22 @@ class GnuplotGenerator:
             # 인쇄/저장 물리 크기는 서로 다른 목적이라 분리한다.
             return f"set terminal windows title '{title}' font 'Malgun Gothic,11' size 1000,700"
         elif fmt == "png":
-            # [수정] size_clause(단위 접미사, 예: "10cm,8cm")를 쓰면 pngcairo가
-            # 그 크기를 72dpi 기준으로 래스터화해서(예: 10cm -> 283px) 텍스트가
-            # 뭉개지고("두꺼운 문자") 그림 자체가 잘 안 보일 정도로 해상도가
-            # 낮았음 - 인쇄 품질(300dpi) 픽셀 수로 직접 지정한다.
-            # [수정] "PDF랑 완전히 다르다, title/legend 폰트가 너무 작다" - pngcairo는
-            # size를 단위 없는 순수 픽셀 수로 주면(위처럼) 내부적으로 font/line/point
-            # 크기(pt)를 항상 72dpi 기준으로 픽셀 변환한다(gnuplot 매뉴얼: "A size
-            # given in centimeters or inches will be converted into pixels assuming
-            # a resolution of 72 dpi") - 즉 300dpi 품질을 의도해 픽셀 수를 4.17배
-            # (300/72) 키웠는데 정작 글자/선/마커는 72dpi 기준 그대로 작게 그려져서,
-            # PDF(같은 물리 크기를 72dpi 그대로 쓰는 pdfcairo)와 달리 캔버스만 커지고
-            # 내용물은 상대적으로 작아 보였던 것 - fontscale/linewidth/pointscale을
-            # 그 배율(300/72)만큼 올려서 실제 300dpi 밀도에 맞는 크기로 보정한다
-            # (실측: DejaVu Sans로 렌더링해서 PDF/SVG와 비율이 일치함을 확인).
-            # [주의] Axis Frame Auto를 끄고 명시적 크기(frame_width/height)를
-            # 지정한 경우는 _manual_size_override(실측 인치 기준 캔버스)를
-            # 쓰는데, 그 마진 계산(_compute_manual_margins_in)은 이 fontscale
-            # 보정을 반영하지 않아서 - title/label 자리가 너무 좁게 잡혀 글자가
-            # 서로 겹치는 심각한 문제가 있었음(실측 확인) - 그 경로까지 제대로
-            # 고치기 전까지는 Auto일 때만 이 보정을 적용하고, 명시적 크기는
-            # 기존 동작(폰트가 작게 나오는 문제는 남아있지만 겹치지는 않음)을
-            # 유지한다.
-            _png_frame_auto = plotdef is None or getattr(plotdef, "frame_auto", True)
-            if _png_frame_auto:
-                _png_dpi = 300
-                _png_scale = _png_dpi / 72.0
-                return (
-                    f"set terminal pngcairo {size_clause_px('size 3508,2481', px_per_in=_png_dpi)} "
-                    f"enhanced font '{_term_font}' fontscale {_png_scale:.6f} "
-                    f"linewidth {_png_scale:.6f} pointscale {_png_scale:.6f}"
-                )
-            return f"set terminal pngcairo {size_clause_px('size 3508,2481', px_per_in=300)} enhanced font '{_term_font}'"
+            # [수정] "PDF랑 완전히 다르다, title/legend 폰트가 너무 작다" - 예전엔
+            # size를 단위 없는 순수 픽셀 수(예: 3508,2481 = 인쇄 품질 300dpi 의도)로
+            # 직접 지정했는데, gnuplot 매뉴얼에 "size가 cm/in 단위 없이 오면 항상
+            # 72dpi로 픽셀 변환한다"고 명시돼 있어서 - 캔버스만 300dpi로 커지고
+            # 글자/선/legend는 72dpi 기준 그대로 작게 그려져 PDF와 확연히 달라
+            # 보였음. 이를 fontscale 등으로 보정하려면 legend box 폭 추정, 명시적
+            # Frame 크기의 마진 계산(_compute_manual_margins_in) 등 문자폭 관련
+            # 계산을 전부 같이 손봐야 하고 서로 어긋나기 쉬웠음(실제로 명시적
+            # Frame 크기에서 title/label이 겹치는 문제가 생겼었음) - 대신
+            # pdfcairo/svg와 완전히 동일하게 "in" 단위로 물리 크기를 그대로 주면
+            # (size_clause는 pdfcairo와 공유하는 함수) pngcairo가 항상 정확히
+            # 72dpi로 래스터화하므로 PDF와 100% 같은 비율로 나온다(비율은 완전히
+            # 정확하고, 해상도만 낮음 - 인쇄 품질 해상도는 create_script에서 저장
+            # 직후 Pillow로 300/72배 업스케일해서 확보한다 - _upscale_png_dpi
+            # 참고). Frame Auto 여부와 무관하게 이 방식 하나로 통일된다.
+            return f"set terminal pngcairo enhanced font '{_term_font}' {size_clause('size 11.7in,8.3in')}"
         elif fmt == "jpg":
             return f"set terminal jpeg {size_clause_px('size 1600,900')} enhanced font '{_term_font}'"
         elif fmt == "svg":
@@ -1473,7 +1461,7 @@ class GnuplotGenerator:
         height_ratio = fh / REFERENCE_HEIGHT_IN
         return max(min(width_ratio, height_ratio), 0.3)  # 너무 작아지지 않게 하한
 
-    def _compute_manual_margins_in(self, plotdef, f_scale, is_print_mode, uses_y2):
+    def _compute_manual_margins_in(self, plotdef, f_scale, is_print_mode, uses_y2, fmt=None):
         """[추가] "Frame(Axis) 크기 = 좌표축(axis) 자체의 크기" - Manual(frame_auto=
         꺼짐)일 때 frame_width/height는 axis 크기이고, 실제 출력 페이지(칸) 크기는
         axis + 이 마진들을 더한 값이어야 한다(예전엔 반대로 frame_width/height를
@@ -1543,6 +1531,20 @@ class GnuplotGenerator:
         else:
             need_right_in = 0.15 * f_scale
 
+        # [추가] Axis Frame Auto를 끄고 명시적 크기를 지정한 뒤 png로 저장하면
+        # (pdf와 완전히 동일한 스크립트인데도) title이 캔버스 밖으로 밀려나
+        # 안 보이는 문제가 실측으로 확인됨 - pngcairo가 pdfcairo와 동일한
+        # font "N pt" 지정에도 실제로는 약간 더 크게/넓게 그리는 탓으로
+        # 보이며, 마진을 딱 필요한 만큼만 잡으면 이 여유 부족분 때문에 pdf에서는
+        # 괜찮던 값이 png에서만 잘림. png일 때만 마진에 15% 안전 여유를 더해서
+        # 이 문제를 피한다(pdf/svg/emf는 원래도 문제 없어 그대로 둠).
+        if (fmt or "").lower() == "png":
+            _png_margin_safety = 1.35
+            need_left_in *= _png_margin_safety
+            need_right_in *= _png_margin_safety
+            need_top_in *= _png_margin_safety
+            need_bottom_in *= _png_margin_safety
+
         return need_left_in, need_right_in, need_top_in, need_bottom_in
 
     def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None):
@@ -1562,7 +1564,7 @@ class GnuplotGenerator:
             if _axis_w_in > 0 and _axis_h_in > 0:
                 _uses_y2 = any(getattr(c, "axis", "y1") == "y2" for c in plotdef.curves)
                 _is_print = getattr(plotdef, "is_print_mode", False)
-                _nl, _nr, _nt, _nb = self._compute_manual_margins_in(plotdef, _size_scale, _is_print, _uses_y2)
+                _nl, _nr, _nt, _nb = self._compute_manual_margins_in(plotdef, _size_scale, _is_print, _uses_y2, fmt=fmt)
                 _total_w_in = _axis_w_in + _nl + _nr
                 _total_h_in = _axis_h_in + _nt + _nb
                 _manual_size_override = f"{_total_w_in:.4f}in,{_total_h_in:.4f}in"
@@ -1619,6 +1621,9 @@ class GnuplotGenerator:
                 if debug_path:
                     msg += f"\n\n(스크립트 보존됨: {debug_path})"
                 raise RuntimeError(msg)
+
+            if fmt.lower() == "png":
+                _upscale_png_dpi(outfile)
 
         return outfile
 
@@ -2179,5 +2184,8 @@ class GnuplotGenerator:
                 if debug_path:
                     msg += f"\n\n(스크립트 보존됨: {debug_path})"
                 raise RuntimeError(msg)
+
+        if fmt.lower() == "png":
+            _upscale_png_dpi(outfile)
 
         return outfile
