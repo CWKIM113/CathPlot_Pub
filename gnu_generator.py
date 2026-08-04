@@ -656,18 +656,20 @@ class GnuplotGenerator:
         # 크게 줄임.
         LABEL_GAP_FRAC = 0.4 * char_width_frac   # 샘플선 <-> curve title 간격
         BOX_EDGE_GAP_FRAC = 0.3 * char_width_frac  # 박스 테두리 <-> 샘플선 간격
-        # [수정] screen(화면)은 print와 같은 "+1.7자" 여유로는 라벨(18~19자 기준)이
-        # 3자 정도 잘렸음 - screen의 char_width_in 계수(0.0049)는 이번 session에
-        # print처럼 실측 재보정을 하지 않은 값이라 실제 폭을 과소평가하는 듯함 -
-        # 화면에서만 여유를 4자 더(+1.7->+5.7) 준다.
-        # [수정] "legend box 좌우 길이도 줄여야지요" - print의 여유분을
-        # 1.7자에서 0.7자로 줄임(화면은 그대로 유지). 이후 "2/p는 1자 늘리고
-        # 4/p,6/p는 2자 더 줄여달라"는 요청으로 호출자가 override를 넘기면
-        # (multiplot에서 total_cells 기준으로) 그 값을 우선한다.
+        # [수정] "screen 창에서도 마진이 너무 넓다(5자 이상 줄여야 함)" - 예전엔
+        # screen의 char_width_in 계수(0.0049)가 실측 재보정이 안 돼 실제 폭을
+        # 과소평가한다는 이유로 여유분을 6.7자까지 늘려뒀었는데, 그 결과 라벨이
+        # 짧을 때(예: "FLOWRATE-A") 박스 왼쪽에 텍스트 3~4개 폭에 달하는 빈
+        # 공간이 남는 문제가 있었음 - 실제로 32자짜리 극단적으로 긴 라벨까지
+        # 렌더링해서 확인해보니 여유분을 5자 줄인 1.7자(print와 동일한 기존
+        # 기본값)로도 박스 밖으로 잘리지 않아, 화면도 print와 같은 값으로
+        # 통일한다. 이후 "2/p는 1자 늘리고 4/p,6/p는 2자 더 줄여달라"는
+        # 요청으로 호출자가 override를 넘기면(multiplot에서 total_cells 기준)
+        # 그 값을 우선한다.
         if box_w_extra_chars_override is not None and is_print_mode:
             _box_w_extra_chars = box_w_extra_chars_override
         else:
-            _box_w_extra_chars = 0.7 if is_print_mode else 6.7
+            _box_w_extra_chars = 0.7 if is_print_mode else 1.7
         box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + BOX_EDGE_GAP_FRAC
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
 
