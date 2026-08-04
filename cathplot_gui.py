@@ -94,7 +94,7 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0(Test) by C.W.Kim @2026.08.03")
+        self.root.title("CathPlot V1.0(Test) by C.W.Kim @2026.08.05")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움 - 처음엔 글꼴/위젯
         # 크기까지 같이 키우는 tk scaling도 적용해봤지만, 그러면 글자가 커져서
@@ -594,9 +594,10 @@ class CathPlotGUI:
         ttk.Button(arrow_btn_col, text="+ Add Line/Arrow", command=self.add_arrow_row).pack(side="top", anchor="w")
         ttk.Checkbutton(arrow_btn_col, text="Enable Arrows", variable=self.arrow_on_var).pack(side="top", anchor="w")
 
-        # [추가] "추가 후 삭제해도 남던 빈 공간" 대신, 처음부터 빈 Comment/Arrow
-        # 줄을 하나씩 보여준다 - 목록이 다 지워져 비었을 때도(remove_row) 이
-        # 빈 줄 하나를 다시 채워 넣어 항상 최소 한 줄은 남아있게 한다.
+        # [수정] "Comment/Arrow 입력창이 안 보임 - 항상 빈 칸이 하나씩 나오게
+        # 해야 함(어차피 안 지워지는 빈 칸이니 기본으로 둠)" - 시작할 때 매번
+        # "+"를 눌러 추가하지 않아도 바로 입력할 수 있게, 빈 행을 하나씩
+        # 미리 만들어둔다(모두 지웠을 때도 remove_row에서 다시 하나 채워줌).
         self.add_comment_row()
         self.add_arrow_row()
 
@@ -833,11 +834,13 @@ class CathPlotGUI:
             base_name = f"{base_title}_mul_{self.multi_counters[base_title]}"
 
             if mode == "Save":
+                # [수정] "이미지 sample 순서는 png, pdf, jpg, svg, emf, eps 순으로" -
+                # Word 등에 넣기 좋은 png를 기본/최우선으로.
                 file_types = [
                     ("PNG Image (*.png)", "*.png"),
                     ("Portable Document Format (*.pdf)", "*.pdf"),
-                    ("SVG Vector Graphic (*.svg)", "*.svg"),
                     ("JPEG Image (*.jpg)", "*.jpg"),
+                    ("SVG Vector Graphic (*.svg)", "*.svg"),
                     ("Enhanced Metafile (*.emf)", "*.emf"),
                     ("Encapsulated PostScript (*.eps)", "*.eps"),
                 ]
@@ -1387,9 +1390,12 @@ class CathPlotGUI:
         ttk.Button(btn_row, text="▼", width=3, command=lambda: move(1)).pack(side="left", padx=2)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
+        # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
+        # png가 default여야 함" - 기본 포맷을 png로 변경, jpg 추가, 순서를
+        # png/pdf/jpg/svg/emf/eps로 통일.
         fmt_var = tk.StringVar(value="png")
         ttk.Combobox(
-            btn_row, textvariable=fmt_var, values=["png", "pdf", "svg", "eps", "emf"],
+            btn_row, textvariable=fmt_var, values=["png", "pdf", "jpg", "svg", "emf", "eps"],
             width=6, state="readonly"
         ).pack(side="left")
 
@@ -1726,9 +1732,12 @@ class CathPlotGUI:
         ttk.Button(btn_row, text="Template Load", command=self.load_template).pack(side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
+        # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
+        # png가 default여야 함" - 기본 포맷을 png로 변경, jpg 추가, 순서를
+        # png/pdf/jpg/svg/emf/eps로 통일.
         fmt_var = tk.StringVar(value="png")
         ttk.Combobox(
-            btn_row, textvariable=fmt_var, values=["png", "pdf", "svg", "eps", "emf"],
+            btn_row, textvariable=fmt_var, values=["png", "pdf", "jpg", "svg", "emf", "eps"],
             width=6, state="readonly"
         ).pack(side="left")
 
@@ -2242,6 +2251,13 @@ class CathPlotGUI:
             if item['frame'] == frame:
                 target_list.remove(item)
                 break
+        # [수정] "모두 지우면 처음처럼 빈 입력칸이 하나씩 보이게" - 목록이
+        # 완전히 비면 빈 행을 하나 다시 채워준다.
+        if not target_list:
+            if target_list is self.comment_list:
+                self.add_comment_row()
+            elif target_list is self.arrow_list:
+                self.add_arrow_row()
 
         # [추가] Comment/Arrow를 전부 지워서 목록이 완전히 비면, 빈 공간 대신
         # 처음 화면처럼 빈 줄 하나를 다시 채워 넣는다.
@@ -4031,11 +4047,12 @@ class CathPlotGUI:
         safe_title = "".join([c for c in raw_title if c.isalnum() or c in ("_", "-")]).strip() or "CathPlot"
         default_name = f"{safe_title}_{next_id}"
 
+        # [수정] "이미지 sample 순서는 png, pdf, jpg, svg, emf, eps 순으로"
         file_types = [
             ("PNG Image (*.png)", "*.png"),
             ("Portable Document Format (*.pdf)", "*.pdf"),
-            ("SVG Vector Graphic (*.svg)", "*.svg"),
             ("JPEG Image (*.jpg)", "*.jpg"),
+            ("SVG Vector Graphic (*.svg)", "*.svg"),
             ("Enhanced Metafile (*.emf)", "*.emf"),
             ("Encapsulated PostScript (*.eps)", "*.eps"),
         ]

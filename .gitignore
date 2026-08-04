@@ -4,8 +4,6 @@
 # 남길 파일들 (직접 지정)
 !dist/
 !dist/**
-!build/
-!build/**
 !data/
 !data/**
 !cathplot_gui.py
