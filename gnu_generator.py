@@ -645,6 +645,17 @@ class GnuplotGenerator:
 
         max_label_len = max((_weighted_label_len(c.title) for c in curves), default=1.0)
         char_width_frac = char_width_in / max(axis_w_in, 0.5)
+        # [수정] "legend box 샘플선과 curve title 사이 간격을 줄여달라(13자
+        # 라벨 기준 2자 정도)" - 기존엔 이 간격(그리고 박스 테두리<->샘플선
+        # 간격)이 axis_w_in에만 반영되고 font 크기와는 무관한 고정값(0.01,
+        # 0.015)이라, 폰트를 키우면 간격은 그대로라 상대적으로 더 좁아
+        # 보이고 폰트를 줄이면 반대로 헐거워 보였음 - char_width_frac(문자
+        # 폭, font_pt에 비례)을 기준으로 한 "문자 개수" 단위로 바꿔서 폰트
+        # 크기에 비례하게 하고, print/save(is_print_mode)와 화면 모두 이
+        # 공식을 그대로 공유한다. 간격 자체도 실측(위 13자 라벨 기준) 대비
+        # 크게 줄임.
+        LABEL_GAP_FRAC = 0.4 * char_width_frac   # 샘플선 <-> curve title 간격
+        BOX_EDGE_GAP_FRAC = 0.3 * char_width_frac  # 박스 테두리 <-> 샘플선 간격
         # [수정] screen(화면)은 print와 같은 "+1.7자" 여유로는 라벨(18~19자 기준)이
         # 3자 정도 잘렸음 - screen의 char_width_in 계수(0.0049)는 이번 session에
         # print처럼 실측 재보정을 하지 않은 값이라 실제 폭을 과소평가하는 듯함 -
@@ -657,7 +668,7 @@ class GnuplotGenerator:
             _box_w_extra_chars = box_w_extra_chars_override
         else:
             _box_w_extra_chars = 0.7 if is_print_mode else 6.7
-        box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + 0.015
+        box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + BOX_EDGE_GAP_FRAC
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
 
         if "right" in corner:
@@ -684,14 +695,14 @@ class GnuplotGenerator:
         for row_i, curve in enumerate(curves):
             row_y = box_top - ROW_MARGIN - ROW_H * (row_i + 0.5)
             if is_right_side:
-                sample_x2 = box_right - 0.015
+                sample_x2 = box_right - BOX_EDGE_GAP_FRAC
                 sample_x1 = sample_x2 - SAMPLE_W
-                label_x = sample_x1 - 0.01
+                label_x = sample_x1 - LABEL_GAP_FRAC
                 label_just = "right"
             else:
-                sample_x1 = box_left + 0.015
+                sample_x1 = box_left + BOX_EDGE_GAP_FRAC
                 sample_x2 = sample_x1 + SAMPLE_W
-                label_x = sample_x2 + 0.01
+                label_x = sample_x2 + LABEL_GAP_FRAC
                 label_just = "left"
 
             idx = curve_index_map.get(id(curve), row_i)
