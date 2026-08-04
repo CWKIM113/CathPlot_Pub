@@ -818,11 +818,13 @@ class CathPlotGUI:
             base_name = f"{base_title}_mul_{self.multi_counters[base_title]}"
 
             if mode == "Save":
+                # [수정] "이미지 sample 순서는 png, pdf, jpg, svg, emf, eps 순으로" -
+                # Word 등에 넣기 좋은 png를 기본/최우선으로.
                 file_types = [
-                    ("Portable Document Format (*.pdf)", "*.pdf"),
                     ("PNG Image (*.png)", "*.png"),
-                    ("SVG Vector Graphic (*.svg)", "*.svg"),
+                    ("Portable Document Format (*.pdf)", "*.pdf"),
                     ("JPEG Image (*.jpg)", "*.jpg"),
+                    ("SVG Vector Graphic (*.svg)", "*.svg"),
                     ("Enhanced Metafile (*.emf)", "*.emf"),
                     ("Encapsulated PostScript (*.eps)", "*.eps"),
                 ]
@@ -830,7 +832,7 @@ class CathPlotGUI:
                     parent=dialog,
                     initialdir=self.plot_dir,
                     initialfile=base_name,
-                    defaultextension=".pdf",
+                    defaultextension=".png",
                     filetypes=file_types,
                     title="Save Multiplot As..."
                 )
@@ -1365,9 +1367,12 @@ class CathPlotGUI:
         ttk.Button(btn_row, text="▼", width=3, command=lambda: move(1)).pack(side="left", padx=2)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
-        fmt_var = tk.StringVar(value="pdf")
+        # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
+        # png가 default여야 함" - 기본 포맷을 png로 변경, jpg 추가, 순서를
+        # png/pdf/jpg/svg/emf/eps로 통일.
+        fmt_var = tk.StringVar(value="png")
         ttk.Combobox(
-            btn_row, textvariable=fmt_var, values=["pdf", "png", "svg", "eps", "emf"],
+            btn_row, textvariable=fmt_var, values=["png", "pdf", "jpg", "svg", "emf", "eps"],
             width=6, state="readonly"
         ).pack(side="left")
 
@@ -1697,9 +1702,12 @@ class CathPlotGUI:
         ttk.Button(btn_row, text="Template Load", command=self.load_template).pack(side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
-        fmt_var = tk.StringVar(value="pdf")
+        # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
+        # png가 default여야 함" - 기본 포맷을 png로 변경, jpg 추가, 순서를
+        # png/pdf/jpg/svg/emf/eps로 통일.
+        fmt_var = tk.StringVar(value="png")
         ttk.Combobox(
-            btn_row, textvariable=fmt_var, values=["pdf", "png", "svg", "eps", "emf"],
+            btn_row, textvariable=fmt_var, values=["png", "pdf", "jpg", "svg", "emf", "eps"],
             width=6, state="readonly"
         ).pack(side="left")
 
@@ -3880,15 +3888,16 @@ class CathPlotGUI:
         safe_title = "".join([c for c in raw_title if c.isalnum() or c in ("_", "-")]).strip() or "CathPlot"
         default_name = f"{safe_title}_{next_id}"
 
+        # [수정] "이미지 sample 순서는 png, pdf, jpg, svg, emf, eps 순으로"
         file_types = [
-            ("Portable Document Format (*.pdf)", "*.pdf"),
             ("PNG Image (*.png)", "*.png"),
-            ("SVG Vector Graphic (*.svg)", "*.svg"),
+            ("Portable Document Format (*.pdf)", "*.pdf"),
             ("JPEG Image (*.jpg)", "*.jpg"),
+            ("SVG Vector Graphic (*.svg)", "*.svg"),
             ("Enhanced Metafile (*.emf)", "*.emf"),
             ("Encapsulated PostScript (*.eps)", "*.eps"),
         ]
-        selected_path = filedialog.asksaveasfilename(initialdir=self.plot_dir, initialfile=default_name, title="Save Plot As...", filetypes=file_types, defaultextension=".pdf")
+        selected_path = filedialog.asksaveasfilename(initialdir=self.plot_dir, initialfile=default_name, title="Save Plot As...", filetypes=file_types, defaultextension=".png")
         if not selected_path: return
 
         ext = os.path.splitext(selected_path)[1].lower().replace(".", "")
