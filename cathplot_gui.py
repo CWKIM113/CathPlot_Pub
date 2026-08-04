@@ -25,6 +25,7 @@ import uuid
 from tkinter import ttk
 from tkinter import filedialog
 from tkinter import messagebox
+from tkinter import font as tkfont
 from pathlib import Path
 
 import win32con
@@ -644,7 +645,12 @@ class CathPlotGUI:
         # 자체가 이미 그만큼 커져서, 예전처럼 추가 버퍼(+70px)를 더하면 PLOT 버튼
         # 위에 불필요한 빈 공간이 남았음("PLOT 버튼 위가 3줄 정도 빔") - 버퍼 없이
         # 필요한 높이 그대로 사용한다.
-        self.root.geometry(f"1330x{required_height}")
+        # [수정] "가로 길이가 너무 크다(Marker 입력칸 끝보다 조금 더 크게 줄여달라)" -
+        # 예전엔 실제 내용 너비와 무관한 고정값(1330)을 썼는데, 높이와 동일한
+        # 방식(winfo_reqwidth)으로 실제 필요한 가로 폭을 구해서 사용한다. 스크롤바
+        # 테두리 등에 눌려 위젯이 딱 붙어 보이지 않도록 아주 작은 여유(10px)만 둔다.
+        required_width = self.root.winfo_reqwidth() + 10
+        self.root.geometry(f"{required_width}x{required_height}")
 
     def _disable_combobox_wheel(self, combo):
         """콤보박스(Color/Style 등) 위에서 마우스 휠을 굴리면 그 콤보박스의 값이
@@ -1404,6 +1410,7 @@ class CathPlotGUI:
 
         saved_count = 0
         errors = []
+        warnings = []
         total = len(template_paths)
 
         for done_idx, tpath in enumerate(template_paths, start=1):
@@ -1429,10 +1436,13 @@ class CathPlotGUI:
             outfile = os.path.join(self.plot_dir, f"{safe_name}_batchset.{fmt}")
 
             try:
+                plotdef, font_warn = self._check_and_fix_fonts(plotdef)
                 generator = GnuplotGenerator(self.plot_dir)
                 generator.create_script(plotdef, outfile, fmt=fmt,
                                          annotations=plotdef.annotations, arrows=plotdef.arrows)
                 saved_count += 1
+                for w in font_warn + generator.warnings:
+                    warnings.append(f"{tname}: {w}")
             except Exception as e:
                 errors.append(f"{tname}: 저장 실패 ({e})")
 
@@ -1444,6 +1454,9 @@ class CathPlotGUI:
             msg += "\n\n오류:\n" + "\n".join(errors[:10])
             if len(errors) > 10:
                 msg += f"\n... 외 {len(errors) - 10}개"
+        log_path = self._log_batch_warnings(warnings)
+        if log_path:
+            msg += f"\n\n경고 {len(warnings)}건이 로그에 기록되었습니다: {log_path}"
         self.root.after(0, lambda m=msg: messagebox.showinfo("Batch Set", m))
 
     def _run_batch_set_async(self, template_paths, fmt):
@@ -1776,6 +1789,7 @@ class CathPlotGUI:
 
         saved_count = 0
         errors = []
+        warnings = []
         total = len(relative_paths)
 
         for done_idx, rel_path in enumerate(relative_paths, start=1):
@@ -1869,9 +1883,12 @@ class CathPlotGUI:
             outfile = os.path.join(self.plot_dir, f"{base_stem}_batch.{fmt}")
 
             try:
+                plotdef, font_warn = self._check_and_fix_fonts(plotdef)
                 generator = GnuplotGenerator(self.plot_dir)
                 generator.create_script(plotdef, outfile, fmt=fmt)
                 saved_count += 1
+                for w in font_warn + generator.warnings:
+                    warnings.append(f"{rel_path}: {w}")
             except Exception as e:
                 errors.append(f"{rel_path}: 저장 실패 ({e})")
 
@@ -1883,6 +1900,9 @@ class CathPlotGUI:
             msg += "\n\n오류:\n" + "\n".join(errors[:10])
             if len(errors) > 10:
                 msg += f"\n... 외 {len(errors) - 10}개"
+        log_path = self._log_batch_warnings(warnings)
+        if log_path:
+            msg += f"\n\n경고 {len(warnings)}건이 로그에 기록되었습니다: {log_path}"
         self.root.after(0, lambda m=msg: messagebox.showinfo("Batch Queue", m))
 
     def _run_batch_queue_async(self, relative_paths, fmt):
@@ -2850,6 +2870,66 @@ class CathPlotGUI:
             w.bind("<Enter>", on_enter)
             w.bind("<Leave>", on_leave)
 
+    FALLBACK_FONT = "Arial"  # 지정된 폰트가 시스템에 없을 때 대체할 폰트(Windows에 기본 내장)
+
+    def _get_installed_font_names(self):
+        """설치된 폰트 이름 집합을 반환한다(세션 중 최초 1회만 조회해서 캐싱).
+        tkinter가 이미 OS 폰트 시스템(Windows GDI 포함)에 접근하고 있으므로
+        별도 win32 API 호출 없이 tkinter.font.families()로 조회한다. 조회
+        자체가 실패하면(예: 디스플레이 없는 환경) None을 반환해서 호출부가
+        검사를 통째로 건너뛰게 한다."""
+        if getattr(self, "_installed_font_cache", None) is not None:
+            return self._installed_font_cache
+        try:
+            names = {f.strip().lower() for f in tkfont.families(self.root)}
+        except Exception:
+            names = None
+        self._installed_font_cache = names
+        return names
+
+    def _check_and_fix_fonts(self, plotdef):
+        """plotdef에 지정된 폰트(Title/X/Y/Y2 label, Legend)가 실제로 설치돼
+        있는지 확인해서, 없는 폰트는 FALLBACK_FONT로 대체한 복사본과 경고
+        메시지 목록을 함께 반환한다."""
+        installed = self._get_installed_font_names()
+        if not installed:
+            return plotdef, []
+
+        import dataclasses
+        font_fields = [
+            ("title_font", "Title"), ("xlabel_font", "X Label"), ("ylabel_font", "Y Label"),
+            ("y2label_font", "Y2 Label"), ("legend_font", "Legend"),
+        ]
+        changes = {}
+        warnings = []
+        reported = set()
+        for field, label in font_fields:
+            name = (getattr(plotdef, field, "") or "").strip()
+            if name and name.lower() not in installed:
+                changes[field] = self.FALLBACK_FONT
+                if name not in reported:
+                    warnings.append(f"'{name}' 폰트를 찾을 수 없어 '{self.FALLBACK_FONT}'(으)로 대체했습니다. ({label})")
+                    reported.add(name)
+
+        if changes:
+            plotdef = dataclasses.replace(plotdef, **changes)
+        return plotdef, warnings
+
+    def _log_batch_warnings(self, warnings, log_name="batch_warnings.log"):
+        """Batch(Queue/Set) 실행 중 모인 경고 메시지를(파일명 prefix 포함) 로그
+        파일에 남긴다. 반환값은 로그 파일 경로(기록 실패 시 None)."""
+        if not warnings:
+            return None
+        log_path = os.path.join(self.plot_dir, log_name)
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                for w in warnings:
+                    f.write(w + "\n")
+            return log_path
+        except OSError:
+            return None
+
     def execute_plot_pipeline(self, mode="Interactive", custom_filepath=None, custom_format=None):
         # 연타(더블클릭)로 인해 gnuplot 창이 동시에 여러 개 뜨는 것을 방지하기 위한 디바운스 가드
         import time
@@ -3076,11 +3156,15 @@ class CathPlotGUI:
                             pass
                         self.plot_processes = alive[1:]
 
+            plotdef, _font_warn = self._check_and_fix_fonts(plotdef)
             generator = GnuplotGenerator(self.plot_dir)
             generator.create_script(
                 plotdef, outfile, fmt=fmt,
                 annotations=plotdef.annotations, arrows=plotdef.arrows
             )
+            _all_warn = _font_warn + generator.warnings
+            if _all_warn:
+                messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
 
             # [추가] gnuplot 스크립트에 에러가 있으면(예: log축 관련 문제) 창이
             # 아예 안 뜨고 프로세스가 바로 죽는데, 그래도 Popen 자체는 성공해서
@@ -3289,6 +3373,13 @@ class CathPlotGUI:
             dataclasses.replace(pd, is_print_mode=(mode != "Interactive"))
             for pd in selected_plot_defs
         ]
+        _font_warn = []
+        _fixed_defs = []
+        for pd in run_plot_defs:
+            pd, w = self._check_and_fix_fonts(pd)
+            _fixed_defs.append(pd)
+            _font_warn.extend(w)
+        run_plot_defs = _fixed_defs
 
         generator = GnuplotGenerator(self.plot_dir)
         generator.create_multiplot_script(
@@ -3302,6 +3393,10 @@ class CathPlotGUI:
 
         if generator.last_size_warning:
             messagebox.showwarning("Plot 크기 자동 조정", generator.last_size_warning)
+
+        _all_warn = _font_warn + generator.warnings
+        if _all_warn:
+            messagebox.showwarning("Multi Print/Save 경고", "\n\n".join(_all_warn))
 
         self.update_plot_file_list()
         return outfile
@@ -3387,9 +3482,13 @@ class CathPlotGUI:
             if chosen_plotdef is not None:
                 print_plotdef = dataclasses.replace(chosen_plotdef, is_print_mode=True)
                 print_plotdef = _apply_orientation_to_plotdef(print_plotdef, orientation)
+                print_plotdef, _font_warn = self._check_and_fix_fonts(print_plotdef)
                 generator = GnuplotGenerator(self.plot_dir)
                 generator.create_script(print_plotdef, temp_emf, fmt="emf",
                                          annotations=print_plotdef.annotations, arrows=print_plotdef.arrows)
+                _all_warn = _font_warn + generator.warnings
+                if _all_warn:
+                    messagebox.showwarning("PRINT 경고", "\n\n".join(_all_warn))
                 success_path = temp_emf
             else:
                 # 현재 화면 설정 그대로 인쇄하는 경우 - GUI 변수를 임시로 방향에 맞게
@@ -3976,12 +4075,16 @@ class CathPlotGUI:
             frame_width=str(w), frame_height=str(h), frame_unit=unit_out,
         )
         try:
+            save_plotdef, _font_warn = self._check_and_fix_fonts(save_plotdef)
             generator = GnuplotGenerator(self.plot_dir)
             generator.create_script(save_plotdef, os.path.abspath(selected_path), fmt=fmt.lower(),
                                      annotations=save_plotdef.annotations, arrows=save_plotdef.arrows)
         except Exception as e:
             messagebox.showerror("Save Error", f"파일 저장 중 오류가 발생했습니다:\n{e}")
             return
+        _all_warn = _font_warn + generator.warnings
+        if _all_warn:
+            messagebox.showwarning("SAVE 경고", "\n\n".join(_all_warn))
         self.update_plot_file_list()
         messagebox.showinfo("Success", f"Saved: {os.path.basename(selected_path)}")
 

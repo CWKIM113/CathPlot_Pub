@@ -251,6 +251,7 @@ class GnuplotGenerator:
         self.custom_export_path = None
         self.last_process = None
         self.last_size_warning = None  # 종이 여백 부족으로 plot 크기를 자동 축소했을 때 메시지가 여기 담김
+        self.warnings = []  # create_script/create_multiplot_script 호출 중 발견된 경고 메시지 목록(legend 폰트 과대 등)
 
     @staticmethod
     def _format_number(value):
@@ -576,9 +577,8 @@ class GnuplotGenerator:
         # 경향이 실측됐지만(동일 스크립트, 터미널만 다르게 비교), 보정 계수가
         # panel_scale/legend_size에 따라 비선형으로 달라져 신뢰할 수 있는 고정
         # 공식을 찾지 못했음 - 잘못된 계수로 legend box가 과도하게 커지는 쪽이
-        # 더 나쁜 실패라 보정 없이 pdfcairo와 동일한 추정을 그대로 쓴다. 아주 큰
-        # 명시적 Frame + 큰 legend 폰트 조합에서는 글자가 box 테두리에 살짝
-        # 닿아 보일 수 있음(후속 조사 필요, png뿐 아니라 pdf에도 있는 기존 이슈).
+        # 더 나쁜 실패라 보정 없이 pdfcairo와 동일한 추정을 그대로 쓴다. 대신
+        # box_w/box_h(아래)가 axis 대비 과도하게 커지면 경고로 미리 알린다.
         # [수정] ROW_H가 축 높이와 무관하게 그냥 graph 비율(0.048*panel_scale)로
         # 고정돼 있어서, explicit frame으로 작은 물리 크기를 지정하면 실제 폰트
         # 크기(font_pt)에 비해 줄 간격이 너무 좁아져 legend 줄들이 서로 겹쳐
@@ -701,6 +701,17 @@ class GnuplotGenerator:
             _box_w_extra_chars = 0.7 if is_print_mode else 1.7
         box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + BOX_EDGE_GAP_FRAC
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
+
+        # [추가] Legend box가 axis 가로/세로의 절반을 넘으면 plot을 너무 많이
+        # 가려서 미리 경고한다(정확한 렌더링 크기가 아니라 Python 추정값
+        # 기준이라 완벽하진 않지만, box_w/box_h는 axis 대비 fraction이라 실제
+        # 렌더링 크기와도 비례해서 신뢰할 만한 지표임).
+        if box_w > 0.5 or box_h > 0.5:
+            self.warnings.append(
+                f"Legend box가 axis 크기의 절반을 넘습니다(가로 {box_w*100:.0f}%, "
+                f"세로 {box_h*100:.0f}%). Legend Font 크기, curve title 길이, "
+                f"curve 개수를 줄이거나 Frame 크기를 키워보세요."
+            )
 
         if "right" in corner:
             box_right, box_left = ax, ax - box_w
