@@ -1202,27 +1202,42 @@ class GnuplotGenerator:
             try: return float(value) / 100.0
             except (TypeError, ValueError): return default
 
+        # [추가] "% 대신 실제 데이터 좌표값(화면 커서에 보이는 x/y1 값 그대로)을
+        # 입력하고 싶다"는 요청으로 행별 coord_mode를 추가했다 - "data"면 gnuplot의
+        # "first"(데이터 축 실제 좌표) 시스템을 쓰고, 기존 "pct"(기본값)면 그대로
+        # "graph"(0~100% 비율) 시스템을 쓴다. "first"는 y1 축 기준이다(Y2 데이터
+        # 값을 쓰려면 추후 별도 축 선택이 필요할 수 있음).
+        def _coord_clause(value, coord_mode, default_frac):
+            if coord_mode == "data":
+                try:
+                    return f"first {float(value)}"
+                except (TypeError, ValueError):
+                    pass
+            return f"graph {_pct_to_frac(value, default_frac)}"
+
         if annotations:
             _ann_font = getattr(plotdef, "legend_font", None) or plotdef.xlabel_font
             _ann_size = int(float(getattr(plotdef, "legend_size", "9") or 9) * f_scale)
             for i, ann in enumerate(annotations):
                 ann_text, ann_enh = self._render_text(ann["text"])
-                gx = _pct_to_frac(ann["x"])
-                gy = _pct_to_frac(ann["y"])
+                _mode = ann.get("coord_mode", "pct")
+                gx = _coord_clause(ann["x"], _mode, 0.5)
+                gy = _coord_clause(ann["y"], _mode, 0.5)
                 try: angle_val = float(ann.get("angle", "0") or 0)
                 except (TypeError, ValueError): angle_val = 0
                 rotate_clause = f"rotate by {angle_val}" if angle_val else "norotate"
-                lines.append(f'set label {i+1} "{ann_text}" at graph {gx},graph {gy} {rotate_clause} font "{_ann_font},{_ann_size}" {ann_enh}')
+                lines.append(f'set label {i+1} "{ann_text}" at {gx},{gy} {rotate_clause} font "{_ann_font},{_ann_size}" {ann_enh}')
 
         if arrows:
             head_map = {"No head": "nohead", "Forward": "head", "Backhead": "backhead", "Both heads": "heads"}
             for i, arr in enumerate(arrows):
                 head = head_map.get(arr.get("head", "Forward"), "head")
-                gx1 = _pct_to_frac(arr["x1"], 0.1)
-                gy1 = _pct_to_frac(arr["y1"], 0.1)
-                gx2 = _pct_to_frac(arr["x2"], 0.5)
-                gy2 = _pct_to_frac(arr["y2"], 0.5)
-                lines.append(f'set arrow {i+1} from graph {gx1},graph {gy1} to graph {gx2},graph {gy2} {head}')
+                _mode = arr.get("coord_mode", "pct")
+                gx1 = _coord_clause(arr["x1"], _mode, 0.1)
+                gy1 = _coord_clause(arr["y1"], _mode, 0.1)
+                gx2 = _coord_clause(arr["x2"], _mode, 0.5)
+                gy2 = _coord_clause(arr["y2"], _mode, 0.5)
+                lines.append(f'set arrow {i+1} from {gx1},{gy1} to {gx2},{gy2} {head}')
 
         tic_size = int(9 * f_scale)
         if getattr(plotdef, "is_print_mode", False):

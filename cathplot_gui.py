@@ -2194,6 +2194,30 @@ class CathPlotGUI:
             self.title_var.set("CathPlot")
             self.filename_var.set("CathPlot")
 
+    # [추가] "%"(0~100 graph 비율)와 "좌표값"(실제 데이터 값, 화면 좌하단
+    # 커서 좌표 그대로 입력) 두 모드를 각 행에서 토글로 고를 수 있게 한다 -
+    # 대략적인 위치를 %로 어림잡기 어렵다는 요청으로 추가.
+    COORD_MODE_DISPLAY = {"pct": "%", "data": "좌표값"}
+    COORD_MODE_FROM_DISPLAY = {v: k for k, v in COORD_MODE_DISPLAY.items()}
+
+    def _make_xy_combo_entry(self, parent, x_var, y_var, init_x, init_y, width=10):
+        """"(x,y)" 한 칸짜리 입력을 만들고, x_var/y_var(내부 저장용 StringVar)와
+        서로 동기화한다. 입력칸이 너무 많다는 요청으로 X/Y 두 칸을 하나로
+        합침 - 저장 포맷(개별 x/y 키)은 템플릿 호환을 위해 그대로 유지."""
+        xy_var = tk.StringVar(value=f"{init_x},{init_y}" if (init_x or init_y) else "")
+
+        def _sync_to_xy(*_):
+            xy_var.set(f"{x_var.get()},{y_var.get()}")
+
+        def _sync_from_xy(*_):
+            parts = xy_var.get().split(",")
+            x_var.set(parts[0].strip() if len(parts) > 0 else "")
+            y_var.set(parts[1].strip() if len(parts) > 1 else "")
+
+        xy_var.trace_add("write", _sync_from_xy)
+        entry = ttk.Entry(parent, textvariable=xy_var, width=width)
+        return entry, xy_var
+
     def add_comment_row(self, initial=None):
         init = initial or {}
         row = ttk.Frame(self.c_list_frame)
@@ -2204,6 +2228,7 @@ class CathPlotGUI:
             'x': tk.StringVar(value=init.get('x', "")),
             'y': tk.StringVar(value=init.get('y', "")),
             'ang': tk.StringVar(value=init.get('ang', "0")),
+            'coord_mode': tk.StringVar(value=init.get('coord_mode', "pct")),
             'frame': row,
         }
         self.comment_list.append(data)
@@ -2213,10 +2238,14 @@ class CathPlotGUI:
         ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
         ttk.Label(row, text="Txt:").pack(side="left")
         ttk.Entry(row, textvariable=data['txt'], width=20).pack(side="left", padx=2)
-        ttk.Label(row, text="X(0~100%):").pack(side="left")
-        ttk.Entry(row, textvariable=data['x'], width=6).pack(side="left", padx=2)
-        ttk.Label(row, text="Y(0~100%):").pack(side="left")
-        ttk.Entry(row, textvariable=data['y'], width=6).pack(side="left", padx=2)
+        ttk.Label(row, text="(X,Y):").pack(side="left")
+        xy_entry, _ = self._make_xy_combo_entry(row, data['x'], data['y'], init.get('x', ''), init.get('y', ''))
+        xy_entry.pack(side="left", padx=2)
+        mode_display_var = tk.StringVar(value=self.COORD_MODE_DISPLAY.get(data['coord_mode'].get(), "%"))
+        def _on_mode_changed(*_):
+            data['coord_mode'].set(self.COORD_MODE_FROM_DISPLAY.get(mode_display_var.get(), "pct"))
+        mode_display_var.trace_add("write", _on_mode_changed)
+        ttk.Combobox(row, textvariable=mode_display_var, values=["%", "좌표값"], width=5, state="readonly").pack(side="left", padx=(1, 2))
         ttk.Label(row, text="Angle(0~360°):").pack(side="left")
         ttk.Entry(row, textvariable=data['ang'], width=6).pack(side="left", padx=2)
 
@@ -2235,7 +2264,9 @@ class CathPlotGUI:
         saved_type = init.get('type', "head")
         data = {'x1': tk.StringVar(value=init.get('x1', "")), 'y1': tk.StringVar(value=init.get('y1', "")),
                 'x2': tk.StringVar(value=init.get('x2', "")), 'y2': tk.StringVar(value=init.get('y2', "")),
-                'type': tk.StringVar(value=saved_type), 'frame': row}
+                'type': tk.StringVar(value=saved_type),
+                'coord_mode': tk.StringVar(value=init.get('coord_mode', "pct")),
+                'frame': row}
         self.arrow_list.append(data)
 
         ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.arrow_list, row)).pack(side="right", padx=5)
@@ -2257,14 +2288,17 @@ class CathPlotGUI:
 
         ttk.Label(row, text="[Arrow]", foreground="darkred").pack(side="left", padx=(0, 5))
 
-        ttk.Label(row, text="X1(0~100%):").pack(side="left")
-        ttk.Entry(row, textvariable=data['x1'], width=5).pack(side="left", padx=1)
-        ttk.Label(row, text="Y1(0~100%):").pack(side="left")
-        ttk.Entry(row, textvariable=data['y1'], width=5).pack(side="left", padx=1)
-        ttk.Label(row, text="→ X2(0~100%):").pack(side="left")
-        ttk.Entry(row, textvariable=data['x2'], width=5).pack(side="left", padx=1)
-        ttk.Label(row, text="Y2(0~100%):").pack(side="left")
-        ttk.Entry(row, textvariable=data['y2'], width=5).pack(side="left", padx=1)
+        ttk.Label(row, text="(X1,Y1):").pack(side="left")
+        xy1_entry, _ = self._make_xy_combo_entry(row, data['x1'], data['y1'], init.get('x1', ''), init.get('y1', ''), width=9)
+        xy1_entry.pack(side="left", padx=1)
+        ttk.Label(row, text="→ (X2,Y2):").pack(side="left")
+        xy2_entry, _ = self._make_xy_combo_entry(row, data['x2'], data['y2'], init.get('x2', ''), init.get('y2', ''), width=9)
+        xy2_entry.pack(side="left", padx=1)
+        mode_display_var = tk.StringVar(value=self.COORD_MODE_DISPLAY.get(data['coord_mode'].get(), "%"))
+        def _on_mode_changed(*_):
+            data['coord_mode'].set(self.COORD_MODE_FROM_DISPLAY.get(mode_display_var.get(), "pct"))
+        mode_display_var.trace_add("write", _on_mode_changed)
+        ttk.Combobox(row, textvariable=mode_display_var, values=["%", "좌표값"], width=5, state="readonly").pack(side="left", padx=(1, 2))
 
     def remove_row(self, target_list, frame):
         frame.destroy()
@@ -2649,8 +2683,9 @@ class CathPlotGUI:
             x = item['x'].get().strip()
             y = item['y'].get().strip()
             angle = item['ang'].get().strip() or "0"
+            coord_mode = item.get('coord_mode', tk.StringVar(value="pct")).get()
             if text and x and y:
-                annotations.append({"text": text, "x": x, "y": y, "angle": angle})
+                annotations.append({"text": text, "x": x, "y": y, "angle": angle, "coord_mode": coord_mode})
         return annotations
 
     def _collect_arrows(self):
@@ -2671,7 +2706,8 @@ class CathPlotGUI:
                 continue
 
             head = head_label_map.get(item['type'].get(), "Forward")
-            arrows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "head": head})
+            coord_mode = item.get('coord_mode', tk.StringVar(value="pct")).get()
+            arrows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "head": head, "coord_mode": coord_mode})
         return arrows
 
     def get_temp_dir(self):
