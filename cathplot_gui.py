@@ -3118,10 +3118,14 @@ class CathPlotGUI:
                 self.title_counters[safe_title] = next_id
 
             # 4. 플롯 정의 객체 생성
-            # Axis Frame Auto가 켜진 채로 파일 출력(Batch/PRINT)하는 경우, 포맷마다
-            # 서로 다른 임의의 기본값을 쓰는 대신 Multi-Print의 1/p Auto와 동일한
-            # 방식(A4 용지 - 절대 여백)으로 계산해서 일관되게 적용한다. 화면에 그냥
-            # 띄우는 Interactive는 해당 없음(용지 개념이 없으므로 그대로 둠).
+            # Axis Frame Auto가 켜진 채로 파일 출력(Save/Print/Batch)하는 경우, 포맷마다
+            # 서로 다른 임의의 기본값을 쓰는 대신 항상 기준 10x8cm(frame_width/height
+            # 입력칸 기본값과 동일)로 일관되게 계산한다 - _compute_auto_frame_size_cm
+            # 참고. [주의] 이건 Multi-plot의 1/p Auto(A4 용지 - 절대 여백, 페이지를
+            # 최대한 채움)와는 의도적으로 다른 기준이다 - 1-plot/Batch는 "한 장의
+            # 적당한 크기 이미지"가 목적이고, Multi-plot Auto는 "용지를 채우는 인쇄물"이
+            # 목적이라 서로 다른 크기 기준을 쓴다. 화면에 그냥 띄우는 Interactive는
+            # 해당 없음(용지 개념이 없으므로 그대로 둠).
             if self.frame_auto_var.get() and mode != "Interactive":
                 _resolved_frame_auto = False
                 _resolved_frame_width, _resolved_frame_height = self._compute_auto_frame_size_cm(for_print=(mode != "Save"))
