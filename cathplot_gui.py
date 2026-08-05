@@ -3410,7 +3410,13 @@ class CathPlotGUI:
         # frame_width/height와 무관하게 항상 자동(A4 기반) 크기로 그린다 -
         # Auto 레이아웃은 굳이 frame 입력값에 맞출 필요 없이 알아서 적절히
         # 그리면 된다는 방향으로 정리함 (종횡비도 A4 기준으로 자유롭게 결정)
-        if layout_opt == "Auto":
+        # [수정 - 버그] "1개만 골라서 Multi Print/Save 하면 Layout을 따로 "1/p"로
+        # 바꾸지 않는 한 기본값 "Auto"라서, Manual(Frame Size)로 지정해도 항상
+        # Auto와 똑같이 나오는 문제가 있었음 - plot이 1개일 때는 "레이아웃(칸
+        # 배치)"이라는 개념 자체가 의미 없으므로, 이 강제 Auto 규칙은 plot이
+        # 2개 이상일 때만 적용한다(1개면 "1/p"를 고른 것과 동일하게 Manual을
+        # 그대로 존중).
+        if layout_opt == "Auto" and len(selected_plot_defs) > 1:
             final_frame_auto = True
             final_frame_width, final_frame_height, final_frame_unit = "", "", ""
 
