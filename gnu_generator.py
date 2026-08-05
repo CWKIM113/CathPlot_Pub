@@ -1781,6 +1781,24 @@ class GnuplotGenerator:
 
         aw, ah = self._A4_SIZES.get(orientation, self._A4_SIZES["portrait"])
         page_w, page_h = float(aw.replace("in", "")), float(ah.replace("in", ""))
+        # [수정 - 버그] "1/p(단일 plot) + Manual"인데도 전체 캔버스(페이지) 크기가
+        # 항상 A4로 고정돼 있어서, 지정한 frame_width/height(예: 10x8cm)는 그
+        # A4 페이지 안의 축(칸) 크기로만 쓰이고 실제 출력 파일 전체 크기는
+        # Auto와 똑같이 A4로 나오는 문제가 있었음("1/p Manual이 Auto와 크기가
+        # 같다" 실측 확인) - 단일 plot(rows=cols=1) + Manual일 때는 단일 plot
+        # create_script와 동일한 개념("Frame 크기 = 축 크기, 페이지 = 축+여백")
+        # 으로, 페이지 크기 자체를 frame_width/height + 여백으로 다시 잡는다.
+        if rows == 1 and cols == 1 and not frame_auto and frame_width and frame_height:
+            try:
+                _fw_in = float(frame_width)
+                _fh_in = float(frame_height)
+                if (frame_unit or "in") == "cm":
+                    _fw_in /= 2.54
+                    _fh_in /= 2.54
+                page_w = _fw_in + pm_left + pm_right
+                page_h = _fh_in + pm_top + pm_bottom
+            except ValueError:
+                pass
         printable_w = page_w - pm_left - pm_right
         printable_h = page_h - pm_top - pm_bottom
 
