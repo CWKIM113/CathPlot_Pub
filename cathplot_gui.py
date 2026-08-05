@@ -2960,6 +2960,11 @@ class CathPlotGUI:
 
         if changes:
             plotdef = dataclasses.replace(plotdef, **changes)
+        # [수정] "screen(Interactive)에는 폰트 대체 메시지가 불필요하다"는 요청 -
+        # 대체 자체(changes)는 화면에서도 그대로 적용하되(그래야 화면도 정상
+        # 렌더링됨), 경고 팝업은 Print/Save(is_print_mode)일 때만 보여준다.
+        if not getattr(plotdef, "is_print_mode", True):
+            return plotdef, []
         return plotdef, warnings
 
     def _log_batch_warnings(self, warnings, log_name="batch_warnings.log"):

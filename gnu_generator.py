@@ -24,6 +24,19 @@ def _no_console_kwargs():
     return kwargs
 import uuid
 
+# [수정] legend box 폭 계산에 쓰는 char_width_in 경험적 계수(아래 참고)는 원래
+# "맑은 고딕" 기준으로 실측(PyMuPDF)해서 얻은 값이라, 지정한 폰트가 시스템에
+# 없어서 다른 폰트(주로 Arial)로 대체되면 실제 렌더링 폭과 어긋날 수 있음
+# ("폰트가 바뀌면 margin도 유동적이어야 하지 않나" 피드백) - tkinter로 실측해
+# 보정하는 방법을 시도했었으나, gnuplot 스크립트 생성이 백그라운드 스레드에서
+# 실행되는데 tkinter는 스레드 세이프하지 않아서 "gnuplot이 그래프를 그리지
+# 못하고 바로 종료" 되는 심각한 회귀를 일으켰음(realtime 실측) - 그 방식은
+# 폐기하고, 항상 1.0(보정 없음, 기존 방식 그대로)을 반환하는 안전한 자리
+# 표시자로 되돌린다. 폰트별 실제 비율로 보정하려면 실측 없이도 안전한 방식
+# (예: 알려진 폰트별 고정 비율표를 미리 만들어두는 등)으로 다시 검토해야 함.
+def _font_width_ratio(font_name):
+    return 1.0
+
 _GNUPLOT_FALLBACK_PATHS = [
     r"C:\Program Files\gnuplot\bin\gnuplot.exe",
     r"C:\Program Files\gnuplot\bin\wgnuplot.exe",
@@ -114,7 +127,11 @@ SCREEN_TIC_MINOR_SCALE = 1.0
 #----------------------------------------------------------
 # Print / Save Output Scale
 #----------------------------------------------------------
-PRINT_FONT_SCALE = 1.00     # 화면과 동일 비율로 나오도록 통일 (기존 1.60 → print만 유독 크게 나오던 원인)
+PRINT_FONT_SCALE = 0.80     # [수정] "screen보다 폰트가 크게 보인다" - 0.60은 너무 과해서
+# title/axis가 잘리는 회귀를 일으켰음(margin 계산이 기존 폰트 크기 기준에
+# 맞춰져 있어서). 완전한 재보정 전 임시로 더 모수한 0.80(약 1.25배 축소)만
+# 적용 - 여백까지 포함한 정확한 재보정은 추후 다시 검토 필요
+# (기존 1.60 → 1.00 → 0.60 시도(잘림, 되돌림) → 이번 0.80).
 PRINT_LINE_SCALE = 1.00     # 기존 1.70
 PRINT_BORDER_SCALE = 1.00   # 기존 1.50
 PRINT_TIC_MAJOR_SCALE = 1.0
@@ -586,7 +603,9 @@ class GnuplotGenerator:
         # 폰트 크기에 맞는 절대 줄 높이를 먼저 구하고, 그걸 graph 비율로 환산한다.
         # [수정] "legend 안 curve간 위아래 간격이 너무 큼" - 줄간격 배수를
         # 1.35 -> 1.15 -> 1.0으로 계속 줄임(더 줄여달라는 후속 요청).
-        ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * 1.0
+        # [수정] "Print에서 첨자(subscript) 넣으면 줄끼리 겹칠 듯하다"는 피드백으로
+        # print만 1.0 -> 1.2로 다시 늘림(화면은 기존 1.0 유지).
+        ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * (1.2 if is_print_mode else 1.0)
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
         # 박스 테두리에 닿아 보인다는 피드백으로 화면에서 크게 늘렸는데(0.3),
@@ -609,6 +628,7 @@ class GnuplotGenerator:
         # 커서, 그 오차가 라벨 길이만큼 누적되어(20자면 20배) legend box 왼쪽에
         # 큰 빈 공간이 남는 원인이었음 - 실측 기준(대문자 1자 폭)으로 재보정.
         char_width_in = (0.0055 if is_print_mode else 0.0049) * font_pt  # 문자 하나당 대략적인 폭(인치, 대문자 기준 실측), 폰트 크기(pt)에 비례
+        char_width_in *= _font_width_ratio(font_name)  # 폰트가 대체된 경우 실제 폭 비율로 보정
         # [수정] legend box와 plot 테두리(frame) 사이 간격은 major tic 길이의
         # 1.5배로 맞춘다("major tic 길이의 1.3~1.5배로" 요청). gnuplot이 실제
         # 그리는 major tic 길이를 Python에서 직접 조회할 수는 없어서, 렌더링된
@@ -660,6 +680,14 @@ class GnuplotGenerator:
 
         SAMPLE_W = 1.3 * 1.3 * ROW_H  # style(샘플선) 길이가 너무 짧다는 피드백으로 1.3배 확대
         SAMPLE_W -= 1.5 * (char_width_in / max(axis_w_in, 0.5))  # 다시 대문자 1.5자만큼 축소 요청
+        # [수정] "Print/Save에서 style 길이가 여전히 너무 짧다" - print만 2배로
+        # (screen은 별도 문제 제기가 없었으므로 기존 값 유지, screen/print 마진을
+        # 분리해야 한다는 후속 피드백 반영).
+        if is_print_mode:
+            SAMPLE_W *= 2
+            # [수정] "지금(2배) 길이가 너무 길다 - 2/3 정도로 줄일 것" 후속 피드백.
+            # 결과적으로 원래 값의 2*(2/3) ≈ 1.33배가 됨.
+            SAMPLE_W *= 2 / 3
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
         # 그냥 len()으로 세면 숫자/콜론/대시처럼 대문자보다 좁은 문자가 많은
         # 라벨(CATHENA 변수명 특성상 흔함, 예: "MFLO:R-SDRT1>L-STLF1")은 실제
@@ -683,14 +711,21 @@ class GnuplotGenerator:
         # 크기에 비례하게 하고, print/save(is_print_mode)와 화면 모두 이
         # 공식을 그대로 공유한다. 간격 자체도 실측(위 13자 라벨 기준) 대비
         # 크게 줄임.
-        LABEL_GAP_FRAC = 0.4 * char_width_frac   # 샘플선 <-> curve title 간격
+        # [수정] "screen에서 legend box frame과 title 사이가 더 넉넉해야 한다"는
+        # 피드백으로 screen만 대문자 1자만큼 추가(print/save는 기존 0.4 유지).
+        # [수정] "Print/Save에서도 title이 샘플선에 붙어 보인다"는 후속 피드백으로
+        # print도 소폭(0.4 -> 0.6) 늘림 - box_w가 폭 폭주 우려가 있어 screen(1.4)
+        # 만큼은 아니고 절반 정도만 늘림.
+        LABEL_GAP_FRAC = (0.6 if is_print_mode else 1.4) * char_width_frac   # 샘플선 <-> curve title 간격
         # [수정] "screen에서 박스 테두리와 샘플선이 붙어 보인다"는 재확인 피드백.
         # 계산해보면 print/screen 공통 계수(0.3)는 기본 legend_size(9pt) 기준
         # 물리 간격이 0.013in 안팎(≈2px)에 불과해, 샘플선 자체의 굵기(lw)나
         # 화면 렌더링의 안티에일리어싱만으로도 시각적으로 거의 사라지는 크기였음.
         # print/save는 아직 문제 제기가 없었으므로 그대로 두고(0.3), 실제
         # 문제가 보고된 screen(is_print_mode=False)만 계수를 키운다.
-        BOX_EDGE_GAP_FRAC = (0.3 if is_print_mode else 0.7) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
+        # [수정] "style과의 간격을 대문자 1/3자 정도 더 키워달라"는 추가 피드백으로
+        # screen 계수를 0.7 -> 0.7+1/3로 더 키움.
+        BOX_EDGE_GAP_FRAC = (0.3 if is_print_mode else 0.7 + 1 / 3) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
         # [수정] "screen 창에서도 마진이 너무 넓다(5자 이상 줄여야 함)" - 예전엔
         # screen의 char_width_in 계수(0.0049)가 실측 재보정이 안 돼 실제 폭을
         # 과소평가한다는 이유로 여유분을 6.7자까지 늘려뒀었는데, 그 결과 라벨이
@@ -704,8 +739,15 @@ class GnuplotGenerator:
         if box_w_extra_chars_override is not None and is_print_mode:
             _box_w_extra_chars = box_w_extra_chars_override
         else:
-            _box_w_extra_chars = 0.7 if is_print_mode else 1.7
-        box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + BOX_EDGE_GAP_FRAC
+            # [수정] "Print에서 title이 box 밖으로 5자 정도 삐져나간다"는 피드백 -
+            # 폰트가 없어 대체(Arial 등)되면 실제 렌더링 폭이 실측 계수(맑은
+            # 고딕 기준)보다 커질 수 있어 안전 여유를 크게 둔다(tkinter 실측
+            # 보정은 스레드 문제로 폐기했으므로, 여기서 고정 버퍼로 흡수한다).
+            _box_w_extra_chars = 5.0 if is_print_mode else 1.7
+        # [수정] box가 title을 못 감싸는(밖으로 삐져나옴) 버그 - LABEL_GAP_FRAC
+        # (샘플선<->title 간격)이 여기 폭 계산에 빠져 있어서, 그 간격을 늘릴수록
+        # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
+        box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + BOX_EDGE_GAP_FRAC + LABEL_GAP_FRAC
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
 
         # [추가] Legend box가 axis 가로/세로의 절반을 넘으면 plot을 너무 많이
@@ -811,6 +853,19 @@ class GnuplotGenerator:
         # Interactive는 이 보정 자체를 건너뛰어 기존(이미 적절히 튜닝된) 화면
         # 여백 비율을 그대로 쓰게 한다.
         _is_interactive = (fmt or "").lower() == "interactive"
+        # [추가] Auto(frame_auto) + Print/Save에서 legend box 폭/높이 추정에 쓰는
+        # "축 실제 물리 크기" 계산이 항상 Interactive 캔버스(1000x700px, 약
+        # 5.95x4.17in) 기준을 썼는데, pngcairo/pdfcairo(Auto 기본 크기
+        # 11.7x8.3in, _get_terminal_cmd의 size_clause 기본값과 동일)는 실제로
+        # 거의 2배 넓은 캔버스를 쓰고 있어서 legend box가 실제보다 훨씬
+        # 크게(약 2배) 계산되는 문제가 있었음("screen은 괜찮은데 PNG/PDF만
+        # legend가 과도하게 크다" 피드백, 실측 이미지로 확인) - inch 단위
+        # 캔버스를 그대로 쓰는 포맷(png/pdf/eps)은 그 실제 크기를 쓴다.
+        # EMF/jpg/svg/windows는 자체 픽셀 계수(_get_terminal_cmd의
+        # size_clause_px)로 이미 따로 맞춰져 있어(EMF는 문제 제기가 없었음)
+        # 여기서는 그대로 둔다.
+        _AUTO_INCH_CANVAS = {"png": (11.7, 8.3), "pdf": (11.7, 8.3), "eps": (11.7, 8.3)}
+        _auto_canvas_in = _AUTO_INCH_CANVAS.get((fmt or "").lower())
 
         if getattr(plotdef, "is_print_mode", False):
             f_scale = PRINT_FONT_SCALE * panel_scale
@@ -1106,6 +1161,9 @@ class GnuplotGenerator:
                         axis_h_in = float((plotdef.frame_height or "4").strip() or 4.0)
                         if (plotdef.frame_unit or "in") == "cm":
                             axis_h_in /= 2.54
+                    elif not _is_interactive and _auto_canvas_in is not None:
+                        # [추가] axis_w_in과 동일한 이유로 실제 inch 캔버스 높이를 쓴다.
+                        axis_h_in = max((_tmargin_base - _bmargin_base) * _auto_canvas_in[1], 0.3)
                     else:
                         _fh_for_legend = 700.0 / 168  # interactive 기본 터미널 높이(700px/168px_per_in)
                         axis_h_in = max((_tmargin_base - _bmargin_base) * _fh_for_legend, 0.3)
@@ -1208,6 +1266,10 @@ class GnuplotGenerator:
                     axis_w_in = float((plotdef.frame_width or "5").strip() or 5.0)
                     if (plotdef.frame_unit or "in") == "cm":
                         axis_w_in /= 2.54
+                elif not _is_interactive and _auto_canvas_in is not None:
+                    # [추가] Auto + png/pdf/eps(실제 inch 캔버스) - 실제 터미널
+                    # 물리 폭을 그대로 쓴다.
+                    axis_w_in = max((_rmargin_base - _lmargin_base) * _auto_canvas_in[0], 0.5)
                 else:
                     fw = 1000.0 / 168  # interactive 기본 터미널 크기(1000px/168px_per_in)
                     axis_w_in = max((_rmargin_base - _lmargin_base) * fw, 0.5)
@@ -1516,6 +1578,7 @@ class GnuplotGenerator:
             return max_len
 
         tick_char_width_in = (0.0055 if is_print_mode else 0.0049) * (9 * f_scale)
+        tick_char_width_in *= _font_width_ratio(plotdef.ylabel_font)  # 폰트 대체 시 실제 폭 비율로 보정
         BASELINE_TICK_CHARS = 4
 
         if plotdef.title:
@@ -1805,6 +1868,8 @@ class GnuplotGenerator:
             _max_title_size_sp = max((float(p.title_size or 14) for p in plots if (p.title or "").strip()), default=14.0)
             _title_pt_sp = _max_title_size_sp * font_panel_scale
             _title_char_w_in = (0.0055 if for_print else 0.0049) * _title_pt_sp
+            _title_font_ratio = max((_font_width_ratio(p.title_font) for p in plots if (p.title or "").strip()), default=1.0)
+            _title_char_w_in *= _title_font_ratio  # 폰트 대체 시 실제 폭 비율로 보정
             _title_char_h_in = _title_pt_sp / 72.0  # 대문자 1자 "높이"(요청대로 폭이 아니라 높이)
             spacing_h_in = spacing_in * 3.0
             spacing_w_in = 2 * _title_char_w_in
@@ -1866,7 +1931,15 @@ class GnuplotGenerator:
         for p in plots:
             max_y1_chars = max(max_y1_chars, _tick_label_chars_mp(p, "y1"))
             max_y2_chars = max(max_y2_chars, _tick_label_chars_mp(p, "y2"))
-        _tick_char_width_in_mp = 0.0055 * (9 * font_panel_scale)
+        # [수정] "Interactive(화면) multiplot에서도 tick 여백 계산이 print
+        # 계수(0.0055)로 고정돼 있던 버그" - 바로 위 title 간격 계산(for_print
+        # 분기)과 달리 여기는 분기가 빠져 있었음. is_print_mode 인자가 없는
+        # 함수라 for_print로 판단(같은 함수 상단에서 이미 이 값을 씀).
+        _tick_font_ratio = max(
+            (_font_width_ratio(p.ylabel_font) for p in plots if getattr(p, "ylabel_font", None)),
+            default=1.0,
+        )
+        _tick_char_width_in_mp = (0.0055 if for_print else 0.0049) * (9 * font_panel_scale) * _tick_font_ratio
         extra_left_margin_in = max(0, max_y1_chars - 4) * _tick_char_width_in_mp
         extra_right_margin_in = max(0, max_y2_chars - 4) * _tick_char_width_in_mp if any_y2 else 0
         # [추가] Scientific("1.5e+03")/Power10("10^3") 형식은 일반 숫자와 길이가
