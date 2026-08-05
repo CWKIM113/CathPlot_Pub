@@ -2395,6 +2395,19 @@ class CathPlotGUI:
 
         valid_file_count = 0
 
+        # [수정 - 버그] 폴더는 다른데 파일명만 같은 dat 파일 두 개를 같이 로드하면,
+        # 아래 섹션 제목이 둘 다 그냥 "out111.dat"처럼 나와서 어느 섹션이 어느
+        # 파일인지 구분이 안 되는 문제가 있었음("Dat list의 파일명도 달리해야
+        # 함" 피드백) - 같은 basename이 여러 번 나오면 등장 순서대로 "-1","-2"를
+        # 붙여서 구분한다(겹치지 않는 보통 경우는 그대로 basename만 표시).
+        _basename_counts = {}
+        for info in self.file_rows:
+            if info["meta"] is None:
+                continue
+            bn = os.path.basename(info["filename"])
+            _basename_counts[bn] = _basename_counts.get(bn, 0) + 1
+        _basename_seen = {}
+
         for idx, info in enumerate(self.file_rows):
             if info["meta"] is None:
                 continue
@@ -2402,7 +2415,13 @@ class CathPlotGUI:
             meta = info["meta"]
 
             file_x_var = info["x_var"]  # <-- 해당 파일 전용 X축 변수
-            frame = ttk.LabelFrame(container, text=os.path.basename(datfile))
+            _bn = os.path.basename(datfile)
+            if _basename_counts.get(_bn, 0) > 1:
+                _basename_seen[_bn] = _basename_seen.get(_bn, 0) + 1
+                _display_name = f"{_bn} -{_basename_seen[_bn]}"
+            else:
+                _display_name = _bn
+            frame = ttk.LabelFrame(container, text=_display_name)
 
             frame.grid(row=valid_file_count // 3, column=valid_file_count % 3, sticky="nw", padx=2, pady=2)
             valid_file_count += 1
