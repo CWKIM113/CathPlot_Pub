@@ -2765,13 +2765,40 @@ class CathPlotGUI:
             # B/out111.dat)을 같은 세션에서 같이 쓰면 temp_sorted 캐시가 서로
             # 덮어써서 경고 없이 잘못된 데이터를 plot에 쓰는 심각한 문제가
             # 있었음("파일명이 같을 때 sorted 파일이 덮어써진다" 실측 확인) -
-            # 원본 파일의 절대경로 기준 짧은 해시를 이름에 추가해서, 파일명이
-            # 같아도 실제 경로가 다르면 서로 다른 캐시 파일로 분리되게 한다.
-            abs_dat_path = os.path.abspath(dat_file)
-            path_hash = hashlib.md5(abs_dat_path.encode("utf-8")).hexdigest()[:8]
+            # 겹칠 때만(보통은 그대로) "파일명-N_해시6자"로 구분한다. N은
+            # update_variable_selection_ui의 LabelFrame 제목에 붙는 "-1,-2"와
+            # 정확히 같은 계산(등장 순서)을 재사용해서 화면 목록과 캐시 파일명이
+            # 서로 맞아떨어지게 한다. 해시(경로 기준, 항상 결정적)는 N이 로드
+            # 순서에 따라 달라져도 실제 데이터 매칭은 항상 정확하도록 보장하는
+            # 안전장치 - N만으론 이전 세션의 다른 순서로 생긴 캐시와 헷갈릴 수
+            # 있지만, 해시가 다르면 그 캐시를 재사용하지 않고 새로 만든다.
             base_name = os.path.basename(dat_file)
             name_root, ext = os.path.splitext(base_name)
-            sorted_filename = f"{name_root}_{path_hash}_sortedX{x_col}{ext}"
+            abs_dat_path = os.path.abspath(dat_file)
+
+            _basename_counts = {}
+            for _info in getattr(self, "file_rows", []):
+                if _info.get("meta") is None:
+                    continue
+                _basename_counts[os.path.basename(_info["filename"])] = \
+                    _basename_counts.get(os.path.basename(_info["filename"]), 0) + 1
+
+            if _basename_counts.get(base_name, 0) > 1:
+                _seen = 0
+                _n = None
+                for _info in getattr(self, "file_rows", []):
+                    if _info.get("meta") is None:
+                        continue
+                    if os.path.basename(_info["filename"]) != base_name:
+                        continue
+                    _seen += 1
+                    if os.path.abspath(_info["filename"]) == abs_dat_path:
+                        _n = _seen
+                        break
+                path_hash = hashlib.md5(abs_dat_path.encode("utf-8")).hexdigest()[:6]
+                sorted_filename = f"{name_root}-{_n if _n else 1}_{path_hash}_sortedX{x_col}{ext}"
+            else:
+                sorted_filename = f"{name_root}_sortedX{x_col}{ext}"
             sorted_filepath = os.path.join(temp_dir, sorted_filename)
 
             if os.path.exists(sorted_filepath):
