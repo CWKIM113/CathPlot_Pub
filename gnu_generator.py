@@ -1627,7 +1627,10 @@ class GnuplotGenerator:
         # 괜찮던 값이 png에서만 잘림. png일 때만 마진에 15% 안전 여유를 더해서
         # 이 문제를 피한다(pdf/svg/emf는 원래도 문제 없어 그대로 둠).
         if (fmt or "").lower() == "png":
-            _png_margin_safety = 1.35
+            # [수정] "10x8cm처럼 작은 Manual 크기 + 축소된 폰트 조합에서 기존
+            # 1.35배로도 x/y2 title이 잘리고 legend box가 곡선과 겹치는 문제가
+            # 실측 확인됨" - 안전 여유를 1.35 -> 1.6으로 더 키움.
+            _png_margin_safety = 1.6
             need_left_in *= _png_margin_safety
             need_right_in *= _png_margin_safety
             need_top_in *= _png_margin_safety
