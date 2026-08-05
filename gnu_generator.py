@@ -1781,6 +1781,185 @@ class GnuplotGenerator:
 
         return outfile
 
+    _3D_PALETTE_MAP = {
+        "rainbow": "set palette rgbformulae 33,13,10",
+        "grayscale": "set palette gray",
+        "bluewhitered": 'set palette defined (0 "blue", 0.5 "white", 1 "red")',
+    }
+    _3D_STYLE_MAP = {"lines": "lines", "points": "points", "linespoints": "linespoints"}
+
+    def create_3d_script(self, curves_3d, outfile, fmt="interactive",
+                          xlabel="", ylabel="", zlabel="", title="",
+                          xlog=False, ylog=False, zlog=False,
+                          rot_x=60, rot_z=30, style="lines", palette="rainbow",
+                          colorbox=True, annotations_3d=None, arrows_3d=None,
+                          equal_xyz=False):
+        """[추가] 3D Plot(splot) - "X/Y1/Y2를 X/Y/Z로 매핑, 여러 세트를 같은 화면에
+        겹쳐 그리고 Z값 기준 palette(낮음=파랑, 높음=빨강)로 색칠"하는 기능.
+        2D curve와 동일하게 gnuplot이 dat 파일을 직접 읽게(using 컬럼 인덱스)
+        해서 별도 데이터 추출 파이프라인 없이 재사용한다.
+        curves_3d: [{dat_file, x_col, y_col, z_col, x_shift, title, marker_shape,
+        marker_size}, ...] (col은 1-based gnuplot $N 컬럼 번호, 즉 output_no+1과
+        동일한 규칙). marker_shape/marker_size는 style이 points/linespoints일 때만
+        쓰이며, 색은 Z값 palette 전용이라 세트 구분은 이 Marker 모양 + title(legend)로
+        한다("Legend 개념 - 그래프 set가 여럿일 때").
+        annotations_3d/arrows_3d: 2D Comment/Arrow와 별개로 3D 팝업에서 입력받은
+        (X,Y,Z) 좌표값 전용 주석("이때는 좌표값으로 통일") - {"text","x","y","z","color"} /
+        {"x1","y1","z1","x2","y2","z2","color","head_size"}.
+        Circle은 gnuplot이 3D 타원/구를 기본 지원하지 않아 이번 단계에서는 미지원.
+        equal_xyz: "set view equal xyz" - X/Y/Z를 데이터 단위 기준으로 동일 비율
+        스케일링. CathPlot 축들은 단위가 제각각(예: Y가 X보다 10000배 큰 값)이라
+        기본은 OFF - 켜면 값이 작은 축이 거의 한 점/직선으로 눌려 보일 수 있음
+        (직접 테스트로 확인됨). 필요할 때만 사용자가 켜도록 옵션으로만 제공.
+        """
+        plot_dir = os.path.dirname(os.path.abspath(outfile))
+        os.makedirs(plot_dir, exist_ok=True)
+
+        is_interactive = (fmt or "").lower() == "interactive"
+        title_disp = os.path.splitext(os.path.basename(outfile))[0]
+        lines = ["set encoding utf8"]
+        if is_interactive:
+            lines.append(f"set terminal windows title '{title_disp}' font 'Malgun Gothic,11' size 1000,700")
+        else:
+            # 2단계(Print/Save)에서 pdf/png 등에 맞게 확장 예정 - 우선 pdfcairo 기본값만.
+            lines.append("set terminal pdfcairo enhanced color font 'Malgun Gothic,14' size 10in,8in")
+            lines.append(f"set output '{outfile.replace(chr(92), '/')}'")
+
+        lines.append(f"set view {rot_x},{rot_z}")
+        if equal_xyz:
+            lines.append("set view equal xyz")
+        if xlog: lines.append("set logscale x")
+        if ylog: lines.append("set logscale y")
+        if zlog:
+            lines.append("set logscale z")
+            lines.append("set logscale cb")  # Z가 log면 색상 스케일도 log로 맞춰야 색이 고르게 분포함
+        lines.append(self._3D_PALETTE_MAP.get(palette, self._3D_PALETTE_MAP["rainbow"]))
+        if not colorbox:
+            lines.append("unset colorbox")
+        if xlabel: lines.append(f'set xlabel "{xlabel}"')
+        if ylabel: lines.append(f'set ylabel "{ylabel}"')
+        if zlabel: lines.append(f'set zlabel "{zlabel}"')
+        if title: lines.append(f'set title "{title}"')
+
+        # [추가] "comment, arrow 등은 3D 전용으로 popup 창에서 입력, 이때는
+        # 좌표값으로 통일 (x,y,z)" - 2D의 %/좌표값 토글 없이 항상 실제 데이터
+        # 좌표값만 받는다.
+        if annotations_3d:
+            for i, ann in enumerate(annotations_3d):
+                ann_text = (ann.get("text") or "").strip()
+                if not ann_text:
+                    continue
+                try:
+                    x, y, z = float(ann["x"]), float(ann["y"]), float(ann["z"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                _color = (ann.get("color") or "").strip()
+                _color_clause = f' textcolor rgb "{_color}"' if _color else ""
+                lines.append(f'set label {i+1} "{ann_text}" at {x},{y},{z}{_color_clause}')
+
+        if arrows_3d:
+            for i, arr in enumerate(arrows_3d):
+                try:
+                    x1, y1, z1 = float(arr["x1"]), float(arr["y1"]), float(arr["z1"])
+                    x2, y2, z2 = float(arr["x2"]), float(arr["y2"]), float(arr["z2"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                _color = (arr.get("color") or "").strip()
+                _color_clause = f' lc rgb "{_color}"' if _color else ""
+                _head_size = arr.get("head_size")
+                _size_clause = f" size graph {_head_size},15" if _head_size else ""
+                lines.append(f'set arrow {i+1} from {x1},{y1},{z1} to {x2},{y2},{z2} head{_size_clause}{_color_clause}')
+
+        gp_style = self._3D_STYLE_MAP.get(style, "lines")
+        # [추가] "Legend 개념 - 그래프 set가 여럿일 때" - 색은 Z값 전용(palette)이라
+        # 여러 세트를 색만으로 구분할 수 없음. 세트 구분은 사용자가 고르는 Marker
+        # 모양(pt)으로 하고, 이름은 title로 넣어 gnuplot 표준 key(legend)가
+        # "모양+이름"을 보여주게 한다. 세트가 2개 이상일 때만 key를 켠다(1개면 불필요).
+        has_title = any((c.get("title") or "").strip() for c in curves_3d)
+        if has_title and len(curves_3d) > 1:
+            lines.append("set key outside right top box")
+
+        splot_parts = []
+        for c in curves_3d:
+            abs_path = c["dat_file"] if os.path.isabs(c["dat_file"]) else os.path.abspath(c["dat_file"])
+            try:
+                path = os.path.relpath(abs_path, start=plot_dir)
+            except ValueError:
+                path = abs_path
+            path = path.replace("\\", "/")
+            x_shift = c.get("x_shift", 0.0)
+            # [수정 - 버그] x_shift가 0이면 괄호 없이 "$1"만 썼는데, gnuplot의
+            # using 절에서 "$N"은 반드시 괄호로 감싼 수식 안에서만 유효함(단독
+            # "$1"은 "column() called from invalid context" 에러) - 2D curve와
+            # 동일하게 항상 괄호+수식 형태로 통일한다.
+            x_expr = f"(${c['x_col']}+{x_shift})"
+            using_expr = f"{x_expr}:{c['y_col']}:{c['z_col']}:{c['z_col']}"
+
+            # [추가] 세트별 Marker(pt)/크기(ps) - style이 points/linespoints일 때만
+            # 의미 있음(lines면 점 모양이 안 보이므로 무시).
+            _pt_clause = ""
+            if gp_style in ("points", "linespoints"):
+                marker_pt = c.get("marker_shape")
+                marker_size = c.get("marker_size")
+                if marker_pt is not None:
+                    _pt_clause += f" pt {marker_pt}"
+                if marker_size:
+                    _pt_clause += f" ps {marker_size}"
+
+            title_text = (c.get("title") or "").strip()
+            if title_text and len(curves_3d) > 1:
+                # enhanced 텍스트 모드에서 "_"가 첨자로 해석되지 않도록 이스케이프.
+                # gnuplot의 큰따옴표 문자열 파서가 백슬래시 1개를 먼저 소비하므로,
+                # enhanced 렌더러가 실제로 "\_"를 보게 하려면 파일에는 "\\_"(백슬래시 2개)를
+                # 써야 한다 - "\\_" 1개만 쓰면 첨자로 계속 해석되는 문제 확인.
+                _title_esc = title_text.replace("_", "\\\\_")
+                _title_clause = f'title "{_title_esc}"'
+            else:
+                _title_clause = "notitle"
+
+            splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {gp_style}{_pt_clause} palette')
+
+        lines.append("splot " + ", \\\n      ".join(splot_parts))
+
+        if is_interactive:
+            lines.append("pause mouse close")
+        else:
+            lines.append("set output")
+
+        script_text = "\n".join(lines)
+        gnuplot_exe = _resolve_gnuplot_exe()
+
+        if is_interactive:
+            script_path = outfile.rsplit(".", 1)[0] + ".plt"
+            with open(script_path, "w", encoding="utf-8") as f:
+                f.write(script_text)
+            self.last_process = subprocess.Popen(
+                [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
+                stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
+            )
+        else:
+            result = subprocess.run(
+                [gnuplot_exe],
+                input=script_text, text=True, encoding="utf-8", errors="replace",
+                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
+            )
+            if result.returncode != 0:
+                debug_path = os.path.join(plot_dir, f".cathplot_failed_3d_{uuid.uuid4().hex}.plt")
+                try:
+                    with open(debug_path, "w", encoding="utf-8") as f:
+                        f.write(script_text)
+                except OSError:
+                    debug_path = None
+                stderr_text = (result.stderr or "").strip()
+                msg = f"gnuplot 실행 실패 (반환 코드 {result.returncode})"
+                if stderr_text:
+                    msg += f":\n{stderr_text}"
+                if debug_path:
+                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
+                raise RuntimeError(msg)
+
+        return outfile
+
     _A4_SIZES = {
         "portrait": ("8.27in", "11.69in"),
         "landscape": ("11.69in", "8.27in"),

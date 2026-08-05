@@ -213,6 +213,9 @@ class CathPlotGUI:
         ttk.Button(
             btn_container, text="Template Load", command=self.load_template
         ).pack(side="left", padx=5)
+        ttk.Button(
+            btn_container, text="3D Plot", command=self.open_3d_plot_dialog
+        ).pack(side="left", padx=5)
 
         self.var_frame = ttk.LabelFrame(self.root, text="Available Variables Selection")
         self.var_frame.pack(fill="x", expand=False, padx=10, pady=0)
@@ -2833,6 +2836,266 @@ class CathPlotGUI:
             color = COLOR_MAP.get(item.get('color', tk.StringVar(value="Auto")).get(), "")
             circles.append({"x": x, "y": y, "rx": rx, "ry": ry, "coord_mode": coord_mode, "color": color})
         return circles
+
+    # ===================== 3D Plot (splot) =====================
+    def _collect_3d_curves(self):
+        """[추가] 3D Plot - "X,Y1,Y2 -> X,Y,Z로 매핑, 여러 세트(파일)를 같은
+        화면에". 파일마다 Y1 1개 + Y2 1개가 선택되어 있어야 그 파일이 3D curve
+        하나가 됨(짝이 안 맞으면 제외하고 이유를 알려줌 - 한 파일에 여러 개면
+        어느 것끼리 짝지어야 할지 알 수 없어서)."""
+        from collections import defaultdict
+        y1_by_file = defaultdict(list)
+        y2_by_file = defaultdict(list)
+        for key, var in self.selected_y1_vars.items():
+            if var.get():
+                d_file, out_no = key.split("||")
+                y1_by_file[d_file].append(int(out_no))
+        for key, var in self.selected_y2_vars.items():
+            if var.get():
+                d_file, out_no = key.split("||")
+                y2_by_file[d_file].append(int(out_no))
+
+        all_files = set(y1_by_file.keys()) | set(y2_by_file.keys())
+        eligible = []
+        skipped = []
+        for d_file in sorted(all_files):
+            y1s = y1_by_file.get(d_file, [])
+            y2s = y2_by_file.get(d_file, [])
+            bn = os.path.basename(d_file)
+            if len(y1s) == 1 and len(y2s) == 1:
+                file_x_output_no = 0
+                for info in self.file_rows:
+                    if info.get("filename") == d_file:
+                        x_var_obj = info.get("x_var")
+                        if x_var_obj and hasattr(x_var_obj, 'get'):
+                            x_key_val = x_var_obj.get()
+                            if x_key_val and "||" in x_key_val:
+                                _, x_out_no_str = x_key_val.split("||")
+                                try:
+                                    file_x_output_no = int(x_out_no_str)
+                                except (ValueError, AttributeError):
+                                    pass
+                        break
+                try:
+                    target_dat_file = self.resort_dat_file(d_file, file_x_output_no)
+                except Exception:
+                    target_dat_file = d_file
+                x_shift = float(self.file_xshift_vars[d_file].get() or 0.0) if d_file in self.file_xshift_vars else 0.0
+                eligible.append({
+                    "dat_file": target_dat_file,
+                    "x_col": file_x_output_no + 1,
+                    "y_col": y1s[0] + 1,
+                    "z_col": y2s[0] + 1,
+                    "x_shift": x_shift,
+                    "label": bn,
+                })
+            elif not y1s and not y2s:
+                continue  # 아예 선택 안 한 파일은 조용히 무시
+            else:
+                reason = []
+                if len(y1s) == 0: reason.append("Y1 없음")
+                elif len(y1s) > 1: reason.append(f"Y1 {len(y1s)}개(어느 것끼리 짝지을지 모호)")
+                if len(y2s) == 0: reason.append("Y2 없음")
+                elif len(y2s) > 1: reason.append(f"Y2 {len(y2s)}개(어느 것끼리 짝지을지 모호)")
+                skipped.append(f"{bn}: {', '.join(reason)}")
+        return eligible, skipped
+
+    def open_3d_plot_dialog(self):
+        eligible, skipped = self._collect_3d_curves()
+        if not eligible:
+            msg = "3D로 그릴 수 있는 파일이 없습니다.\n(파일마다 Y1 1개 + Y2 1개가 선택되어 있어야 합니다.)"
+            if skipped:
+                msg += "\n\n제외된 파일:\n" + "\n".join(skipped)
+            messagebox.showwarning("3D Plot", msg)
+            return
+        if skipped:
+            proceed = messagebox.askyesno(
+                "3D Plot",
+                "다음 파일은 Y1/Y2 짝이 맞지 않아 3D에서 제외됩니다:\n\n" + "\n".join(skipped) +
+                "\n\n나머지 파일로 계속할까요?"
+            )
+            if not proceed:
+                return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("3D Plot Options")
+        dialog.transient(self.root)
+
+        info_row = ttk.Frame(dialog)
+        info_row.pack(fill="x", padx=10, pady=(8, 2))
+        ttk.Label(info_row, text=f"3D curve {len(eligible)}개: " + ", ".join(c["label"] for c in eligible),
+                  foreground="darkgreen").pack(side="left")
+
+        row1 = ttk.Frame(dialog)
+        row1.pack(fill="x", padx=10, pady=5)
+        rot_x_var = tk.StringVar(value="60")
+        rot_z_var = tk.StringVar(value="30")
+        ttk.Label(row1, text="Rotate X:").pack(side="left")
+        ttk.Entry(row1, textvariable=rot_x_var, width=5).pack(side="left", padx=(2, 10))
+        ttk.Label(row1, text="Rotate Z:").pack(side="left")
+        ttk.Entry(row1, textvariable=rot_z_var, width=5).pack(side="left", padx=(2, 10))
+
+        row2 = ttk.Frame(dialog)
+        row2.pack(fill="x", padx=10, pady=5)
+        style_var = tk.StringVar(value="lines")
+        palette_var = tk.StringVar(value="rainbow")
+        colorbox_var = tk.BooleanVar(value=True)
+        marker_size_var_3d = tk.StringVar(value="M")
+        ttk.Label(row2, text="Style:").pack(side="left")
+        ttk.Combobox(row2, textvariable=style_var, values=["lines", "points", "linespoints"],
+                     width=12, state="readonly").pack(side="left", padx=(2, 10))
+        ttk.Label(row2, text="Palette:").pack(side="left")
+        ttk.Combobox(row2, textvariable=palette_var, values=["rainbow", "grayscale", "bluewhitered"],
+                     width=12, state="readonly").pack(side="left", padx=(2, 10))
+        ttk.Checkbutton(row2, text="Colorbox", variable=colorbox_var).pack(side="left", padx=(10, 0))
+        ttk.Label(row2, text="Marker Size:").pack(side="left", padx=(10, 0))
+        ttk.Combobox(row2, textvariable=marker_size_var_3d, values=MARKER_SIZE_LIST,
+                     width=4, state="readonly").pack(side="left", padx=(2, 0))
+        equal_xyz_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row2, text="Equal XYZ scale", variable=equal_xyz_var).pack(side="left", padx=(10, 0))
+
+        # [추가] "Legend 개념 - 그래프 set가 여럿일 때" - 색은 Z값 전용(palette)이라
+        # 세트(파일) 구분은 Marker 모양으로 함. Style이 Points/Linespoints일 때만
+        # 의미가 있지만, 나중에 Style을 바꿀 수도 있으니 항상 보여주고 세트별로
+        # 사용자가 직접 고르게 한다(자동 배정 X - "사용자가 선택하게 옵션을 하나 더").
+        # 기본값은 겹치지 않게 Shape 목록을 순서대로 배정.
+        marker_shape_vars_3d = []
+        if len(eligible) > 1:
+            marker_row = ttk.LabelFrame(dialog, text="Marker Shape (세트별, Style=Points/Linespoints일 때 적용)")
+            marker_row.pack(fill="x", padx=10, pady=5)
+            _shape_choices = [s for s in MARKER_SHAPE_LIST if s != "None"]
+            for idx, c in enumerate(eligible):
+                mrow = ttk.Frame(marker_row)
+                mrow.pack(fill="x", pady=1)
+                ttk.Label(mrow, text=c["label"], width=20, anchor="w").pack(side="left", padx=(2, 5))
+                shape_default = _shape_choices[idx % len(_shape_choices)]
+                shape_var = tk.StringVar(value=shape_default)
+                ttk.Combobox(mrow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
+                             width=10, state="readonly").pack(side="left")
+                marker_shape_vars_3d.append(shape_var)
+        else:
+            for _ in eligible:
+                marker_shape_vars_3d.append(tk.StringVar(value="Circle"))
+
+        # [추가] "comment, arrow 등은 3D 전용으로 popup 창에서 입력, 이때는
+        # 좌표값으로 통일 (x,y,z)" - 2D 입력과 완전히 별개로, 이 팝업 안에서만
+        # 쓰이는 3D 전용 목록.
+        anno3d_list = []
+        arrow3d_list = []
+
+        anno3d_frame = ttk.LabelFrame(dialog, text="3D Comment/Arrow (좌표값 X,Y,Z)")
+        anno3d_frame.pack(fill="x", padx=10, pady=5)
+        c3d_list_frame = ttk.Frame(anno3d_frame)
+        c3d_list_frame.pack(fill="x")
+        a3d_list_frame = ttk.Frame(anno3d_frame)
+        a3d_list_frame.pack(fill="x")
+
+        def add_3d_comment_row():
+            row = ttk.Frame(c3d_list_frame)
+            row.pack(fill="x", pady=1)
+            data = {'txt': tk.StringVar(), 'x': tk.StringVar(), 'y': tk.StringVar(), 'z': tk.StringVar(),
+                    'color': tk.StringVar(value="Auto"), 'frame': row}
+            anno3d_list.append(data)
+            ttk.Button(row, text="X", width=2, command=lambda: (row.destroy(), anno3d_list.remove(data))).pack(side="right", padx=3)
+            ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
+            ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 3))
+            ttk.Entry(row, textvariable=data['txt'], width=14).pack(side="left", padx=2)
+            ttk.Label(row, text="X:").pack(side="left")
+            ttk.Entry(row, textvariable=data['x'], width=6).pack(side="left")
+            ttk.Label(row, text="Y:").pack(side="left")
+            ttk.Entry(row, textvariable=data['y'], width=6).pack(side="left")
+            ttk.Label(row, text="Z:").pack(side="left")
+            ttk.Entry(row, textvariable=data['z'], width=6).pack(side="left")
+
+        def add_3d_arrow_row():
+            row = ttk.Frame(a3d_list_frame)
+            row.pack(fill="x", pady=1)
+            data = {'x1': tk.StringVar(), 'y1': tk.StringVar(), 'z1': tk.StringVar(),
+                    'x2': tk.StringVar(), 'y2': tk.StringVar(), 'z2': tk.StringVar(),
+                    'color': tk.StringVar(value="Auto"), 'size': tk.StringVar(value="M"), 'frame': row}
+            arrow3d_list.append(data)
+            ttk.Button(row, text="X", width=2, command=lambda: (row.destroy(), arrow3d_list.remove(data))).pack(side="right", padx=3)
+            ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
+            ttk.Combobox(row, textvariable=data['size'], values=list(self.ARROW_SIZE_MAP.keys()), width=4, state="readonly").pack(side="right", padx=2)
+            ttk.Label(row, text="[Arrow]", foreground="darkred").pack(side="left", padx=(0, 3))
+            for lbl, k, w in [("X1:", 'x1', 5), ("Y1:", 'y1', 5), ("Z1:", 'z1', 5),
+                               ("→X2:", 'x2', 5), ("Y2:", 'y2', 5), ("Z2:", 'z2', 5)]:
+                ttk.Label(row, text=lbl).pack(side="left")
+                ttk.Entry(row, textvariable=data[k], width=w).pack(side="left")
+
+        btn3d_row = ttk.Frame(anno3d_frame)
+        btn3d_row.pack(fill="x", pady=2)
+        ttk.Button(btn3d_row, text="+ Add 3D Comment", command=add_3d_comment_row).pack(side="left", padx=5)
+        ttk.Button(btn3d_row, text="+ Add 3D Arrow", command=add_3d_arrow_row).pack(side="left", padx=5)
+
+        def do_plot():
+            try:
+                rot_x = float(rot_x_var.get() or 60)
+            except ValueError:
+                rot_x = 60
+            try:
+                rot_z = float(rot_z_var.get() or 30)
+            except ValueError:
+                rot_z = 30
+
+            annotations_3d = []
+            for d in anno3d_list:
+                if d['txt'].get().strip() and d['x'].get().strip() and d['y'].get().strip() and d['z'].get().strip():
+                    annotations_3d.append({
+                        "text": d['txt'].get(), "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
+                        "color": COLOR_MAP.get(d['color'].get(), ""),
+                    })
+            arrows_3d = []
+            for d in arrow3d_list:
+                if all(d[k].get().strip() for k in ('x1', 'y1', 'z1', 'x2', 'y2', 'z2')):
+                    arrows_3d.append({
+                        "x1": d['x1'].get(), "y1": d['y1'].get(), "z1": d['z1'].get(),
+                        "x2": d['x2'].get(), "y2": d['y2'].get(), "z2": d['z2'].get(),
+                        "color": COLOR_MAP.get(d['color'].get(), ""),
+                        "head_size": self.ARROW_SIZE_MAP.get(d['size'].get(), self.ARROW_SIZE_MAP["M"]),
+                    })
+
+            marker_size_val = MARKER_SIZE_MAP.get(marker_size_var_3d.get(), 1.0)
+            curves_final = []
+            for idx, c in enumerate(eligible):
+                c2 = dict(c)
+                shape_label = marker_shape_vars_3d[idx].get() if idx < len(marker_shape_vars_3d) else "None"
+                hollow_pt, _filled_pt = MARKER_SHAPE_MAP.get(shape_label, (None, None))
+                c2["marker_shape"] = hollow_pt
+                c2["marker_size"] = marker_size_val
+                c2["title"] = c["label"]
+                curves_final.append(c2)
+
+            dialog.destroy()
+            self._execute_3d_plot(curves_final, rot_x, rot_z, style_var.get(), palette_var.get(),
+                                   colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get())
+
+        ok_row = ttk.Frame(dialog)
+        ok_row.pack(fill="x", padx=10, pady=10)
+        ttk.Button(ok_row, text="Plot", command=do_plot).pack(side="left", padx=5)
+        ttk.Button(ok_row, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
+
+    def _execute_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d, equal_xyz=False):
+        os.makedirs(self.plot_dir, exist_ok=True)
+        raw_title = self.filename_var.get().strip() or "CathPlot"
+        safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
+        next_id = self.title_counters.get(safe_title, 0) + 1
+        base_name = f"{safe_title}_3D_{next_id}"
+        outfile = os.path.join(self.plot_dir, f"{base_name}.plt")
+        self.title_counters[safe_title] = next_id
+
+        generator = GnuplotGenerator(self.plot_dir)
+        try:
+            generator.create_3d_script(
+                curves, outfile, fmt="interactive",
+                xlabel=self.xlabel_var.get(), ylabel=self.ylabel_var.get(), zlabel=self.y2label_var.get(),
+                title=raw_title,
+                xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
+                rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
+                annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
+            )
+        except Exception as e:
+            messagebox.showerror("3D Plot Error", str(e))
 
     def get_temp_dir(self):
         temp_dir = os.path.join(self.cwd, "temp_sorted")
