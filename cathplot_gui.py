@@ -21,6 +21,7 @@ import time
 import glob
 import re
 import uuid
+import hashlib
 
 from tkinter import ttk
 from tkinter import filedialog
@@ -2740,9 +2741,18 @@ class CathPlotGUI:
             temp_dir = os.path.join(self.plot_dir, "temp_sorted")
             os.makedirs(temp_dir, exist_ok=True)
 
+            # [수정 - 버그] 파일명(base_name)만으로 임시 정렬 파일 이름을 정해서,
+            # 서로 다른 폴더에 있는 "같은 이름"의 dat 파일(예: A/out111.dat와
+            # B/out111.dat)을 같은 세션에서 같이 쓰면 temp_sorted 캐시가 서로
+            # 덮어써서 경고 없이 잘못된 데이터를 plot에 쓰는 심각한 문제가
+            # 있었음("파일명이 같을 때 sorted 파일이 덮어써진다" 실측 확인) -
+            # 원본 파일의 절대경로 기준 짧은 해시를 이름에 추가해서, 파일명이
+            # 같아도 실제 경로가 다르면 서로 다른 캐시 파일로 분리되게 한다.
+            abs_dat_path = os.path.abspath(dat_file)
+            path_hash = hashlib.md5(abs_dat_path.encode("utf-8")).hexdigest()[:8]
             base_name = os.path.basename(dat_file)
             name_root, ext = os.path.splitext(base_name)
-            sorted_filename = f"{name_root}_sortedX{x_col}{ext}"
+            sorted_filename = f"{name_root}_{path_hash}_sortedX{x_col}{ext}"
             sorted_filepath = os.path.join(temp_dir, sorted_filename)
 
             if os.path.exists(sorted_filepath):
