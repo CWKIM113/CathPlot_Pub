@@ -678,7 +678,15 @@ class GnuplotGenerator:
         # 실제 ax(0~1) 값으로 좌/우를 직접 판단해서 미러링 방향을 정한다
         is_right_side = ax >= 0.5
 
-        SAMPLE_W = 1.3 * 1.3 * ROW_H  # style(샘플선) 길이가 너무 짧다는 피드백으로 1.3배 확대
+        # [수정 - 버그] SAMPLE_W(가로 길이)를 ROW_H(세로=axis_h_in 기준 비율)로
+        # 그대로 계산해서, 축이 정사각형이 아니면(Portrait처럼 axis_h_in이
+        # axis_w_in보다 크면) 실제 세로 절대 길이(ROW_LINE_HEIGHT_IN)를
+        # axis_w_in이 아닌 axis_h_in으로 나눈 값이 가로 길이로 잘못 쓰여서
+        # style이 실제보다 짧게 나오는 문제가 있었음("port에서 style이 축
+        # 비율 대비 더 짧다" 실측 확인) - 같은 절대 길이(ROW_LINE_HEIGHT_IN)를
+        # axis_w_in으로 나눠 올바른 가로 비율로 계산한다(정사각형 축이면
+        # 기존과 동일).
+        SAMPLE_W = 1.3 * 1.3 * (ROW_LINE_HEIGHT_IN / max(axis_w_in, 0.5))  # style(샘플선) 길이가 너무 짧다는 피드백으로 1.3배 확대
         SAMPLE_W -= 1.5 * (char_width_in / max(axis_w_in, 0.5))  # 다시 대문자 1.5자만큼 축소 요청
         # [수정] "Print/Save에서 style 길이가 여전히 너무 짧다" - print만 2배로
         # (screen은 별도 문제 제기가 없었으므로 기존 값 유지, screen/print 마진을
