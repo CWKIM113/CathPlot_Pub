@@ -110,6 +110,7 @@ class CathPlotGUI:
         self.file_rows = []
         self.comment_list = []
         self.arrow_list = []
+        self.circle_list = []
 
         self.selected_x_key = tk.StringVar(value="")
         self.prev_x_key = ""
@@ -586,9 +587,12 @@ class CathPlotGUI:
         self.c_list_frame.pack(fill="x", padx=5)
         self.a_list_frame = ttk.Frame(self.anno_frame)
         self.a_list_frame.pack(fill="x", padx=5)
+        self.e_list_frame = ttk.Frame(self.anno_frame)
+        self.e_list_frame.pack(fill="x", padx=5)
 
         self.comment_on_var = tk.BooleanVar(value=True)
         self.arrow_on_var = tk.BooleanVar(value=True)
+        self.circle_on_var = tk.BooleanVar(value=True)
 
         btn_f = ttk.Frame(self.anno_frame)
         #self.anno_btn_f = ttk.Frame(self.anno_frame)
@@ -606,12 +610,19 @@ class CathPlotGUI:
         ttk.Button(arrow_btn_col, text="+ Add Line/Arrow", command=self.add_arrow_row).pack(side="top", anchor="w")
         ttk.Checkbutton(arrow_btn_col, text="Enable Arrows", variable=self.arrow_on_var).pack(side="top", anchor="w")
 
+        # [추가] "Arrow 옆에 Circle(중심축 2개 타원 - 반지름 1개만 입력하면 원)"
+        circle_btn_col = ttk.Frame(btn_f)
+        circle_btn_col.pack(side="left", padx=15)
+        ttk.Button(circle_btn_col, text="+ Add Circle", command=self.add_circle_row).pack(side="top", anchor="w")
+        ttk.Checkbutton(circle_btn_col, text="Enable Circles", variable=self.circle_on_var).pack(side="top", anchor="w")
+
         # [수정] "Comment/Arrow 입력창이 안 보임 - 항상 빈 칸이 하나씩 나오게
         # 해야 함(어차피 안 지워지는 빈 칸이니 기본으로 둠)" - 시작할 때 매번
         # "+"를 눌러 추가하지 않아도 바로 입력할 수 있게, 빈 행을 하나씩
         # 미리 만들어둔다(모두 지웠을 때도 remove_row에서 다시 하나 채워줌).
         self.add_comment_row()
         self.add_arrow_row()
+        self.add_circle_row()
 
         # 고급: raw gnuplot 명령어 직접 입력 (여기 적은 내용은 생성되는 .plt 파일에 그대로 삽입됨)
         self.raw_gnuplot_frame = ttk.LabelFrame(self.plot_frame, text="Advanced: Raw gnuplot commands")
@@ -979,16 +990,24 @@ class CathPlotGUI:
             "ytics": self.ytics_var.get(),
             "y2tics": self.y2tics_var.get(),
 
-            # --- annotation(코멘트) / arrow(화살표) ---
+            # --- annotation(코멘트) / arrow(화살표) / circle(원,타원) ---
             "comment_on": self.comment_on_var.get(),
             "arrow_on": self.arrow_on_var.get(),
+            "circle_on": self.circle_on_var.get(),
             "annotations": [
-                {"txt": c['txt'].get(), "x": c['x'].get(), "y": c['y'].get(), "ang": c['ang'].get()}
+                {"txt": c['txt'].get(), "x": c['x'].get(), "y": c['y'].get(), "ang": c['ang'].get(),
+                 "coord_mode": c['coord_mode'].get(), "color": c['color'].get()}
                 for c in self.comment_list
             ],
             "arrows": [
-                {"x1": a['x1'].get(), "y1": a['y1'].get(), "x2": a['x2'].get(), "y2": a['y2'].get(), "type": a['type'].get()}
+                {"x1": a['x1'].get(), "y1": a['y1'].get(), "x2": a['x2'].get(), "y2": a['y2'].get(), "type": a['type'].get(),
+                 "coord_mode": a['coord_mode'].get(), "color": a['color'].get(), "size": a['size'].get()}
                 for a in self.arrow_list
+            ],
+            "circles": [
+                {"x": e['x'].get(), "y": e['y'].get(), "rx": e['rx'].get(), "ry": e['ry'].get(),
+                 "coord_mode": e['coord_mode'].get(), "color": e['color'].get()}
+                for e in self.circle_list
             ],
 
             # --- var_no(output_no) 기준 curve 스타일: Color/Linestyle/Linewidth/Shift ---
@@ -1161,30 +1180,39 @@ class CathPlotGUI:
             self.ytics_var.set(data.get("ytics", self.ytics_var.get()))
             self.y2tics_var.set(data.get("y2tics", self.y2tics_var.get()))
 
-            # annotation/arrow: 템플릿 파일에 해당 항목이 있을 때만 기존 행을 전부 지우고
-            # 저장된 내용으로 다시 생성 (없는 구버전 템플릿을 불러올 땐 기존 목록 유지)
-            if "annotations" in data or "arrows" in data:
+            # annotation/arrow/circle: 템플릿 파일에 해당 항목이 있을 때만 기존 행을
+            # 전부 지우고 저장된 내용으로 다시 생성 (없는 구버전 템플릿을 불러올 땐
+            # 기존 목록 유지)
+            if "annotations" in data or "arrows" in data or "circles" in data:
                 for item in list(self.comment_list):
                     item['frame'].destroy()
                 self.comment_list.clear()
                 for item in list(self.arrow_list):
                     item['frame'].destroy()
                 self.arrow_list.clear()
+                for item in list(self.circle_list):
+                    item['frame'].destroy()
+                self.circle_list.clear()
 
                 for c in data.get("annotations", []):
                     self.add_comment_row(initial=c)
                 for a in data.get("arrows", []):
                     self.add_arrow_row(initial=a)
+                for e in data.get("circles", []):
+                    self.add_circle_row(initial=e)
 
-                # 템플릿에 저장된 annotation/arrow가 하나도 없으면(빈 리스트),
+                # 템플릿에 저장된 annotation/arrow/circle이 하나도 없으면(빈 리스트),
                 # 목록이 완전히 비지 않도록 기본 빈 줄을 하나씩 채워 넣는다.
                 if not self.comment_list:
                     self.add_comment_row()
                 if not self.arrow_list:
                     self.add_arrow_row()
+                if not self.circle_list:
+                    self.add_circle_row()
 
                 self.comment_on_var.set(data.get("comment_on", self.comment_on_var.get()))
                 self.arrow_on_var.set(data.get("arrow_on", self.arrow_on_var.get()))
+                self.circle_on_var.set(data.get("circle_on", self.circle_on_var.get()))
 
             # var_no(output_no) 기준 curve 스타일(Color/Linestyle/Linewidth/Shift + 축)을
             # 현재 로드된 파일들 중 output_no가 일치하는 변수에 적용 (Batch Queue의
@@ -1332,13 +1360,24 @@ class CathPlotGUI:
             frame_height=data.get("frame_height", ""), frame_unit=data.get("frame_unit", "in"),
             curves=curves,
             annotations=(
-                [{"text": c["txt"], "x": c["x"], "y": c["y"], "angle": c["ang"]} for c in data.get("annotations", [])]
+                [{"text": c["txt"], "x": c["x"], "y": c["y"], "angle": c["ang"],
+                  "coord_mode": c.get("coord_mode", "pct"), "color": COLOR_MAP.get(c.get("color", "Auto"), "")}
+                 for c in data.get("annotations", [])]
                 if data.get("comment_on", True) else []
             ),
             arrows=(
                 [{"x1": a["x1"], "y1": a["y1"], "x2": a["x2"], "y2": a["y2"],
-                  "head": head_label_map.get(a["type"], "Forward")} for a in data.get("arrows", [])]
+                  "head": head_label_map.get(a["type"], "Forward"),
+                  "coord_mode": a.get("coord_mode", "pct"), "color": COLOR_MAP.get(a.get("color", "Auto"), ""),
+                  "head_size": self.ARROW_SIZE_MAP.get(a.get("size", "M"), self.ARROW_SIZE_MAP["M"])}
+                 for a in data.get("arrows", [])]
                 if data.get("arrow_on", True) else []
+            ),
+            circles=(
+                [{"x": e["x"], "y": e["y"], "rx": e["rx"], "ry": e.get("ry", ""),
+                  "coord_mode": e.get("coord_mode", "pct"), "color": COLOR_MAP.get(e.get("color", "Auto"), "")}
+                 for e in data.get("circles", [])]
+                if data.get("circle_on", True) else []
             ),
             is_print_mode=True,
             x_output_no=default_x_output_no,
@@ -1466,7 +1505,8 @@ class CathPlotGUI:
                 plotdef, font_warn = self._check_and_fix_fonts(plotdef)
                 generator = GnuplotGenerator(self.plot_dir)
                 generator.create_script(plotdef, outfile, fmt=fmt,
-                                         annotations=plotdef.annotations, arrows=plotdef.arrows)
+                                         annotations=plotdef.annotations, arrows=plotdef.arrows,
+                                         circles=getattr(plotdef, "circles", []))
                 saved_count += 1
                 for w in font_warn + generator.warnings:
                     warnings.append(f"{tname}: {w}")
@@ -1906,8 +1946,9 @@ class CathPlotGUI:
                 frame_auto=settings["frame_auto"], frame_width=settings["frame_width"],
                 frame_height=settings["frame_height"], frame_unit=settings["frame_unit"],
                 curves=curves,
-                annotations=[],  # Batch Queue에서는 annotation/arrow 리셋
+                annotations=[],  # Batch Queue에서는 annotation/arrow/circle 리셋
                 arrows=[],
+                circles=[],
                 is_print_mode=True,
                 x_output_no=x_output_no,
                 extra_gnuplot=settings.get("extra_gnuplot", ""),
@@ -2229,12 +2270,14 @@ class CathPlotGUI:
             'x': tk.StringVar(value=init.get('x', "")),
             'y': tk.StringVar(value=init.get('y', "")),
             'ang': tk.StringVar(value=init.get('ang', "0")),
-            'coord_mode': tk.StringVar(value=init.get('coord_mode', "pct")),
+            'coord_mode': tk.StringVar(value=init.get('coord_mode', "data")),
+            'color': tk.StringVar(value=init.get('color', "Auto")),
             'frame': row,
         }
         self.comment_list.append(data)
 
         ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.comment_list, row)).pack(side="right", padx=5)
+        ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=(2, 5))
 
         ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
         ttk.Label(row, text="Txt:").pack(side="left")
@@ -2257,6 +2300,13 @@ class CathPlotGUI:
         "Both Heads": "heads",
     }
 
+    # [추가] "화살표 크기 옵션도 넣어달라(각도는 auto)" - Marker Size(XS~XL)와
+    # 같은 프리셋 방식. 값은 gnuplot arrow head size의 "길이"(graph 비율,
+    # 축 크기와 무관하게 항상 같은 시각적 크기로 보이게)이고, 각도는 15도
+    # 고정(화살촉 모양이 자연스러운 기본값)으로 자동 적용한다.
+    ARROW_SIZE_MAP = {"S": 0.015, "M": 0.03, "L": 0.05, "XL": 0.08}
+    ARROW_HEAD_ANGLE = 15
+
     def add_arrow_row(self, initial=None):
         init = initial or {}
         row = ttk.Frame(self.a_list_frame)
@@ -2266,11 +2316,15 @@ class CathPlotGUI:
         data = {'x1': tk.StringVar(value=init.get('x1', "")), 'y1': tk.StringVar(value=init.get('y1', "")),
                 'x2': tk.StringVar(value=init.get('x2', "")), 'y2': tk.StringVar(value=init.get('y2', "")),
                 'type': tk.StringVar(value=saved_type),
-                'coord_mode': tk.StringVar(value=init.get('coord_mode', "pct")),
+                'coord_mode': tk.StringVar(value=init.get('coord_mode', "data")),
+                'color': tk.StringVar(value=init.get('color', "Auto")),
+                'size': tk.StringVar(value=init.get('size', "M")),
                 'frame': row}
         self.arrow_list.append(data)
 
         ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.arrow_list, row)).pack(side="right", padx=5)
+        ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=(2, 5))
+        ttk.Combobox(row, textvariable=data['size'], values=list(self.ARROW_SIZE_MAP.keys()), width=4, state="readonly").pack(side="right", padx=(2, 2))
 
         # 저장된 type("head"/"nohead"/...) 값에 맞는 콤보박스 표시 라벨을 역매핑해서 초기값으로 사용
         inverse_head_map = {v: k for k, v in self.ARROW_HEAD_DISPLAY_MAP.items()}
@@ -2301,6 +2355,43 @@ class CathPlotGUI:
         mode_display_var.trace_add("write", _on_mode_changed)
         ttk.Combobox(row, textvariable=mode_display_var, values=["%", "좌표값"], width=5, state="readonly").pack(side="left", padx=(1, 2))
 
+    def add_circle_row(self, initial=None):
+        """[추가] Circle/Ellipse 주석 - 중심(X,Y) + 반지름(Rx,Ry). Ry를 비워두면
+        Rx를 그대로 써서 원이 된다(반지름 1개만 입력하면 원). 좌표값/% 모드와
+        색상은 Comment/Arrow와 동일한 방식을 재사용. 두께는 Arrow처럼 별도
+        지정하지 않아 gnuplot 기본값으로 서로 같게 맞춘다."""
+        init = initial or {}
+        row = ttk.Frame(self.e_list_frame)
+        row.pack(fill="x", pady=0)
+
+        data = {
+            'x': tk.StringVar(value=init.get('x', "")),
+            'y': tk.StringVar(value=init.get('y', "")),
+            'rx': tk.StringVar(value=init.get('rx', "")),
+            'ry': tk.StringVar(value=init.get('ry', "")),
+            'coord_mode': tk.StringVar(value=init.get('coord_mode', "data")),
+            'color': tk.StringVar(value=init.get('color', "Auto")),
+            'frame': row,
+        }
+        self.circle_list.append(data)
+
+        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.circle_list, row)).pack(side="right", padx=5)
+        ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=(2, 5))
+
+        ttk.Label(row, text="[Circle]", foreground="darkgreen").pack(side="left", padx=(0, 5))
+        ttk.Label(row, text="Center(X,Y):").pack(side="left")
+        c_entry, _ = self._make_xy_combo_entry(row, data['x'], data['y'], init.get('x', ''), init.get('y', ''), width=9)
+        c_entry.pack(side="left", padx=1)
+        ttk.Label(row, text="Radius(Rx,Ry):").pack(side="left")
+        r_entry, _ = self._make_xy_combo_entry(row, data['rx'], data['ry'], init.get('rx', ''), init.get('ry', ''), width=9)
+        r_entry.pack(side="left", padx=1)
+        ttk.Label(row, text="(Ry 비우면 원)", foreground="gray").pack(side="left", padx=(0, 5))
+        mode_display_var = tk.StringVar(value=self.COORD_MODE_DISPLAY.get(data['coord_mode'].get(), "%"))
+        def _on_mode_changed(*_):
+            data['coord_mode'].set(self.COORD_MODE_FROM_DISPLAY.get(mode_display_var.get(), "pct"))
+        mode_display_var.trace_add("write", _on_mode_changed)
+        ttk.Combobox(row, textvariable=mode_display_var, values=["%", "좌표값"], width=5, state="readonly").pack(side="left", padx=(1, 2))
+
     def remove_row(self, target_list, frame):
         frame.destroy()
         for item in target_list:
@@ -2314,14 +2405,8 @@ class CathPlotGUI:
                 self.add_comment_row()
             elif target_list is self.arrow_list:
                 self.add_arrow_row()
-
-        # [추가] Comment/Arrow를 전부 지워서 목록이 완전히 비면, 빈 공간 대신
-        # 처음 화면처럼 빈 줄 하나를 다시 채워 넣는다.
-        if not target_list:
-            if target_list is self.comment_list:
-                self.add_comment_row()
-            elif target_list is self.arrow_list:
-                self.add_arrow_row()
+            elif target_list is self.circle_list:
+                self.add_circle_row()
 
     #def remove_row(self, target_list, frame):
     #    container = frame.master  # c_list_frame 또는 a_list_frame
@@ -2704,8 +2789,9 @@ class CathPlotGUI:
             y = item['y'].get().strip()
             angle = item['ang'].get().strip() or "0"
             coord_mode = item.get('coord_mode', tk.StringVar(value="pct")).get()
+            color = COLOR_MAP.get(item.get('color', tk.StringVar(value="Auto")).get(), "")
             if text and x and y:
-                annotations.append({"text": text, "x": x, "y": y, "angle": angle, "coord_mode": coord_mode})
+                annotations.append({"text": text, "x": x, "y": y, "angle": angle, "coord_mode": coord_mode, "color": color})
         return annotations
 
     def _collect_arrows(self):
@@ -2727,8 +2813,26 @@ class CathPlotGUI:
 
             head = head_label_map.get(item['type'].get(), "Forward")
             coord_mode = item.get('coord_mode', tk.StringVar(value="pct")).get()
-            arrows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "head": head, "coord_mode": coord_mode})
+            color = COLOR_MAP.get(item.get('color', tk.StringVar(value="Auto")).get(), "")
+            head_size = self.ARROW_SIZE_MAP.get(item.get('size', tk.StringVar(value="M")).get(), self.ARROW_SIZE_MAP["M"])
+            arrows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "head": head, "coord_mode": coord_mode, "color": color, "head_size": head_size})
         return arrows
+
+    def _collect_circles(self):
+        if not self.circle_on_var.get():
+            return []
+        circles = []
+        for item in self.circle_list:
+            x = item['x'].get().strip()
+            y = item['y'].get().strip()
+            rx = item['rx'].get().strip()
+            ry = item['ry'].get().strip()
+            if not (x and y and rx):
+                continue
+            coord_mode = item.get('coord_mode', tk.StringVar(value="pct")).get()
+            color = COLOR_MAP.get(item.get('color', tk.StringVar(value="Auto")).get(), "")
+            circles.append({"x": x, "y": y, "rx": rx, "ry": ry, "coord_mode": coord_mode, "color": color})
+        return circles
 
     def get_temp_dir(self):
         temp_dir = os.path.join(self.cwd, "temp_sorted")
@@ -3300,6 +3404,7 @@ class CathPlotGUI:
                 curves=curves,
                 annotations=self._collect_annotations(),
                 arrows=self._collect_arrows(),
+                circles=self._collect_circles(),
                 is_print_mode=(mode == "Batch"),
                 extra_gnuplot=self.raw_gnuplot_text.get("1.0", "end-1c"),
             )
@@ -3331,7 +3436,8 @@ class CathPlotGUI:
             generator = GnuplotGenerator(self.plot_dir)
             generator.create_script(
                 plotdef, outfile, fmt=fmt,
-                annotations=plotdef.annotations, arrows=plotdef.arrows
+                annotations=plotdef.annotations, arrows=plotdef.arrows,
+                circles=getattr(plotdef, "circles", [])
             )
             _all_warn = _font_warn + generator.warnings
             if _all_warn:
@@ -3662,7 +3768,8 @@ class CathPlotGUI:
                 print_plotdef, _font_warn = self._check_and_fix_fonts(print_plotdef)
                 generator = GnuplotGenerator(self.plot_dir)
                 generator.create_script(print_plotdef, temp_emf, fmt="emf",
-                                         annotations=print_plotdef.annotations, arrows=print_plotdef.arrows)
+                                         annotations=print_plotdef.annotations, arrows=print_plotdef.arrows,
+                                         circles=getattr(print_plotdef, "circles", []))
                 _all_warn = _font_warn + generator.warnings
                 if _all_warn:
                     messagebox.showwarning("PRINT 경고", "\n\n".join(_all_warn))
@@ -4256,7 +4363,8 @@ class CathPlotGUI:
             save_plotdef, _font_warn = self._check_and_fix_fonts(save_plotdef)
             generator = GnuplotGenerator(self.plot_dir)
             generator.create_script(save_plotdef, os.path.abspath(selected_path), fmt=fmt.lower(),
-                                     annotations=save_plotdef.annotations, arrows=save_plotdef.arrows)
+                                     annotations=save_plotdef.annotations, arrows=save_plotdef.arrows,
+                                     circles=getattr(save_plotdef, "circles", []))
         except Exception as e:
             messagebox.showerror("Save Error", f"파일 저장 중 오류가 발생했습니다:\n{e}")
             return

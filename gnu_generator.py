@@ -197,6 +197,7 @@ class PlotDefinition:
 
     annotations: list = field(default_factory=list)
     arrows: list = field(default_factory=list)
+    circles: list = field(default_factory=list)  # {"x","y","rx","ry","coord_mode"} - 원/타원 주석
     curves: list = field(default_factory=list)
     output_format: str = "Interactive"
     xauto: bool = True
@@ -864,7 +865,7 @@ class GnuplotGenerator:
                 f'{label_just} front font "{font_name},{int(font_pt)}" {lbl_enh}'
             )
 
-    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None, legend_scale_boost=1.0, legend_width_extra_chars=None):
+    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, circles=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None, legend_scale_boost=1.0, legend_width_extra_chars=None):
         # [추가] Interactive(화면) 창은 frame_auto/frame_width와 무관하게 항상
         # 고정된 1000x700 캔버스로 뜬다(_get_terminal_cmd 참고) - 그런데 아래
         # 절대 여백 보정(축소 시 title/label이 사라지는 것 방지 등)은 "캔버스가
@@ -1226,7 +1227,11 @@ class GnuplotGenerator:
                 try: angle_val = float(ann.get("angle", "0") or 0)
                 except (TypeError, ValueError): angle_val = 0
                 rotate_clause = f"rotate by {angle_val}" if angle_val else "norotate"
-                lines.append(f'set label {i+1} "{ann_text}" at {gx},{gy} {rotate_clause} font "{_ann_font},{_ann_size}" {ann_enh}')
+                # [추가] Comment/Arrow/Circle 각각 행별로 색상을 고를 수 있게 함
+                # ("Auto"면 빈 문자열 -> gnuplot 기본색, 그 외엔 lc/textcolor 지정).
+                _color = (ann.get("color") or "").strip()
+                _color_clause = f' textcolor rgb "{_color}"' if _color else ""
+                lines.append(f'set label {i+1} "{ann_text}" at {gx},{gy} {rotate_clause} font "{_ann_font},{_ann_size}"{_color_clause} {ann_enh}')
 
         if arrows:
             head_map = {"No head": "nohead", "Forward": "head", "Backhead": "backhead", "Both heads": "heads"}
@@ -1237,7 +1242,34 @@ class GnuplotGenerator:
                 gy1 = _coord_clause(arr["y1"], _mode, 0.1)
                 gx2 = _coord_clause(arr["x2"], _mode, 0.5)
                 gy2 = _coord_clause(arr["y2"], _mode, 0.5)
-                lines.append(f'set arrow {i+1} from {gx1},{gy1} to {gx2},{gy2} {head}')
+                _color = (arr.get("color") or "").strip()
+                _color_clause = f' lc rgb "{_color}"' if _color else ""
+                # [추가] "화살표 크기 옵션(각도는 auto)" - 화살촉 길이는 GUI에서
+                # 고른 프리셋(graph 비율, 축 크기와 무관하게 항상 같은 시각적
+                # 크기)을, 각도는 15도 고정으로 자동 적용한다.
+                _head_size = arr.get("head_size")
+                _size_clause = f" size graph {_head_size},15" if _head_size else ""
+                lines.append(f'set arrow {i+1} from {gx1},{gy1} to {gx2},{gy2} {head}{_size_clause}{_color_clause}')
+
+        # [추가] "Circle(중심축 2개 타원, 반지름 입력, 좌표값/% 선택, 반지름 1개만
+        # 입력하면 원, 두께는 Arrow와 동일)" - 중심(x,y)과 반지름(rx,ry)에 Comment/
+        # Arrow와 동일한 coord_mode(좌표값/%) 변환을 그대로 재사용한다. ry가
+        # 비어있으면 rx를 그대로 써서 원이 된다. 두께는 Arrow처럼 별도 지정 없이
+        # gnuplot 기본값을 그대로 써서 서로 같게 맞춘다.
+        if circles:
+            for i, ell in enumerate(circles):
+                _mode = ell.get("coord_mode", "pct")
+                gx = _coord_clause(ell.get("x", ""), _mode, 0.5)
+                gy = _coord_clause(ell.get("y", ""), _mode, 0.5)
+                rx_val = (ell.get("rx", "") or "").strip()
+                ry_val = (ell.get("ry", "") or "").strip() or rx_val
+                grx = _coord_clause(rx_val, _mode, 0.05)
+                gry = _coord_clause(ry_val, _mode, 0.05)
+                _color = (ell.get("color") or "").strip() or "black"
+                lines.append(
+                    f'set object {i+1} ellipse at {gx},{gy} size {grx},{gry} '
+                    f'front fillstyle empty border lc rgb "{_color}"'
+                )
 
         tic_size = int(9 * f_scale)
         if getattr(plotdef, "is_print_mode", False):
@@ -1669,7 +1701,7 @@ class GnuplotGenerator:
 
         return need_left_in, need_right_in, need_top_in, need_bottom_in
 
-    def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None):
+    def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None, circles=None):
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
 
@@ -1698,7 +1730,7 @@ class GnuplotGenerator:
         if fmt.lower() != "interactive":
             lines.append(f"set output '{outfile.replace(chr(92), '/')}'")
 
-        self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, panel_scale=_size_scale, fmt=fmt)
+        self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, circles=circles, panel_scale=_size_scale, fmt=fmt)
 
         if fmt.lower() == "interactive": lines.append("pause mouse close")
         else: lines.append("set output")
@@ -2289,6 +2321,7 @@ class GnuplotGenerator:
                 plotdef, lines, is_multiplot=True, panel_scale=font_panel_scale,
                 annotations=getattr(plotdef, "annotations", None),
                 arrows=getattr(plotdef, "arrows", None),
+                circles=getattr(plotdef, "circles", None),
                 axis_w_in=axis_right_in - axis_left_in,
                 axis_h_in=axis_top_in - axis_bottom_in,
                 legend_scale_boost=_legend_boost,
