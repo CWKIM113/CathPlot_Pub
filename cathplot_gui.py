@@ -268,6 +268,10 @@ class CathPlotGUI:
         self.legend_on_var = tk.BooleanVar(value=True)
         self.legend_box_var = tk.BooleanVar(value=True)
         self.legend_pos_var = tk.StringVar(value="right top")
+        # [추가] 기존엔 legend 안 샘플선/title의 좌/우 정렬이 pos의 x값(50% 기준)으로만
+        # 자동 결정됐는데, 그 기준과 다르게 정렬하고 싶다는 요청으로 명시 선택지를
+        # 추가한다. "Auto"면 기존 방식(x>=50%면 우측 정렬) 그대로 유지.
+        self.legend_align_var = tk.StringVar(value="Auto")
         self.legend_thick_var = tk.StringVar(value="1.5")  # legend box 테두리 두께
         self.legend_font_var = tk.StringVar(value="Malgun Gothic")  # Legend 전용 폰트(Comment도 같이 씀)
         self.legend_size_var = tk.StringVar(value="9")  # Legend 전용 크기(Comment도 같이 씀)
@@ -276,6 +280,7 @@ class CathPlotGUI:
         self.legend2_on_var = tk.BooleanVar(value=False)
         self.legend2_box_var = tk.BooleanVar(value=True)
         self.legend2_pos_var = tk.StringVar(value="right bottom")
+        self.legend2_align_var = tk.StringVar(value="Auto")  # Legend1과 동일한 개념(Align 참고)
 
         self.title_font_var = tk.StringVar(value="Malgun Gothic")
         self.title_size_var = tk.StringVar(value="14")
@@ -326,11 +331,14 @@ class CathPlotGUI:
         legend1_row = ttk.Frame(self.plot_frame)
         legend1_row.grid(row=0, column=3, columnspan=3, padx=3, pady=0, sticky="w")
         ttk.Checkbutton(legend1_row, text="Legend1 On", variable=self.legend_on_var).pack(side="left", padx=3)
-        ttk.Checkbutton(legend1_row, text="Legend1 Box", variable=self.legend_box_var).pack(side="left", padx=3)
+        ttk.Checkbutton(legend1_row, text="Box", variable=self.legend_box_var).pack(side="left", padx=3)
         ttk.Label(legend1_row, text="Pos1:").pack(side="left", padx=2)
         legend_pos_combo = ttk.Combobox(legend1_row, textvariable=self.legend_pos_var, values=pos_list, width=10)
         legend_pos_combo.pack(side="left", padx=2)
         _add_legend_pos_hint(legend_pos_combo)
+        ttk.Label(legend1_row, text="Align:").pack(side="left", padx=(4, 1))
+        ttk.Combobox(legend1_row, textvariable=self.legend_align_var, values=["Auto", "Left", "Right"],
+                     width=5, state="readonly").pack(side="left", padx=1)
 
         def _legend1_get(key):
             if key not in self.in_legend1_vars:
@@ -364,11 +372,14 @@ class CathPlotGUI:
         legend2_row = ttk.Frame(self.plot_frame)
         legend2_row.grid(row=1, column=3, columnspan=3, padx=3, pady=0, sticky="w")
         ttk.Checkbutton(legend2_row, text="Legend2 On", variable=self.legend2_on_var).pack(side="left", padx=3)
-        ttk.Checkbutton(legend2_row, text="Legend2 Box", variable=self.legend2_box_var).pack(side="left", padx=3)
+        ttk.Checkbutton(legend2_row, text="Box", variable=self.legend2_box_var).pack(side="left", padx=3)
         ttk.Label(legend2_row, text="Pos2:").pack(side="left", padx=2)
         legend2_pos_combo = ttk.Combobox(legend2_row, textvariable=self.legend2_pos_var, values=pos_list, width=10)
         legend2_pos_combo.pack(side="left", padx=2)
         _add_legend_pos_hint(legend2_pos_combo)
+        ttk.Label(legend2_row, text="Align:").pack(side="left", padx=(4, 1))
+        ttk.Combobox(legend2_row, textvariable=self.legend2_align_var, values=["Auto", "Left", "Right"],
+                     width=5, state="readonly").pack(side="left", padx=1)
         def _legend2_get(key):
             if key not in self.legend_group_vars:
                 self.legend_group_vars[key] = tk.StringVar(value="2")
@@ -928,11 +939,13 @@ class CathPlotGUI:
             "legend_on": self.legend_on_var.get(),
             "legend_box": self.legend_box_var.get(),
             "legend_pos": self.legend_pos_var.get(),
+            "legend_align": self.legend_align_var.get(),
             "legend_thick": self.legend_thick_var.get(),
             "legend_font": self.legend_font_var.get(), "legend_size": self.legend_size_var.get(),
             "legend2_on": self.legend2_on_var.get(),
             "legend2_box": self.legend2_box_var.get(),
             "legend2_pos": self.legend2_pos_var.get(),
+            "legend2_align": self.legend2_align_var.get(),
             "legend2_thick": self.legend_thick_var.get(),
             "major_grid": self.major_grid_var.get(),
             "minor_grid": self.minor_grid_var.get(),
@@ -1092,12 +1105,14 @@ class CathPlotGUI:
             self.legend_on_var.set(data.get("legend_on", self.legend_on_var.get()))
             self.legend_box_var.set(data.get("legend_box", self.legend_box_var.get()))
             self.legend_pos_var.set(data.get("legend_pos", self.legend_pos_var.get()))
+            self.legend_align_var.set(data.get("legend_align", self.legend_align_var.get()))
             self.legend_thick_var.set(data.get("legend_thick", self.legend_thick_var.get()))
             self.legend_font_var.set(data.get("legend_font", self.legend_font_var.get()))
             self.legend_size_var.set(data.get("legend_size", self.legend_size_var.get()))
             self.legend2_on_var.set(data.get("legend2_on", self.legend2_on_var.get()))
             self.legend2_box_var.set(data.get("legend2_box", self.legend2_box_var.get()))
             self.legend2_pos_var.set(data.get("legend2_pos", self.legend2_pos_var.get()))
+            self.legend2_align_var.set(data.get("legend2_align", self.legend2_align_var.get()))
             self.major_grid_var.set(data.get("major_grid", self.major_grid_var.get()))
             self.minor_grid_var.set(data.get("minor_grid", self.minor_grid_var.get()))
             self.mxtics_var.set(data.get("mxtics", self.mxtics_var.get()))
@@ -1302,10 +1317,12 @@ class CathPlotGUI:
             major_grid=data.get("major_grid", True), minor_grid=data.get("minor_grid", False),
             legend_on=data.get("legend_on", True), legend_box=data.get("legend_box", True),
             legend_pos=data.get("legend_pos", "right top"),
+            legend_align=data.get("legend_align", "Auto"),
             legend_thick=data.get("legend_thick", "1.5"),
             legend_font=data.get("legend_font", "Malgun Gothic"), legend_size=data.get("legend_size", "9"),
             legend2_on=data.get("legend2_on", False), legend2_box=data.get("legend2_box", True),
             legend2_pos=data.get("legend2_pos", "right bottom"), legend2_thick=data.get("legend2_thick", "1.5"),
+            legend2_align=data.get("legend2_align", "Auto"),
             title_font=data.get("title_font", "Malgun Gothic"), title_size=data.get("title_size", "14"),
             xlabel_font=data.get("xlabel_font", "Malgun Gothic"), xlabel_size=data.get("xlabel_size", "11"),
             ylabel_font=data.get("ylabel_font", "Malgun Gothic"), ylabel_size=data.get("ylabel_size", "11"),
@@ -1776,10 +1793,12 @@ class CathPlotGUI:
             "major_grid": self.major_grid_var.get(), "minor_grid": self.minor_grid_var.get(),
             "legend_on": self.legend_on_var.get(), "legend_box": self.legend_box_var.get(),
             "legend_pos": self.legend_pos_var.get(),
+            "legend_align": self.legend_align_var.get(),
             "legend_thick": self.legend_thick_var.get(),
             "legend_font": self.legend_font_var.get(), "legend_size": self.legend_size_var.get(),
             "legend2_on": self.legend2_on_var.get(), "legend2_box": self.legend2_box_var.get(),
             "legend2_pos": self.legend2_pos_var.get(), "legend2_thick": self.legend_thick_var.get(),
+            "legend2_align": self.legend2_align_var.get(),
             "title_font": self.title_font_var.get(), "title_size": self.title_size_var.get(),
             "xlabel_font": self.xlabel_font_var.get(), "xlabel_size": self.xlabel_size_var.get(),
             "ylabel_font": self.ylabel_font_var.get(), "ylabel_size": self.ylabel_size_var.get(),
@@ -1872,10 +1891,12 @@ class CathPlotGUI:
                 major_grid=settings["major_grid"], minor_grid=settings["minor_grid"],
                 legend_on=settings["legend_on"], legend_box=settings["legend_box"],
                 legend_pos=settings["legend_pos"],
+                legend_align=settings.get("legend_align", "Auto"),
                 legend_thick=settings.get("legend_thick", "1.5"),
                 legend_font=settings.get("legend_font", "Malgun Gothic"), legend_size=settings.get("legend_size", "9"),
                 legend2_on=settings.get("legend2_on", False), legend2_box=settings.get("legend2_box", True),
                 legend2_pos=settings.get("legend2_pos", "right bottom"),
+                legend2_align=settings.get("legend2_align", "Auto"),
                 legend2_thick=settings.get("legend2_thick", "1.5"),
                 title_font=settings["title_font"], title_size=settings["title_size"],
                 xlabel_font=settings["xlabel_font"], xlabel_size=settings["xlabel_size"],
@@ -3164,11 +3185,13 @@ class CathPlotGUI:
                 legend_on=self.legend_on_var.get(),
                 legend_box=self.legend_box_var.get(),
                 legend_pos=self.legend_pos_var.get(),
+                legend_align=self.legend_align_var.get(),
                 legend_thick=self.legend_thick_var.get(),
                 legend_font=self.legend_font_var.get(), legend_size=self.legend_size_var.get(),
                 legend2_on=self.legend2_on_var.get(),
                 legend2_box=self.legend2_box_var.get(),
                 legend2_pos=self.legend2_pos_var.get(),
+                legend2_align=self.legend2_align_var.get(),
                 legend2_thick=self.legend_thick_var.get(),
                 title_font=self.title_font_var.get(),
                 title_size=self.title_size_var.get(),

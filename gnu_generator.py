@@ -225,6 +225,10 @@ class PlotDefinition:
     legend_on: bool = True
     legend_box: bool = True
     legend_pos: str = "right top"
+    # [추가] "Auto"(기존 방식: pos의 x값이 50% 이상이면 우측 정렬, 아니면 좌측
+    # 정렬)/"Left"/"Right" - 자동 판정과 다르게 명시적으로 정렬을 고르고 싶다는
+    # 요청으로 추가.
+    legend_align: str = "Auto"
     legend_thick: str = "1.5"  # legend box 테두리 두께
     legend_font: str = "Malgun Gothic"  # Legend 전용 폰트 (Comment도 같이 씀)
     legend_size: str = "9"  # Legend 전용 크기 (Comment도 같이 씀)
@@ -232,6 +236,7 @@ class PlotDefinition:
     legend2_on: bool = False
     legend2_box: bool = True
     legend2_pos: str = "right bottom"
+    legend2_align: str = "Auto"  # Legend1과 동일(legend_align 참고)
     legend2_thick: str = "1.5"
 
     title_font: str = "Malgun Gothic"
@@ -580,7 +585,8 @@ class GnuplotGenerator:
 
     def _render_legend_box(self, lines, curves, pos_raw, box_on, thick_val, id_offset,
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
-                            axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None):
+                            axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None,
+                            align="Auto"):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -676,7 +682,15 @@ class GnuplotGenerator:
         ax, ay, corner = _resolve_anchor(pos_raw)
         # 좌표(%,graph) 입력일 때 corner가 "left bottom"으로 고정되어 있어도,
         # 실제 ax(0~1) 값으로 좌/우를 직접 판단해서 미러링 방향을 정한다
-        is_right_side = ax >= 0.5
+        # [수정] "이 자동 판정과 다르게 정렬하고 싶다"는 요청으로, align이
+        # "Left"/"Right"로 명시되면 그 값을 그대로 따르고, "Auto"(기본)일 때만
+        # 기존 x값 기준 자동 판정을 쓴다.
+        if align == "Left":
+            is_right_side = False
+        elif align == "Right":
+            is_right_side = True
+        else:
+            is_right_side = ax >= 0.5
 
         # [수정 - 버그] SAMPLE_W(가로 길이)를 ROW_H(세로=axis_h_in 기준 비율)로
         # 그대로 계산해서, 축이 정사각형이 아니면(Portrait처럼 axis_h_in이
@@ -1297,7 +1311,8 @@ class GnuplotGenerator:
                 legend_thick_val, 8000, f_scale * legend_scale_boost, line_scale, panel_scale,
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
                 axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
-                box_w_extra_chars_override=legend_width_extra_chars
+                box_w_extra_chars_override=legend_width_extra_chars,
+                align=getattr(plotdef, "legend_align", "Auto")
             )
 
         group2_curves = [c for c in plotdef.curves if getattr(c, "legend_group", 1) == 2]
@@ -1308,7 +1323,8 @@ class GnuplotGenerator:
                 legend2_thick_val, 9000, f_scale * legend_scale_boost, line_scale, panel_scale,
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
                 axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
-                box_w_extra_chars_override=legend_width_extra_chars
+                box_w_extra_chars_override=legend_width_extra_chars,
+                align=getattr(plotdef, "legend2_align", "Auto")
             )
 
 
