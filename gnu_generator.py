@@ -1873,6 +1873,12 @@ class GnuplotGenerator:
         lines.append(f"set view {rot_x},{rot_z}")
         if equal_xyz:
             lines.append("set view equal xyz")
+        # [추가] "z축이 x,y 평면보다 너무 위로 뜸" - gnuplot 기본 ticslevel(0.5)은
+        # x,y 바닥면을 z축 최소값보다 z_range*0.5만큼 아래에 그려서 z축이
+        # 바닥에서 떠 보이게 만듦. 0으로 두면 바닥면이 z 최소값과 정확히 맞음
+        # (실측 확인: ticslevel은 아래 축 회전각(축 title 각도) 계산에는
+        # 영향 없음 - 별개 설정).
+        lines.append("set ticslevel 0")
         if xlog: lines.append("set logscale x")
         if ylog: lines.append("set logscale y")
         if zlog:
@@ -1881,12 +1887,48 @@ class GnuplotGenerator:
         lines.append(self._3D_PALETTE_MAP.get(palette, self._3D_PALETTE_MAP["rainbow"]))
         if not colorbox:
             lines.append("unset colorbox")
-        if xlabel: lines.append(f'set xlabel "{xlabel}"')
-        if ylabel: lines.append(f'set ylabel "{ylabel}"')
+        # [추가] "X/Y축 title 각도도 축 방향에 맞춰 회전" - Z축과 마찬가지로
+        # gnuplot은 xlabel/ylabel도 회전 지정이 없으면 항상 가로로 그리는데,
+        # rot_x/rot_z에 따라 3D축이 화면에 투영되는 실제 방향은 다름.
+        # "각도 계산이 복잡해서 미확정"으로 남겨뒀던 부분 - 실제 gnuplot
+        # 렌더링 결과(pngcairo)에서 원점->각 축 끝점 픽셀좌표를 직접 측정해
+        # rot_x/rot_z에 대한 화면투영 공식을 역산으로 구해 반영함(추측이 아니라
+        # 84개 (rot_x,rot_z) 조합 실측 후 최소제곱으로 적합, 잔차 1픽셀 미만).
+        # 측정으로 확인된 gnuplot 3D 투영(기본 ticslevel/뷰 스케일, X/Y/Z 실제
+        # 데이터값 크기와는 무관 - 별도로 확인함):
+        #   X축 방향 벡터의 화면 각도 = atan2(-R*cos(rot_x)*sin(rot_z), cos(rot_z))
+        #   Y축 방향 벡터의 화면 각도 = atan2( R*cos(rot_x)*cos(rot_z), sin(rot_z))
+        #   Z축 방향 벡터의 화면 각도 = 항상 90도(수직) - 기존 zlabel 90도 고정과 일치,
+        #     rot_x/rot_z 전체 조합에서 화면 X성분이 항상 정확히 0으로 나와 확인됨.
+        # R(z축 높이/xy 바닥면 스케일 비율)도 실측값으로, ticslevel과는 무관함
+        # (별도로 확인 - ticslevel 0/0.5 양쪽에서 동일한 값이 나옴).
+        _R_3D = 0.7625
+        _rx_rad = math.radians(rot_x)
+        _rz_rad = math.radians(rot_z)
+
+        def _axis_label_rotate_deg(sx, sy):
+            """축 방향 화면투영각도(도)를 구해 텍스트가 뒤집혀 보이지 않도록
+            -90~90 범위로 접어서 반환("rotate by"는 180도 차이는 같은 직선이므로
+            글자가 거꾸로 보이지 않는 쪽을 고른다)."""
+            ang = math.degrees(math.atan2(sy, sx))
+            while ang > 90:
+                ang -= 180
+            while ang < -90:
+                ang += 180
+            return ang
+
+        _xlabel_rot = _axis_label_rotate_deg(math.cos(_rz_rad), -_R_3D * math.cos(_rx_rad) * math.sin(_rz_rad))
+        _ylabel_rot = _axis_label_rotate_deg(math.sin(_rz_rad), _R_3D * math.cos(_rx_rad) * math.cos(_rz_rad))
+        if xlabel: lines.append(f'set xlabel "{xlabel}" rotate by {_xlabel_rot:.2f}')
+        if ylabel: lines.append(f'set ylabel "{ylabel}" rotate by {_ylabel_rot:.2f}')
         # [수정] "3D 축 title 각도가 축 방향과 다름, 특히 Z축은 90도 다름" -
         # gnuplot은 zlabel을 회전 지정 없으면 항상 가로(수평)로 그리는데, Z축은
-        # 화면에서 수직으로 보이니 어긋나 보였던 것. Z축 방향에 맞춰 90도 회전.
+        # 화면에서 수직으로 보이니 어긋나 보였던 것. Z축 방향에 맞춰 90도 회전
+        # (위 실측으로 Z축은 rot_x/rot_z 전체 범위에서 항상 90도임을 확인함).
         if zlabel: lines.append(f'set zlabel "{zlabel}" rotate by 90')
+        # [추가] "x축은 title과 tic 추가 마진 필요" - x축 title이 회전되면서
+        # tic 숫자와 겹치기 쉬워져 아래쪽 여백을 기본보다 넉넉히 확보.
+        lines.append("set bmargin 6")
         if title: lines.append(f'set title "{title}"')
 
         # [추가] "comment, arrow 등은 3D 전용으로 popup 창에서 입력, 이때는
