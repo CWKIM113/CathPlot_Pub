@@ -1996,8 +1996,14 @@ class GnuplotGenerator:
         # 여러 세트를 색만으로 구분할 수 없음. 세트 구분은 사용자가 고르는 Marker
         # 모양(pt)으로 하고, 이름은 title로 넣어 gnuplot 표준 key(legend)가
         # "모양+이름"을 보여주게 한다. 세트가 2개 이상일 때만 key를 켠다(1개면 불필요).
-        has_title = any((c.get("title") or "").strip() for c in curves_3d)
-        if has_title and len(curves_3d) > 1:
+        # [수정 - 버그] curves_3d만 보고 key(legend) 켤지 판단해서, surface만
+        # 여러 개 있을 때는(예: 서로 다른 파일의 splot 4개) title이 있어도
+        # key가 전혀 안 켜져서 어떤 선이 어느 surface인지 구분이 안 됐음 -
+        # surfaces도 판단에 포함한다.
+        _all_titles = [(c.get("title") or "").strip() for c in curves_3d] + \
+                      [(s.get("label") or "").strip() for s in (surfaces or [])]
+        has_title = any(_all_titles)
+        if has_title and len(curves_3d) + len(surfaces or []) > 1:
             lines.append("set key outside right top box")
 
         splot_parts = []
@@ -2040,7 +2046,13 @@ class GnuplotGenerator:
 
             splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {gp_style}{_pt_clause} palette')
 
-        for s in (surfaces or []):
+        # [추가] "splot에 x-set 4개 넣으니 구분 안됨" - 여러 surface를 겹쳐 그리면
+        # 전부 palette(Z값)로만 색칠돼서, 서로 다른 surface(파일)라도 Z값이
+        # 비슷한 구간은 색이 같아 보여 구분이 안 됨. 색은 그대로 Z값 팔레트로
+        # 유지하되(어느 쪽이 요청/필요할 수도 있어 색 자체는 안 건드림), surface별로
+        # dashtype(선 패턴)을 다르게 줘서 최소한 선 자체는 겹쳐도 구분되게 한다.
+        _SURFACE_DASH_CYCLE = ["", "6, 3", "1, 2", "8, 3, 1, 3", "3, 2"]  # 첫 surface는 실선
+        for _s_idx, s in enumerate(surfaces or []):
             abs_path = s["dat_file"] if os.path.isabs(s["dat_file"]) else os.path.abspath(s["dat_file"])
             try:
                 path = os.path.relpath(abs_path, start=plot_dir)
@@ -2049,9 +2061,11 @@ class GnuplotGenerator:
             path = path.replace("\\", "/")
             _s_title = (s.get("label") or "").strip()
             _s_title_clause = f'title "{_s_title.replace("_", chr(92)+chr(92)+"_")}"' if (_s_title and (len(curves_3d) + len(surfaces or [])) > 1) else "notitle"
+            _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
+            _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
             # surface 원본 파일은 이미 gnuplot이 그대로 읽을 수 있는 형식('#'/빈 줄
             # 자동 무시)이라 별도 가공 없이 컬럼 1:2:3(time:output_no:value)을 그대로 쓴다.
-            splot_parts.append(f'"{path}" using 1:2:3 {_s_title_clause} with lines palette')
+            splot_parts.append(f'"{path}" using 1:2:3 {_s_title_clause} with lines palette{_s_dash_clause}')
 
         lines.append("splot " + ", \\\n      ".join(splot_parts))
 
