@@ -1262,7 +1262,22 @@ class GnuplotGenerator:
                 gx = _coord_clause(ell.get("x", ""), _mode, 0.5)
                 gy = _coord_clause(ell.get("y", ""), _mode, 0.5)
                 rx_val = (ell.get("rx", "") or "").strip()
-                ry_val = (ell.get("ry", "") or "").strip() or rx_val
+                ry_raw = (ell.get("ry", "") or "").strip()
+                # [수정 - 버그] "Ry를 비워서 원을 그렸는데 실제로는 타원으로 보임" -
+                # size graph X,Y는 "축 가로/세로 크기에 대한 비율"이라, 축이
+                # 정사각형이 아니면(대부분 그럼, 예: Time 대 값) Rx=Ry(비율)로
+                # 넣어도 실제 물리적 가로/세로 길이가 달라져 타원처럼 보였음.
+                # Ry를 비워서 "원"을 의도한 경우(%, 즉 pct 모드)만, 축 가로세로
+                # 물리 비율(axis_w_in/axis_h_in)을 반영해 실제로 원이 되게
+                # Ry 비율을 보정한다. Ry를 직접 입력했거나 좌표값(data) 모드면
+                # 사용자가 명시한 값을 그대로 존중해 보정하지 않는다.
+                if not ry_raw and _mode != "data":
+                    try:
+                        ry_val = str(float(rx_val) * (axis_w_in / max(axis_h_in, 0.01)))
+                    except (TypeError, ValueError):
+                        ry_val = rx_val
+                else:
+                    ry_val = ry_raw or rx_val
                 grx = _coord_clause(rx_val, _mode, 0.05)
                 gry = _coord_clause(ry_val, _mode, 0.05)
                 _color = (ell.get("color") or "").strip() or "black"
