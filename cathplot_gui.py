@@ -91,6 +91,17 @@ MARKER_SIZE_LIST = list(MARKER_SIZE_MAP.keys())
 COLOR_LIST = list(COLOR_MAP.keys())
 STYLE_LIST = list(STYLE_MAP.keys())
 
+# [수정] "pm3d 옵션 이름을 'color palette' 또는 '입체채색'으로" - 내부적으로는
+# gnu_generator.create_3d_script가 "pm3d" 문자열을 그대로 판별하므로 그대로 두고,
+# 화면에 보여주는 표시명만 사용자가 알아보기 쉬운 이름으로 매핑한다.
+STYLE_3D_DISPLAY_MAP = {
+    "lines": "Lines",
+    "points": "Points",
+    "linespoints": "Linespoints",
+    "pm3d": "Color Palette(입체채색)",
+}
+STYLE_3D_INTERNAL_MAP = {v: k for k, v in STYLE_3D_DISPLAY_MAP.items()}
+
 class CathPlotGUI:
 
     def __init__(self, root):
@@ -1025,6 +1036,11 @@ class CathPlotGUI:
             #     완전히 같은 plot을 재현할 수 있도록, dat 파일명 자체도 포함) ---
             "file_assignments": self._capture_file_assignments(),
 
+            # [추가] "3D도 Batch에 연동" - surface(splot) 파일은 Y1/Y2 선택이 없어
+            # file_assignments에는 안 잡히므로(변수 선택 UI 자체가 없음), 3D Batch가
+            # 이 Template만으로 surface도 재현할 수 있게 경로를 별도로 저장한다.
+            "surface_files": self._capture_surface_files(),
+
             # --- Advanced: Raw gnuplot 입력창 내용 ---
             "extra_gnuplot": self.raw_gnuplot_text.get("1.0", "end-1c"),
         }
@@ -1072,6 +1088,91 @@ class CathPlotGUI:
                 "x_shift": self.file_xshift_vars[datfile].get() if datfile in self.file_xshift_vars else "0",
             })
         return assignments
+
+    def _capture_surface_files(self):
+        """[추가] "3D도 Batch에 연동" - 현재 로드된 surface(splot) 파일들의
+        경로(cwd 기준 상대경로)만 저장한다. surface는 Y1/Y2 선택이 없어
+        _capture_file_assignments에는 안 잡히므로 따로 캡처."""
+        paths = []
+        for info in self.file_rows:
+            datfile = info.get("filename")
+            meta = info.get("meta")
+            if not datfile or meta is None or not getattr(meta, "is_surface", False):
+                continue
+            try:
+                rel_path = os.path.relpath(datfile, self.cwd)
+            except ValueError:
+                rel_path = datfile
+            paths.append(rel_path)
+        return paths
+
+    def _build_3d_curves_from_template_data(self, data):
+        """[추가] "3D도 Batch에 연동" - 2D Template JSON의 file_assignments만으로
+        (화면 상태를 전혀 안 건드리고) 3D curve 목록을 만든다. _collect_3d_curves와
+        동일한 적격 조건(파일당 Y1 1개+Y2 1개)을 그대로 적용 - Batch Set과 같은
+        이유로 백그라운드 스레드에서 호출해도 안전함."""
+        eligible = []
+        skipped = []
+        for fa in data.get("file_assignments", []):
+            rel_path = fa["filename"]
+            abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(self.cwd, rel_path)
+            bn = os.path.basename(abs_path)
+
+            def _nos(items):
+                return [(v["output_no"] if isinstance(v, dict) else v) for v in (items or [])]
+            y1s = _nos(fa.get("y1_output_nos"))
+            y2s = _nos(fa.get("y2_output_nos"))
+
+            if len(y1s) == 1 and len(y2s) == 1:
+                if not os.path.exists(abs_path):
+                    skipped.append(f"{bn}: 파일 없음")
+                    continue
+                x_output_no = fa.get("x_output_no") or 0
+                try:
+                    target_dat_file = self.resort_dat_file(abs_path, x_output_no)
+                except Exception:
+                    target_dat_file = abs_path
+                x_shift = float(fa.get("x_shift") or 0.0)
+                eligible.append({
+                    "dat_file": target_dat_file,
+                    "x_col": x_output_no + 1,
+                    "y_col": y1s[0] + 1,
+                    "z_col": y2s[0] + 1,
+                    "x_shift": x_shift,
+                    "label": bn,
+                })
+            elif not y1s and not y2s:
+                continue
+            else:
+                reason = []
+                if len(y1s) != 1: reason.append(f"Y1 {len(y1s)}개")
+                if len(y2s) != 1: reason.append(f"Y2 {len(y2s)}개")
+                skipped.append(f"{bn}: {', '.join(reason)}")
+        return eligible, skipped
+
+    def _build_3d_surfaces_from_template_data(self, data):
+        """[추가] "3D도 Batch에 연동" - Template JSON의 surface_files만으로
+        (화면 상태를 전혀 안 건드리고) 3D surface 목록을 만든다.
+        _collect_3d_surfaces와 동일한 형식으로 반환."""
+        surfaces = []
+        for rel_path in data.get("surface_files", []):
+            abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(self.cwd, rel_path)
+            if not os.path.exists(abs_path):
+                continue
+            try:
+                meta = self.parser.parse(abs_path)
+            except Exception:
+                continue
+            if not getattr(meta, "is_surface", False):
+                continue
+            _disp = os.path.basename(abs_path)
+            surfaces.append({
+                "dat_file": abs_path,
+                "label": _disp,
+                "n_outputs": meta.n_outputs,
+                "z_label": meta.surface_base_name or _disp,
+            })
+        return surfaces
 
     def save_template(self):
         template_dir = os.path.join(self.cwd, "template")
@@ -1459,28 +1560,141 @@ class CathPlotGUI:
             width=6, state="readonly"
         ).pack(side="left")
 
+        # [추가] "3D도 Batch에 연동" - 2D Template 각각에 3D curve/surface 적격
+        # 조건(Y1 1개+Y2 1개, 또는 surface)이 있으면, 여기서 고른 3D Template(회전각/
+        # Style/Marker 등)을 그대로 적용해서 3D 이미지도 같이 만든다. 3D Template은
+        # 파일/변수 지정을 안 담고 있어서(3D 팝업에서 그때그때 로드된 걸 쓰는 방식) 여기
+        # 목록의 모든 항목에 공통으로 적용되는 "하나"만 고르게 한다(항목별로 다른 3D
+        # Template을 쓰려면 나중에 필요시 확장).
+        td3_row = ttk.Frame(dlg)
+        td3_row.pack(fill="x", padx=10, pady=(0, 5))
+        td3_path_var = tk.StringVar(value="")
+        ttk.Label(td3_row, text="3D Template(선택하면 3D도 같이 렌더링):").pack(side="left")
+        td3_label = ttk.Label(td3_row, text="(3D Template 없음)", foreground="#555555")
+        td3_label.pack(side="left", padx=5)
+
+        def pick_3d_template():
+            p = filedialog.askopenfilename(
+                initialdir=template_dir,
+                filetypes=[("CathPlot 3D Template", "*.json"), ("All files", "*.*")],
+                title="3D Template 선택 (Batch Set 전체 항목에 공통 적용)"
+            )
+            if p:
+                td3_path_var.set(p)
+                td3_label.config(text=os.path.basename(p), foreground="black")
+
+        ttk.Button(td3_row, text="선택...", command=pick_3d_template).pack(side="left", padx=5)
+        ttk.Button(td3_row, text="해제", command=lambda: (td3_path_var.set(""), td3_label.config(text="(3D Template 없음)", foreground="#555555"))).pack(side="left")
+
         def run_batch_set():
             if not queue_list:
                 messagebox.showwarning("Batch Set", "먼저 Template 파일을 추가하세요.")
                 return
             dlg.destroy()
-            self._run_batch_set_async(list(queue_list), fmt_var.get())
+            self._run_batch_set_async(list(queue_list), fmt_var.get(), td3_path_var.get() or None)
 
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
         ttk.Button(run_row, text="취소", command=dlg.destroy).pack(side="right", padx=5)
         ttk.Button(run_row, text="Run Batch Set", command=run_batch_set).pack(side="right", padx=5)
 
-    def _run_batch_set(self, template_paths, fmt, progress_callback=None):
+    def _render_3d_from_template_data(self, data, td3_data, outfile, fmt):
+        """[추가] "3D도 Batch에 연동" - 2D Template의 data(file_assignments/
+        surface_files)로 3D curve/surface를 derive하고, 3D Template(td3_data)의
+        설정(회전각/Style/Palette/Marker/Comment 등)을 그대로 적용해서 3D 이미지를
+        만든다. Tkinter 위젯 접근이 없어 백그라운드 스레드에서 호출해도 안전함.
+        curve/surface가 하나도 없으면(적격 조건 안 맞음) 조용히 스킵(None 반환)."""
+        eligible, _skipped = self._build_3d_curves_from_template_data(data)
+        surfaces = self._build_3d_surfaces_from_template_data(data)
+        if not eligible and not surfaces:
+            return None
+
+        marker_size_val = MARKER_SIZE_MAP.get(td3_data.get("marker_size", "M"), 1.0)
+        shapes = td3_data.get("marker_shapes", {})
+
+        def _with_marker(item):
+            item = dict(item)
+            hollow_pt, _ = MARKER_SHAPE_MAP.get(shapes.get(item["label"], "Circle"), (None, None))
+            item["marker_shape"] = hollow_pt
+            item["marker_size"] = marker_size_val
+            item["title"] = item["label"]
+            return item
+
+        curves_final = [_with_marker(c) for c in eligible]
+        surfaces_final = [_with_marker(s) for s in surfaces]
+
+        def _parse_opt_float(s):
+            s = (s or "").strip()
+            if not s:
+                return None
+            try:
+                return float(s)
+            except ValueError:
+                return None
+
+        annotations_3d = [
+            {"text": a["txt"], "x": a["x"], "y": a["y"], "z": a["z"], "color": COLOR_MAP.get(a.get("color", "Auto"), "")}
+            for a in td3_data.get("annotations_3d", []) if a.get("txt", "").strip()
+        ]
+        arrows_3d = [
+            {"x1": a["x1"], "y1": a["y1"], "z1": a["z1"], "x2": a["x2"], "y2": a["y2"], "z2": a["z2"],
+             "color": COLOR_MAP.get(a.get("color", "Auto"), ""),
+             "head_size": self.ARROW_SIZE_MAP.get(a.get("size", "M"), self.ARROW_SIZE_MAP["M"])}
+            for a in td3_data.get("arrows_3d", [])
+        ]
+
+        zlabel = td3_data.get("zlabel3d", "")
+        if not zlabel and surfaces_final:
+            zlabel = surfaces_final[0].get("z_label", "")
+
+        try:
+            rot_x = float(td3_data.get("rot_x") or 60)
+        except (TypeError, ValueError):
+            rot_x = 60
+        try:
+            rot_z = float(td3_data.get("rot_z") or 30)
+        except (TypeError, ValueError):
+            rot_z = 30
+
+        generator = GnuplotGenerator(self.plot_dir)
+        generator.create_3d_script(
+            curves_final, outfile, fmt=fmt,
+            xlabel=td3_data.get("xlabel3d") or "Time", ylabel=td3_data.get("ylabel3d") or "Data_No", zlabel=zlabel,
+            title=td3_data.get("plot_title") or "CathPlot",
+            xlog=data.get("xlog", False), ylog=data.get("y1log", False), zlog=data.get("y2log", False),
+            rot_x=rot_x, rot_z=rot_z,
+            style=STYLE_3D_INTERNAL_MAP.get(td3_data.get("style", "Lines"), "lines"),
+            palette=td3_data.get("palette", "rainbow"), colorbox=td3_data.get("colorbox", True),
+            annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=td3_data.get("equal_xyz", False),
+            surfaces=surfaces_final,
+            time_min=_parse_opt_float(td3_data.get("time_min", "")), time_max=_parse_opt_float(td3_data.get("time_max", "")),
+        )
+        return outfile
+
+    def _run_batch_set(self, template_paths, fmt, progress_callback=None, td3_path=None):
         """template_paths(각각 완전한 plot 사양이 담긴 *.json)를 순서대로 읽어서
         이미지로 저장한다. self.xxx_var.get() 같은 Tkinter 접근을 안 하므로
-        백그라운드 스레드에서 호출해도 안전함."""
+        백그라운드 스레드에서 호출해도 안전함.
+        [추가] td3_path가 있으면(3D Template *.json), 각 항목의 file_assignments/
+        surface_files로 derive한 3D curve/surface에 그 3D Template 설정을 적용해서
+        3D 이미지도 같이 만든다(적격 조건 안 맞는 항목은 조용히 스킵)."""
         import json
 
         saved_count = 0
+        saved_3d_count = 0
         errors = []
         warnings = []
         total = len(template_paths)
+
+        td3_data = None
+        if td3_path:
+            try:
+                with open(td3_path, "r", encoding="utf-8") as f:
+                    td3_data = json.load(f)
+            except Exception as e:
+                errors.append(f"3D Template 읽기 실패 ({os.path.basename(td3_path)}): {e} - 3D 렌더링 없이 계속 진행")
+                td3_path = None
+                td3_data = None
 
         for done_idx, tpath in enumerate(template_paths, start=1):
             tname = os.path.basename(tpath)
@@ -1516,10 +1730,23 @@ class CathPlotGUI:
             except Exception as e:
                 errors.append(f"{tname}: 저장 실패 ({e})")
 
+            if td3_data is not None:
+                outfile_3d = os.path.join(self.plot_dir, f"{safe_name}_batchset_3D.{fmt}")
+                try:
+                    result = self._render_3d_from_template_data(data, td3_data, outfile_3d, fmt)
+                    if result:
+                        saved_3d_count += 1
+                    else:
+                        warnings.append(f"{tname}: 3D 적격 조건(Y1 1개+Y2 1개, 또는 surface)에 맞는 파일이 없어 3D는 스킵")
+                except Exception as e:
+                    errors.append(f"{tname}: 3D 저장 실패 ({e})")
+
         if progress_callback:
             progress_callback(total, total, "완료")
 
         msg = f"{saved_count}개 Template 처리 완료. (plot_dir: {self.plot_dir})"
+        if td3_path:
+            msg += f"\n3D 이미지 {saved_3d_count}개 추가 생성됨."
         if errors:
             msg += "\n\n오류:\n" + "\n".join(errors[:10])
             if len(errors) > 10:
@@ -1529,7 +1756,7 @@ class CathPlotGUI:
             msg += f"\n\n경고 {len(warnings)}건이 로그에 기록되었습니다: {log_path}"
         self.root.after(0, lambda m=msg: messagebox.showinfo("Batch Set", m))
 
-    def _run_batch_set_async(self, template_paths, fmt):
+    def _run_batch_set_async(self, template_paths, fmt, td3_path=None):
         """Batch Set을 백그라운드 스레드에서 실행하며 진행창을 보여준다."""
         progress_win = tk.Toplevel(self.root)
         progress_win.title("Batch Set 처리 중")
@@ -1549,7 +1776,7 @@ class CathPlotGUI:
             self.root.after(0, _update)
 
         def worker():
-            self._run_batch_set(template_paths, fmt, progress_callback=progress_callback)
+            self._run_batch_set(template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path)
             self.root.after(0, lambda: progress_win.destroy() if progress_win.winfo_exists() else None)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -2229,9 +2456,18 @@ class CathPlotGUI:
         self.show_variables()
 
     def update_title_from_first_file(self):
+        # [수정] "s-plot dat를 먼저 불러 읽으면 2-D는 2-D관련 첫 dat file로부터
+        # title을 정해야(일반 3-D 포함)" - surface(splot) 파일이 로드 순서상
+        # 가장 먼저면 무조건 그 파일명을 title/filename_var로 썼는데, surface는
+        # 2D 곡선과 무관한 완전히 다른 데이터라 2D(그리고 curve 기반 "일반 3D"의
+        # Plot Title 기본값도 이 filename_var를 그대로 물려받음)에는 부적절함 -
+        # surface가 아닌 첫 파일을 우선으로 찾고, 전부 surface일 때만(2D 관련
+        # 파일이 하나도 없을 때) 첫 파일(=첫 surface) 그대로 사용한다.
         valid_files = [info for info in self.file_rows if info["filename"] and info["meta"]]
-        if valid_files:
-            first_filename = valid_files[0]["filename"]
+        non_surface_files = [info for info in valid_files if not getattr(info["meta"], "is_surface", False)]
+        target_files = non_surface_files or valid_files
+        if target_files:
+            first_filename = target_files[0]["filename"]
             base_name = os.path.splitext(os.path.basename(first_filename))[0]
             self.title_var.set(base_name)
             self.filename_var.set(base_name)
@@ -2299,7 +2535,11 @@ class CathPlotGUI:
 
         ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
         ttk.Label(row, text="Txt:").pack(side="left")
-        ttk.Entry(row, textvariable=data['txt'], width=20).pack(side="left", padx=2)
+        txt_entry = ttk.Entry(row, textvariable=data['txt'], width=20)
+        txt_entry.pack(side="left", padx=2)
+        # [추가] "Comment창에도 Ω창에서 입력 가능하게" - Title류 입력칸과 동일하게
+        # 포커스될 때 active_entry로 기록해서 Ω 심볼 창이 여기에 삽입할 수 있게 함.
+        txt_entry.bind("<FocusIn>", lambda e: self.set_active_entry(txt_entry))
         ttk.Label(row, text="(X,Y):").pack(side="left")
         xy_entry, _ = self._make_xy_combo_entry(row, data['x'], data['y'], init.get('x', ''), init.get('y', ''))
         xy_entry.pack(side="left", padx=2)
@@ -2489,6 +2729,35 @@ class CathPlotGUI:
         self.sync_axis_labels()
 
 
+    def _dedup_display_name(self, target_filename):
+        """[정리] 같은 basename을 가진 dat 파일이 여러 개 로드됐을 때, 로드된
+        등장 순서대로 "파일명-#.ext" 형식으로 구분한 표시용 이름을 반환한다
+        (겹치지 않는 보통 경우는 그대로 basename만 표시). Dat list 섹션 제목과
+        3D legend가 항상 같은 번호를 쓰도록 공용 함수로 뽑음.
+        [수정] "filename.dat-# 대신 filename-#.dat로" - 확장자 뒤가 아니라
+        이름과 확장자 사이에 번호를 끼워 넣는 형태로 통일."""
+        target_bn = os.path.basename(target_filename)
+        _basename_counts = {}
+        for info in self.file_rows:
+            if info.get("meta") is None:
+                continue
+            bn = os.path.basename(info["filename"])
+            _basename_counts[bn] = _basename_counts.get(bn, 0) + 1
+        if _basename_counts.get(target_bn, 0) <= 1:
+            return target_bn
+        seen = 0
+        for info in self.file_rows:
+            if info.get("meta") is None:
+                continue
+            bn = os.path.basename(info["filename"])
+            if bn != target_bn:
+                continue
+            seen += 1
+            if os.path.abspath(info["filename"]) == os.path.abspath(target_filename):
+                name_root, ext = os.path.splitext(target_bn)
+                return f"{name_root}-{seen}{ext}"
+        return target_bn
+
     def show_variables(self):
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
@@ -2498,19 +2767,6 @@ class CathPlotGUI:
 
         valid_file_count = 0
 
-        # [수정 - 버그] 폴더는 다른데 파일명만 같은 dat 파일 두 개를 같이 로드하면,
-        # 아래 섹션 제목이 둘 다 그냥 "out111.dat"처럼 나와서 어느 섹션이 어느
-        # 파일인지 구분이 안 되는 문제가 있었음("Dat list의 파일명도 달리해야
-        # 함" 피드백) - 같은 basename이 여러 번 나오면 등장 순서대로 "-1","-2"를
-        # 붙여서 구분한다(겹치지 않는 보통 경우는 그대로 basename만 표시).
-        _basename_counts = {}
-        for info in self.file_rows:
-            if info["meta"] is None:
-                continue
-            bn = os.path.basename(info["filename"])
-            _basename_counts[bn] = _basename_counts.get(bn, 0) + 1
-        _basename_seen = {}
-
         for idx, info in enumerate(self.file_rows):
             if info["meta"] is None:
                 continue
@@ -2518,12 +2774,7 @@ class CathPlotGUI:
             meta = info["meta"]
 
             file_x_var = info["x_var"]  # <-- 해당 파일 전용 X축 변수
-            _bn = os.path.basename(datfile)
-            if _basename_counts.get(_bn, 0) > 1:
-                _basename_seen[_bn] = _basename_seen.get(_bn, 0) + 1
-                _display_name = f"{_bn} -{_basename_seen[_bn]}"
-            else:
-                _display_name = _bn
+            _display_name = self._dedup_display_name(datfile)
             frame = ttk.LabelFrame(container, text=_display_name)
 
             frame.grid(row=valid_file_count // 3, column=valid_file_count % 3, sticky="nw", padx=2, pady=2)
@@ -2890,7 +3141,9 @@ class CathPlotGUI:
         for d_file in sorted(all_files):
             y1s = y1_by_file.get(d_file, [])
             y2s = y2_by_file.get(d_file, [])
-            bn = os.path.basename(d_file)
+            # [수정] "3D legend에서도 동일 filename들을 filename-#로 구분 표기" -
+            # Dat list 섹션 제목과 항상 같은 번호를 쓰도록 공용 dedup 함수 재사용.
+            bn = self._dedup_display_name(d_file)
             if len(y1s) == 1 and len(y2s) == 1:
                 file_x_output_no = 0
                 for info in self.file_rows:
@@ -2938,11 +3191,13 @@ class CathPlotGUI:
         for info in self.file_rows:
             meta = info.get("meta")
             if meta is not None and getattr(meta, "is_surface", False):
+                # [수정] "3D legend에서도 동일 filename들을 filename-#로 구분 표기"
+                _disp = self._dedup_display_name(info["filename"])
                 surfaces.append({
                     "dat_file": info["filename"],
-                    "label": os.path.basename(info["filename"]),
+                    "label": _disp,
                     "n_outputs": meta.n_outputs,
-                    "z_label": meta.surface_base_name or os.path.basename(info["filename"]),
+                    "z_label": meta.surface_base_name or _disp,
                 })
         return surfaces
 
@@ -2968,41 +3223,77 @@ class CathPlotGUI:
         dialog.title("3D Plot Options")
         dialog.transient(self.root)
 
-        info_row = ttk.Frame(dialog)
-        info_row.pack(fill="x", padx=10, pady=(8, 2))
+        # [추가] "Plot Title 입력칸을 따로 둬서 (splot 입력의 filename을 무조건
+        # 쓰는 대신) 수정 가능하게" / "x,y,z 선택(=Y1/Y2 매핑) 없으면 splot
+        # title을 기본으로" - curve가 있으면 기존처럼 파일명(filename_var),
+        # curve 없이 surface만 있으면 그 surface의 표시명을 기본값으로 쓴다.
         if eligible:
-            ttk.Label(info_row, text=f"3D curve {len(eligible)}개: " + ", ".join(c["label"] for c in eligible),
-                      foreground="darkgreen").pack(side="left")
+            _default_plot_title = self.filename_var.get().strip() or "CathPlot"
+        elif surfaces:
+            _default_plot_title = surfaces[0]["label"]
+        else:
+            _default_plot_title = self.filename_var.get().strip() or "CathPlot"
+        plot_title_var = tk.StringVar(value=_default_plot_title)
 
-        # [추가] Surface(splot) 파일 - 로드된 것 전부 기본 체크(선택 해제 가능).
-        surface_check_vars = []
-        if surfaces:
-            surf_frame = ttk.LabelFrame(dialog, text="Surface(splot) 데이터")
-            surf_frame.pack(fill="x", padx=10, pady=5)
-            for s in surfaces:
-                v = tk.BooleanVar(value=True)
-                ttk.Checkbutton(
-                    surf_frame, variable=v,
-                    text=f"{s['label']} (채널 {s['n_outputs']}개, Z={s['z_label']})"
-                ).pack(anchor="w", padx=4)
-                surface_check_vars.append((v, s))
+        title_row = ttk.Frame(dialog)
+        title_row.pack(fill="x", padx=10, pady=(8, 2))
+        ttk.Label(title_row, text="Plot Title:").pack(side="left")
+        plot_title_entry = ttk.Entry(title_row, textvariable=plot_title_var, width=30)
+        plot_title_entry.pack(side="left", padx=(2, 10))
+        # [수정] "Title 박스 입력이 안되어서 오메가(Ω) 문자창 입력 되게 하라" -
+        # 기존 "Ω" 심볼 창(open_permanent_symbol_window)은 항상 self.active_entry에
+        # 삽입하는데, 2D의 title/xlabel/ylabel/y2label Entry만 <FocusIn>에서
+        # set_active_entry를 해뒀고 이 3D 팝업의 새 입력칸들은 안 돼 있어서 Ω 창을
+        # 열어도 여기 포커스로는 아무 데도 안 들어갔던 것 - 2D와 동일하게 바인딩.
+        plot_title_entry.bind("<FocusIn>", lambda e: self.set_active_entry(plot_title_entry))
+        # [추가] "Ω 선택 창은 떠 있으면 2D/3D 모두 사용 가능, 없으면 띄우고 사용" -
+        # open_permanent_symbol_window가 이미 그 로직(떠 있으면 앞으로, 없으면 새로
+        # 열기)이라 그대로 재사용. 메인 창 툴바에만 버튼이 있어 3D 팝업을 띄운
+        # 상태에서는 손이 안 갈 수 있으니 이 팝업 안에도 같은 버튼을 둔다.
+        ttk.Button(title_row, text=chr(937), width=3,
+                   command=self.open_permanent_symbol_window).pack(side="left", padx=(0, 10))
 
         # [추가] "X,Y,Z title 입력박스 필요" - 2D의 xlabel/ylabel/y2label을 그대로
         # 재사용하지 않고 3D 전용으로 따로 입력받는다(3D는 Z가 y2label 자리를
         # 대신 쓰는 등 2D와 축 의미가 달라서 같은 값을 강제로 공유하면 어색함).
         # 기존 기본값(Time/Output #)은 그대로 두되, "splot에서 y-title에
         # Output #는 부적절함" 피드백으로 기본값을 Data_No로 바꿈.
+        # [수정] "splot만 그릴 때 z-title이 비어 있는 대신 Dat list의 title을
+        # 활용" - curve 없이 surface만 있으면(2D Y2 label을 그대로 물려받는 게
+        # 의미 없음) Z title 기본값을 surface의 표시명으로 채운다.
+        # [수정 - 버그] "x,y,z 선택 안 하고 s-plot 파일만 읽으면 축 title이
+        # 2D title로 나타남" - self.xlabel_var/ylabel_var/y2label_var는 "완전히
+        # 빈 문자열"일 때만 기본값(Time/Data_No)으로 대체했는데, 이전에 2D 작업
+        # 하면서 이미 값을 채워둔 상태라면 그 값이 surface 전용 3D에도 그대로
+        # 새어 들어옴(2D의 xlabel/y2label은 curve 데이터 의미라 surface의 raw
+        # time/output_no/value 컬럼과는 전혀 무관함) - eligible(curve)이 있을
+        # 때만 2D 값을 물려받고, 없으면(surface만) 항상 Time/Data_No/surface
+        # 표시명을 쓴다.
         row0 = ttk.Frame(dialog)
         row0.pack(fill="x", padx=10, pady=5)
-        xlabel3d_var = tk.StringVar(value=self.xlabel_var.get() or "Time")
-        ylabel3d_var = tk.StringVar(value=self.ylabel_var.get() or "Data_No")
-        zlabel3d_var = tk.StringVar(value=self.y2label_var.get())
+        if eligible:
+            xlabel3d_var = tk.StringVar(value=self.xlabel_var.get() or "Time")
+            ylabel3d_var = tk.StringVar(value=self.ylabel_var.get() or "Data_No")
+            _default_zlabel = self.y2label_var.get()
+            if not _default_zlabel and surfaces:
+                _default_zlabel = surfaces[0].get("z_label", "")
+        else:
+            xlabel3d_var = tk.StringVar(value="Time")
+            ylabel3d_var = tk.StringVar(value="Data_No")
+            _default_zlabel = surfaces[0].get("z_label", "") if surfaces else ""
+        zlabel3d_var = tk.StringVar(value=_default_zlabel)
         ttk.Label(row0, text="X title:").pack(side="left")
-        ttk.Entry(row0, textvariable=xlabel3d_var, width=14).pack(side="left", padx=(2, 10))
+        xlabel3d_entry = ttk.Entry(row0, textvariable=xlabel3d_var, width=14)
+        xlabel3d_entry.pack(side="left", padx=(2, 10))
+        xlabel3d_entry.bind("<FocusIn>", lambda e: self.set_active_entry(xlabel3d_entry))
         ttk.Label(row0, text="Y title:").pack(side="left")
-        ttk.Entry(row0, textvariable=ylabel3d_var, width=14).pack(side="left", padx=(2, 10))
+        ylabel3d_entry = ttk.Entry(row0, textvariable=ylabel3d_var, width=14)
+        ylabel3d_entry.pack(side="left", padx=(2, 10))
+        ylabel3d_entry.bind("<FocusIn>", lambda e: self.set_active_entry(ylabel3d_entry))
         ttk.Label(row0, text="Z title:").pack(side="left")
-        ttk.Entry(row0, textvariable=zlabel3d_var, width=14).pack(side="left", padx=(2, 10))
+        zlabel3d_entry = ttk.Entry(row0, textvariable=zlabel3d_var, width=14)
+        zlabel3d_entry.pack(side="left", padx=(2, 10))
+        zlabel3d_entry.bind("<FocusIn>", lambda e: self.set_active_entry(zlabel3d_entry))
 
         row1 = ttk.Frame(dialog)
         row1.pack(fill="x", padx=10, pady=5)
@@ -3012,10 +3303,18 @@ class CathPlotGUI:
         ttk.Entry(row1, textvariable=rot_x_var, width=5).pack(side="left", padx=(2, 10))
         ttk.Label(row1, text="Rotate Z:").pack(side="left")
         ttk.Entry(row1, textvariable=rot_z_var, width=5).pack(side="left", padx=(2, 10))
+        # [추가] "splot 입력 자료에서 time 구간 입력 필요(필요 구간 data만 plot)"
+        # - 둘 다 비우면 전체 구간(제한 없음).
+        time_min_var = tk.StringVar(value="")
+        time_max_var = tk.StringVar(value="")
+        ttk.Label(row1, text="Time range Min:").pack(side="left", padx=(10, 0))
+        ttk.Entry(row1, textvariable=time_min_var, width=8).pack(side="left", padx=(2, 5))
+        ttk.Label(row1, text="Max:").pack(side="left")
+        ttk.Entry(row1, textvariable=time_max_var, width=8).pack(side="left", padx=(2, 0))
 
         row2 = ttk.Frame(dialog)
         row2.pack(fill="x", padx=10, pady=5)
-        style_var = tk.StringVar(value="lines")
+        style_var = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
         palette_var = tk.StringVar(value="rainbow")
         colorbox_var = tk.BooleanVar(value=True)
         marker_size_var_3d = tk.StringVar(value="M")
@@ -3024,8 +3323,10 @@ class CathPlotGUI:
         # 채우기)로 그릴 수 있음(일반 curve는 grid 형식이 아니라 pm3d 의미가
         # 없어 lines로 그대로 그려짐). 여러 surface를 겹쳐 비교할 때는 선
         # 스타일(dashtype 구분)이 더 나을 수 있어 강제 전환 대신 선택 옵션으로 추가.
-        ttk.Combobox(row2, textvariable=style_var, values=["lines", "points", "linespoints", "pm3d"],
-                     width=12, state="readonly").pack(side="left", padx=(2, 10))
+        # [수정] "pm3d 옵션 이름을 'color palette' 또는 '입체채색'으로" - 표시명만
+        # 바꾸고 내부 값은 STYLE_3D_INTERNAL_MAP으로 되돌려서 사용.
+        ttk.Combobox(row2, textvariable=style_var, values=list(STYLE_3D_DISPLAY_MAP.values()),
+                     width=20, state="readonly").pack(side="left", padx=(2, 10))
         ttk.Label(row2, text="Palette:").pack(side="left")
         ttk.Combobox(row2, textvariable=palette_var, values=["rainbow", "grayscale", "bluewhitered"],
                      width=12, state="readonly").pack(side="left", padx=(2, 10))
@@ -3036,28 +3337,38 @@ class CathPlotGUI:
         equal_xyz_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row2, text="Equal XYZ scale", variable=equal_xyz_var).pack(side="left", padx=(10, 0))
 
-        # [추가] "Legend 개념 - 그래프 set가 여럿일 때" - 색은 Z값 전용(palette)이라
-        # 세트(파일) 구분은 Marker 모양으로 함. Style이 Points/Linespoints일 때만
-        # 의미가 있지만, 나중에 Style을 바꿀 수도 있으니 항상 보여주고 세트별로
-        # 사용자가 직접 고르게 한다(자동 배정 X - "사용자가 선택하게 옵션을 하나 더").
-        # 기본값은 겹치지 않게 Shape 목록을 순서대로 배정.
-        marker_shape_vars_3d = []
-        if len(eligible) > 1:
-            marker_row = ttk.LabelFrame(dialog, text="Marker Shape (세트별, Style=Points/Linespoints일 때 적용)")
-            marker_row.pack(fill="x", padx=10, pady=5)
-            _shape_choices = [s for s in MARKER_SHAPE_LIST if s != "None"]
-            for idx, c in enumerate(eligible):
-                mrow = ttk.Frame(marker_row)
-                mrow.pack(fill="x", pady=1)
-                ttk.Label(mrow, text=c["label"], width=20, anchor="w").pack(side="left", padx=(2, 5))
-                shape_default = _shape_choices[idx % len(_shape_choices)]
-                shape_var = tk.StringVar(value=shape_default)
-                ttk.Combobox(mrow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
-                             width=10, state="readonly").pack(side="left")
-                marker_shape_vars_3d.append(shape_var)
-        else:
-            for _ in eligible:
-                marker_shape_vars_3d.append(tk.StringVar(value="Circle"))
+        # [추가] "3D plot 창에서 dat file, splot 파일 선택 옵션 추가" - curve와
+        # surface 모두 체크박스로 포함 여부를 고를 수 있게 통합. "Legend 개념 -
+        # 그래프 set가 여럿일 때"에 쓰이는 Marker 모양도 같은 곳에서 세트별로
+        # 고른다(자동 배정 X - "사용자가 선택하게 옵션을 하나 더"). 기본값은
+        # 겹치지 않게 Shape 목록을 순서대로 배정(curve 다음 surface 순서로 이어짐).
+        set_frame = ttk.LabelFrame(dialog, text="포함할 Set (체크 해제로 제외, Marker 모양은 Style=Points/Linespoints일 때 적용)")
+        set_frame.pack(fill="x", padx=10, pady=5)
+        _shape_choices = [s for s in MARKER_SHAPE_LIST if s != "None"]
+        _set_idx = 0
+        curve_check_vars = []    # [(BooleanVar, curve_dict, shape_StringVar), ...]
+        surface_check_vars = []  # [(BooleanVar, surface_dict, shape_StringVar), ...]
+        for c in eligible:
+            srow = ttk.Frame(set_frame)
+            srow.pack(fill="x", pady=1)
+            v = tk.BooleanVar(value=True)
+            ttk.Checkbutton(srow, variable=v, text=f"[Curve] {c['label']}").pack(side="left")
+            shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
+            ttk.Combobox(srow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
+                         width=10, state="readonly").pack(side="right", padx=4)
+            curve_check_vars.append((v, c, shape_var))
+            _set_idx += 1
+        for s in surfaces:
+            srow = ttk.Frame(set_frame)
+            srow.pack(fill="x", pady=1)
+            v = tk.BooleanVar(value=True)
+            ttk.Checkbutton(srow, variable=v,
+                             text=f"[Surface] {s['label']} (채널 {s['n_outputs']}개, Z={s['z_label']})").pack(side="left")
+            shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
+            ttk.Combobox(srow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
+                         width=10, state="readonly").pack(side="right", padx=4)
+            surface_check_vars.append((v, s, shape_var))
+            _set_idx += 1
 
         # [추가] "comment, arrow 등은 3D 전용으로 popup 창에서 입력, 이때는
         # 좌표값으로 통일 (x,y,z)" - 2D 입력과 완전히 별개로, 이 팝업 안에서만
@@ -3081,7 +3392,10 @@ class CathPlotGUI:
             ttk.Button(row, text="X", width=2, command=lambda: (row.destroy(), anno3d_list.remove(data))).pack(side="right", padx=3)
             ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
             ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 3))
-            ttk.Entry(row, textvariable=data['txt'], width=14).pack(side="left", padx=2)
+            txt3d_entry = ttk.Entry(row, textvariable=data['txt'], width=14)
+            txt3d_entry.pack(side="left", padx=2)
+            # [추가] "Comment창에도 Ω창에서 입력 가능하게" - 2D Comment와 동일.
+            txt3d_entry.bind("<FocusIn>", lambda e: self.set_active_entry(txt3d_entry))
             ttk.Label(row, text="(X,Y,Z):").pack(side="left")
             xyz_entry, _ = self._make_xyz_combo_entry(row, data['x'], data['y'], data['z'], "", "", "")
             xyz_entry.pack(side="left", padx=2)
@@ -3138,20 +3452,46 @@ class CathPlotGUI:
                     })
 
             marker_size_val = MARKER_SIZE_MAP.get(marker_size_var_3d.get(), 1.0)
+            # [수정] "3D plot 창에서 dat file, splot 파일 선택 옵션" - 체크 해제된
+            # set은 아예 제외한다(curve/surface 공통).
             curves_final = []
-            for idx, c in enumerate(eligible):
+            for v, c, shape_var in curve_check_vars:
+                if not v.get():
+                    continue
                 c2 = dict(c)
-                shape_label = marker_shape_vars_3d[idx].get() if idx < len(marker_shape_vars_3d) else "None"
-                hollow_pt, _filled_pt = MARKER_SHAPE_MAP.get(shape_label, (None, None))
+                hollow_pt, _filled_pt = MARKER_SHAPE_MAP.get(shape_var.get(), (None, None))
                 c2["marker_shape"] = hollow_pt
                 c2["marker_size"] = marker_size_val
                 c2["title"] = c["label"]
                 curves_final.append(c2)
 
-            surfaces_final = [s for v, s in surface_check_vars if v.get()]
-            return (curves_final, rot_x, rot_z, style_var.get(), palette_var.get(),
+            surfaces_final = []
+            for v, s, shape_var in surface_check_vars:
+                if not v.get():
+                    continue
+                s2 = dict(s)
+                hollow_pt, _filled_pt = MARKER_SHAPE_MAP.get(shape_var.get(), (None, None))
+                s2["marker_shape"] = hollow_pt
+                s2["marker_size"] = marker_size_val
+                surfaces_final.append(s2)
+
+            # [추가] "time 구간 입력" - 비우면 제한 없음(None).
+            def _parse_opt_float(s):
+                s = (s or "").strip()
+                if not s:
+                    return None
+                try:
+                    return float(s)
+                except ValueError:
+                    return None
+            time_min = _parse_opt_float(time_min_var.get())
+            time_max = _parse_opt_float(time_max_var.get())
+
+            _style_internal = STYLE_3D_INTERNAL_MAP.get(style_var.get(), "lines")
+            return (curves_final, rot_x, rot_z, _style_internal, palette_var.get(),
                     colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get(), surfaces_final,
-                    xlabel3d_var.get(), ylabel3d_var.get(), zlabel3d_var.get())
+                    xlabel3d_var.get(), ylabel3d_var.get(), zlabel3d_var.get(),
+                    plot_title_var.get(), time_min, time_max)
 
         def do_plot():
             # [수정] "3D Plot 추가 창은 plot 후에도 닫지 말 것" - rot_x/rot_z를
@@ -3160,27 +3500,171 @@ class CathPlotGUI:
             args = _collect_3d_state()
             self._execute_3d_plot(*args)
 
+        def _close_3d_dialog():
+            # [수정] "3D plot 창을 닫고 나면 Dat list에서 splot 파일 설명이
+            # 없어짐(다시 3D Plot을 누르면 정상 복귀)" - 코드상 3D 다이얼로그가
+            # file_rows/meta를 건드리는 곳은 없어서 데이터 자체가 사라지는 건
+            # 아니고, 자식 Toplevel이 닫힐 때 부모 캔버스(scrollable_frame)가
+            # 제대로 다시 그려지지 않는 Tk의 재도장(repaint) 지연 증상으로 보임 -
+            # 다이얼로그를 닫을 때마다 Dat list를 강제로 다시 그려서 항상 최신
+            # 상태로 보이게 한다(show_variables는 그리기만 다시 하는 거라
+            # 데이터가 이미 정상이면 아무 부작용 없음).
+            dialog.destroy()
+            self.show_variables()
+
+        dialog.protocol("WM_DELETE_WINDOW", _close_3d_dialog)
+
         def do_save():
             args = _collect_3d_state()
-            dialog.destroy()
+            _close_3d_dialog()
             self._save_3d_plot(*args)
 
         def do_print():
             args = _collect_3d_state()
-            dialog.destroy()
+            _close_3d_dialog()
             self._print_3d_plot(*args)
+
+        # [추가] "3D template는 따로 3D 창에서 save/load" - 2D Template
+        # Save/Load(메인 창 버튼)와는 완전히 별개로, 이 팝업 자체의 설정(회전각,
+        # Style, Palette, Marker 모양, Comment/Arrow 등)만 저장/복원한다. curve/
+        # surface 목록은 그때그때 로드된 파일 기준으로 다시 만들어지므로 저장 안
+        # 하고, Marker 모양만 label(파일명) 기준으로 매칭해서 복원한다.
+        def _3d_template_dict():
+            _shapes = {}
+            for v, c, shape_var in curve_check_vars:
+                _shapes[c["label"]] = shape_var.get()
+            for v, s, shape_var in surface_check_vars:
+                _shapes[s["label"]] = shape_var.get()
+            return {
+                "type": "cathplot_3d_template",
+                "plot_title": plot_title_var.get(),
+                "xlabel3d": xlabel3d_var.get(), "ylabel3d": ylabel3d_var.get(), "zlabel3d": zlabel3d_var.get(),
+                "rot_x": rot_x_var.get(), "rot_z": rot_z_var.get(),
+                "time_min": time_min_var.get(), "time_max": time_max_var.get(),
+                "style": style_var.get(), "palette": palette_var.get(),
+                "colorbox": colorbox_var.get(), "marker_size": marker_size_var_3d.get(),
+                "equal_xyz": equal_xyz_var.get(),
+                "marker_shapes": _shapes,
+                "annotations_3d": [
+                    {"txt": d['txt'].get(), "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
+                     "color": d['color'].get()}
+                    for d in anno3d_list
+                ],
+                "arrows_3d": [
+                    {"x1": d['x1'].get(), "y1": d['y1'].get(), "z1": d['z1'].get(),
+                     "x2": d['x2'].get(), "y2": d['y2'].get(), "z2": d['z2'].get(),
+                     "color": d['color'].get(), "size": d['size'].get()}
+                    for d in arrow3d_list
+                ],
+            }
+
+        def do_save_3d_template():
+            # [수정] "저장할 때 default로 plottitle_3d_...가 좋겠다" - 3D Plot
+            # 이미지 저장(_execute_3d_plot의 base_name)과 동일한 규칙(이름_3D_번호).
+            template_dir = os.path.join(self.cwd, "template")
+            os.makedirs(template_dir, exist_ok=True)
+            raw_title = plot_title_var.get().strip() or "CathPlot"
+            safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
+            next_id = self.title_counters.get(safe_title, 0) + 1
+            default_name = f"{safe_title}_3D_{next_id}"
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[("CathPlot 3D Template", "*.json")],
+                initialdir=template_dir, initialfile=default_name,
+                title="Save 3D Template"
+            )
+            if not filepath:
+                return
+            self.title_counters[safe_title] = next_id
+            try:
+                import json
+                with open(filepath, "w", encoding="utf-8") as f:
+                    json.dump(_3d_template_dict(), f, indent=2, ensure_ascii=False)
+                messagebox.showinfo("3D Template", f"3D 템플릿을 저장했습니다:\n{filepath}")
+            except Exception as e:
+                messagebox.showerror("3D Template", f"3D 템플릿 저장 실패: {e}")
+
+        def do_load_3d_template():
+            template_dir = os.path.join(self.cwd, "template")
+            filepath = filedialog.askopenfilename(
+                filetypes=[("CathPlot 3D Template", "*.json"), ("All files", "*.*")],
+                initialdir=template_dir if os.path.isdir(template_dir) else self.cwd,
+                title="Load 3D Template"
+            )
+            if not filepath:
+                return
+            try:
+                import json
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                messagebox.showerror("3D Template", f"3D 템플릿 불러오기 실패: {e}")
+                return
+
+            plot_title_var.set(data.get("plot_title", plot_title_var.get()))
+            xlabel3d_var.set(data.get("xlabel3d", xlabel3d_var.get()))
+            ylabel3d_var.set(data.get("ylabel3d", ylabel3d_var.get()))
+            zlabel3d_var.set(data.get("zlabel3d", zlabel3d_var.get()))
+            rot_x_var.set(data.get("rot_x", rot_x_var.get()))
+            rot_z_var.set(data.get("rot_z", rot_z_var.get()))
+            time_min_var.set(data.get("time_min", ""))
+            time_max_var.set(data.get("time_max", ""))
+            style_var.set(data.get("style", style_var.get()))
+            palette_var.set(data.get("palette", palette_var.get()))
+            colorbox_var.set(data.get("colorbox", True))
+            marker_size_var_3d.set(data.get("marker_size", "M"))
+            equal_xyz_var.set(data.get("equal_xyz", False))
+
+            _shapes = data.get("marker_shapes", {})
+            for v, c, shape_var in curve_check_vars:
+                if c["label"] in _shapes:
+                    shape_var.set(_shapes[c["label"]])
+            for v, s, shape_var in surface_check_vars:
+                if s["label"] in _shapes:
+                    shape_var.set(_shapes[s["label"]])
+
+            for d in list(anno3d_list):
+                d['frame'].destroy()
+            anno3d_list.clear()
+            for ad in data.get("annotations_3d", []):
+                add_3d_comment_row()
+                last = anno3d_list[-1]
+                last['txt'].set(ad.get("txt", ""))
+                last['x'].set(ad.get("x", "")); last['y'].set(ad.get("y", "")); last['z'].set(ad.get("z", ""))
+                last['color'].set(ad.get("color", "Auto"))
+
+            for d in list(arrow3d_list):
+                d['frame'].destroy()
+            arrow3d_list.clear()
+            for ar in data.get("arrows_3d", []):
+                add_3d_arrow_row()
+                last = arrow3d_list[-1]
+                last['x1'].set(ar.get("x1", "")); last['y1'].set(ar.get("y1", "")); last['z1'].set(ar.get("z1", ""))
+                last['x2'].set(ar.get("x2", "")); last['y2'].set(ar.get("y2", "")); last['z2'].set(ar.get("z2", ""))
+                last['color'].set(ar.get("color", "Auto")); last['size'].set(ar.get("size", "M"))
+
+            messagebox.showinfo("3D Template", "3D 템플릿을 불러왔습니다.")
+
+        template3d_row = ttk.Frame(dialog)
+        template3d_row.pack(fill="x", padx=10, pady=(0, 5))
+        ttk.Button(template3d_row, text="3D Template Save", command=do_save_3d_template).pack(side="left", padx=5)
+        ttk.Button(template3d_row, text="3D Template Load", command=do_load_3d_template).pack(side="left", padx=5)
 
         ok_row = ttk.Frame(dialog)
         ok_row.pack(fill="x", padx=10, pady=10)
         ttk.Button(ok_row, text="Plot", command=do_plot).pack(side="left", padx=5)
         ttk.Button(ok_row, text="Save", command=do_save).pack(side="left", padx=5)
         ttk.Button(ok_row, text="Print", command=do_print).pack(side="left", padx=5)
-        ttk.Button(ok_row, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
+        ttk.Button(ok_row, text="Cancel", command=_close_3d_dialog).pack(side="left", padx=5)
 
     def _execute_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
-                          equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d=""):
+                          equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
+                          plot_title="", time_min=None, time_max=None):
         os.makedirs(self.plot_dir, exist_ok=True)
-        raw_title = self.filename_var.get().strip() or "CathPlot"
+        # [수정] "Plot Title 입력칸을 따로 둬서 수정 가능하게" - 팝업의 Plot Title
+        # 입력값을 그대로 쓰고(filename_var를 무조건 쓰지 않음), 비었을 때만
+        # filename_var로 되돌아간다.
+        raw_title = (plot_title or "").strip() or self.filename_var.get().strip() or "CathPlot"
         safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
         next_id = self.title_counters.get(safe_title, 0) + 1
         base_name = f"{safe_title}_3D_{next_id}"
@@ -3202,16 +3686,17 @@ class CathPlotGUI:
                 xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
                 rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
                 annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
-                surfaces=surfaces,
+                surfaces=surfaces, time_min=time_min, time_max=time_max,
             )
         except Exception as e:
             messagebox.showerror("3D Plot Error", str(e))
 
     def _generate_3d_file(self, outfile, fmt, curves, rot_x, rot_z, style, palette, colorbox,
-                           annotations_3d, arrows_3d, equal_xyz, surfaces, xlabel3d="", ylabel3d="", zlabel3d=""):
+                           annotations_3d, arrows_3d, equal_xyz, surfaces, xlabel3d="", ylabel3d="", zlabel3d="",
+                           plot_title="", time_min=None, time_max=None):
         """Save/Print가 공통으로 쓰는, 파일로 직접 렌더링하는 부분만 뽑은 버전
         (_execute_3d_plot의 화면(interactive) 전용 코드와 outfile/fmt만 다름)."""
-        raw_title = self.filename_var.get().strip() or "CathPlot"
+        raw_title = (plot_title or "").strip() or self.filename_var.get().strip() or "CathPlot"
         zlabel = zlabel3d
         if not zlabel and surfaces:
             zlabel = surfaces[0].get("z_label", "")
@@ -3223,16 +3708,17 @@ class CathPlotGUI:
             xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
             rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
             annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
-            surfaces=surfaces,
+            surfaces=surfaces, time_min=time_min, time_max=time_max,
         )
 
     def _save_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
-                       equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d=""):
+                       equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
+                       plot_title="", time_min=None, time_max=None):
         """[추가] "3D Plot도 저장 지원" - 2D SAVE와 동일한 포맷 선택 방식,
         방향/Frame 크기 선택 등 2D의 복잡한 캐시 선택 로직 없이 지금 다이얼로그
         입력값 그대로 바로 파일로 렌더링한다."""
         os.makedirs(self.plot_dir, exist_ok=True)
-        raw_title = self.filename_var.get().strip() or "CathPlot"
+        raw_title = (plot_title or "").strip() or self.filename_var.get().strip() or "CathPlot"
         safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
         next_id = self.title_counters.get(safe_title, 0) + 1
         default_name = f"{safe_title}_3D_{next_id}"
@@ -3254,7 +3740,7 @@ class CathPlotGUI:
         try:
             self._generate_3d_file(os.path.abspath(selected_path), ext, curves, rot_x, rot_z, style, palette,
                                     colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces,
-                                    xlabel3d, ylabel3d, zlabel3d)
+                                    xlabel3d, ylabel3d, zlabel3d, plot_title, time_min, time_max)
         except Exception as e:
             messagebox.showerror("Save Error", f"3D Plot 저장 중 오류가 발생했습니다:\n{e}")
             return
@@ -3262,7 +3748,8 @@ class CathPlotGUI:
         messagebox.showinfo("Success", f"Saved: {os.path.basename(selected_path)}")
 
     def _print_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
-                        equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d=""):
+                        equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
+                        plot_title="", time_min=None, time_max=None):
         """[추가] "3D Plot도 인쇄 지원" - 2D PRINT와 동일하게 EMF를 만들어
         프린터로 직접 그린다(_print_emf_and_cleanup/_pick_printer_dialog 재사용).
         2D처럼 어떤 plot을 고를지/용지 방향을 다시 묻는 절차는 3D 다이얼로그가
@@ -3277,7 +3764,7 @@ class CathPlotGUI:
         try:
             self._generate_3d_file(temp_emf, "emf", curves, rot_x, rot_z, style, palette,
                                     colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces,
-                                    xlabel3d, ylabel3d, zlabel3d)
+                                    xlabel3d, ylabel3d, zlabel3d, plot_title, time_min, time_max)
         except Exception as e:
             messagebox.showerror("Print Error", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
             return
@@ -3290,7 +3777,7 @@ class CathPlotGUI:
             except OSError:
                 pass
             return
-        raw_title = self.filename_var.get().strip() or "CathPlot"
+        raw_title = (plot_title or "").strip() or self.filename_var.get().strip() or "CathPlot"
         threading.Thread(
             target=self._print_emf_and_cleanup, args=(temp_emf, raw_title, printer_name, "landscape"), daemon=True
         ).start()

@@ -1838,12 +1838,24 @@ class GnuplotGenerator:
     }
     _3D_STYLE_MAP = {"lines": "lines", "points": "points", "linespoints": "linespoints"}
 
+    def _time_range_cond(self, raw_ref, tmin, tmax):
+        """[추가] "splot 입력 자료에서 time 구간 입력 필요(필요 구간 data만 plot)" -
+        tmin/tmax 둘 다 없으면 None(조건 없음). gnuplot에서 좌표값을 NaN(0/0)으로
+        만들면 그 지점이 통째로 빠져서(선은 끊기고 점은 안 찍힘) 원본 파일을
+        건드리지 않고도 원하는 구간만 그릴 수 있음(직접 테스트로 확인)."""
+        parts = []
+        if tmin is not None and tmin != "":
+            parts.append(f"{raw_ref}>=({tmin})")
+        if tmax is not None and tmax != "":
+            parts.append(f"{raw_ref}<=({tmax})")
+        return " && ".join(parts) if parts else None
+
     def create_3d_script(self, curves_3d, outfile, fmt="interactive",
                           xlabel="", ylabel="", zlabel="", title="",
                           xlog=False, ylog=False, zlog=False,
                           rot_x=60, rot_z=30, style="lines", palette="rainbow",
                           colorbox=True, annotations_3d=None, arrows_3d=None,
-                          equal_xyz=False, surfaces=None):
+                          equal_xyz=False, surfaces=None, time_min=None, time_max=None):
         """[추가] 3D Plot(splot) - "X/Y1/Y2를 X/Y/Z로 매핑, 여러 세트를 같은 화면에
         겹쳐 그리고 Z값 기준 palette(낮음=파랑, 높음=빨강)로 색칠"하는 기능.
         2D curve와 동일하게 gnuplot이 dat 파일을 직접 읽게(using 컬럼 인덱스)
@@ -1866,6 +1878,9 @@ class GnuplotGenerator:
         스케일링. CathPlot 축들은 단위가 제각각(예: Y가 X보다 10000배 큰 값)이라
         기본은 OFF - 켜면 값이 작은 축이 거의 한 점/직선으로 눌려 보일 수 있음
         (직접 테스트로 확인됨). 필요할 때만 사용자가 켜도록 옵션으로만 제공.
+        time_min/time_max: "splot 입력 자료에서 time 구간 입력 필요(필요 구간
+        data만 plot)" - 둘 다 비우면 전체 구간. curve는 x_shift 적용 전 원본
+        time 값 기준으로 판단(사용자가 보는 실제 데이터 구간과 일치시키려고).
         """
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
@@ -1953,25 +1968,149 @@ class GnuplotGenerator:
                 return min((0, 90, -90), key=lambda c: abs(a - c))
             _xlabel_rot = _snap90(_xlabel_rot)
             _ylabel_rot = _snap90(_ylabel_rot)
-        if xlabel: lines.append(f'set xlabel "{xlabel}" rotate by {_xlabel_rot:.2f} offset 0,-1')
-        if ylabel: lines.append(f'set ylabel "{ylabel}" rotate by {_ylabel_rot:.2f} offset 0,-1')
+        # [수정] "3-D title의 _,^ 첨자 처리 문제, 그리스 문자 가능하게 (2-D처럼
+        # 첨자 등 입력 가능하게)" - 예전엔 "_"를 무조건 "\\_"로 이스케이프해서
+        # 항상 리터럴로만 나왔는데, 2D는 "_{...}"/"^{...}"(중괄호) 형태일 때만
+        # 실제 첨자로 렌더링하고 그 외(맨 "_"만 있는 보통 파일명 등)는 리터럴로
+        # 보이게 하는 자체 규칙(_render_text/_has_enhanced_markup)이 이미 있음 -
+        # 3D도 그 규칙을 그대로 재사용해서 2D와 동일하게 동작하게 한다. 그리스
+        # 문자(Ω 등)는 noenhanced 모드에서도 UTF-8 그대로 통과되어 별도 처리 불필요.
+        # [수정] "tic 숫자와 프레임 간격, 숫자와 title 간격이 축마다 다름 - 가능한
+        # 조정" - X/Y/Z 세 군데(네이티브 xlabel, set label로 대체한 ylabel, 네이티브
+        # zlabel)가 서로 다른 메커니즘이라 같은 offset 값이어도 실제 화면 간격이
+        # 달라 보였음. 기본 회전각(60,30) 기준으로 여러 값을 직접 렌더링/비교해서
+        # 세 축의 "숫자-title 간격"이 최대한 비슷해 보이는 조합을 골랐다(v1~v6까지
+        # 비교 - v2/v3는 오히려 과했다는 피드백으로 되돌려 축소; "X tic 숫자가 축에
+        # 너무 붙어 보인다"는 피드백으로 xtics/ytics 자체의 offset도 추가해 숫자를
+        # 축에서 살짝 띄움; "Y title-tic 간격 조금 더"라는 마지막 피드백으로 Y만
+        # 한 번 더 늘려 v6 확정).
+        # 회전각을 크게 바꾸면 이 값들도 다시 맞춰야 할 수 있음(3D 투영 특성상
+        # 완전히 일치시키긴 어려움).
+        lines.append("set xtics offset 0,-0.6")
+        lines.append("set ytics offset 0.3,-0.3")
+        if xlabel:
+            _xlabel_text, _xlabel_enh = self._render_text(xlabel)
+            lines.append(f'set xlabel "{_xlabel_text}" rotate by {_xlabel_rot:.2f} offset 0,-1.0 {_xlabel_enh}')
+        # [수정 - 버그] "y-title도 x-title처럼 축 각도에 비례해서 축과 평행하게" -
+        # 직접 테스트로 확인: gnuplot(6.0)은 3D splot에서 set ylabel의 "rotate by"만
+        # xlabel/zlabel과 달리 항상 무시함(각도를 줘도 그냥 수평으로만 나옴 -
+        # pdfcairo/interactive 둘 다 동일). 반면 set label(텍스트 주석)은 3D에서도
+        # rotate by가 정상 적용되는 걸 확인했으므로, 네이티브 ylabel 대신 Y축
+        # 근처에 직접 배치한 set label로 대체한다. "축이 거꾸로 보여도 title까지
+        # 뒤집을 필요 없음"은 _axis_label_rotate_deg가 이미 -90~90으로 접어주므로
+        # 그대로 만족됨.
+        # [주의] 위치(graph 1.0, 0.5, 0)는 기본 회전각(60,30) 기준으로 맞춘 것 -
+        # 회전각을 크게 바꾸면 gnuplot이 tic 위치를 반대쪽으로 옮길 수 있어 그
+        # 경우엔 label 위치가 안 맞을 수 있음(실측 확인, 추후 필요시 조정).
+        if ylabel:
+            _ylabel_text, _ylabel_enh = self._render_text(ylabel)
+            lines.append(f'set label 9001 "{_ylabel_text}" at graph 1.0, graph 0.5, graph 0 '
+                         f'rotate by {_ylabel_rot:.2f} offset 4.0,-2.1 {_ylabel_enh}')
         # [수정] "3D 축 title 각도가 축 방향과 다름, 특히 Z축은 90도 다름" -
         # gnuplot은 zlabel을 회전 지정 없으면 항상 가로(수평)로 그리는데, Z축은
         # 화면에서 수직으로 보이니 어긋나 보였던 것. Z축 방향에 맞춰 90도 회전
         # (위 실측으로 Z축은 rot_x/rot_z 전체 범위에서 항상 90도임을 확인함).
-        if zlabel: lines.append(f'set zlabel "{zlabel}" rotate by 90')
+        if zlabel:
+            _zlabel_text, _zlabel_enh = self._render_text(zlabel)
+            lines.append(f'set zlabel "{_zlabel_text}" rotate by 90 offset -1.5,0 {_zlabel_enh}')
+        # [추가] "회전 후 키 한 번 누르면 즉시 재정렬" - 마우스로 view를 돌리는
+        # 동안 실시간으로 title을 따라가게 하는 건 gnuplot이 지원하지 않지만
+        # (드래그 종료/유휴 감지 훅이 없음), 키 입력에는 bind로 반응할 수 있고
+        # gnuplot이 현재 회전각을 GPVAL_VIEW_ROT_X/GPVAL_VIEW_ROT_Z로 이미 들고
+        # 있어서(splot/replot 이후 갱신됨, 직접 확인) "그 순간의 회전각으로 X/Y
+        # title 각도를 다시 계산해서 반영"은 가능함. 'r'/'a' 등 자주 쓰는 키는
+        # gnuplot 기본 바인딩(ruler/autoscale 등)과 겹쳐서 비어있는 't'를 사용.
+        # curve/surface 여부와 무관하게 이 함수 전체에 공통 적용됨.
+        if is_interactive:
+            # [주의] label 9001은 ylabel이 있을 때만 위에서 만들어지므로, 없는데
+            # "set label 9001 rotate by ..."를 호출하면 존재하지 않는 라벨을
+            # 건드리게 됨 - xlabel/ylabel 존재 여부에 따라 필요한 부분만 넣는다.
+            _bind_parts = [
+                "rx=GPVAL_VIEW_ROT_X", "rz=GPVAL_VIEW_ROT_Z",
+                "rrz=rz*pi/180.0", "rrx=rx*pi/180.0",
+            ]
+            if xlabel:
+                _bind_parts.append(f"xr=atan2(-{_R_3D}*cos(rrx)*sin(rrz),cos(rrz))*180.0/pi")
+                _bind_parts.append("if (xr>90) {xr=xr-180}")
+                _bind_parts.append("if (xr<-90) {xr=xr+180}")
+                _bind_parts.append("set xlabel rotate by xr")
+            if ylabel:
+                _bind_parts.append(f"yr=atan2({_R_3D}*cos(rrx)*cos(rrz),sin(rrz))*180.0/pi")
+                _bind_parts.append("if (yr>90) {yr=yr-180}")
+                _bind_parts.append("if (yr<-90) {yr=yr+180}")
+                _bind_parts.append("set label 9001 rotate by yr")
+            # [추가] "x,z축 각도를 나타내 줄 수 있나요? 입력으로 넣기 좋게" -
+            # 화면에서 돌려본 뒤 가장 좋은 각도를 그대로 Rotate X/Z 입력칸에
+            # 재입력해서 Save/Print 하려는 용도. GPVAL_VIEW_ROT_X/Z(방금 읽은
+            # rx/rz)를 화면 좌하단에 텍스트로 표시(screen 좌표라 회전과 무관하게
+            # 항상 같은 자리에 나옴). "front"로 그려서 데이터에 가려지지 않게 함.
+            _bind_parts.append(
+                'set label 9002 sprintf("Rot X=%.1f  Rot Z=%.1f", rx, rz) '
+                'at screen 0.02, screen 0.02 front noenhanced'
+            )
+            _bind_parts.append("replot")
+            lines.append("bind 't' '" + "; ".join(_bind_parts) + "'")
+
+        # [추가] "회전+재정렬한 지금 상태를 파일로 저장" - gnuplot 안에서
+        # 터미널을 잠깐 바꿔 replot한 뒤 원래 터미널로 복귀하는 방식으로 가능함
+        # (직접 테스트로 확인). 형식별로 키를 나눠서 바로 고를 수 있게 함 -
+        # gnuplot 기본 키(p/n/e 등)와 안 겹치는 것만 사용, 겹치는 자리는
+        # 대문자로 피함. 파일명은 창 제목_view_HHMMSS로 자동 생성(같은 초에 같은
+        # 형식으로 두 번 누르면 덮어써질 수 있음 - 낮은 확률이라 허용).
+        if is_interactive:
+            _save_dir_esc = plot_dir.replace(chr(92), '/')
+            _restore_term = f'windows title "{title_disp}" font "Malgun Gothic,11" size 1000,700'
+            # [추가] "저장은 되는데 인쇄가 안 되니 넣는 게 좋겠다 - 저장 파일과
+            # 많이 달라지나?" - EMF 저장('E' 키)과 완전히 같은 터미널/설정을
+            # 그대로 재사용하고, 목적지만 파일 대신 "PRN"(gnuplot/Windows의
+            # 인쇄 리다이렉트 장치)으로 바꾼 것뿐이라 렌더링 품질은 거의 동일함.
+            # "set output PRN"이 에러/멈춤 없이 동작하는 것은 직접 테스트로
+            # 확인(기본 프린터가 무엇이든 Windows 인쇄 파이프라인을 그대로 탐).
+            # 키는 gnuplot 기본 바인딩과 안 겹치고 관용적으로 익숙한 Ctrl+P 사용.
+            _print_cmd = (
+                'set terminal emf enhanced size 1680,1200 font "Malgun Gothic,14"; '
+                'set output "PRN"; '
+                'replot; '
+                'set output; '
+                f'set terminal {_restore_term}; '
+                'replot'
+            )
+            lines.append(f"bind 'ctrl-p' '{_print_cmd}'")
+            _view_formats = [
+                ('P', 'pdfcairo enhanced color font "Malgun Gothic,14" size 10in,8in', 'pdf'),
+                ('N', 'pngcairo enhanced color font "Malgun Gothic,14" size 11.7in,8.3in', 'png'),
+                ('j', 'jpeg size 1600,900 enhanced font "Malgun Gothic,14"', 'jpg'),
+                ('E', 'emf enhanced size 1680,1200 font "Malgun Gothic,14"', 'emf'),
+                ('s', 'svg enhanced size 1123,797 font "Malgun Gothic,14"', 'svg'),
+            ]
+            for _key, _term_spec, _ext in _view_formats:
+                _outexpr = (f'sprintf("{_save_dir_esc}/{title_disp}_view_%s.{_ext}", '
+                            f'strftime("%H%M%S", time(0)))')
+                _cmd = (
+                    f'set terminal {_term_spec}; '
+                    f'set output {_outexpr}; '
+                    f'replot; '
+                    f'set output; '
+                    f'set terminal {_restore_term}; '
+                    f'replot'
+                )
+                lines.append(f"bind '{_key}' '{_cmd}'")
+
         # [추가] "x축은 title과 tic 추가 마진 필요" - x축 title이 회전되면서
         # tic 숫자와 겹치기 쉬워져 아래쪽 여백을 기본보다 넉넉히 확보.
-        lines.append("set bmargin 6")
-        if title: lines.append(f'set title "{title}"')
+        # [수정] xlabel offset을 -1→-2.2로 늘리면서 아래 여백도 같이 넉넉하게.
+        lines.append("set bmargin 6.5")
+        if title:
+            _title_text, _title_enh = self._render_text(title)
+            lines.append(f'set title "{_title_text}" {_title_enh}')
 
         # [추가] "comment, arrow 등은 3D 전용으로 popup 창에서 입력, 이때는
         # 좌표값으로 통일 (x,y,z)" - 2D의 %/좌표값 토글 없이 항상 실제 데이터
         # 좌표값만 받는다.
         if annotations_3d:
             for i, ann in enumerate(annotations_3d):
-                ann_text = (ann.get("text") or "").strip()
-                if not ann_text:
+                ann_text_raw = (ann.get("text") or "").strip()
+                if not ann_text_raw:
                     continue
                 try:
                     x, y, z = float(ann["x"]), float(ann["y"]), float(ann["z"])
@@ -1979,7 +2118,10 @@ class GnuplotGenerator:
                     continue
                 _color = (ann.get("color") or "").strip()
                 _color_clause = f' textcolor rgb "{_color}"' if _color else ""
-                lines.append(f'set label {i+1} "{ann_text}" at {x},{y},{z}{_color_clause}')
+                # [수정] "Comment 첨자처리도 되게" - 2D Comment와 동일한
+                # _render_text 규칙 재사용(_{...}/^{...}만 실제 첨자, 나머지는 리터럴).
+                ann_text, ann_enh = self._render_text(ann_text_raw)
+                lines.append(f'set label {i+1} "{ann_text}" at {x},{y},{z}{_color_clause} {ann_enh}')
 
         if arrows_3d:
             for i, arr in enumerate(arrows_3d):
@@ -2034,7 +2176,14 @@ class GnuplotGenerator:
             # using 절에서 "$N"은 반드시 괄호로 감싼 수식 안에서만 유효함(단독
             # "$1"은 "column() called from invalid context" 에러) - 2D curve와
             # 동일하게 항상 괄호+수식 형태로 통일한다.
-            x_expr = f"(${c['x_col']}+{x_shift})"
+            _raw_ref = f"${c['x_col']}"
+            _t_cond = self._time_range_cond(_raw_ref, time_min, time_max)
+            if _t_cond:
+                # [추가] "time 구간만 plot" - 원본 time 값(shift 적용 전) 기준으로
+                # 판단하고, 구간 밖이면 NaN(0/0)으로 만들어 그 지점만 빠지게 한다.
+                x_expr = f"(({_t_cond}) ? ({_raw_ref}+{x_shift}) : (0/0))"
+            else:
+                x_expr = f"({_raw_ref}+{x_shift})"
             using_expr = f"{x_expr}:{c['y_col']}:{c['z_col']}:{c['z_col']}"
 
             # [추가] 세트별 Marker(pt)/크기(ps) - style이 points/linespoints일 때만
@@ -2048,14 +2197,16 @@ class GnuplotGenerator:
                 if marker_size:
                     _pt_clause += f" ps {marker_size}"
 
+            # [수정] "3-D title의 _,^ 첨자 처리 문제" - 2D와 동일한
+            # _render_text/noenhanced 규칙 재사용(위 xlabel/ylabel/zlabel/title과 동일).
+            # [수정 - 버그] curve 개수만 보고 title을 넣을지 판단해서, curve 1개+
+            # surface 1개처럼 "합쳐서 2개 이상"인데 curve만 있는 쪽 기준으로는
+            # 1개라서 legend에서 조용히 빠지는 문제(직접 테스트로 확인) - has_title
+            # 판단과 동일하게 curve+surface 합산 개수로 판단.
             title_text = (c.get("title") or "").strip()
-            if title_text and len(curves_3d) > 1:
-                # enhanced 텍스트 모드에서 "_"가 첨자로 해석되지 않도록 이스케이프.
-                # gnuplot의 큰따옴표 문자열 파서가 백슬래시 1개를 먼저 소비하므로,
-                # enhanced 렌더러가 실제로 "\_"를 보게 하려면 파일에는 "\\_"(백슬래시 2개)를
-                # 써야 한다 - "\\_" 1개만 쓰면 첨자로 계속 해석되는 문제 확인.
-                _title_esc = title_text.replace("_", "\\\\_")
-                _title_clause = f'title "{_title_esc}"'
+            if title_text and (len(curves_3d) + len(surfaces or [])) > 1:
+                _title_rendered, _title_enh = self._render_text(title_text)
+                _title_clause = f'title "{_title_rendered}" {_title_enh}'
             else:
                 _title_clause = "notitle"
 
@@ -2075,16 +2226,35 @@ class GnuplotGenerator:
                 path = abs_path
             path = path.replace("\\", "/")
             _s_title = (s.get("label") or "").strip()
-            _s_title_clause = f'title "{_s_title.replace("_", chr(92)+chr(92)+"_")}"' if (_s_title and (len(curves_3d) + len(surfaces or [])) > 1) else "notitle"
-            # surface 원본 파일은 이미 gnuplot이 그대로 읽을 수 있는 형식('#'/빈 줄
-            # 자동 무시)이라 별도 가공 없이 컬럼 1:2:3(time:output_no:value)을 그대로 쓴다.
-            if _use_pm3d:
-                # pm3d는 면(facet)이라 dashtype이 적용 안 되므로 생략.
-                splot_parts.append(f'"{path}" using 1:2:3 {_s_title_clause} with pm3d')
+            if _s_title and (len(curves_3d) + len(surfaces or [])) > 1:
+                _s_title_rendered, _s_title_enh = self._render_text(_s_title)
+                _s_title_clause = f'title "{_s_title_rendered}" {_s_title_enh}'
             else:
+                _s_title_clause = "notitle"
+            # surface 원본 파일은 이미 gnuplot이 그대로 읽을 수 있는 형식('#'/빈 줄
+            # 자동 무시)이라 컬럼 1:2:3(time:output_no:value)을 그대로 쓴다. time
+            # 구간 필터만 컬럼 1(원본 그대로, x_shift 없음)에 적용.
+            _s_t_cond = self._time_range_cond("$1", time_min, time_max)
+            _s_x_using = f"(({_s_t_cond}) ? ($1) : (0/0))" if _s_t_cond else "1"
+            if _use_pm3d:
+                # pm3d는 면(facet)이라 dashtype/marker가 적용 안 되므로 생략.
+                splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with pm3d')
+            else:
+                # [수정 - 버그] "Marker 안 나옴" - Style을 Points/Linespoints로
+                # 골라도 surface는 항상 "with lines"로 하드코딩돼 있어 Marker가
+                # 전혀 안 보였음. curve와 동일하게 gp_style/marker pt·ps를
+                # 그대로 적용한다(dashtype은 선이 있을 때만 의미 있음).
                 _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
                 _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
-                splot_parts.append(f'"{path}" using 1:2:3 {_s_title_clause} with lines palette{_s_dash_clause}')
+                _s_pt_clause = ""
+                if gp_style in ("points", "linespoints"):
+                    _s_marker_pt = s.get("marker_shape")
+                    _s_marker_size = s.get("marker_size")
+                    if _s_marker_pt is not None:
+                        _s_pt_clause += f" pt {_s_marker_pt}"
+                    if _s_marker_size:
+                        _s_pt_clause += f" ps {_s_marker_size}"
+                splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {gp_style}{_s_pt_clause} palette{_s_dash_clause}')
 
         lines.append("splot " + ", \\\n      ".join(splot_parts))
 
