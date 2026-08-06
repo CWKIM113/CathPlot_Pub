@@ -2987,6 +2987,23 @@ class CathPlotGUI:
                 ).pack(anchor="w", padx=4)
                 surface_check_vars.append((v, s))
 
+        # [추가] "X,Y,Z title 입력박스 필요" - 2D의 xlabel/ylabel/y2label을 그대로
+        # 재사용하지 않고 3D 전용으로 따로 입력받는다(3D는 Z가 y2label 자리를
+        # 대신 쓰는 등 2D와 축 의미가 달라서 같은 값을 강제로 공유하면 어색함).
+        # 기존 기본값(Time/Output #)은 그대로 두되, "splot에서 y-title에
+        # Output #는 부적절함" 피드백으로 기본값을 Data_No로 바꿈.
+        row0 = ttk.Frame(dialog)
+        row0.pack(fill="x", padx=10, pady=5)
+        xlabel3d_var = tk.StringVar(value=self.xlabel_var.get() or "Time")
+        ylabel3d_var = tk.StringVar(value=self.ylabel_var.get() or "Data_No")
+        zlabel3d_var = tk.StringVar(value=self.y2label_var.get())
+        ttk.Label(row0, text="X title:").pack(side="left")
+        ttk.Entry(row0, textvariable=xlabel3d_var, width=14).pack(side="left", padx=(2, 10))
+        ttk.Label(row0, text="Y title:").pack(side="left")
+        ttk.Entry(row0, textvariable=ylabel3d_var, width=14).pack(side="left", padx=(2, 10))
+        ttk.Label(row0, text="Z title:").pack(side="left")
+        ttk.Entry(row0, textvariable=zlabel3d_var, width=14).pack(side="left", padx=(2, 10))
+
         row1 = ttk.Frame(dialog)
         row1.pack(fill="x", padx=10, pady=5)
         rot_x_var = tk.StringVar(value="60")
@@ -3129,11 +3146,14 @@ class CathPlotGUI:
 
             surfaces_final = [s for v, s in surface_check_vars if v.get()]
             return (curves_final, rot_x, rot_z, style_var.get(), palette_var.get(),
-                    colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get(), surfaces_final)
+                    colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get(), surfaces_final,
+                    xlabel3d_var.get(), ylabel3d_var.get(), zlabel3d_var.get())
 
         def do_plot():
+            # [수정] "3D Plot 추가 창은 plot 후에도 닫지 말 것" - rot_x/rot_z를
+            # 조금씩 바꿔가며 여러 번 그려보는 용도가 많아서, 매번 다이얼로그를
+            # 다시 열고 curve/comment/arrow 설정을 새로 고르는 게 번거로웠음.
             args = _collect_3d_state()
-            dialog.destroy()
             self._execute_3d_plot(*args)
 
         def do_save():
@@ -3154,7 +3174,7 @@ class CathPlotGUI:
         ttk.Button(ok_row, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
 
     def _execute_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
-                          equal_xyz=False, surfaces=None):
+                          equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d=""):
         os.makedirs(self.plot_dir, exist_ok=True)
         raw_title = self.filename_var.get().strip() or "CathPlot"
         safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
@@ -3164,8 +3184,8 @@ class CathPlotGUI:
         self.title_counters[safe_title] = next_id
 
         # [추가] Surface(splot) 파일의 Z축 라벨 기본값 - curve가 없고 surface만
-        # 있을 때는 y2label(빈 값이 많음) 대신 surface의 공통 변수명을 쓴다.
-        zlabel = self.y2label_var.get()
+        # 있을 때는 Z title 입력이 빈 값이면 surface의 공통 변수명을 쓴다.
+        zlabel = zlabel3d
         if not zlabel and surfaces:
             zlabel = surfaces[0].get("z_label", "")
 
@@ -3173,7 +3193,7 @@ class CathPlotGUI:
         try:
             generator.create_3d_script(
                 curves, outfile, fmt="interactive",
-                xlabel=self.xlabel_var.get() or "Time", ylabel=self.ylabel_var.get() or "Output #", zlabel=zlabel,
+                xlabel=xlabel3d or "Time", ylabel=ylabel3d or "Data_No", zlabel=zlabel,
                 title=raw_title,
                 xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
                 rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
@@ -3184,17 +3204,17 @@ class CathPlotGUI:
             messagebox.showerror("3D Plot Error", str(e))
 
     def _generate_3d_file(self, outfile, fmt, curves, rot_x, rot_z, style, palette, colorbox,
-                           annotations_3d, arrows_3d, equal_xyz, surfaces):
+                           annotations_3d, arrows_3d, equal_xyz, surfaces, xlabel3d="", ylabel3d="", zlabel3d=""):
         """Save/Print가 공통으로 쓰는, 파일로 직접 렌더링하는 부분만 뽑은 버전
         (_execute_3d_plot의 화면(interactive) 전용 코드와 outfile/fmt만 다름)."""
         raw_title = self.filename_var.get().strip() or "CathPlot"
-        zlabel = self.y2label_var.get()
+        zlabel = zlabel3d
         if not zlabel and surfaces:
             zlabel = surfaces[0].get("z_label", "")
         generator = GnuplotGenerator(self.plot_dir)
         generator.create_3d_script(
             curves, outfile, fmt=fmt,
-            xlabel=self.xlabel_var.get() or "Time", ylabel=self.ylabel_var.get() or "Output #", zlabel=zlabel,
+            xlabel=xlabel3d or "Time", ylabel=ylabel3d or "Data_No", zlabel=zlabel,
             title=raw_title,
             xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
             rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
@@ -3203,7 +3223,7 @@ class CathPlotGUI:
         )
 
     def _save_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
-                       equal_xyz=False, surfaces=None):
+                       equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d=""):
         """[추가] "3D Plot도 저장 지원" - 2D SAVE와 동일한 포맷 선택 방식,
         방향/Frame 크기 선택 등 2D의 복잡한 캐시 선택 로직 없이 지금 다이얼로그
         입력값 그대로 바로 파일로 렌더링한다."""
@@ -3229,7 +3249,8 @@ class CathPlotGUI:
         ext = os.path.splitext(selected_path)[1].lower().replace(".", "") or "png"
         try:
             self._generate_3d_file(os.path.abspath(selected_path), ext, curves, rot_x, rot_z, style, palette,
-                                    colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces)
+                                    colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces,
+                                    xlabel3d, ylabel3d, zlabel3d)
         except Exception as e:
             messagebox.showerror("Save Error", f"3D Plot 저장 중 오류가 발생했습니다:\n{e}")
             return
@@ -3237,7 +3258,7 @@ class CathPlotGUI:
         messagebox.showinfo("Success", f"Saved: {os.path.basename(selected_path)}")
 
     def _print_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
-                        equal_xyz=False, surfaces=None):
+                        equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d=""):
         """[추가] "3D Plot도 인쇄 지원" - 2D PRINT와 동일하게 EMF를 만들어
         프린터로 직접 그린다(_print_emf_and_cleanup/_pick_printer_dialog 재사용).
         2D처럼 어떤 plot을 고를지/용지 방향을 다시 묻는 절차는 3D 다이얼로그가
@@ -3251,7 +3272,8 @@ class CathPlotGUI:
             idx += 1
         try:
             self._generate_3d_file(temp_emf, "emf", curves, rot_x, rot_z, style, palette,
-                                    colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces)
+                                    colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces,
+                                    xlabel3d, ylabel3d, zlabel3d)
         except Exception as e:
             messagebox.showerror("Print Error", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
             return

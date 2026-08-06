@@ -85,11 +85,18 @@ def _upscale_png_dpi(png_path):
 DEFAULT_COLORS = ["black", "red", "blue", "green", "magenta", "cyan", "orange", "brown", "purple", "gray"]
 DEFAULT_LINESTYLES = ["solid", "dash", "dot", "dashdot", "shortdash", "dashdotdot"]
 DASH_PATTERNS = {
-    "dash": "6,3",
-    "dot": "1,2",
-    "dashdot": "8,3,1,3",       # dash를 길게(6->8), dot과의 틈새도 넓힘(2->3)
-    "shortdash": "3,2",
-    "dashdotdot": "8,3,1,3,1,3",  # 위와 동일하게 확대
+    # [수정 - 심각한 버그] "red curve가 Dash 지정해도 실선으로 보임" - 데이터가
+    # 빠르게 진동해서 그런 걸로 예전에 추정했었는데, 그건 틀렸음. 실측 확인:
+    # gnuplot(6.0.3)이 "dashtype (6,3)"처럼 콤마 뒤 공백이 없는 튜플을 stdin/
+    # 파일 어느 쪽으로 줘도 에러 없이 그냥 조용히 선 자체를 안 그려버림(빈
+    # plot이 됨) - 콤마 뒤 공백을 넣은 "dashtype (6, 3)"는 정상 동작함을
+    # 직접 렌더링 비교로 확인함. 이 파싱 특이사항 때문에 그동안 Dash/Dot 등
+    # 모든 점선 스타일이 항상 조용히 실패해서 실선처럼 보였던 것.
+    "dash": "6, 3",
+    "dot": "1, 2",
+    "dashdot": "8, 3, 1, 3",       # dash를 길게(6->8), dot과의 틈새도 넓힘(2->3)
+    "shortdash": "3, 2",
+    "dashdotdot": "8, 3, 1, 3, 1, 3",  # 위와 동일하게 확대
 }
 
 # Legend 샘플선 위에 마커를 표시할 때 쓰는 유니코드 기호 (pointtype 번호 -> 기호)
