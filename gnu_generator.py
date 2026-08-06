@@ -1860,14 +1860,27 @@ class GnuplotGenerator:
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
 
-        is_interactive = (fmt or "").lower() == "interactive"
+        _fmt = (fmt or "interactive").lower()
+        is_interactive = _fmt == "interactive"
         title_disp = os.path.splitext(os.path.basename(outfile))[0]
         lines = ["set encoding utf8"]
+        # [추가] "3D Plot도 저장/인쇄 지원" - 2D create_script처럼 확장자별로
+        # 맞는 gnuplot 터미널을 골라야 하는데, 3D 다이얼로그는 2D의 Frame
+        # Auto/Width/Height 설정이 없어 크기는 고정값(2D의 A4 기본값과 비슷한
+        # 비율)으로 둔다.
+        _3D_TERMINAL_MAP = {
+            "png": "set terminal pngcairo enhanced color font 'Malgun Gothic,14' size 11.7in,8.3in",
+            "jpg": "set terminal jpeg size 1600,900 enhanced font 'Malgun Gothic,14'",
+            "jpeg": "set terminal jpeg size 1600,900 enhanced font 'Malgun Gothic,14'",
+            "svg": "set terminal svg enhanced size 1123,797 font 'Malgun Gothic,14'",
+            "eps": "set terminal postscript eps enhanced color font 'Malgun Gothic,14'",
+            "emf": "set terminal emf enhanced size 1680,1200 font 'Malgun Gothic,14'",
+            "pdf": "set terminal pdfcairo enhanced color font 'Malgun Gothic,14' size 10in,8in",
+        }
         if is_interactive:
             lines.append(f"set terminal windows title '{title_disp}' font 'Malgun Gothic,11' size 1000,700")
         else:
-            # 2단계(Print/Save)에서 pdf/png 등에 맞게 확장 예정 - 우선 pdfcairo 기본값만.
-            lines.append("set terminal pdfcairo enhanced color font 'Malgun Gothic,14' size 10in,8in")
+            lines.append(_3D_TERMINAL_MAP.get(_fmt, _3D_TERMINAL_MAP["pdf"]))
             lines.append(f"set output '{outfile.replace(chr(92), '/')}'")
 
         lines.append(f"set view {rot_x},{rot_z}")

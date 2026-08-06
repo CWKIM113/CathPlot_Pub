@@ -3088,7 +3088,8 @@ class CathPlotGUI:
         ttk.Button(btn3d_row, text="+ Add 3D Comment", command=add_3d_comment_row).pack(side="left", padx=5)
         ttk.Button(btn3d_row, text="+ Add 3D Arrow", command=add_3d_arrow_row).pack(side="left", padx=5)
 
-        def do_plot():
+        def _collect_3d_state():
+            """Plot/Save/Print 버튼이 공통으로 쓰는 다이얼로그 입력값 수집(중복 방지)."""
             try:
                 rot_x = float(rot_x_var.get() or 60)
             except ValueError:
@@ -3127,15 +3128,29 @@ class CathPlotGUI:
                 curves_final.append(c2)
 
             surfaces_final = [s for v, s in surface_check_vars if v.get()]
+            return (curves_final, rot_x, rot_z, style_var.get(), palette_var.get(),
+                    colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get(), surfaces_final)
 
+        def do_plot():
+            args = _collect_3d_state()
             dialog.destroy()
-            self._execute_3d_plot(curves_final, rot_x, rot_z, style_var.get(), palette_var.get(),
-                                   colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get(),
-                                   surfaces_final)
+            self._execute_3d_plot(*args)
+
+        def do_save():
+            args = _collect_3d_state()
+            dialog.destroy()
+            self._save_3d_plot(*args)
+
+        def do_print():
+            args = _collect_3d_state()
+            dialog.destroy()
+            self._print_3d_plot(*args)
 
         ok_row = ttk.Frame(dialog)
         ok_row.pack(fill="x", padx=10, pady=10)
         ttk.Button(ok_row, text="Plot", command=do_plot).pack(side="left", padx=5)
+        ttk.Button(ok_row, text="Save", command=do_save).pack(side="left", padx=5)
+        ttk.Button(ok_row, text="Print", command=do_print).pack(side="left", padx=5)
         ttk.Button(ok_row, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
 
     def _execute_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
@@ -3167,6 +3182,92 @@ class CathPlotGUI:
             )
         except Exception as e:
             messagebox.showerror("3D Plot Error", str(e))
+
+    def _generate_3d_file(self, outfile, fmt, curves, rot_x, rot_z, style, palette, colorbox,
+                           annotations_3d, arrows_3d, equal_xyz, surfaces):
+        """Save/Print가 공통으로 쓰는, 파일로 직접 렌더링하는 부분만 뽑은 버전
+        (_execute_3d_plot의 화면(interactive) 전용 코드와 outfile/fmt만 다름)."""
+        raw_title = self.filename_var.get().strip() or "CathPlot"
+        zlabel = self.y2label_var.get()
+        if not zlabel and surfaces:
+            zlabel = surfaces[0].get("z_label", "")
+        generator = GnuplotGenerator(self.plot_dir)
+        generator.create_3d_script(
+            curves, outfile, fmt=fmt,
+            xlabel=self.xlabel_var.get() or "Time", ylabel=self.ylabel_var.get() or "Output #", zlabel=zlabel,
+            title=raw_title,
+            xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
+            rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
+            annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
+            surfaces=surfaces,
+        )
+
+    def _save_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
+                       equal_xyz=False, surfaces=None):
+        """[추가] "3D Plot도 저장 지원" - 2D SAVE와 동일한 포맷 선택 방식,
+        방향/Frame 크기 선택 등 2D의 복잡한 캐시 선택 로직 없이 지금 다이얼로그
+        입력값 그대로 바로 파일로 렌더링한다."""
+        os.makedirs(self.plot_dir, exist_ok=True)
+        raw_title = self.filename_var.get().strip() or "CathPlot"
+        safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
+        next_id = self.title_counters.get(safe_title, 0) + 1
+        default_name = f"{safe_title}_3D_{next_id}"
+        file_types = [
+            ("PNG Image (*.png)", "*.png"),
+            ("Portable Document Format (*.pdf)", "*.pdf"),
+            ("JPEG Image (*.jpg)", "*.jpg"),
+            ("SVG Vector Graphic (*.svg)", "*.svg"),
+            ("Enhanced Metafile (*.emf)", "*.emf"),
+            ("Encapsulated PostScript (*.eps)", "*.eps"),
+        ]
+        selected_path = filedialog.asksaveasfilename(
+            initialdir=self.plot_dir, initialfile=default_name,
+            title="Save 3D Plot As...", filetypes=file_types, defaultextension=".png")
+        if not selected_path:
+            return
+        self.title_counters[safe_title] = next_id
+        ext = os.path.splitext(selected_path)[1].lower().replace(".", "") or "png"
+        try:
+            self._generate_3d_file(os.path.abspath(selected_path), ext, curves, rot_x, rot_z, style, palette,
+                                    colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces)
+        except Exception as e:
+            messagebox.showerror("Save Error", f"3D Plot 저장 중 오류가 발생했습니다:\n{e}")
+            return
+        self.update_plot_file_list()
+        messagebox.showinfo("Success", f"Saved: {os.path.basename(selected_path)}")
+
+    def _print_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
+                        equal_xyz=False, surfaces=None):
+        """[추가] "3D Plot도 인쇄 지원" - 2D PRINT와 동일하게 EMF를 만들어
+        프린터로 직접 그린다(_print_emf_and_cleanup/_pick_printer_dialog 재사용).
+        2D처럼 어떤 plot을 고를지/용지 방향을 다시 묻는 절차는 3D 다이얼로그가
+        이미 그 자리에서 설정을 받은 뒤라 생략하고 프린터만 고른다."""
+        os.makedirs(self.plot_dir, exist_ok=True)
+        idx = 1
+        while True:
+            temp_emf = os.path.join(self.plot_dir, f"Print_Job_Temp_3D_{idx}.emf")
+            if not os.path.exists(temp_emf):
+                break
+            idx += 1
+        try:
+            self._generate_3d_file(temp_emf, "emf", curves, rot_x, rot_z, style, palette,
+                                    colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces)
+        except Exception as e:
+            messagebox.showerror("Print Error", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
+            return
+        if not os.path.exists(temp_emf):
+            return
+        printer_name = self._pick_printer_dialog()
+        if not printer_name:
+            try:
+                os.remove(temp_emf)
+            except OSError:
+                pass
+            return
+        raw_title = self.filename_var.get().strip() or "CathPlot"
+        threading.Thread(
+            target=self._print_emf_and_cleanup, args=(temp_emf, raw_title, printer_name, "landscape"), daemon=True
+        ).start()
 
     def get_temp_dir(self):
         temp_dir = os.path.join(self.cwd, "temp_sorted")
