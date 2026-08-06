@@ -3020,7 +3020,11 @@ class CathPlotGUI:
         colorbox_var = tk.BooleanVar(value=True)
         marker_size_var_3d = tk.StringVar(value="M")
         ttk.Label(row2, text="Style:").pack(side="left")
-        ttk.Combobox(row2, textvariable=style_var, values=["lines", "points", "linespoints"],
+        # [추가] "s-plot에 pm3d 옵션 필요?" - Surface(splot) 데이터만 pm3d(면
+        # 채우기)로 그릴 수 있음(일반 curve는 grid 형식이 아니라 pm3d 의미가
+        # 없어 lines로 그대로 그려짐). 여러 surface를 겹쳐 비교할 때는 선
+        # 스타일(dashtype 구분)이 더 나을 수 있어 강제 전환 대신 선택 옵션으로 추가.
+        ttk.Combobox(row2, textvariable=style_var, values=["lines", "points", "linespoints", "pm3d"],
                      width=12, state="readonly").pack(side="left", padx=(2, 10))
         ttk.Label(row2, text="Palette:").pack(side="left")
         ttk.Combobox(row2, textvariable=palette_var, values=["rainbow", "grayscale", "bluewhitered"],

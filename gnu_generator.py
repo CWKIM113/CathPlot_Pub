@@ -2009,6 +2009,18 @@ class GnuplotGenerator:
         if has_title and len(curves_3d) + len(surfaces or []) > 1:
             lines.append("set key outside right top box")
 
+        # [추가] "s-plot에 pm3d 옵션 필요?" - CATHENA surface(splot) 데이터는
+        # 이미 gnuplot의 grid(격자) 형식(빈 줄로 블록 구분)이라 pm3d로 그리면
+        # 선(wireframe) 대신 실제 색이 채워진 연속된 면(surface)으로 보임 -
+        # 단일/소수 surface를 볼 때는 이게 더 "surface답게" 보이지만, surface를
+        # 여러 개 겹쳐 비교할 때는 불투명한 면끼리 서로 가려버려서 오히려
+        # 구분이 더 안 될 수 있음(위 dashtype 구분은 선 스타일이라 pm3d 면에는
+        # 적용이 안 됨) - 그래서 강제 전환하지 않고, style 선택에 "pm3d" 옵션을
+        # 추가해서 사용자가 상황에 맞게 고르게 한다.
+        _use_pm3d = (style or "").lower() == "pm3d"
+        if _use_pm3d:
+            lines.append("set pm3d depthorder")
+
         splot_parts = []
         for c in curves_3d:
             abs_path = c["dat_file"] if os.path.isabs(c["dat_file"]) else os.path.abspath(c["dat_file"])
@@ -2064,11 +2076,15 @@ class GnuplotGenerator:
             path = path.replace("\\", "/")
             _s_title = (s.get("label") or "").strip()
             _s_title_clause = f'title "{_s_title.replace("_", chr(92)+chr(92)+"_")}"' if (_s_title and (len(curves_3d) + len(surfaces or [])) > 1) else "notitle"
-            _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
-            _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
             # surface 원본 파일은 이미 gnuplot이 그대로 읽을 수 있는 형식('#'/빈 줄
             # 자동 무시)이라 별도 가공 없이 컬럼 1:2:3(time:output_no:value)을 그대로 쓴다.
-            splot_parts.append(f'"{path}" using 1:2:3 {_s_title_clause} with lines palette{_s_dash_clause}')
+            if _use_pm3d:
+                # pm3d는 면(facet)이라 dashtype이 적용 안 되므로 생략.
+                splot_parts.append(f'"{path}" using 1:2:3 {_s_title_clause} with pm3d')
+            else:
+                _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
+                _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
+                splot_parts.append(f'"{path}" using 1:2:3 {_s_title_clause} with lines palette{_s_dash_clause}')
 
         lines.append("splot " + ", \\\n      ".join(splot_parts))
 
