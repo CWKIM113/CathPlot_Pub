@@ -1251,54 +1251,13 @@ class GnuplotGenerator:
                 _size_clause = f" size graph {_head_size},15" if _head_size else ""
                 lines.append(f'set arrow {i+1} from {gx1},{gy1} to {gx2},{gy2} {head}{_size_clause}{_color_clause}')
 
-        # [추가] "Circle(중심축 2개 타원, 반지름 입력, 좌표값/% 선택, 반지름 1개만
-        # 입력하면 원, 두께는 Arrow와 동일)" - 중심(x,y)과 반지름(rx,ry)에 Comment/
-        # Arrow와 동일한 coord_mode(좌표값/%) 변환을 그대로 재사용한다. ry가
-        # 비어있으면 rx를 그대로 써서 원이 된다. 두께는 Arrow처럼 별도 지정 없이
-        # gnuplot 기본값을 그대로 써서 서로 같게 맞춘다.
-        if circles:
-            for i, ell in enumerate(circles):
-                _mode = ell.get("coord_mode", "pct")
-                gx = _coord_clause(ell.get("x", ""), _mode, 0.5)
-                gy = _coord_clause(ell.get("y", ""), _mode, 0.5)
-                rx_val = (ell.get("rx", "") or "").strip()
-                ry_raw = (ell.get("ry", "") or "").strip()
-                # [수정 - 버그] "Ry를 비워서 원을 그렸는데 실제로는 타원으로 보임" -
-                # size graph/first X,Y는 "축 가로/세로 크기(또는 데이터 범위)에
-                # 대한 비율"이라, 축이 정사각형이 아니면(대부분 그럼, 예: Time
-                # 대 값) Rx=Ry로 넣어도 실제 물리적 가로/세로 길이가 달라져
-                # 타원처럼 보였음. Ry를 비워서 "원"을 의도한 경우, %(pct)와
-                # 좌표값(data) 모드 둘 다 축 가로세로 물리 비율을 반영해서
-                # Ry를 보정한다. Ry를 직접 입력했으면 사용자가 명시한 값을
-                # 그대로 존중해 보정하지 않는다.
-                if not ry_raw and _mode == "data":
-                    try:
-                        x_nice = self._nice_axis_range(plotdef, "x")
-                        y_nice = self._nice_axis_range(plotdef, "y1")
-                        x_lo, x_hi, _ = x_nice
-                        y_lo, y_hi, _ = y_nice
-                        x_range = x_hi - x_lo
-                        y_range = y_hi - y_lo
-                        # rx(데이터 단위)를 실제 물리(inch) 크기로 바꾼 뒤, 같은
-                        # 물리 크기가 되도록 y축 데이터 단위로 다시 환산한다.
-                        rx_phys_in = float(rx_val) * (axis_w_in / x_range)
-                        ry_val = str(rx_phys_in / (axis_h_in / y_range))
-                    except Exception:
-                        ry_val = rx_val
-                elif not ry_raw:
-                    try:
-                        ry_val = str(float(rx_val) * (axis_w_in / max(axis_h_in, 0.01)))
-                    except (TypeError, ValueError):
-                        ry_val = rx_val
-                else:
-                    ry_val = ry_raw or rx_val
-                grx = _coord_clause(rx_val, _mode, 0.05)
-                gry = _coord_clause(ry_val, _mode, 0.05)
-                _color = (ell.get("color") or "").strip() or "black"
-                lines.append(
-                    f'set object {i+1} ellipse at {gx},{gy} size {grx},{gry} '
-                    f'front fillstyle empty border lc rgb "{_color}"'
-                )
+        # [수정 - 버그] Circle(ellipse) 렌더링은 axis_w_in/axis_h_in(축 물리
+        # 가로세로 비율)이 있어야 Ry 자동보정이 되는데, 이 지점에서는 아직
+        # axis_w_in이 None(단일 plot은 한참 아래 "if axis_w_in is None:"
+        # 블록에서야 실제 값이 계산됨)이라 항상 예외로 빠져 보정이 조용히
+        # 무시되고 있었음("%로 Rx만 넣어도 타원으로 나옴" 실측 확인) - 이
+        # 블록 자체를 axis_w_in/axis_h_in이 확정된 뒤로 옮긴다(_render_circles
+        # 참고, 아래로 이동).
 
         tic_size = int(9 * f_scale)
         if getattr(plotdef, "is_print_mode", False):
@@ -1374,6 +1333,58 @@ class GnuplotGenerator:
             except ValueError:
                 axis_w_in = 5.0
             axis_w_in = max(axis_w_in, 0.5)
+
+        # [추가] "Circle(중심축 2개 타원, 반지름 입력, 좌표값/% 선택, 반지름 1개만
+        # 입력하면 원, 두께는 Arrow와 동일)" - 중심(x,y)과 반지름(rx,ry)에 Comment/
+        # Arrow와 동일한 coord_mode(좌표값/%) 변환을 그대로 재사용한다. ry가
+        # 비어있으면 rx를 그대로 써서 원이 된다. 두께는 Arrow처럼 별도 지정 없이
+        # gnuplot 기본값을 그대로 써서 서로 같게 맞춘다.
+        # [수정 - 위치 이동] axis_w_in/axis_h_in이 확정된(위에서 이미 계산된)
+        # 뒤로 옮김 - 예전 위치(annotations/arrows 바로 다음)에서는 axis_w_in이
+        # 아직 None이라 Ry 자동보정이 항상 예외로 빠져 조용히 무시되고 있었음.
+        if circles:
+            for i, ell in enumerate(circles):
+                _mode = ell.get("coord_mode", "pct")
+                gx = _coord_clause(ell.get("x", ""), _mode, 0.5)
+                gy = _coord_clause(ell.get("y", ""), _mode, 0.5)
+                rx_val = (ell.get("rx", "") or "").strip()
+                ry_raw = (ell.get("ry", "") or "").strip()
+                # [수정 - 버그] "Ry를 비워서 원을 그렸는데 실제로는 타원으로 보임" -
+                # size graph/first X,Y는 "축 가로/세로 크기(또는 데이터 범위)에
+                # 대한 비율"이라, 축이 정사각형이 아니면(대부분 그럼, 예: Time
+                # 대 값) Rx=Ry로 넣어도 실제 물리적 가로/세로 길이가 달라져
+                # 타원처럼 보였음. Ry를 비워서 "원"을 의도한 경우, %(pct)와
+                # 좌표값(data) 모드 둘 다 축 가로세로 물리 비율을 반영해서
+                # Ry를 보정한다(기본값 = 비율 보정된 값, Ry를 직접 입력했으면
+                # 그 값으로 덮어씀 - "처음부터 Ry=Rx 두고 입력 있으면 바꾼다").
+                if not ry_raw and _mode == "data":
+                    try:
+                        x_nice = self._nice_axis_range(plotdef, "x")
+                        y_nice = self._nice_axis_range(plotdef, "y1")
+                        x_lo, x_hi, _ = x_nice
+                        y_lo, y_hi, _ = y_nice
+                        x_range = x_hi - x_lo
+                        y_range = y_hi - y_lo
+                        # rx(데이터 단위)를 실제 물리(inch) 크기로 바꾼 뒤, 같은
+                        # 물리 크기가 되도록 y축 데이터 단위로 다시 환산한다.
+                        rx_phys_in = float(rx_val) * (axis_w_in / x_range)
+                        ry_val = str(rx_phys_in / (axis_h_in / y_range))
+                    except Exception:
+                        ry_val = rx_val
+                elif not ry_raw:
+                    try:
+                        ry_val = str(float(rx_val) * (axis_w_in / max(axis_h_in, 0.01)))
+                    except (TypeError, ValueError):
+                        ry_val = rx_val
+                else:
+                    ry_val = ry_raw or rx_val
+                grx = _coord_clause(rx_val, _mode, 0.05)
+                gry = _coord_clause(ry_val, _mode, 0.05)
+                _color = (ell.get("color") or "").strip() or "black"
+                lines.append(
+                    f'set object {i+1} ellipse at {gx},{gy} size {grx},{gry} '
+                    f'front fillstyle empty border lc rgb "{_color}"'
+                )
 
         # Legend box 테두리는 Frame(plot 외곽 border) 두께 이하여야 하므로,
         # 사용자가 더 크게 입력해도 Frame 두께로 제한한다
