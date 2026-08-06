@@ -1919,8 +1919,19 @@ class GnuplotGenerator:
 
         _xlabel_rot = _axis_label_rotate_deg(math.cos(_rz_rad), -_R_3D * math.cos(_rx_rad) * math.sin(_rz_rad))
         _ylabel_rot = _axis_label_rotate_deg(math.sin(_rz_rad), _R_3D * math.cos(_rx_rad) * math.cos(_rz_rad))
-        if xlabel: lines.append(f'set xlabel "{xlabel}" rotate by {_xlabel_rot:.2f}')
-        if ylabel: lines.append(f'set ylabel "{ylabel}" rotate by {_ylabel_rot:.2f}')
+        # [수정 - 실측 확인] gnuplot의 "windows"(대화형) 터미널은 3D xlabel/ylabel의
+        # 임의 각도 "rotate by"를 지원하지 않고 그냥 무시(항상 가로로 표시)함 -
+        # 실제 라이브 창을 스크린샷으로 직접 캡처해 확인함. zlabel의 90도만
+        # 됐던 건 90이 예외적으로 지원되는 값이었을 뿐. pdf/png(pdfcairo)는
+        # 임의 각도가 정상 동작함(별도 렌더링 테스트로 확인). 그래서 interactive는
+        # 0/90/-90 중 가장 가까운 값으로 스냅해서 최소한 가로/세로는 맞춘다.
+        if is_interactive:
+            def _snap90(a):
+                return min((0, 90, -90), key=lambda c: abs(a - c))
+            _xlabel_rot = _snap90(_xlabel_rot)
+            _ylabel_rot = _snap90(_ylabel_rot)
+        if xlabel: lines.append(f'set xlabel "{xlabel}" rotate by {_xlabel_rot:.2f} offset 0,-1')
+        if ylabel: lines.append(f'set ylabel "{ylabel}" rotate by {_ylabel_rot:.2f} offset 0,-1')
         # [수정] "3D 축 title 각도가 축 방향과 다름, 특히 Z축은 90도 다름" -
         # gnuplot은 zlabel을 회전 지정 없으면 항상 가로(수평)로 그리는데, Z축은
         # 화면에서 수직으로 보이니 어긋나 보였던 것. Z축 방향에 맞춰 90도 회전
