@@ -1843,7 +1843,10 @@ class GnuplotGenerator:
             lines.append("unset colorbox")
         if xlabel: lines.append(f'set xlabel "{xlabel}"')
         if ylabel: lines.append(f'set ylabel "{ylabel}"')
-        if zlabel: lines.append(f'set zlabel "{zlabel}"')
+        # [수정] "3D 축 title 각도가 축 방향과 다름, 특히 Z축은 90도 다름" -
+        # gnuplot은 zlabel을 회전 지정 없으면 항상 가로(수평)로 그리는데, Z축은
+        # 화면에서 수직으로 보이니 어긋나 보였던 것. Z축 방향에 맞춰 90도 회전.
+        if zlabel: lines.append(f'set zlabel "{zlabel}" rotate by 90')
         if title: lines.append(f'set title "{title}"')
 
         # [추가] "comment, arrow 등은 3D 전용으로 popup 창에서 입력, 이때는
