@@ -1264,14 +1264,28 @@ class GnuplotGenerator:
                 rx_val = (ell.get("rx", "") or "").strip()
                 ry_raw = (ell.get("ry", "") or "").strip()
                 # [수정 - 버그] "Ry를 비워서 원을 그렸는데 실제로는 타원으로 보임" -
-                # size graph X,Y는 "축 가로/세로 크기에 대한 비율"이라, 축이
-                # 정사각형이 아니면(대부분 그럼, 예: Time 대 값) Rx=Ry(비율)로
-                # 넣어도 실제 물리적 가로/세로 길이가 달라져 타원처럼 보였음.
-                # Ry를 비워서 "원"을 의도한 경우(%, 즉 pct 모드)만, 축 가로세로
-                # 물리 비율(axis_w_in/axis_h_in)을 반영해 실제로 원이 되게
-                # Ry 비율을 보정한다. Ry를 직접 입력했거나 좌표값(data) 모드면
-                # 사용자가 명시한 값을 그대로 존중해 보정하지 않는다.
-                if not ry_raw and _mode != "data":
+                # size graph/first X,Y는 "축 가로/세로 크기(또는 데이터 범위)에
+                # 대한 비율"이라, 축이 정사각형이 아니면(대부분 그럼, 예: Time
+                # 대 값) Rx=Ry로 넣어도 실제 물리적 가로/세로 길이가 달라져
+                # 타원처럼 보였음. Ry를 비워서 "원"을 의도한 경우, %(pct)와
+                # 좌표값(data) 모드 둘 다 축 가로세로 물리 비율을 반영해서
+                # Ry를 보정한다. Ry를 직접 입력했으면 사용자가 명시한 값을
+                # 그대로 존중해 보정하지 않는다.
+                if not ry_raw and _mode == "data":
+                    try:
+                        x_nice = self._nice_axis_range(plotdef, "x")
+                        y_nice = self._nice_axis_range(plotdef, "y1")
+                        x_lo, x_hi, _ = x_nice
+                        y_lo, y_hi, _ = y_nice
+                        x_range = x_hi - x_lo
+                        y_range = y_hi - y_lo
+                        # rx(데이터 단위)를 실제 물리(inch) 크기로 바꾼 뒤, 같은
+                        # 물리 크기가 되도록 y축 데이터 단위로 다시 환산한다.
+                        rx_phys_in = float(rx_val) * (axis_w_in / x_range)
+                        ry_val = str(rx_phys_in / (axis_h_in / y_range))
+                    except Exception:
+                        ry_val = rx_val
+                elif not ry_raw:
                     try:
                         ry_val = str(float(rx_val) * (axis_w_in / max(axis_h_in, 0.01)))
                     except (TypeError, ValueError):
