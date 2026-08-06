@@ -101,6 +101,16 @@ class DatFile:
 
     data_start_line: int
 
+    # [추가] gnuplot splot용 CATHENA 출력(모든 헤더 줄에 '#'가 붙고, 데이터가
+    # "time output_no value" 3컬럼 x n_outputs줄 + 빈 줄 반복 블록 구조인
+    # surface 포맷) 여부. 일반 CATHENA .dat와는 데이터 구조가 완전히 달라서
+    # (여러 컬럼 한 줄이 아니라 3컬럼 여러 줄), 3D-Plot에서 별도 취급이 필요함.
+    is_surface: bool = False
+
+    # [추가] surface 포맷의 각 채널 이름이 "VOID:HTSECT(1)", "VOID:HTSECT(2)"처럼
+    # "공통이름(위치번호)" 패턴이면, 그 공통이름만 뽑아서 Z축 라벨 기본값으로 쓴다.
+    surface_base_name: str = ""
+
 
 # ==========================================================
 # PARSER
@@ -114,11 +124,101 @@ class CathenaDatParser:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             lines = [x.rstrip("\n") for x in f]
 
+        # [추가] gnuplot splot용 CATHENA surface 출력 감지 - 일반 CATHENA와
+        # 헤더 내용은 같지만 모든 줄(날짜/타이틀/OUTPUT#/변수명 포함)에 '#'가
+        # 붙어있는 게 특징(gnuplot이 '#'로 시작하는 줄을 자동으로 주석 처리해
+        # 그냥 splot에 넣어도 되게 만든 포맷). 1번째 줄이 '#'로 시작하고
+        # OUTPUT # 패턴도 있으면 이 포맷으로 판단한다.
+        if lines and lines[0].strip().startswith("#") and any("OUTPUT #" in line.upper() for line in lines[:20]):
+            return self._parse_cathena_splot(lines, path)
         # CATHENA 파일 감지 (OUTPUT # 키워드 존재 여부)
         if any("OUTPUT #" in line.upper() for line in lines[:15]):
             return self._parse_cathena(lines, path)
         else:
             return self._parse_generic(lines, path)
+
+    @staticmethod
+    def _strip_hash(line):
+        """줄 맨 앞의 '#'(과 그 뒤 공백 1개)만 제거한다(내용 중간의 #는 그대로 둠)."""
+        s = line.rstrip()
+        if s.startswith("#"):
+            s = s[1:]
+            if s.startswith(" "):
+                s = s[1:]
+        return s
+
+    @staticmethod
+    def _surface_base_name(names):
+        """"VOID:HTSECT(1)", "VOID:HTSECT(2)", ... 처럼 "공통이름(위치번호)"
+        패턴이면 공통이름만 뽑아 반환한다(패턴이 안 맞으면 첫 채널 이름 그대로)."""
+        m = re.match(r"^(.*)\(\s*\d+\s*\)\s*$", names[0]) if names else None
+        base = m.group(1).strip() if m else (names[0] if names else "")
+        # 모든 채널이 같은 base로 시작하는지 확인 - 아니면 그냥 첫 채널 이름 사용
+        if base and all(n.startswith(base) for n in names):
+            return base
+        return names[0] if names else ""
+
+    def _parse_cathena_splot(self, lines, path):
+        """gnuplot splot용 CATHENA surface 출력 파싱. 헤더는 일반 CATHENA와
+        같은 내용이되 전부 '#'가 붙어있고, OUTPUT # 마다 "# OUTPUT # N:" 줄
+        다음에 "# 변수명" 줄이 하나(또는 그 사이 "#"만 있는 구분줄들)로 온다.
+        데이터 본문은 재가공하지 않는다 - gnuplot이 '#' 줄/빈 줄을 그대로
+        무시하고 using 1:2:3 with lines로 바로 splot 가능한 형식이라, 여기서는
+        메타데이터(채널 이름, 개수)만 뽑아내면 충분하다."""
+        stripped = [self._strip_hash(l) if l.strip().startswith("#") else l.rstrip() for l in lines]
+
+        date_line = stripped[0]
+        title_lines = [stripped[1], stripped[2]] if len(stripped) > 2 else []
+
+        # "# 10" 처럼 정수만 있는 줄을 n_outputs로 사용(중복 헤더가 있어도
+        # 첫 번째로 발견되는 순수 정수 줄을 채택)
+        n_outputs = 0
+        for s in stripped[:10]:
+            if s.strip().isdigit():
+                n_outputs = int(s.strip())
+                break
+
+        variables = [PlotVariable(output_no=0, data_column=1, signals=[SignalDefinition(name="Time")])]
+        names = []
+        i = 0
+        while i < len(stripped):
+            m = self.output_re.search(stripped[i])
+            if m:
+                output_no = int(m.group(1))
+                # OUTPUT # 줄 다음, 다음 OUTPUT#/데이터 줄이 나오기 전까지의
+                # 비어있지 않은 줄을 변수명으로 취급(보통 1줄).
+                j = i + 1
+                sig_name = f"OUTPUT #{output_no}"
+                while j < len(stripped):
+                    txt = stripped[j].strip()
+                    if not txt or self.output_re.search(stripped[j]) or self._is_numeric_row(lines[j]):
+                        break
+                    sig_name = txt
+                    j += 1
+                variables.append(PlotVariable(output_no=output_no, data_column=output_no + 1,
+                                               signals=[SignalDefinition(name=sig_name)]))
+                names.append(sig_name)
+            i += 1
+
+        data_start_line = None
+        for i, raw in enumerate(lines):
+            if self._is_numeric_row(raw):
+                data_start_line = i
+                break
+        if data_start_line is None:
+            raise RuntimeError("DATA section not found.")
+
+        return DatFile(
+            filename=path.name,
+            date_line=date_line,
+            title_lines=title_lines,
+            format_line="",
+            n_outputs=n_outputs or len(names),
+            variables=variables,
+            data_start_line=data_start_line,
+            is_surface=True,
+            surface_base_name=self._surface_base_name(names),
+        )
 
     def _parse_cathena(self, lines, path):
         if len(lines) < 6:

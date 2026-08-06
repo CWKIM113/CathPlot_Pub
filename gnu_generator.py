@@ -1793,7 +1793,7 @@ class GnuplotGenerator:
                           xlog=False, ylog=False, zlog=False,
                           rot_x=60, rot_z=30, style="lines", palette="rainbow",
                           colorbox=True, annotations_3d=None, arrows_3d=None,
-                          equal_xyz=False):
+                          equal_xyz=False, surfaces=None):
         """[추가] 3D Plot(splot) - "X/Y1/Y2를 X/Y/Z로 매핑, 여러 세트를 같은 화면에
         겹쳐 그리고 Z값 기준 palette(낮음=파랑, 높음=빨강)로 색칠"하는 기능.
         2D curve와 동일하게 gnuplot이 dat 파일을 직접 읽게(using 컬럼 인덱스)
@@ -1807,6 +1807,11 @@ class GnuplotGenerator:
         (X,Y,Z) 좌표값 전용 주석("이때는 좌표값으로 통일") - {"text","x","y","z","color"} /
         {"x1","y1","z1","x2","y2","z2","color","head_size"}.
         Circle은 gnuplot이 3D 타원/구를 기본 지원하지 않아 이번 단계에서는 미지원.
+        surfaces: [{dat_file, label}, ...] - gnuplot splot용 CATHENA surface
+        출력(모든 헤더 줄에 '#', 데이터가 "time output_no value" 3컬럼씩 블록
+        반복). 원본 파일이 이미 gnuplot이 그대로 읽을 수 있는 형식(#/빈 줄은
+        gnuplot이 자동 무시)이라 별도 가공 없이 "using 1:2:3 with lines"로
+        바로 splot에 추가한다.
         equal_xyz: "set view equal xyz" - X/Y/Z를 데이터 단위 기준으로 동일 비율
         스케일링. CathPlot 축들은 단위가 제각각(예: Y가 X보다 10000배 큰 값)이라
         기본은 OFF - 켜면 값이 작은 축이 거의 한 점/직선으로 눌려 보일 수 있음
@@ -1918,6 +1923,19 @@ class GnuplotGenerator:
                 _title_clause = "notitle"
 
             splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {gp_style}{_pt_clause} palette')
+
+        for s in (surfaces or []):
+            abs_path = s["dat_file"] if os.path.isabs(s["dat_file"]) else os.path.abspath(s["dat_file"])
+            try:
+                path = os.path.relpath(abs_path, start=plot_dir)
+            except ValueError:
+                path = abs_path
+            path = path.replace("\\", "/")
+            _s_title = (s.get("label") or "").strip()
+            _s_title_clause = f'title "{_s_title.replace("_", chr(92)+chr(92)+"_")}"' if (_s_title and (len(curves_3d) + len(surfaces or [])) > 1) else "notitle"
+            # surface 원본 파일은 이미 gnuplot이 그대로 읽을 수 있는 형식('#'/빈 줄
+            # 자동 무시)이라 별도 가공 없이 컬럼 1:2:3(time:output_no:value)을 그대로 쓴다.
+            splot_parts.append(f'"{path}" using 1:2:3 {_s_title_clause} with lines palette')
 
         lines.append("splot " + ", \\\n      ".join(splot_parts))
 

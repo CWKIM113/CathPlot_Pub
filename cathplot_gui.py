@@ -2245,6 +2245,21 @@ class CathPlotGUI:
     COORD_MODE_DISPLAY = {"pct": "%", "data": "좌표값"}
     COORD_MODE_FROM_DISPLAY = {v: k for k, v in COORD_MODE_DISPLAY.items()}
 
+    def _make_xyz_combo_entry(self, parent, x_var, y_var, z_var, init_x, init_y, init_z, width=14):
+        """"(x,y,z)" 한 칸짜리 입력 - 3D Comment/Arrow 좌표용. _make_xy_combo_entry와
+        같은 방식이나 3개 값을 다룬다."""
+        xyz_var = tk.StringVar(value=f"{init_x},{init_y},{init_z}" if (init_x or init_y or init_z) else "")
+
+        def _sync_from_xyz(*_):
+            parts = xyz_var.get().split(",")
+            x_var.set(parts[0].strip() if len(parts) > 0 else "")
+            y_var.set(parts[1].strip() if len(parts) > 1 else "")
+            z_var.set(parts[2].strip() if len(parts) > 2 else "")
+
+        xyz_var.trace_add("write", _sync_from_xyz)
+        entry = ttk.Entry(parent, textvariable=xyz_var, width=width)
+        return entry, xyz_var
+
     def _make_xy_combo_entry(self, parent, x_var, y_var, init_x, init_y, width=10):
         """"(x,y)" 한 칸짜리 입력을 만들고, x_var/y_var(내부 저장용 StringVar)와
         서로 동기화한다. 입력칸이 너무 많다는 요청으로 X/Y 두 칸을 하나로
@@ -2513,6 +2528,20 @@ class CathPlotGUI:
 
             frame.grid(row=valid_file_count // 3, column=valid_file_count % 3, sticky="nw", padx=2, pady=2)
             valid_file_count += 1
+
+            # [추가] gnuplot splot용 CATHENA surface 파일(is_surface)은 일반
+            # Y1/Y2 변수 선택이 의미가 없는 구조(한 파일 전체가 격자 하나)라,
+            # 안내 문구만 보여주고 나머지 변수 선택 UI는 건너뛴다. 실제 3D
+            # surface로 쓰려면 "3D Plot" 버튼을 누르면 자동으로 목록에 뜬다.
+            if getattr(meta, "is_surface", False):
+                ttk.Label(
+                    frame,
+                    text=f"Surface(splot) 데이터 - 채널 {meta.n_outputs}개\n"
+                         f"Z: {meta.surface_base_name or '(이름 없음)'}\n"
+                         f"'3D Plot' 버튼에서 바로 사용 가능",
+                    foreground="darkgreen", justify="left"
+                ).pack(anchor="w", padx=4, pady=4)
+                continue
 
             header_f = ttk.Frame(frame)
             header_f.pack(fill="x", padx=2)
@@ -2900,10 +2929,28 @@ class CathPlotGUI:
                 skipped.append(f"{bn}: {', '.join(reason)}")
         return eligible, skipped
 
+    def _collect_3d_surfaces(self):
+        """[추가] gnuplot splot용 CATHENA surface 파일(is_surface) 목록을 모은다.
+        일반 3D curve(여러 2D 값을 X/Y/Z로 매핑)와 달리, 이 파일들은 원본
+        그대로 "using 1:2:3"으로 바로 splot 가능한 격자 데이터라 별도 목록으로
+        수집한다(Y1/Y2 선택 여부와 무관하게, 로드된 순간부터 바로 사용 가능)."""
+        surfaces = []
+        for info in self.file_rows:
+            meta = info.get("meta")
+            if meta is not None and getattr(meta, "is_surface", False):
+                surfaces.append({
+                    "dat_file": info["filename"],
+                    "label": os.path.basename(info["filename"]),
+                    "n_outputs": meta.n_outputs,
+                    "z_label": meta.surface_base_name or os.path.basename(info["filename"]),
+                })
+        return surfaces
+
     def open_3d_plot_dialog(self):
         eligible, skipped = self._collect_3d_curves()
-        if not eligible:
-            msg = "3D로 그릴 수 있는 파일이 없습니다.\n(파일마다 Y1 1개 + Y2 1개가 선택되어 있어야 합니다.)"
+        surfaces = self._collect_3d_surfaces()
+        if not eligible and not surfaces:
+            msg = "3D로 그릴 수 있는 파일이 없습니다.\n(파일마다 Y1 1개 + Y2 1개가 선택되어 있어야 합니다.\nSurface(splot) 파일은 로드만 하면 바로 사용 가능합니다.)"
             if skipped:
                 msg += "\n\n제외된 파일:\n" + "\n".join(skipped)
             messagebox.showwarning("3D Plot", msg)
@@ -2923,8 +2970,22 @@ class CathPlotGUI:
 
         info_row = ttk.Frame(dialog)
         info_row.pack(fill="x", padx=10, pady=(8, 2))
-        ttk.Label(info_row, text=f"3D curve {len(eligible)}개: " + ", ".join(c["label"] for c in eligible),
-                  foreground="darkgreen").pack(side="left")
+        if eligible:
+            ttk.Label(info_row, text=f"3D curve {len(eligible)}개: " + ", ".join(c["label"] for c in eligible),
+                      foreground="darkgreen").pack(side="left")
+
+        # [추가] Surface(splot) 파일 - 로드된 것 전부 기본 체크(선택 해제 가능).
+        surface_check_vars = []
+        if surfaces:
+            surf_frame = ttk.LabelFrame(dialog, text="Surface(splot) 데이터")
+            surf_frame.pack(fill="x", padx=10, pady=5)
+            for s in surfaces:
+                v = tk.BooleanVar(value=True)
+                ttk.Checkbutton(
+                    surf_frame, variable=v,
+                    text=f"{s['label']} (채널 {s['n_outputs']}개, Z={s['z_label']})"
+                ).pack(anchor="w", padx=4)
+                surface_check_vars.append((v, s))
 
         row1 = ttk.Frame(dialog)
         row1.pack(fill="x", padx=10, pady=5)
@@ -3000,12 +3061,9 @@ class CathPlotGUI:
             ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
             ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 3))
             ttk.Entry(row, textvariable=data['txt'], width=14).pack(side="left", padx=2)
-            ttk.Label(row, text="X:").pack(side="left")
-            ttk.Entry(row, textvariable=data['x'], width=6).pack(side="left")
-            ttk.Label(row, text="Y:").pack(side="left")
-            ttk.Entry(row, textvariable=data['y'], width=6).pack(side="left")
-            ttk.Label(row, text="Z:").pack(side="left")
-            ttk.Entry(row, textvariable=data['z'], width=6).pack(side="left")
+            ttk.Label(row, text="(X,Y,Z):").pack(side="left")
+            xyz_entry, _ = self._make_xyz_combo_entry(row, data['x'], data['y'], data['z'], "", "", "")
+            xyz_entry.pack(side="left", padx=2)
 
         def add_3d_arrow_row():
             row = ttk.Frame(a3d_list_frame)
@@ -3018,10 +3076,12 @@ class CathPlotGUI:
             ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
             ttk.Combobox(row, textvariable=data['size'], values=list(self.ARROW_SIZE_MAP.keys()), width=4, state="readonly").pack(side="right", padx=2)
             ttk.Label(row, text="[Arrow]", foreground="darkred").pack(side="left", padx=(0, 3))
-            for lbl, k, w in [("X1:", 'x1', 5), ("Y1:", 'y1', 5), ("Z1:", 'z1', 5),
-                               ("→X2:", 'x2', 5), ("Y2:", 'y2', 5), ("Z2:", 'z2', 5)]:
-                ttk.Label(row, text=lbl).pack(side="left")
-                ttk.Entry(row, textvariable=data[k], width=w).pack(side="left")
+            ttk.Label(row, text="(X1,Y1,Z1):").pack(side="left")
+            xyz1_entry, _ = self._make_xyz_combo_entry(row, data['x1'], data['y1'], data['z1'], "", "", "", width=12)
+            xyz1_entry.pack(side="left", padx=2)
+            ttk.Label(row, text="→ (X2,Y2,Z2):").pack(side="left")
+            xyz2_entry, _ = self._make_xyz_combo_entry(row, data['x2'], data['y2'], data['z2'], "", "", "", width=12)
+            xyz2_entry.pack(side="left", padx=2)
 
         btn3d_row = ttk.Frame(anno3d_frame)
         btn3d_row.pack(fill="x", pady=2)
@@ -3066,16 +3126,20 @@ class CathPlotGUI:
                 c2["title"] = c["label"]
                 curves_final.append(c2)
 
+            surfaces_final = [s for v, s in surface_check_vars if v.get()]
+
             dialog.destroy()
             self._execute_3d_plot(curves_final, rot_x, rot_z, style_var.get(), palette_var.get(),
-                                   colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get())
+                                   colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get(),
+                                   surfaces_final)
 
         ok_row = ttk.Frame(dialog)
         ok_row.pack(fill="x", padx=10, pady=10)
         ttk.Button(ok_row, text="Plot", command=do_plot).pack(side="left", padx=5)
         ttk.Button(ok_row, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
 
-    def _execute_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d, equal_xyz=False):
+    def _execute_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
+                          equal_xyz=False, surfaces=None):
         os.makedirs(self.plot_dir, exist_ok=True)
         raw_title = self.filename_var.get().strip() or "CathPlot"
         safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
@@ -3084,15 +3148,22 @@ class CathPlotGUI:
         outfile = os.path.join(self.plot_dir, f"{base_name}.plt")
         self.title_counters[safe_title] = next_id
 
+        # [추가] Surface(splot) 파일의 Z축 라벨 기본값 - curve가 없고 surface만
+        # 있을 때는 y2label(빈 값이 많음) 대신 surface의 공통 변수명을 쓴다.
+        zlabel = self.y2label_var.get()
+        if not zlabel and surfaces:
+            zlabel = surfaces[0].get("z_label", "")
+
         generator = GnuplotGenerator(self.plot_dir)
         try:
             generator.create_3d_script(
                 curves, outfile, fmt="interactive",
-                xlabel=self.xlabel_var.get(), ylabel=self.ylabel_var.get(), zlabel=self.y2label_var.get(),
+                xlabel=self.xlabel_var.get() or "Time", ylabel=self.ylabel_var.get() or "Output #", zlabel=zlabel,
                 title=raw_title,
                 xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
                 rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
                 annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
+                surfaces=surfaces,
             )
         except Exception as e:
             messagebox.showerror("3D Plot Error", str(e))
