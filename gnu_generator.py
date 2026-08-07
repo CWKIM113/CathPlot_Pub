@@ -1782,6 +1782,25 @@ class GnuplotGenerator:
 
         self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, circles=circles, panel_scale=_size_scale, fmt=fmt)
 
+        # [추가] "원래(처음) plot으로 되돌리는 기능 - 2D/3D 모두" - 2D도 마우스
+        # 휠/드래그로 확대·이동한 뒤 처음 축 범위로 되돌릴 방법이 없었음. 위에서
+        # 이미 만들어진 set xrange/yrange/y2range 줄을 그대로 다시 실행하는
+        # 키를 추가한다(범위를 따로 재계산하지 않고 그대로 재사용해 항상
+        # 일치하게 함). 그런 줄이 없으면(완전 auto) set autoscale로 대체.
+        if fmt.lower() == "interactive":
+            def _find_range_cmd(prefix, autoscale_name):
+                for _l in lines:
+                    if _l.startswith(prefix):
+                        return _l
+                return f"set autoscale {autoscale_name}"
+            _reset_cmds = [
+                _find_range_cmd("set xrange", "x"),
+                _find_range_cmd("set yrange", "y"),
+                _find_range_cmd("set y2range", "y2"),
+                "replot",
+            ]
+            lines.append("bind 'R' '" + "; ".join(_reset_cmds) + "'")
+
         if fmt.lower() == "interactive": lines.append("pause mouse close")
         else: lines.append("set output")
 
@@ -1855,7 +1874,8 @@ class GnuplotGenerator:
                           xlog=False, ylog=False, zlog=False,
                           rot_x=60, rot_z=30, style="lines", palette="rainbow",
                           colorbox=True, annotations_3d=None, arrows_3d=None,
-                          equal_xyz=False, surfaces=None, time_min=None, time_max=None):
+                          equal_xyz=False, surfaces=None, time_min=None, time_max=None,
+                          y_min=None, y_max=None, z_min=None, z_max=None):
         """[추가] 3D Plot(splot) - "X/Y1/Y2를 X/Y/Z로 매핑, 여러 세트를 같은 화면에
         겹쳐 그리고 Z값 기준 palette(낮음=파랑, 높음=빨강)로 색칠"하는 기능.
         2D curve와 동일하게 gnuplot이 dat 파일을 직접 읽게(using 컬럼 인덱스)
@@ -1881,6 +1901,9 @@ class GnuplotGenerator:
         time_min/time_max: "splot 입력 자료에서 time 구간 입력 필요(필요 구간
         data만 plot)" - 둘 다 비우면 전체 구간. curve는 x_shift 적용 전 원본
         time 값 기준으로 판단(사용자가 보는 실제 데이터 구간과 일치시키려고).
+        y_min/y_max, z_min/z_max: "마우스 스크롤로 Z 범위가 예측 못하게 바뀜 -
+        명시적 입력칸으로" - 비우면 auto(gnuplot 기본 자동 범위), 값을 채우면
+        그 범위로 고정(set yrange/set zrange). 2D의 Auto Range와 동일한 개념.
         """
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
@@ -1911,6 +1934,19 @@ class GnuplotGenerator:
         lines.append(f"set view {rot_x},{rot_z}")
         if equal_xyz:
             lines.append("set view equal xyz")
+        # [추가] "마우스 스크롤에 따라 Y/Z 범위가 예측 못하게 바뀜 - 명시적
+        # 입력칸으로" - 비우면 gnuplot 자동 범위 그대로, 값을 채우면 그 범위로
+        # 고정. 2D의 Auto Range/Min/Max와 같은 개념.
+        def _range_clause(vmin, vmax):
+            has_min = vmin is not None and vmin != ""
+            has_max = vmax is not None and vmax != ""
+            if not has_min and not has_max:
+                return None
+            return f"[{vmin if has_min else '*'}:{vmax if has_max else '*'}]"
+        _yr = _range_clause(y_min, y_max)
+        if _yr: lines.append(f"set yrange {_yr}")
+        _zr = _range_clause(z_min, z_max)
+        if _zr: lines.append(f"set zrange {_zr}")
         # [추가] "z축이 x,y 평면보다 너무 위로 뜸" - gnuplot 기본 ticslevel(0.5)은
         # x,y 바닥면을 z축 최소값보다 z_range*0.5만큼 아래에 그려서 z축이
         # 바닥에서 떠 보이게 만듦. 0으로 두면 바닥면이 z 최소값과 정확히 맞음
@@ -2048,8 +2084,37 @@ class GnuplotGenerator:
                 'set label 9002 sprintf("Rot X=%.1f  Rot Z=%.1f", rx, rz) '
                 'at screen 0.02, screen 0.02 front noenhanced'
             )
+            # [추가] "t 누르면 아래쪽/좌측에 저장 키 안내도 표시(저장 파일에는
+            # 안 나오게)" - 각도 표시 바로 위에 키 안내 문구를 같이 띄운다.
+            # 저장 키(P/N/j/E/s)와 Ctrl+P 인쇄 bind에서 파일로 replot하기 전에
+            # 이 라벨만 잠깐 unset하고 복귀 후 다시 set해서, 화면에는 보이지만
+            # 저장되는 파일에는 안 나오게 한다.
+            _bind_parts.append(
+                'set label 9003 "t:재정렬  z:Y·Z범위복원  R:전체초기화  Ctrl+P:인쇄  P/N/j/E/s:저장" '
+                'at screen 0.02, screen 0.055 front noenhanced'
+            )
             _bind_parts.append("replot")
             lines.append("bind 't' '" + "; ".join(_bind_parts) + "'")
+
+            # [추가] "그래도 휠을 습관적으로 쓸 텐데, Y/Z 범위가 바뀌면 입력값으로
+            # 다시 되돌리는 기법 넣자" - 휠 클릭 드래그(scale) 등으로 Y/Z 범위가
+            # 뜻하지 않게 틀어졌을 때, 팝업에 입력했던 값(비웠으면 gnuplot 자동
+            # 범위 [*:*])으로 즉시 되돌리는 키. 'z' 키 사용(gnuplot 기본 바인딩과
+            # 안 겹침, Z축 되돌리기라는 의미로 기억하기 쉬움).
+            _reset_yr = _yr or "[*:*]"
+            _reset_zr = _zr or "[*:*]"
+            lines.append(
+                f"bind 'z' 'set yrange {_reset_yr}; set zrange {_reset_zr}; replot'"
+            )
+            # [추가] "원래(처음) plot으로 되돌리는 기능 - 키 조작으로" - 회전각+
+            # 배율(scale)+X/Y/Z range를 전부 처음(스크립트 생성 시점) 상태로
+            # 되돌린다. "set view rotx,rotz"만 쓰면 scale은 그대로 남는 것으로
+            # 보여 배율까지 확실히 1,1로 되돌리려고 4개 값을 전부 명시한다.
+            # gnuplot 기본 바인딩과 안 겹치는 대문자 'R'(Reset) 사용.
+            lines.append(
+                f"bind 'R' 'set view {rot_x},{rot_z},1,1; set xrange [*:*]; "
+                f"set yrange {_reset_yr}; set zrange {_reset_zr}; replot'"
+            )
 
         # [추가] "회전+재정렬한 지금 상태를 파일로 저장" - gnuplot 안에서
         # 터미널을 잠깐 바꿔 replot한 뒤 원래 터미널로 복귀하는 방식으로 가능함
@@ -2067,12 +2132,17 @@ class GnuplotGenerator:
             # "set output PRN"이 에러/멈춤 없이 동작하는 것은 직접 테스트로
             # 확인(기본 프린터가 무엇이든 Windows 인쇄 파이프라인을 그대로 탐).
             # 키는 gnuplot 기본 바인딩과 안 겹치고 관용적으로 익숙한 Ctrl+P 사용.
+            # [추가] "키 안내 문구(9003)는 저장되는 파일에는 안 나오게" - 파일로
+            # replot하기 직전에 잠깐 unset하고, 화면으로 복귀한 뒤 다시 set한다.
             _print_cmd = (
+                'unset label 9003; '
                 'set terminal emf enhanced size 1680,1200 font "Malgun Gothic,14"; '
                 'set output "PRN"; '
                 'replot; '
                 'set output; '
                 f'set terminal {_restore_term}; '
+                'set label 9003 "t:재정렬  z:Y·Z범위복원  R:전체초기화  Ctrl+P:인쇄  P/N/j/E/s:저장" '
+                'at screen 0.02, screen 0.055 front noenhanced; '
                 'replot'
             )
             lines.append(f"bind 'ctrl-p' '{_print_cmd}'")
@@ -2087,11 +2157,14 @@ class GnuplotGenerator:
                 _outexpr = (f'sprintf("{_save_dir_esc}/{title_disp}_view_%s.{_ext}", '
                             f'strftime("%H%M%S", time(0)))')
                 _cmd = (
+                    'unset label 9003; '
                     f'set terminal {_term_spec}; '
                     f'set output {_outexpr}; '
                     f'replot; '
                     f'set output; '
                     f'set terminal {_restore_term}; '
+                    'set label 9003 "t:재정렬  z:Y·Z범위복원  R:전체초기화  Ctrl+P:인쇄  P/N/j/E/s:저장" '
+                    'at screen 0.02, screen 0.055 front noenhanced; '
                     f'replot'
                 )
                 lines.append(f"bind '{_key}' '{_cmd}'")
@@ -2136,7 +2209,13 @@ class GnuplotGenerator:
                 _size_clause = f" size graph {_head_size},15" if _head_size else ""
                 lines.append(f'set arrow {i+1} from {x1},{y1},{z1} to {x2},{y2},{z2} head{_size_clause}{_color_clause}')
 
-        gp_style = self._3D_STYLE_MAP.get(style, "lines")
+        # [수정] "Style, Marker Size를 세트별로(curve마다 다르게 줄 수 있으면
+        # 세트 목록으로 이동)" - 예전엔 style 파라미터 하나로 전체 curve/surface에
+        # 똑같이 적용했는데, 이제 각 curve/surface dict의 "style" 키를 우선
+        # 쓰고 없을 때만 이 함수의 style 인자를 방어적 기본값으로 쓴다.
+        def _resolve_style(item):
+            return (item.get("style") or style or "lines")
+
         # [추가] "Legend 개념 - 그래프 set가 여럿일 때" - 색은 Z값 전용(palette)이라
         # 여러 세트를 색만으로 구분할 수 없음. 세트 구분은 사용자가 고르는 Marker
         # 모양(pt)으로 하고, 이름은 title로 넣어 gnuplot 표준 key(legend)가
@@ -2151,16 +2230,16 @@ class GnuplotGenerator:
         if has_title and len(curves_3d) + len(surfaces or []) > 1:
             lines.append("set key outside right top box")
 
-        # [추가] "s-plot에 pm3d 옵션 필요?" - CATHENA surface(splot) 데이터는
-        # 이미 gnuplot의 grid(격자) 형식(빈 줄로 블록 구분)이라 pm3d로 그리면
-        # 선(wireframe) 대신 실제 색이 채워진 연속된 면(surface)으로 보임 -
-        # 단일/소수 surface를 볼 때는 이게 더 "surface답게" 보이지만, surface를
-        # 여러 개 겹쳐 비교할 때는 불투명한 면끼리 서로 가려버려서 오히려
-        # 구분이 더 안 될 수 있음(위 dashtype 구분은 선 스타일이라 pm3d 면에는
-        # 적용이 안 됨) - 그래서 강제 전환하지 않고, style 선택에 "pm3d" 옵션을
-        # 추가해서 사용자가 상황에 맞게 고르게 한다.
-        _use_pm3d = (style or "").lower() == "pm3d"
-        if _use_pm3d:
+        # [추가] "s-plot에 pm3d(Color Palette/입체채색) 옵션 필요?" - CATHENA
+        # surface(splot) 데이터는 이미 gnuplot의 grid(격자) 형식(빈 줄로 블록
+        # 구분)이라 pm3d로 그리면 선(wireframe) 대신 실제 색이 채워진 연속된
+        # 면(surface)으로 보임. curve는 격자 데이터가 아니라 pm3d 자체가 의미가
+        # 없어 curve에는 이 옵션을 안 보여주고, surface에만 세트별로 선택 가능
+        # ("입체채색이 s-plot에만 해당하는지? curve별로 줄 수 있으면 이동, s-plot에만
+        # 적용되면 s-plot에서만 활성화" 요청 반영). depthorder는 surface 중 하나라도
+        # pm3d를 쓰면 필요.
+        _any_pm3d = any(_resolve_style(s).lower() == "pm3d" for s in (surfaces or []))
+        if _any_pm3d:
             lines.append("set pm3d depthorder")
 
         splot_parts = []
@@ -2186,10 +2265,14 @@ class GnuplotGenerator:
                 x_expr = f"({_raw_ref}+{x_shift})"
             using_expr = f"{x_expr}:{c['y_col']}:{c['z_col']}:{c['z_col']}"
 
+            # [수정] Style이 세트별로 바뀌면서 이 curve 자신의 style을 쓴다
+            # (curve에는 "pm3d"가 애초에 선택지로 안 뜨므로 항상 lines/points/
+            # linespoints 중 하나 - 방어적으로 매핑 안 되면 lines로 fallback).
+            _c_style = self._3D_STYLE_MAP.get(_resolve_style(c), "lines")
             # [추가] 세트별 Marker(pt)/크기(ps) - style이 points/linespoints일 때만
             # 의미 있음(lines면 점 모양이 안 보이므로 무시).
             _pt_clause = ""
-            if gp_style in ("points", "linespoints"):
+            if _c_style in ("points", "linespoints"):
                 marker_pt = c.get("marker_shape")
                 marker_size = c.get("marker_size")
                 if marker_pt is not None:
@@ -2210,7 +2293,7 @@ class GnuplotGenerator:
             else:
                 _title_clause = "notitle"
 
-            splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {gp_style}{_pt_clause} palette')
+            splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette')
 
         # [추가] "splot에 x-set 4개 넣으니 구분 안됨" - 여러 surface를 겹쳐 그리면
         # 전부 palette(Z값)로만 색칠돼서, 서로 다른 surface(파일)라도 Z값이
@@ -2236,25 +2319,29 @@ class GnuplotGenerator:
             # 구간 필터만 컬럼 1(원본 그대로, x_shift 없음)에 적용.
             _s_t_cond = self._time_range_cond("$1", time_min, time_max)
             _s_x_using = f"(({_s_t_cond}) ? ($1) : (0/0))" if _s_t_cond else "1"
-            if _use_pm3d:
+            # [수정] 이 surface 자신의 style을 쓴다(pm3d는 surface에만 선택지로
+            # 나타나므로 여기서만 체크).
+            _s_style_raw = _resolve_style(s)
+            if _s_style_raw.lower() == "pm3d":
                 # pm3d는 면(facet)이라 dashtype/marker가 적용 안 되므로 생략.
                 splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with pm3d')
             else:
                 # [수정 - 버그] "Marker 안 나옴" - Style을 Points/Linespoints로
                 # 골라도 surface는 항상 "with lines"로 하드코딩돼 있어 Marker가
-                # 전혀 안 보였음. curve와 동일하게 gp_style/marker pt·ps를
-                # 그대로 적용한다(dashtype은 선이 있을 때만 의미 있음).
+                # 전혀 안 보였음. curve와 동일하게 이 surface의 style/marker
+                # pt·ps를 그대로 적용한다(dashtype은 선이 있을 때만 의미 있음).
+                _s_style = self._3D_STYLE_MAP.get(_s_style_raw, "lines")
                 _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
                 _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
                 _s_pt_clause = ""
-                if gp_style in ("points", "linespoints"):
+                if _s_style in ("points", "linespoints"):
                     _s_marker_pt = s.get("marker_shape")
                     _s_marker_size = s.get("marker_size")
                     if _s_marker_pt is not None:
                         _s_pt_clause += f" pt {_s_marker_pt}"
                     if _s_marker_size:
                         _s_pt_clause += f" ps {_s_marker_size}"
-                splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {gp_style}{_s_pt_clause} palette{_s_dash_clause}')
+                splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}')
 
         lines.append("splot " + ", \\\n      ".join(splot_parts))
 

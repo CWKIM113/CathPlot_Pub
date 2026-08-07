@@ -1609,14 +1609,21 @@ class CathPlotGUI:
         if not eligible and not surfaces:
             return None
 
-        marker_size_val = MARKER_SIZE_MAP.get(td3_data.get("marker_size", "M"), 1.0)
+        # [수정] "Marker Size, Style을 세트별로" - 3D Template의 marker_shapes와
+        # 같은 방식(label 기준 dict)으로 저장된 marker_sizes/styles를 그대로 씀
+        # (예전 템플릿에 있던 전역 marker_size/style 키는 없으면 기본값으로 대체).
         shapes = td3_data.get("marker_shapes", {})
+        sizes = td3_data.get("marker_sizes", {})
+        styles = td3_data.get("styles", {})
+        _legacy_size = MARKER_SIZE_MAP.get(td3_data.get("marker_size", "M"), 1.0)
+        _legacy_style = STYLE_3D_INTERNAL_MAP.get(td3_data.get("style", "Lines"), "lines")
 
         def _with_marker(item):
             item = dict(item)
             hollow_pt, _ = MARKER_SHAPE_MAP.get(shapes.get(item["label"], "Circle"), (None, None))
             item["marker_shape"] = hollow_pt
-            item["marker_size"] = marker_size_val
+            item["marker_size"] = MARKER_SIZE_MAP.get(sizes.get(item["label"], ""), _legacy_size)
+            item["style"] = STYLE_3D_INTERNAL_MAP.get(styles.get(item["label"], ""), _legacy_style)
             item["title"] = item["label"]
             return item
 
@@ -1663,11 +1670,13 @@ class CathPlotGUI:
             title=td3_data.get("plot_title") or "CathPlot",
             xlog=data.get("xlog", False), ylog=data.get("y1log", False), zlog=data.get("y2log", False),
             rot_x=rot_x, rot_z=rot_z,
-            style=STYLE_3D_INTERNAL_MAP.get(td3_data.get("style", "Lines"), "lines"),
+            style=_legacy_style,
             palette=td3_data.get("palette", "rainbow"), colorbox=td3_data.get("colorbox", True),
             annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=td3_data.get("equal_xyz", False),
             surfaces=surfaces_final,
             time_min=_parse_opt_float(td3_data.get("time_min", "")), time_max=_parse_opt_float(td3_data.get("time_max", "")),
+            y_min=_parse_opt_float(td3_data.get("y_min", "")), y_max=_parse_opt_float(td3_data.get("y_max", "")),
+            z_min=_parse_opt_float(td3_data.get("z_min", "")), z_max=_parse_opt_float(td3_data.get("z_max", "")),
         )
         return outfile
 
@@ -3312,51 +3321,62 @@ class CathPlotGUI:
         ttk.Label(row1, text="Max:").pack(side="left")
         ttk.Entry(row1, textvariable=time_max_var, width=8).pack(side="left", padx=(2, 0))
 
+        # [추가] "마우스 스크롤로 Y/Z 범위가 예측 못하게 바뀜 - 명시적 입력칸으로,
+        # 2D 축범위(Auto Range/Min/Max)와 같은 개념" - 비우면 auto.
+        row1b = ttk.Frame(dialog)
+        row1b.pack(fill="x", padx=10, pady=(0, 5))
+        y_min_var = tk.StringVar(value="")
+        y_max_var = tk.StringVar(value="")
+        z_min_var = tk.StringVar(value="")
+        z_max_var = tk.StringVar(value="")
+        ttk.Label(row1b, text="Y range Min:").pack(side="left")
+        ttk.Entry(row1b, textvariable=y_min_var, width=8).pack(side="left", padx=(2, 5))
+        ttk.Label(row1b, text="Max:").pack(side="left")
+        ttk.Entry(row1b, textvariable=y_max_var, width=8).pack(side="left", padx=(2, 10))
+        ttk.Label(row1b, text="Z range Min:").pack(side="left")
+        ttk.Entry(row1b, textvariable=z_min_var, width=8).pack(side="left", padx=(2, 5))
+        ttk.Label(row1b, text="Max:").pack(side="left")
+        ttk.Entry(row1b, textvariable=z_max_var, width=8).pack(side="left", padx=(2, 0))
+
         row2 = ttk.Frame(dialog)
         row2.pack(fill="x", padx=10, pady=5)
-        style_var = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
         palette_var = tk.StringVar(value="rainbow")
         colorbox_var = tk.BooleanVar(value=True)
-        marker_size_var_3d = tk.StringVar(value="M")
-        ttk.Label(row2, text="Style:").pack(side="left")
-        # [추가] "s-plot에 pm3d 옵션 필요?" - Surface(splot) 데이터만 pm3d(면
-        # 채우기)로 그릴 수 있음(일반 curve는 grid 형식이 아니라 pm3d 의미가
-        # 없어 lines로 그대로 그려짐). 여러 surface를 겹쳐 비교할 때는 선
-        # 스타일(dashtype 구분)이 더 나을 수 있어 강제 전환 대신 선택 옵션으로 추가.
-        # [수정] "pm3d 옵션 이름을 'color palette' 또는 '입체채색'으로" - 표시명만
-        # 바꾸고 내부 값은 STYLE_3D_INTERNAL_MAP으로 되돌려서 사용.
-        ttk.Combobox(row2, textvariable=style_var, values=list(STYLE_3D_DISPLAY_MAP.values()),
-                     width=20, state="readonly").pack(side="left", padx=(2, 10))
         ttk.Label(row2, text="Palette:").pack(side="left")
         ttk.Combobox(row2, textvariable=palette_var, values=["rainbow", "grayscale", "bluewhitered"],
                      width=12, state="readonly").pack(side="left", padx=(2, 10))
         ttk.Checkbutton(row2, text="Colorbox", variable=colorbox_var).pack(side="left", padx=(10, 0))
-        ttk.Label(row2, text="Marker Size:").pack(side="left", padx=(10, 0))
-        ttk.Combobox(row2, textvariable=marker_size_var_3d, values=MARKER_SIZE_LIST,
-                     width=4, state="readonly").pack(side="left", padx=(2, 0))
         equal_xyz_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row2, text="Equal XYZ scale", variable=equal_xyz_var).pack(side="left", padx=(10, 0))
 
-        # [추가] "3D plot 창에서 dat file, splot 파일 선택 옵션 추가" - curve와
-        # surface 모두 체크박스로 포함 여부를 고를 수 있게 통합. "Legend 개념 -
-        # 그래프 set가 여럿일 때"에 쓰이는 Marker 모양도 같은 곳에서 세트별로
-        # 고른다(자동 배정 X - "사용자가 선택하게 옵션을 하나 더"). 기본값은
-        # 겹치지 않게 Shape 목록을 순서대로 배정(curve 다음 surface 순서로 이어짐).
-        set_frame = ttk.LabelFrame(dialog, text="포함할 Set (체크 해제로 제외, Marker 모양은 Style=Points/Linespoints일 때 적용)")
+        # [수정] "Marker Size를 세트 선택 줄로 이동(모양 앞에), Style도 세트별로
+        # (curve마다 다르게 줄 수 있으므로) 이동 - Color Palette(입체채색)는
+        # s-plot(surface)에만 의미가 있으니 curve 행에는 그 옵션 자체를 빼서
+        # s-plot에서만 선택 가능하게 함" - curve/surface 체크박스, Style,
+        # Marker Size, Marker 모양을 한 줄에서 같이 고른다.
+        set_frame = ttk.LabelFrame(dialog, text="포함할 Set (체크 해제로 제외, Style·Size·Marker 모양을 세트별로 지정)")
         set_frame.pack(fill="x", padx=10, pady=5)
         _shape_choices = [s for s in MARKER_SHAPE_LIST if s != "None"]
+        _style_choices_curve = [v for k, v in STYLE_3D_DISPLAY_MAP.items() if k != "pm3d"]
+        _style_choices_surface = list(STYLE_3D_DISPLAY_MAP.values())
         _set_idx = 0
-        curve_check_vars = []    # [(BooleanVar, curve_dict, shape_StringVar), ...]
-        surface_check_vars = []  # [(BooleanVar, surface_dict, shape_StringVar), ...]
+        curve_check_vars = []    # [(BooleanVar, curve_dict, shape_StringVar, size_StringVar, style_StringVar), ...]
+        surface_check_vars = []  # [(BooleanVar, surface_dict, shape_StringVar, size_StringVar, style_StringVar), ...]
         for c in eligible:
             srow = ttk.Frame(set_frame)
             srow.pack(fill="x", pady=1)
             v = tk.BooleanVar(value=True)
             ttk.Checkbutton(srow, variable=v, text=f"[Curve] {c['label']}").pack(side="left")
             shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
+            size_var = tk.StringVar(value="M")
+            style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
             ttk.Combobox(srow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
                          width=10, state="readonly").pack(side="right", padx=4)
-            curve_check_vars.append((v, c, shape_var))
+            ttk.Combobox(srow, textvariable=size_var, values=MARKER_SIZE_LIST,
+                         width=4, state="readonly").pack(side="right", padx=4)
+            ttk.Combobox(srow, textvariable=style_var_row, values=_style_choices_curve,
+                         width=13, state="readonly").pack(side="right", padx=4)
+            curve_check_vars.append((v, c, shape_var, size_var, style_var_row))
             _set_idx += 1
         for s in surfaces:
             srow = ttk.Frame(set_frame)
@@ -3365,9 +3385,15 @@ class CathPlotGUI:
             ttk.Checkbutton(srow, variable=v,
                              text=f"[Surface] {s['label']} (채널 {s['n_outputs']}개, Z={s['z_label']})").pack(side="left")
             shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
+            size_var = tk.StringVar(value="M")
+            style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
             ttk.Combobox(srow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
                          width=10, state="readonly").pack(side="right", padx=4)
-            surface_check_vars.append((v, s, shape_var))
+            ttk.Combobox(srow, textvariable=size_var, values=MARKER_SIZE_LIST,
+                         width=4, state="readonly").pack(side="right", padx=4)
+            ttk.Combobox(srow, textvariable=style_var_row, values=_style_choices_surface,
+                         width=13, state="readonly").pack(side="right", padx=4)
+            surface_check_vars.append((v, s, shape_var, size_var, style_var_row))
             _set_idx += 1
 
         # [추가] "comment, arrow 등은 3D 전용으로 popup 창에서 입력, 이때는
@@ -3451,28 +3477,30 @@ class CathPlotGUI:
                         "head_size": self.ARROW_SIZE_MAP.get(d['size'].get(), self.ARROW_SIZE_MAP["M"]),
                     })
 
-            marker_size_val = MARKER_SIZE_MAP.get(marker_size_var_3d.get(), 1.0)
-            # [수정] "3D plot 창에서 dat file, splot 파일 선택 옵션" - 체크 해제된
-            # set은 아예 제외한다(curve/surface 공통).
+            # [수정] "Marker Size를 세트별로, Style도 세트별로(curve마다 다르게
+            # 줄 수 있으므로) 이동" - 예전엔 전체 공용 하나였는데, 이제 각 행의
+            # size_var/style_var_row를 그대로 쓴다. 체크 해제된 set은 제외.
             curves_final = []
-            for v, c, shape_var in curve_check_vars:
+            for v, c, shape_var, size_var, style_var_row in curve_check_vars:
                 if not v.get():
                     continue
                 c2 = dict(c)
                 hollow_pt, _filled_pt = MARKER_SHAPE_MAP.get(shape_var.get(), (None, None))
                 c2["marker_shape"] = hollow_pt
-                c2["marker_size"] = marker_size_val
+                c2["marker_size"] = MARKER_SIZE_MAP.get(size_var.get(), 1.0)
+                c2["style"] = STYLE_3D_INTERNAL_MAP.get(style_var_row.get(), "lines")
                 c2["title"] = c["label"]
                 curves_final.append(c2)
 
             surfaces_final = []
-            for v, s, shape_var in surface_check_vars:
+            for v, s, shape_var, size_var, style_var_row in surface_check_vars:
                 if not v.get():
                     continue
                 s2 = dict(s)
                 hollow_pt, _filled_pt = MARKER_SHAPE_MAP.get(shape_var.get(), (None, None))
                 s2["marker_shape"] = hollow_pt
-                s2["marker_size"] = marker_size_val
+                s2["marker_size"] = MARKER_SIZE_MAP.get(size_var.get(), 1.0)
+                s2["style"] = STYLE_3D_INTERNAL_MAP.get(style_var_row.get(), "lines")
                 surfaces_final.append(s2)
 
             # [추가] "time 구간 입력" - 비우면 제한 없음(None).
@@ -3486,12 +3514,18 @@ class CathPlotGUI:
                     return None
             time_min = _parse_opt_float(time_min_var.get())
             time_max = _parse_opt_float(time_max_var.get())
+            y_min = _parse_opt_float(y_min_var.get())
+            y_max = _parse_opt_float(y_max_var.get())
+            z_min = _parse_opt_float(z_min_var.get())
+            z_max = _parse_opt_float(z_max_var.get())
 
-            _style_internal = STYLE_3D_INTERNAL_MAP.get(style_var.get(), "lines")
-            return (curves_final, rot_x, rot_z, _style_internal, palette_var.get(),
+            # [수정] Style이 세트별로 바뀌면서 여기서 쓰던 전역 style은 없어짐 -
+            # create_3d_script의 style 파라미터는 이제 "세트에 style이 없을 때"의
+            # 방어적 기본값 역할만 하므로 고정값 "lines"만 넘긴다.
+            return (curves_final, rot_x, rot_z, "lines", palette_var.get(),
                     colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get(), surfaces_final,
                     xlabel3d_var.get(), ylabel3d_var.get(), zlabel3d_var.get(),
-                    plot_title_var.get(), time_min, time_max)
+                    plot_title_var.get(), time_min, time_max, y_min, y_max, z_min, z_max)
 
         def do_plot():
             # [수정] "3D Plot 추가 창은 plot 후에도 닫지 말 것" - rot_x/rot_z를
@@ -3530,21 +3564,29 @@ class CathPlotGUI:
         # surface 목록은 그때그때 로드된 파일 기준으로 다시 만들어지므로 저장 안
         # 하고, Marker 모양만 label(파일명) 기준으로 매칭해서 복원한다.
         def _3d_template_dict():
-            _shapes = {}
-            for v, c, shape_var in curve_check_vars:
+            # [수정] "Marker Size, Style을 세트별로" - marker_shapes와 같은 방식
+            # (label 기준 dict)으로 세트별 크기/스타일도 같이 저장한다.
+            _shapes, _sizes, _styles = {}, {}, {}
+            for v, c, shape_var, size_var, style_var_row in curve_check_vars:
                 _shapes[c["label"]] = shape_var.get()
-            for v, s, shape_var in surface_check_vars:
+                _sizes[c["label"]] = size_var.get()
+                _styles[c["label"]] = style_var_row.get()
+            for v, s, shape_var, size_var, style_var_row in surface_check_vars:
                 _shapes[s["label"]] = shape_var.get()
+                _sizes[s["label"]] = size_var.get()
+                _styles[s["label"]] = style_var_row.get()
             return {
                 "type": "cathplot_3d_template",
                 "plot_title": plot_title_var.get(),
                 "xlabel3d": xlabel3d_var.get(), "ylabel3d": ylabel3d_var.get(), "zlabel3d": zlabel3d_var.get(),
                 "rot_x": rot_x_var.get(), "rot_z": rot_z_var.get(),
                 "time_min": time_min_var.get(), "time_max": time_max_var.get(),
-                "style": style_var.get(), "palette": palette_var.get(),
-                "colorbox": colorbox_var.get(), "marker_size": marker_size_var_3d.get(),
+                "y_min": y_min_var.get(), "y_max": y_max_var.get(),
+                "z_min": z_min_var.get(), "z_max": z_max_var.get(),
+                "palette": palette_var.get(),
+                "colorbox": colorbox_var.get(),
                 "equal_xyz": equal_xyz_var.get(),
-                "marker_shapes": _shapes,
+                "marker_shapes": _shapes, "marker_sizes": _sizes, "styles": _styles,
                 "annotations_3d": [
                     {"txt": d['txt'].get(), "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
                      "color": d['color'].get()}
@@ -3609,19 +3651,33 @@ class CathPlotGUI:
             rot_z_var.set(data.get("rot_z", rot_z_var.get()))
             time_min_var.set(data.get("time_min", ""))
             time_max_var.set(data.get("time_max", ""))
-            style_var.set(data.get("style", style_var.get()))
+            y_min_var.set(data.get("y_min", ""))
+            y_max_var.set(data.get("y_max", ""))
+            z_min_var.set(data.get("z_min", ""))
+            z_max_var.set(data.get("z_max", ""))
             palette_var.set(data.get("palette", palette_var.get()))
             colorbox_var.set(data.get("colorbox", True))
-            marker_size_var_3d.set(data.get("marker_size", "M"))
             equal_xyz_var.set(data.get("equal_xyz", False))
 
+            # [수정] "Marker Size, Style을 세트별로" - label 기준으로 각 행에
+            # 복원(예전 템플릿의 "marker_size"/"style" 전역 키는 없으면 무시됨).
             _shapes = data.get("marker_shapes", {})
-            for v, c, shape_var in curve_check_vars:
+            _sizes = data.get("marker_sizes", {})
+            _styles = data.get("styles", {})
+            for v, c, shape_var, size_var, style_var_row in curve_check_vars:
                 if c["label"] in _shapes:
                     shape_var.set(_shapes[c["label"]])
-            for v, s, shape_var in surface_check_vars:
+                if c["label"] in _sizes:
+                    size_var.set(_sizes[c["label"]])
+                if c["label"] in _styles:
+                    style_var_row.set(_styles[c["label"]])
+            for v, s, shape_var, size_var, style_var_row in surface_check_vars:
                 if s["label"] in _shapes:
                     shape_var.set(_shapes[s["label"]])
+                if s["label"] in _sizes:
+                    size_var.set(_sizes[s["label"]])
+                if s["label"] in _styles:
+                    style_var_row.set(_styles[s["label"]])
 
             for d in list(anno3d_list):
                 d['frame'].destroy()
@@ -3659,7 +3715,8 @@ class CathPlotGUI:
 
     def _execute_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
                           equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
-                          plot_title="", time_min=None, time_max=None):
+                          plot_title="", time_min=None, time_max=None,
+                          y_min=None, y_max=None, z_min=None, z_max=None):
         os.makedirs(self.plot_dir, exist_ok=True)
         # [수정] "Plot Title 입력칸을 따로 둬서 수정 가능하게" - 팝업의 Plot Title
         # 입력값을 그대로 쓰고(filename_var를 무조건 쓰지 않음), 비었을 때만
@@ -3687,13 +3744,15 @@ class CathPlotGUI:
                 rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
                 annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
                 surfaces=surfaces, time_min=time_min, time_max=time_max,
+                y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
             )
         except Exception as e:
             messagebox.showerror("3D Plot Error", str(e))
 
     def _generate_3d_file(self, outfile, fmt, curves, rot_x, rot_z, style, palette, colorbox,
                            annotations_3d, arrows_3d, equal_xyz, surfaces, xlabel3d="", ylabel3d="", zlabel3d="",
-                           plot_title="", time_min=None, time_max=None):
+                           plot_title="", time_min=None, time_max=None,
+                           y_min=None, y_max=None, z_min=None, z_max=None):
         """Save/Print가 공통으로 쓰는, 파일로 직접 렌더링하는 부분만 뽑은 버전
         (_execute_3d_plot의 화면(interactive) 전용 코드와 outfile/fmt만 다름)."""
         raw_title = (plot_title or "").strip() or self.filename_var.get().strip() or "CathPlot"
@@ -3709,11 +3768,13 @@ class CathPlotGUI:
             rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
             annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
             surfaces=surfaces, time_min=time_min, time_max=time_max,
+            y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
         )
 
     def _save_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
                        equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
-                       plot_title="", time_min=None, time_max=None):
+                       plot_title="", time_min=None, time_max=None,
+                       y_min=None, y_max=None, z_min=None, z_max=None):
         """[추가] "3D Plot도 저장 지원" - 2D SAVE와 동일한 포맷 선택 방식,
         방향/Frame 크기 선택 등 2D의 복잡한 캐시 선택 로직 없이 지금 다이얼로그
         입력값 그대로 바로 파일로 렌더링한다."""
@@ -3740,7 +3801,8 @@ class CathPlotGUI:
         try:
             self._generate_3d_file(os.path.abspath(selected_path), ext, curves, rot_x, rot_z, style, palette,
                                     colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces,
-                                    xlabel3d, ylabel3d, zlabel3d, plot_title, time_min, time_max)
+                                    xlabel3d, ylabel3d, zlabel3d, plot_title, time_min, time_max,
+                                    y_min, y_max, z_min, z_max)
         except Exception as e:
             messagebox.showerror("Save Error", f"3D Plot 저장 중 오류가 발생했습니다:\n{e}")
             return
@@ -3749,7 +3811,8 @@ class CathPlotGUI:
 
     def _print_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
                         equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
-                        plot_title="", time_min=None, time_max=None):
+                        plot_title="", time_min=None, time_max=None,
+                        y_min=None, y_max=None, z_min=None, z_max=None):
         """[추가] "3D Plot도 인쇄 지원" - 2D PRINT와 동일하게 EMF를 만들어
         프린터로 직접 그린다(_print_emf_and_cleanup/_pick_printer_dialog 재사용).
         2D처럼 어떤 plot을 고를지/용지 방향을 다시 묻는 절차는 3D 다이얼로그가
@@ -3764,7 +3827,8 @@ class CathPlotGUI:
         try:
             self._generate_3d_file(temp_emf, "emf", curves, rot_x, rot_z, style, palette,
                                     colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces,
-                                    xlabel3d, ylabel3d, zlabel3d, plot_title, time_min, time_max)
+                                    xlabel3d, ylabel3d, zlabel3d, plot_title, time_min, time_max,
+                                    y_min, y_max, z_min, z_max)
         except Exception as e:
             messagebox.showerror("Print Error", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
             return
