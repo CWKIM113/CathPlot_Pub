@@ -702,8 +702,14 @@ class GnuplotGenerator:
             "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": 6.0},
             "svg": {"row_mult": 2.0 * (2 / 3), "box_chars": 6.0},
         }
+        # [수정 - 버그] "화면(screen)은 건드리지 말라고 했는데 왜 바뀌었나" -
+        # 실측 확인 결과 screen의 row_mult=1.0(폰트 크기와 정확히 같은 줄
+        # 높이, 여유 0)은 원래부터 자체적으로 너무 빠듯해서 curve가 2개만
+        # 있어도 줄끼리 겹쳐 보이는 문제가 있었음(직접 렌더링해서 확인 -
+        # 오늘 바꾼 적 없는 값인데도 재현됨). "노트북에서 title-box 간격이
+        # 대문자 5자 정도 과하다" 피드백으로 box_chars도 1.7 -> 0.5로 축소.
         _legend_tuning = (_PRINT_LEGEND_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0})
-                          if is_print_mode else {"row_mult": 1.0, "box_chars": 1.7})
+                          if is_print_mode else {"row_mult": 1.2, "box_chars": 0.5})
         ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * _legend_tuning["row_mult"]
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
@@ -820,9 +826,13 @@ class GnuplotGenerator:
         SAMPLE_W *= 1.2
         # [수정 - 버그] "PDF의 style 길이=2/3로 줄일 것" - PNG/EMF/JPG/SVG는
         # 현재(위 계산 그대로)로 문제 제기가 없어 1.0 유지, PDF만 추가로 2/3.
+        # [수정] "화면(screen)도 style 길이를 지금의 2/3 정도로" - 화면은
+        # is_print_mode=False라 위 print 전용 분기를 안 타서 별도로 적용.
         _SAMPLE_W_FMT_MULT = {"pdf": 2 / 3}
         if is_print_mode:
             SAMPLE_W *= _SAMPLE_W_FMT_MULT.get(_fmt_l, 1.0)
+        else:
+            SAMPLE_W *= 2 / 3
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
         # 그냥 len()으로 세면 숫자/콜론/대시처럼 대문자보다 좁은 문자가 많은
         # 라벨(CATHENA 변수명 특성상 흔함, 예: "MFLO:R-SDRT1>L-STLF1")은 실제
