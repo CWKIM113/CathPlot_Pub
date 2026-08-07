@@ -659,7 +659,12 @@ class GnuplotGenerator:
         # [되돌림] "legend box가 axis frame에 붙어버림" - 2글자만큼 줄이는
         # 시도가 과했음(그 "2글자" 요청은 실은 Auto 2/p 등의 plot간 좌우 간격
         # 얘기였던 것으로 확인). 원래(1.5*tic 길이) 값으로 되돌림.
-        FRAME_GAP_IN = 1.5 * TIC_LEN_IN
+        # [수정 - 버그] "legend box와 축 frame 사이도 major tic 1.5배 정도
+        # 여유를 둬야 함" - 계수(1.5)는 그대로인데 그 기준인 TIC_LEN_IN이
+        # legend 폰트 크기(font_pt, print에서 7~8pt로 작음) 기준 추정값이라
+        # 실제 렌더링에서 픽셀 몇 개(약 4px) 수준밖에 안 돼 거의 안 보였음
+        # (실측 확인) - 눈에 띄는 간격이 되도록 계수를 키운다.
+        FRAME_GAP_IN = 6.0 * TIC_LEN_IN
         FRAME_MARGIN_X = FRAME_GAP_IN / max(axis_w_in, 0.5)  # plot 테두리(frame)와 박스 사이 가로 간격
         FRAME_MARGIN_Y = FRAME_GAP_IN / max(axis_h_in, 0.3)  # 세로 간격(동일한 물리 거리)
 
@@ -726,6 +731,13 @@ class GnuplotGenerator:
         # [수정] "Legend 내 style 길이 조금 더 길게(1.2배 정도)" 요청 - screen/print
         # 공통으로 추가 확대.
         SAMPLE_W *= 1.2
+        # [수정 - 버그] "style 길이도 조금 줄여줘요 - 지금의 2/3" - 이 요청 직전에
+        # ROW_LINE_HEIGHT_IN의 print 배수를 legend 줄 겹침 버그 수정을 위해
+        # 1.2 -> 2.0으로 올렸는데, SAMPLE_W가 이 값에 비례해서 계산돼(위 첫 줄)
+        # 의도치 않게 style도 같이 길어져 버렸음(1.667배) - print만 2/3를
+        # 곱해 그 부작용을 되돌린다(줄 간격 자체는 그대로 유지).
+        if is_print_mode:
+            SAMPLE_W *= 2 / 3
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
         # 그냥 len()으로 세면 숫자/콜론/대시처럼 대문자보다 좁은 문자가 많은
         # 라벨(CATHENA 변수명 특성상 흔함, 예: "MFLO:R-SDRT1>L-STLF1")은 실제
@@ -759,11 +771,13 @@ class GnuplotGenerator:
         # 계산해보면 print/screen 공통 계수(0.3)는 기본 legend_size(9pt) 기준
         # 물리 간격이 0.013in 안팎(≈2px)에 불과해, 샘플선 자체의 굵기(lw)나
         # 화면 렌더링의 안티에일리어싱만으로도 시각적으로 거의 사라지는 크기였음.
-        # print/save는 아직 문제 제기가 없었으므로 그대로 두고(0.3), 실제
-        # 문제가 보고된 screen(is_print_mode=False)만 계수를 키운다.
-        # [수정] "style과의 간격을 대문자 1/3자 정도 더 키워달라"는 추가 피드백으로
-        # screen 계수를 0.7 -> 0.7+1/3로 더 키움.
-        BOX_EDGE_GAP_FRAC = (0.3 if is_print_mode else 0.7 + 1 / 3) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
+        # [수정 - 버그] "Legend 우측 align 기준으로 style과 box 사이 간격이 없음" -
+        # 당시엔 print/save가 문제 없다고 봐서 0.3을 그대로 뒀는데, 실측 확인
+        # 결과 legend_size 9pt 기준 물리 간격이 0.013in(≈2px)뿐이라 샘플선
+        # 두께(lw)만으로도 거의 다 채워져 시각적으로 안 보였음(우측 정렬이면
+        # 샘플선이 box 오른쪽 테두리에 바로 붙는 쪽이라 특히 눈에 띔) - screen과
+        # 동일한 계수(0.7+1/3)로 맞춘다.
+        BOX_EDGE_GAP_FRAC = (0.7 + 1 / 3) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
         # [수정] "screen 창에서도 마진이 너무 넓다(5자 이상 줄여야 함)" - 예전엔
         # screen의 char_width_in 계수(0.0049)가 실측 재보정이 안 돼 실제 폭을
         # 과소평가한다는 이유로 여유분을 6.7자까지 늘려뒀었는데, 그 결과 라벨이
@@ -781,7 +795,7 @@ class GnuplotGenerator:
             # 폰트가 없어 대체(Arial 등)되면 실제 렌더링 폭이 실측 계수(맑은
             # 고딕 기준)보다 커질 수 있어 안전 여유를 크게 둔다(tkinter 실측
             # 보정은 스레드 문제로 폐기했으므로, 여기서 고정 버퍼로 흡수한다).
-            _box_w_extra_chars = 14.0 if is_print_mode else 1.7
+            _box_w_extra_chars = 18.0 if is_print_mode else 1.7
         # [수정] box가 title을 못 감싸는(밖으로 삐져나옴) 버그 - LABEL_GAP_FRAC
         # (샘플선<->title 간격)이 여기 폭 계산에 빠져 있어서, 그 간격을 늘릴수록
         # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
@@ -2091,14 +2105,14 @@ class GnuplotGenerator:
         # title 각도를 다시 계산해서 반영"은 가능함. 'r'/'a' 등 자주 쓰는 키는
         # gnuplot 기본 바인딩(ruler/autoscale 등)과 겹쳐서 비어있는 't'를 사용.
         # curve/surface 여부와 무관하게 이 함수 전체에 공통 적용됨.
-        # [수정] "저장/인쇄 안내 문구"를 't' 키, Ctrl+P, P/N/j/E/s 저장 키
+        # [수정] "저장/인쇄 안내 문구"를 't' 키, Ctrl+P, P/N/J/E/S 저장 키
         # 복귀 시퀀스 등 여러 곳에서 반복 재설정하므로, 문구가 서로 어긋나지
         # 않게 한 곳에서만 정의해 재사용한다(아래에서 쓰기 전에 rx/rz를 항상
         # 먼저 GPVAL_VIEW_ROT_X/Z로 다시 읽어와야 함 - bind별로 독립 실행돼도
         # gnuplot 변수는 전역이라 't'를 먼저 안 눌렀으면 rx/rz가 없을 수 있음).
         _status_label_cmd = (
             'set label 9003 sprintf('
-            '"지금 상태 저장/인쇄 가능 - P:PDF N:PNG j:JPG E:EMF s:SVG Ctrl+P:인쇄  '
+            '"지금 상태 저장/인쇄 가능 - P:PDF N:PNG J:JPG E:EMF S:SVG Ctrl+P:인쇄  '
             't:재정렬  z:Y·Z범위복원  R:전체초기화  (Rot X=%.1f Rot Z=%.1f)", rx, rz) '
             'at screen 0.02, screen 0.055 front noenhanced'
         )
@@ -2140,7 +2154,7 @@ class GnuplotGenerator:
             # 중복을 줄이고 "지금 상태 저장/인쇄 가능"이라는 안내를 앞에 붙여
             # 한 줄(9003)로 합침. 회전각 숫자는 Rotate X/Z 입력칸에 그대로
             # 옮겨 적을 때 여전히 편해서 완전히 빼지 않고 뒤에 같이 둠.
-            # 저장 키(P/N/j/E/s)와 Ctrl+P 인쇄 bind에서 파일로 replot하기 전에
+            # 저장 키(P/N/J/E/S)와 Ctrl+P 인쇄 bind에서 파일로 replot하기 전에
             # 이 라벨(과 9004 저장완료 안내)만 잠깐 unset하고 복귀 후 다시
             # set해서, 화면에는 보이지만 저장되는 파일에는 안 나오게 한다.
             _bind_parts.append(_status_label_cmd)
@@ -2202,12 +2216,14 @@ class GnuplotGenerator:
                 'replot'
             )
             lines.append(f"bind 'ctrl-p' '{_print_cmd}'")
+            # [수정] "저장 키를 통일성 있게 전부 대문자로(P/N/J/E/S), t는 재정렬
+            # 기능이라 그대로 소문자 유지" 요청 - j/s만 소문자였던 걸 J/S로 변경.
             _view_formats = [
                 ('P', 'pdfcairo enhanced color font "Malgun Gothic,14" size 10in,8in', 'pdf'),
                 ('N', 'pngcairo enhanced color font "Malgun Gothic,14" size 11.7in,8.3in', 'png'),
-                ('j', 'jpeg size 1600,900 enhanced font "Malgun Gothic,14"', 'jpg'),
+                ('J', 'jpeg size 1600,900 enhanced font "Malgun Gothic,14"', 'jpg'),
                 ('E', 'emf enhanced size 1680,1200 font "Malgun Gothic,14"', 'emf'),
-                ('s', 'svg enhanced size 1123,797 font "Malgun Gothic,14"', 'svg'),
+                ('S', 'svg enhanced size 1123,797 font "Malgun Gothic,14"', 'svg'),
             ]
             for _key, _term_spec, _ext in _view_formats:
                 _outexpr = (f'sprintf("{_save_dir_esc}/{title_disp}_view_%s.{_ext}", '
