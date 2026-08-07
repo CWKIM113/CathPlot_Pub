@@ -941,8 +941,12 @@ class GnuplotGenerator:
                 return p / 100.0 if p > 0 else None
             except (TypeError, ValueError):
                 return None
-        _box_w_override = _parse_pct(box_w_pct_override)
-        _box_h_override = _parse_pct(box_h_pct_override)
+        # [수정 - 버그] "Print/Save 전용" 툴팁을 달아놓고 정작 코드는 화면
+        # (Interactive)에서도 그대로 적용되고 있었음 - "프린트나 이미지에서"
+        # 라는 명시적 요청과 툴팁 문구에 맞게 is_print_mode일 때만 적용한다
+        # (기존 box_w_extra_chars_override와 동일한 방식).
+        _box_w_override = _parse_pct(box_w_pct_override) if is_print_mode else None
+        _box_h_override = _parse_pct(box_h_pct_override) if is_print_mode else None
         if _box_w_override is not None:
             box_w = _box_w_override
         if _box_h_override is not None:
