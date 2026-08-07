@@ -3155,6 +3155,7 @@ class CathPlotGUI:
             bn = self._dedup_display_name(d_file)
             if len(y1s) == 1 and len(y2s) == 1:
                 file_x_output_no = 0
+                x_key_val = ""
                 for info in self.file_rows:
                     if info.get("filename") == d_file:
                         x_var_obj = info.get("x_var")
@@ -3172,6 +3173,17 @@ class CathPlotGUI:
                 except Exception:
                     target_dat_file = d_file
                 x_shift = float(self.file_xshift_vars[d_file].get() or 0.0) if d_file in self.file_xshift_vars else 0.0
+                # [추가 - 버그] "선택 해제되면 차순위 file의 x,y,z(y2) title을
+                # 읽어와야지" - X/Y1/Y2 title도 Plot Title처럼 "체크된 첫
+                # curve"를 따라가려면, 그 curve가 실제로 어떤 변수(legend 이름)를
+                # 쓰는지 알아야 함 - sync_axis_labels()와 동일하게 legend_vars에서
+                # 실제 변수명을 가져와 같이 저장해둔다(2D의 xlabel_var 등 화면에
+                # 지금 떠 있는 값이 아니라, 이 curve 고유의 X/Y1/Y2 변수명).
+                y1_key = f"{d_file}||{y1s[0]}"
+                y2_key = f"{d_file}||{y2s[0]}"
+                x_title = self.legend_vars.get(x_key_val).get() if x_key_val in self.legend_vars else ""
+                y_title = self.legend_vars.get(y1_key).get() if y1_key in self.legend_vars else ""
+                y2_title = self.legend_vars.get(y2_key).get() if y2_key in self.legend_vars else ""
                 eligible.append({
                     "dat_file": target_dat_file,
                     "x_col": file_x_output_no + 1,
@@ -3179,6 +3191,9 @@ class CathPlotGUI:
                     "z_col": y2s[0] + 1,
                     "x_shift": x_shift,
                     "label": bn,
+                    "x_title": x_title,
+                    "y_title": y_title,
+                    "y2_title": y2_title,
                 })
             elif not y1s and not y2s:
                 continue  # 아예 선택 안 한 파일은 조용히 무시
@@ -3415,22 +3430,49 @@ class CathPlotGUI:
                     return item
             return None
 
+        _auto_title["x"] = xlabel3d_var.get()
+        _auto_title["y"] = ylabel3d_var.get()
+
         def _sync_default_titles(*_args):
             # [수정 - 버그] "3-D Plot Title 기본값이 2-D의 Plot Title(파일명)로
             # 새어 들어옴 - 체크된 첫 curve/surface 이름이 없으면 그냥 blank여야
             # 함" - self.filename_var(2D 메인 창이 보고 있는 파일)로 떨어지는
             # 폴백과 "CathPlot" 폴백을 없애서, 체크된 게 하나도 없으면(전부
             # 체크 해제) 3D와 무관한 값 대신 빈 문자열이 되게 한다.
+            # [수정 - 버그] "Plot Title은 filename만(확장자는 지우고) 사용" -
+            # label(예: out111.dat, 중복시 out111-1.dat)에서 확장자만 뗀다
+            # (Dat list/legend 표시용 label 자체는 확장자 포함 그대로 유지 -
+            # 여기 Plot Title 기본값에만 적용).
+            # [수정 - 버그] "1번 file 체크 해제해도 axis-title은 여전히 1번
+            # file 것 - 차순위 file(또는 s-plot)의 X/Y1/Y2(Z)로 바뀌어야 함" -
+            # Plot Title처럼 X/Y title도 체크된 첫 curve의 실제 변수명(legend
+            # 이름, _collect_3d_curves에서 미리 담아둔 x_title/y_title)을
+            # 따라가게 한다. curve가 없고 surface만 체크됐으면(surface는 raw
+            # CATHENA 포맷이라 X=Time, Y=Data_No가 항상 맞음) 기존처럼 고정값.
             _cur = _first_checked_curve()
             _surf = _first_checked_surface()
-            new_plot_title = (_cur or _surf or {}).get("label") or ""
+            new_plot_title = os.path.splitext((_cur or _surf or {}).get("label") or "")[0]
             if plot_title_var.get() == _auto_title["plot"]:
                 plot_title_var.set(new_plot_title)
             _auto_title["plot"] = new_plot_title
+
+            if _cur is not None:
+                new_xlabel = _cur.get("x_title") or "Time"
+                new_ylabel = _cur.get("y_title") or "Data_No"
+            else:
+                new_xlabel = "Time"
+                new_ylabel = "Data_No"
+            if xlabel3d_var.get() == _auto_title["x"]:
+                xlabel3d_var.set(new_xlabel)
+            _auto_title["x"] = new_xlabel
+            if ylabel3d_var.get() == _auto_title["y"]:
+                ylabel3d_var.set(new_ylabel)
+            _auto_title["y"] = new_ylabel
+
             if _surf is not None:
                 new_zlabel = _surf.get("z_label", "") or _surf.get("label", "")
             elif _cur is not None:
-                new_zlabel = self.y2label_var.get()
+                new_zlabel = _cur.get("y2_title") or ""
             else:
                 new_zlabel = ""
             if zlabel3d_var.get() == _auto_title["z"]:
