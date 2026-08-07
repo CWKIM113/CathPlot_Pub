@@ -3416,9 +3416,14 @@ class CathPlotGUI:
             return None
 
         def _sync_default_titles(*_args):
+            # [수정 - 버그] "3-D Plot Title 기본값이 2-D의 Plot Title(파일명)로
+            # 새어 들어옴 - 체크된 첫 curve/surface 이름이 없으면 그냥 blank여야
+            # 함" - self.filename_var(2D 메인 창이 보고 있는 파일)로 떨어지는
+            # 폴백과 "CathPlot" 폴백을 없애서, 체크된 게 하나도 없으면(전부
+            # 체크 해제) 3D와 무관한 값 대신 빈 문자열이 되게 한다.
             _cur = _first_checked_curve()
             _surf = _first_checked_surface()
-            new_plot_title = (_cur or _surf or {}).get("label") or self.filename_var.get().strip() or "CathPlot"
+            new_plot_title = (_cur or _surf or {}).get("label") or ""
             if plot_title_var.get() == _auto_title["plot"]:
                 plot_title_var.set(new_plot_title)
             _auto_title["plot"] = new_plot_title
