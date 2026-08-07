@@ -98,7 +98,7 @@ STYLE_3D_DISPLAY_MAP = {
     "lines": "Lines",
     "points": "Points",
     "linespoints": "Linespoints",
-    "pm3d": "Color Palette(입체채색)",
+    "pm3d": "Color Palette",
 }
 STYLE_3D_INTERNAL_MAP = {v: k for k, v in STYLE_3D_DISPLAY_MAP.items()}
 
@@ -3232,17 +3232,17 @@ class CathPlotGUI:
         dialog.title("3D Plot Options")
         dialog.transient(self.root)
 
-        # [추가] "Plot Title 입력칸을 따로 둬서 (splot 입력의 filename을 무조건
-        # 쓰는 대신) 수정 가능하게" / "x,y,z 선택(=Y1/Y2 매핑) 없으면 splot
-        # title을 기본으로" - curve가 있으면 기존처럼 파일명(filename_var),
-        # curve 없이 surface만 있으면 그 surface의 표시명을 기본값으로 쓴다.
-        if eligible:
-            _default_plot_title = self.filename_var.get().strip() or "CathPlot"
-        elif surfaces:
-            _default_plot_title = surfaces[0]["label"]
-        else:
-            _default_plot_title = self.filename_var.get().strip() or "CathPlot"
-        plot_title_var = tk.StringVar(value=_default_plot_title)
+        # [수정 - 버그] "선택하지 않은 curve의 title 대신, 선택한 curve 중
+        # 먼저 것의 title을 default로" - 예전엔 curve가 하나라도 있으면
+        # (아래 포함할 Set 목록에서 실제 체크돼 있는지와 무관하게) 항상
+        # self.filename_var(2D 메인 창에서 지금 보고 있는 파일)를 기본값으로
+        # 썼는데, 여러 파일을 로드해둔 상태에서 지금 보고 있는 파일이 3D에
+        # 포함 안 시킨(또는 체크 해제한) 파일일 수 있어 엉뚱한 이름이 나왔음.
+        # "포함할 Set" 체크박스들이 아래에서 만들어지므로, 일단 임시값으로 두고
+        # 그 체크박스들을 다 만든 뒤 실제로 체크된 첫 항목 기준으로 다시 채운다
+        # (아래 _sync_default_titles 참고). 체크박스를 껐다 켰다 할 때도 같은
+        # 함수가 다시 불려 반영됨 - 단, 사용자가 직접 고친 값은 덮어쓰지 않음.
+        plot_title_var = tk.StringVar(value="CathPlot")
 
         title_row = ttk.Frame(dialog)
         title_row.pack(fill="x", padx=10, pady=(8, 2))
@@ -3395,6 +3395,48 @@ class CathPlotGUI:
                          width=13, state="readonly").pack(side="right", padx=4)
             surface_check_vars.append((v, s, shape_var, size_var, style_var_row))
             _set_idx += 1
+
+        # [수정 - 버그] "선택 여부에 따라 Plot Title/Z title의 default가 바뀌게" -
+        # 위 체크박스들이 이제서야 다 만들어졌으니, 실제로 체크된 첫 curve(없으면
+        # 첫 surface)를 기준으로 Plot Title/Z title 기본값을 다시 채운다. 체크를
+        # 켰다 껐다 할 때마다 다시 계산해서 반영하되, 사용자가 이미 손으로 값을
+        # 고쳐놨으면(=마지막으로 자동으로 채워준 값과 다르면) 덮어쓰지 않는다.
+        _auto_title = {"plot": plot_title_var.get(), "z": zlabel3d_var.get()}
+
+        def _first_checked_curve():
+            for v, item, *_ in curve_check_vars:
+                if v.get():
+                    return item
+            return None
+
+        def _first_checked_surface():
+            for v, item, *_ in surface_check_vars:
+                if v.get():
+                    return item
+            return None
+
+        def _sync_default_titles(*_args):
+            _cur = _first_checked_curve()
+            _surf = _first_checked_surface()
+            new_plot_title = (_cur or _surf or {}).get("label") or self.filename_var.get().strip() or "CathPlot"
+            if plot_title_var.get() == _auto_title["plot"]:
+                plot_title_var.set(new_plot_title)
+            _auto_title["plot"] = new_plot_title
+            if _surf is not None:
+                new_zlabel = _surf.get("z_label", "") or _surf.get("label", "")
+            elif _cur is not None:
+                new_zlabel = self.y2label_var.get()
+            else:
+                new_zlabel = ""
+            if zlabel3d_var.get() == _auto_title["z"]:
+                zlabel3d_var.set(new_zlabel)
+            _auto_title["z"] = new_zlabel
+
+        for v, *_rest in curve_check_vars:
+            v.trace_add("write", _sync_default_titles)
+        for v, *_rest in surface_check_vars:
+            v.trace_add("write", _sync_default_titles)
+        _sync_default_titles()  # 다이얼로그를 처음 열 때도 한 번 반영(전부 체크된 초기 상태 기준)
 
         # [추가] "comment, arrow 등은 3D 전용으로 popup 창에서 입력, 이때는
         # 좌표값으로 통일 (x,y,z)" - 2D 입력과 완전히 별개로, 이 팝업 안에서만
