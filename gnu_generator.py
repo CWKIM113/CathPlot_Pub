@@ -37,6 +37,49 @@ import uuid
 def _font_width_ratio(font_name):
     return 1.0
 
+# [추가] "font_pt/72 기준이 폰트를 바꾸면 왜곡될 수 있다 - 결과를 보고
+# intelligent하게 할 수 없나" - 위 tkinter 실측 시도는 스레드 문제로
+# 폐기됐지만, PIL(Pillow)의 ImageFont는 GUI가 아닌 순수 이미지 라이브러리라
+# 백그라운드 스레드에서도 안전하게 쓸 수 있음(위 tkinter 실패 사례와는
+# 다른 라이브러리). Legend Font 콤보박스에 있는 알려진 폰트들만 실제 .ttf
+# 파일 경로를 미리 매핑해두고, PIL로 문자열의 실제 폭을 직접 측정해서
+# legend box 폭 추정에 쓴다(문자별 가중치 추측 대신 실측) - 매핑에 없는
+# 폰트거나 Pillow/폰트 파일이 없으면 기존 문자 가중치 방식으로 안전하게
+# 대체(폴백)한다.
+_FONT_FILE_MAP = {
+    "malgun gothic": r"C:\Windows\Fonts\malgun.ttf",
+    "arial": r"C:\Windows\Fonts\arial.ttf",
+    "times new roman": r"C:\Windows\Fonts\times.ttf",
+    "courier new": r"C:\Windows\Fonts\cour.ttf",
+    "consolas": r"C:\Windows\Fonts\consola.ttf",
+}
+_font_measure_cache = {}
+
+def _measure_text_width_in(text, font_name, font_pt):
+    """text를 font_name(Legend Font 콤보 값) 폰트의 font_pt 크기로 실제
+    렌더링했을 때의 폭을 inch로 반환. 측정 불가능하면 None(호출부가 기존
+    문자 가중치 추정으로 대체해야 함)."""
+    if not text:
+        return 0.0
+    path = _FONT_FILE_MAP.get((font_name or "").strip().lower())
+    if not path or not os.path.exists(path):
+        return None
+    cache_key = (path, round(font_pt, 2))
+    font_obj = _font_measure_cache.get(cache_key)
+    if font_obj is None:
+        try:
+            from PIL import ImageFont
+            # PIL의 truetype size는 72dpi 기준 픽셀이라, 그대로 pt로 써도
+            # "1pt=1/72in" 정의와 일치해 inch 환산이 바로 됨.
+            font_obj = ImageFont.truetype(path, max(int(round(font_pt)), 1))
+        except Exception:
+            return None
+        _font_measure_cache[cache_key] = font_obj
+    try:
+        return font_obj.getlength(text) / 72.0
+    except Exception:
+        return None
+
 _GNUPLOT_FALLBACK_PATHS = [
     r"C:\Program Files\gnuplot\bin\gnuplot.exe",
     r"C:\Program Files\gnuplot\bin\wgnuplot.exe",
@@ -252,12 +295,20 @@ class PlotDefinition:
     legend_thick: str = "1.5"  # legend box 테두리 두께
     legend_font: str = "Malgun Gothic"  # Legend 전용 폰트 (Comment도 같이 씀)
     legend_size: str = "9"  # Legend 전용 크기 (Comment도 같이 씀)
+    # [추가] "자동 추정이 안 맞는 경우만 사용자 입력(axis 대비 %)으로" - 비어
+    # 있으면(기본) 기존 폰트 기반 자동 추정, 값이 있으면 그 크기(axis width/
+    # height 대비 %)로 고정. Print/Save 전용(포맷별 렌더링 차이로 자동
+    # 추정이 어긋나는 예외 상황 대응용).
+    legend_box_width_pct: str = ""
+    legend_box_height_pct: str = ""
 
     legend2_on: bool = False
     legend2_box: bool = True
     legend2_pos: str = "right bottom"
     legend2_align: str = "Auto"  # Legend1과 동일(legend_align 참고)
     legend2_thick: str = "1.5"
+    legend2_box_width_pct: str = ""   # Legend1과 동일(legend_box_width_pct 참고)
+    legend2_box_height_pct: str = ""
 
     title_font: str = "Malgun Gothic"
     title_size: str = "14"
@@ -606,7 +657,7 @@ class GnuplotGenerator:
     def _render_legend_box(self, lines, curves, pos_raw, box_on, thick_val, id_offset,
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
                             axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None,
-                            align="Auto", fmt=None):
+                            align="Auto", fmt=None, box_w_pct_override=None, box_h_pct_override=None):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -661,7 +712,8 @@ class GnuplotGenerator:
         # 화면만 크게 유지한다
         # [수정] "legend box 테두리와 첫/끝 줄 글자 사이 여백도 줄여달라"는
         # 요청으로 print 쪽 계수를 0.12 -> 0.08로 축소(화면은 그대로 유지).
-        ROW_MARGIN = (0.08 if is_print_mode else 0.3) * ROW_H
+        _row_margin_ratio = 0.08 if is_print_mode else 0.3
+        ROW_MARGIN = _row_margin_ratio * ROW_H
         # [수정] "문자 하나당 대략적인 폭(인치)"을 legend 라벨 폭 추정뿐 아니라
         # legend box와 axis frame 사이 간격(1자 정도)에도 재사용한다 - font_pt에
         # 비례하는 절대(인치) 값을 먼저 구하고, 가로/세로는 각각 axis_w_in/
@@ -800,7 +852,16 @@ class GnuplotGenerator:
                 return 1.0  # 대문자 및 그 외(한글 등)는 기준(1.0) 그대로
             return sum(_w(ch) for ch in (title or "")) or 1.0
 
-        max_label_len = max((_weighted_label_len(c.title) for c in curves), default=1.0)
+        # [수정] "AI가 결과 보고 intelligent하게 할 수 없나" - 위 문자 가중치는
+        # 여전히 추측이라, Legend Font가 알려진 폰트(_FONT_FILE_MAP)면 PIL로
+        # 각 curve title의 실제 렌더 폭을 직접 측정해서 쓴다(추측이 아니라
+        # 실측 - 폰트를 바꿔도 자동으로 맞음). 측정 실패(모르는 폰트, Pillow
+        # 없음 등)시에만 위 문자 가중치 추정으로 안전하게 대체.
+        _measured_widths_in = [_measure_text_width_in(c.title, font_name, font_pt) for c in curves]
+        if curves and all(w is not None for w in _measured_widths_in):
+            max_label_len = max(_measured_widths_in) / char_width_in
+        else:
+            max_label_len = max((_weighted_label_len(c.title) for c in curves), default=1.0)
         char_width_frac = char_width_in / max(axis_w_in, 0.5)
         # [수정] "legend box 샘플선과 curve title 사이 간격을 줄여달라(13자
         # 라벨 기준 2자 정도)" - 기존엔 이 간격(그리고 박스 테두리<->샘플선
@@ -866,6 +927,29 @@ class GnuplotGenerator:
         # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
         box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + BOX_EDGE_GAP_FRAC + LABEL_GAP_FRAC
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
+
+        # [추가] "자동 추정이 안 맞는 경우만 사용자 입력(axis 대비 %)으로
+        # 직접 지정" - 비워두면(None/빈 문자열/숫자 아님) 위 자동 추정을
+        # 그대로 쓰고, 값이 있으면(axis width/height 대비 %) 그 크기로
+        # 고정한다. 높이를 고정하면 줄 간격(ROW_H)/줄 위아래 여백(ROW_MARGIN)도
+        # 그 고정 높이에 맞춰 다시 나눠야, 아래 curve별 루프에서 쓰는 row_y가
+        # 실제로 그 안에 고르게 들어간다(안 그러면 박스만 커지고 줄 간격은
+        # 그대로라 위아래에 빈 공간만 남거나, 반대로 줄어들면 여전히 겹침).
+        def _parse_pct(v):
+            try:
+                p = float(v)
+                return p / 100.0 if p > 0 else None
+            except (TypeError, ValueError):
+                return None
+        _box_w_override = _parse_pct(box_w_pct_override)
+        _box_h_override = _parse_pct(box_h_pct_override)
+        if _box_w_override is not None:
+            box_w = _box_w_override
+        if _box_h_override is not None:
+            box_h = _box_h_override
+            n_rows = max(len(curves), 1)
+            ROW_H = box_h / (n_rows + 2 * _row_margin_ratio)
+            ROW_MARGIN = _row_margin_ratio * ROW_H
 
         # [추가] Legend box가 axis 가로/세로의 절반을 넘으면 plot을 너무 많이
         # 가려서 미리 경고한다(정확한 렌더링 크기가 아니라 Python 추정값
@@ -1533,7 +1617,9 @@ class GnuplotGenerator:
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
                 axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
                 box_w_extra_chars_override=legend_width_extra_chars,
-                align=getattr(plotdef, "legend_align", "Auto"), fmt=fmt
+                align=getattr(plotdef, "legend_align", "Auto"), fmt=fmt,
+                box_w_pct_override=getattr(plotdef, "legend_box_width_pct", ""),
+                box_h_pct_override=getattr(plotdef, "legend_box_height_pct", ""),
             )
 
         group2_curves = [c for c in plotdef.curves if getattr(c, "legend_group", 1) == 2]
@@ -1545,7 +1631,9 @@ class GnuplotGenerator:
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
                 axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
                 box_w_extra_chars_override=legend_width_extra_chars,
-                align=getattr(plotdef, "legend2_align", "Auto"), fmt=fmt
+                align=getattr(plotdef, "legend2_align", "Auto"), fmt=fmt,
+                box_w_pct_override=getattr(plotdef, "legend2_box_width_pct", ""),
+                box_h_pct_override=getattr(plotdef, "legend2_box_height_pct", ""),
             )
 
 
