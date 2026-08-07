@@ -801,7 +801,12 @@ class GnuplotGenerator:
             # 폰트가 없어 대체(Arial 등)되면 실제 렌더링 폭이 실측 계수(맑은
             # 고딕 기준)보다 커질 수 있어 안전 여유를 크게 둔다(tkinter 실측
             # 보정은 스레드 문제로 폐기했으므로, 여기서 고정 버퍼로 흡수한다).
-            _box_w_extra_chars = 18.0 if is_print_mode else 1.7
+            # [수정] "box와 title 간격을 대문자 4자만큼 줄여줘요" 피드백으로
+            # 18.0 -> 14.0. (이 값은 char_width_frac에 곱해져 legend font
+            # 크기에 비례하고, box_w 자체도 max_label_len을 포함하고 있어
+            # 체크된 curve/surface 중 가장 긴 라벨 글자 수에 맞춰 자동으로
+            # 넓어짐 - 둘 다 이미 요청한 대로 동작 중.)
+            _box_w_extra_chars = 14.0 if is_print_mode else 1.7
         # [수정] box가 title을 못 감싸는(밖으로 삐져나옴) 버그 - LABEL_GAP_FRAC
         # (샘플선<->title 간격)이 여기 폭 계산에 빠져 있어서, 그 간격을 늘릴수록
         # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
@@ -1338,12 +1343,18 @@ class GnuplotGenerator:
         # 직접 렌더링 비교로 확인함(Y1은 오른쪽 +, Y2는 왼쪽 -). lmargin/rmargin을
         # "at screen"으로 고정하는 경우(Print/Save 전부)에만 필요하고 부작용도
         # 없어 항상 적용.
+        # [수정 - 버그] "emf 파일에 Y1 title이 아예 안 보임" - png(pngcairo, 벡터
+        # 렌더러 cairo)에서는 2글자 offset이면 충분했는데, emf(네이티브 GDI
+        # 렌더러)는 offset 단위(문자폭)의 기준 폰트가 다른 것으로 보여 2로는
+        # 여전히 캔버스 밖에 남고 4는 모든 테스트에서 확실히 들어옴을 직접
+        # 렌더링 비교로 확인함 - 터미널(fmt)별로 다른 offset을 쓴다.
+        _ylabel_offset = 4 if (fmt or "").lower() == "emf" else 2
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
-        lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset 2,0 {ylabel_enh}')
+        lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset},0 {ylabel_enh}')
 
         if plotdef.y2label:
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
-            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset -2,0 {y2label_enh}')
+            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset -{_ylabel_offset},0 {y2label_enh}')
 
         lines.append("set ytics nomirror")
 
