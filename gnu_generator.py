@@ -2035,12 +2035,20 @@ class GnuplotGenerator:
         # 근처에 직접 배치한 set label로 대체한다. "축이 거꾸로 보여도 title까지
         # 뒤집을 필요 없음"은 _axis_label_rotate_deg가 이미 -90~90으로 접어주므로
         # 그대로 만족됨.
-        # [주의] 위치(graph 1.0, 0.5, 0)는 기본 회전각(60,30) 기준으로 맞춘 것 -
-        # 회전각을 크게 바꾸면 gnuplot이 tic 위치를 반대쪽으로 옮길 수 있어 그
-        # 경우엔 label 위치가 안 맞을 수 있음(실측 확인, 추후 필요시 조정).
+        # [수정 - 버그] "Y축을 회전해서 반대로 두고 t 누르면 y-title이 tic 숫자와
+        # 반대편에 찍힌다" - 위치(graph 1.0, 0.5, 0)를 항상 고정해서 썼는데,
+        # 실측 확인: gnuplot은 회전각(rot_x/rot_z)이 90도씩 넘어갈 때마다 Y축
+        # tic을 반대쪽 벽으로 옮김(예: rot_x=60,rot_z=30→오른쪽, rot_x=120,rot_z=30→
+        # 왼쪽 - rot_x/rot_z 둘 다 90도 경계를 넘는 횟수의 홀짝(XOR)으로 결정됨,
+        # 여러 조합 직접 렌더링해 확인). 그래서 label의 graph-x 위치(0.0 vs 1.0)도
+        # 같은 규칙으로 반대쪽 벽을 따라가게 해야 tic 옆에 제대로 붙는다.
+        def _side_bin(a):
+            pos = a - 360.0 * math.floor(a / 360.0)  # 0~360으로 접기(정수 아닌 값도 처리)
+            return int(math.floor(pos / 90.0)) % 2
+        _y_anchor_x = 0.0 if (_side_bin(rot_x) ^ _side_bin(rot_z)) else 1.0
         if ylabel:
             _ylabel_text, _ylabel_enh = self._render_text(ylabel)
-            lines.append(f'set label 9001 "{_ylabel_text}" at graph 1.0, graph 0.5, graph 0 '
+            lines.append(f'set label 9001 "{_ylabel_text}" at graph {_y_anchor_x}, graph 0.5, graph 0 '
                          f'rotate by {_ylabel_rot:.2f} offset 4.0,-2.1 {_ylabel_enh}')
         # [수정] "3D 축 title 각도가 축 방향과 다름, 특히 Z축은 90도 다름" -
         # gnuplot은 zlabel을 회전 지정 없으면 항상 가로(수평)로 그리는데, Z축은
@@ -2057,6 +2065,17 @@ class GnuplotGenerator:
         # title 각도를 다시 계산해서 반영"은 가능함. 'r'/'a' 등 자주 쓰는 키는
         # gnuplot 기본 바인딩(ruler/autoscale 등)과 겹쳐서 비어있는 't'를 사용.
         # curve/surface 여부와 무관하게 이 함수 전체에 공통 적용됨.
+        # [수정] "저장/인쇄 안내 문구"를 't' 키, Ctrl+P, P/N/j/E/s 저장 키
+        # 복귀 시퀀스 등 여러 곳에서 반복 재설정하므로, 문구가 서로 어긋나지
+        # 않게 한 곳에서만 정의해 재사용한다(아래에서 쓰기 전에 rx/rz를 항상
+        # 먼저 GPVAL_VIEW_ROT_X/Z로 다시 읽어와야 함 - bind별로 독립 실행돼도
+        # gnuplot 변수는 전역이라 't'를 먼저 안 눌렀으면 rx/rz가 없을 수 있음).
+        _status_label_cmd = (
+            'set label 9003 sprintf('
+            '"지금 상태 저장/인쇄 가능 - P:PDF N:PNG j:JPG E:EMF s:SVG Ctrl+P:인쇄  '
+            't:재정렬  z:Y·Z범위복원  R:전체초기화  (Rot X=%.1f Rot Z=%.1f)", rx, rz) '
+            'at screen 0.02, screen 0.055 front noenhanced'
+        )
         if is_interactive:
             # [주의] label 9001은 ylabel이 있을 때만 위에서 만들어지므로, 없는데
             # "set label 9001 rotate by ..."를 호출하면 존재하지 않는 라벨을
@@ -2074,25 +2093,31 @@ class GnuplotGenerator:
                 _bind_parts.append(f"yr=atan2({_R_3D}*cos(rrx)*cos(rrz),sin(rrz))*180.0/pi")
                 _bind_parts.append("if (yr>90) {yr=yr-180}")
                 _bind_parts.append("if (yr<-90) {yr=yr+180}")
-                _bind_parts.append("set label 9001 rotate by yr")
-            # [추가] "x,z축 각도를 나타내 줄 수 있나요? 입력으로 넣기 좋게" -
-            # 화면에서 돌려본 뒤 가장 좋은 각도를 그대로 Rotate X/Z 입력칸에
-            # 재입력해서 Save/Print 하려는 용도. GPVAL_VIEW_ROT_X/Z(방금 읽은
-            # rx/rz)를 화면 좌하단에 텍스트로 표시(screen 좌표라 회전과 무관하게
-            # 항상 같은 자리에 나옴). "front"로 그려서 데이터에 가려지지 않게 함.
-            _bind_parts.append(
-                'set label 9002 sprintf("Rot X=%.1f  Rot Z=%.1f", rx, rz) '
-                'at screen 0.02, screen 0.02 front noenhanced'
-            )
-            # [추가] "t 누르면 아래쪽/좌측에 저장 키 안내도 표시(저장 파일에는
-            # 안 나오게)" - 각도 표시 바로 위에 키 안내 문구를 같이 띄운다.
+                # [수정 - 버그] xlabel의 "rotate by xr"과 달리 ylabel은 "at graph
+                # ..."로 위치까지 고정해서 썼기 때문에, 마우스로 돌린 뒤 't'를
+                # 눌러도 각도만 갱신되고 위치(어느 벽에 붙일지)는 그대로였음 -
+                # 위 초기 렌더링과 동일한 규칙(rot_x/rot_z 90도 경계를 넘은
+                # 횟수의 홀짝 XOR)을 gnuplot 식으로 재계산해서 위치도 같이 갱신.
+                _bind_parts.append("posx=rx-360.0*floor(rx/360.0)")
+                _bind_parts.append("posz=rz-360.0*floor(rz/360.0)")
+                _bind_parts.append("bx=floor(posx/90.0)%2")
+                _bind_parts.append("bz=floor(posz/90.0)%2")
+                _bind_parts.append("if ((bx+bz)%2==0) {ax=1.0} else {ax=0.0}")
+                _bind_parts.append(
+                    f'set label 9001 "{_ylabel_text}" at graph ax, graph 0.5, graph 0 '
+                    f'rotate by yr offset 4.0,-2.1 {_ylabel_enh}'
+                )
+            # [수정] "task bar의 view에도 회전각이 나오는데 굳이 따로 찍을
+            # 필요 있나? 저장/인쇄 가능하다는 표시+format 안내가 더 유용할 듯" -
+            # 예전엔 회전각(Rot X/Z)과 저장 키 안내를 label 9002/9003 두 줄로
+            # 나눠서 보여줬는데, 회전각은 taskbar의 "view"에도 이미 나오므로
+            # 중복을 줄이고 "지금 상태 저장/인쇄 가능"이라는 안내를 앞에 붙여
+            # 한 줄(9003)로 합침. 회전각 숫자는 Rotate X/Z 입력칸에 그대로
+            # 옮겨 적을 때 여전히 편해서 완전히 빼지 않고 뒤에 같이 둠.
             # 저장 키(P/N/j/E/s)와 Ctrl+P 인쇄 bind에서 파일로 replot하기 전에
-            # 이 라벨만 잠깐 unset하고 복귀 후 다시 set해서, 화면에는 보이지만
-            # 저장되는 파일에는 안 나오게 한다.
-            _bind_parts.append(
-                'set label 9003 "t:재정렬  z:Y·Z범위복원  R:전체초기화  Ctrl+P:인쇄  P/N/j/E/s:저장" '
-                'at screen 0.02, screen 0.055 front noenhanced'
-            )
+            # 이 라벨(과 9004 저장완료 안내)만 잠깐 unset하고 복귀 후 다시
+            # set해서, 화면에는 보이지만 저장되는 파일에는 안 나오게 한다.
+            _bind_parts.append(_status_label_cmd)
             _bind_parts.append("replot")
             lines.append("bind 't' '" + "; ".join(_bind_parts) + "'")
 
@@ -2132,17 +2157,22 @@ class GnuplotGenerator:
             # "set output PRN"이 에러/멈춤 없이 동작하는 것은 직접 테스트로
             # 확인(기본 프린터가 무엇이든 Windows 인쇄 파이프라인을 그대로 탐).
             # 키는 gnuplot 기본 바인딩과 안 겹치고 관용적으로 익숙한 Ctrl+P 사용.
-            # [추가] "키 안내 문구(9003)는 저장되는 파일에는 안 나오게" - 파일로
-            # replot하기 직전에 잠깐 unset하고, 화면으로 복귀한 뒤 다시 set한다.
+            # [추가] "save 기능이 동작하는지? 저장됐다는 메시지가 없음 - 어떤
+            # 이름으로 어디에 저장했는지 표시 필요" - 저장/인쇄 후 화면으로
+            # 복귀하면 label 9004에 "저장됨: 파일경로"(인쇄는 "인쇄 완료")를
+            # 잠깐 띄운다. 9003과 마찬가지로 파일로 replot하기 전엔 잠깐
+            # unset해서 저장되는 파일에는 안 나오게 한다.
             _print_cmd = (
-                'unset label 9003; '
+                'unset label 9003; unset label 9004; '
                 'set terminal emf enhanced size 1680,1200 font "Malgun Gothic,14"; '
                 'set output "PRN"; '
                 'replot; '
                 'set output; '
                 f'set terminal {_restore_term}; '
-                'set label 9003 "t:재정렬  z:Y·Z범위복원  R:전체초기화  Ctrl+P:인쇄  P/N/j/E/s:저장" '
-                'at screen 0.02, screen 0.055 front noenhanced; '
+                'rx=GPVAL_VIEW_ROT_X; rz=GPVAL_VIEW_ROT_Z; '
+                f'{_status_label_cmd}; '
+                'set label 9004 "인쇄 완료 (기본 프린터로 전송됨)" '
+                'at screen 0.02, screen 0.02 front noenhanced; '
                 'replot'
             )
             lines.append(f"bind 'ctrl-p' '{_print_cmd}'")
@@ -2157,14 +2187,17 @@ class GnuplotGenerator:
                 _outexpr = (f'sprintf("{_save_dir_esc}/{title_disp}_view_%s.{_ext}", '
                             f'strftime("%H%M%S", time(0)))')
                 _cmd = (
-                    'unset label 9003; '
+                    'unset label 9003; unset label 9004; '
+                    f'fn9004={_outexpr}; '
                     f'set terminal {_term_spec}; '
-                    f'set output {_outexpr}; '
+                    f'set output fn9004; '
                     f'replot; '
                     f'set output; '
                     f'set terminal {_restore_term}; '
-                    'set label 9003 "t:재정렬  z:Y·Z범위복원  R:전체초기화  Ctrl+P:인쇄  P/N/j/E/s:저장" '
-                    'at screen 0.02, screen 0.055 front noenhanced; '
+                    'rx=GPVAL_VIEW_ROT_X; rz=GPVAL_VIEW_ROT_Z; '
+                    f'{_status_label_cmd}; '
+                    'set label 9004 sprintf("저장됨: %s", fn9004) '
+                    'at screen 0.02, screen 0.02 front noenhanced; '
                     f'replot'
                 )
                 lines.append(f"bind '{_key}' '{_cmd}'")
