@@ -657,7 +657,8 @@ class GnuplotGenerator:
     def _render_legend_box(self, lines, curves, pos_raw, box_on, thick_val, id_offset,
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
                             axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None,
-                            align="Auto", fmt=None, box_w_pct_override=None, box_h_pct_override=None):
+                            align="Auto", fmt=None, box_w_pct_override=None, box_h_pct_override=None,
+                            axis_x_span=None, axis_y_span=None):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -928,25 +929,42 @@ class GnuplotGenerator:
         box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + BOX_EDGE_GAP_FRAC + LABEL_GAP_FRAC
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
 
-        # [추가] "자동 추정이 안 맞는 경우만 사용자 입력(axis 대비 %)으로
-        # 직접 지정" - 비워두면(None/빈 문자열/숫자 아님) 위 자동 추정을
-        # 그대로 쓰고, 값이 있으면(axis width/height 대비 %) 그 크기로
-        # 고정한다. 높이를 고정하면 줄 간격(ROW_H)/줄 위아래 여백(ROW_MARGIN)도
-        # 그 고정 높이에 맞춰 다시 나눠야, 아래 curve별 루프에서 쓰는 row_y가
-        # 실제로 그 안에 고르게 들어간다(안 그러면 박스만 커지고 줄 간격은
-        # 그대로라 위아래에 빈 공간만 남거나, 반대로 줄어들면 여전히 겹침).
-        def _parse_pct(v):
-            try:
-                p = float(v)
-                return p / 100.0 if p > 0 else None
-            except (TypeError, ValueError):
+        # [추가] "자동 추정이 안 맞는 경우만 사용자 입력으로 직접 지정" -
+        # 비워두면(None/빈 문자열/숫자 아님) 위 자동 추정을 그대로 쓰고,
+        # 값이 있으면 그 크기로 고정한다. 높이를 고정하면 줄 간격(ROW_H)/
+        # 줄 위아래 여백(ROW_MARGIN)도 그 고정 높이에 맞춰 다시 나눠야,
+        # 아래 curve별 루프에서 쓰는 row_y가 실제로 그 안에 고르게 들어간다
+        # (안 그러면 박스만 커지고 줄 간격은 그대로라 위아래에 빈 공간만
+        # 남거나, 반대로 줄어들면 여전히 겹침).
+        # [추가] "%뿐 아니라 x,y 좌표값으로도 - 인터랙티브 창에서 마우스
+        # 커서로 좌표를 직접 읽어서 넣기 편하게, print/save 결과와 정확히
+        # 안 맞을 수 있어도 참고하기 쉬움" 요청 - "%"로 끝나면 axis 대비
+        # 비율(기존), 그냥 숫자면 실제 데이터 좌표값 차이로 보고 axis의
+        # 전체 데이터 범위(axis_x_span/axis_y_span)로 나눠 비율로 환산한다.
+        # 좌표값 모드인데 범위를 못 구했으면(예: auto인데 아직 데이터 없음)
+        # 조용히 무시하고 자동 추정으로 대체한다.
+        def _parse_box_dim(v, axis_span):
+            s = (v or "").strip()
+            if not s:
                 return None
+            is_pct = s.endswith("%")
+            try:
+                num = float(s[:-1] if is_pct else s)
+            except ValueError:
+                return None
+            if num <= 0:
+                return None
+            if is_pct:
+                return num / 100.0
+            if not axis_span or axis_span <= 0:
+                return None  # 좌표값 모드인데 axis 범위를 모름 - 자동 추정으로 대체
+            return num / axis_span
         # [수정 - 버그] "Print/Save 전용" 툴팁을 달아놓고 정작 코드는 화면
         # (Interactive)에서도 그대로 적용되고 있었음 - "프린트나 이미지에서"
         # 라는 명시적 요청과 툴팁 문구에 맞게 is_print_mode일 때만 적용한다
         # (기존 box_w_extra_chars_override와 동일한 방식).
-        _box_w_override = _parse_pct(box_w_pct_override) if is_print_mode else None
-        _box_h_override = _parse_pct(box_h_pct_override) if is_print_mode else None
+        _box_w_override = _parse_box_dim(box_w_pct_override, axis_x_span) if is_print_mode else None
+        _box_h_override = _parse_box_dim(box_h_pct_override, axis_y_span) if is_print_mode else None
         if _box_w_override is not None:
             box_w = _box_w_override
         if _box_h_override is not None:
@@ -1612,6 +1630,28 @@ class GnuplotGenerator:
         # 사용자가 더 크게 입력해도 Frame 두께로 제한한다
         _frame_border_lw = 1.5 * border_scale
 
+        # [추가] "legend box W*H를 %뿐 아니라 x,y 좌표값(데이터 단위)으로도
+        # 입력 가능하게 - 인터랙티브 창에서 마우스 커서로 좌표를 직접 읽어서
+        # 그 차이를 넣기 편하게" - "%"로 끝나면 기존처럼 axis 대비 비율,
+        # "%" 없이 그냥 숫자면 실제 X/Y 데이터 값 차이로 해석해서 axis의
+        # 전체 데이터 범위(폭/높이) 대비 비율로 환산한다. 범위를 못 구하면
+        # (예: 아직 auto인데 데이터가 없음) 좌표값 입력은 조용히 무시되고
+        # 기존 자동 추정으로 대체됨(아래 _render_legend_box의 안전한 폴백).
+        def _axis_span(axis_name, auto, manual_min, manual_max, is_log):
+            if auto:
+                nice = self._nice_axis_range(plotdef, axis_name, is_log=is_log)
+                if nice:
+                    lo, hi, _ = nice
+                    return hi - lo
+                return None
+            lo, hi = self._safe_manual_range(manual_min, manual_max, is_log)
+            try:
+                return float(hi) - float(lo)
+            except (ValueError, TypeError):
+                return None
+        _legend_x_span = _axis_span("x", plotdef.xauto, plotdef.xmin, plotdef.xmax, getattr(plotdef, "xlog", False))
+        _legend_y_span = _axis_span("y1", plotdef.yauto, plotdef.ymin, plotdef.ymax, getattr(plotdef, "y1log", False))
+
         group1_curves = [c for c in plotdef.curves if getattr(c, "in_legend1", True)]
         if plotdef.legend_on and group1_curves:
             legend_thick_val = min(float(getattr(plotdef, "legend_thick", "1.5") or 1.5), _frame_border_lw)
@@ -1624,6 +1664,7 @@ class GnuplotGenerator:
                 align=getattr(plotdef, "legend_align", "Auto"), fmt=fmt,
                 box_w_pct_override=getattr(plotdef, "legend_box_width_pct", ""),
                 box_h_pct_override=getattr(plotdef, "legend_box_height_pct", ""),
+                axis_x_span=_legend_x_span, axis_y_span=_legend_y_span,
             )
 
         group2_curves = [c for c in plotdef.curves if getattr(c, "legend_group", 1) == 2]
@@ -1638,6 +1679,7 @@ class GnuplotGenerator:
                 align=getattr(plotdef, "legend2_align", "Auto"), fmt=fmt,
                 box_w_pct_override=getattr(plotdef, "legend2_box_width_pct", ""),
                 box_h_pct_override=getattr(plotdef, "legend2_box_height_pct", ""),
+                axis_x_span=_legend_x_span, axis_y_span=_legend_y_span,
             )
 
 

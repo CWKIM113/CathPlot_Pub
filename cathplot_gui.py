@@ -395,8 +395,11 @@ class CathPlotGUI:
         _l1_boxh_entry.pack(side="left", padx=1)
         _box_size_hint = ("Print/Save 전용(화면 미리보기엔 적용 안 됨)\n"
                            "비우면 폰트 기준 자동 추정(기본) - 자동 추정이\n"
-                           "안 맞을 때만 axis 대비 %로 직접 지정\n"
-                           "예: 30 (가로/세로 각각 axis의 30%)")
+                           "안 맞을 때만 직접 지정\n"
+                           "숫자만: X/Y 데이터 좌표값 차이(인터랙티브 창에서\n"
+                           "  커서로 읽은 값 참고- 예: 200)\n"
+                           "%로 끝나면: axis 대비 비율 - 예: 30%\n"
+                           "(좌표값은 axis 범위가 나중에 바뀌면 비율도 같이 바뀜)")
         _add_hint(_l1_boxw_entry, _box_size_hint)
         _add_hint(_l1_boxh_entry, _box_size_hint)
 
