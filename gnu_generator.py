@@ -1359,9 +1359,14 @@ class GnuplotGenerator:
             # [수정 - 버그] "PNG의 major tic이 EMF 대비 약 2배로 길게 나옴,
             # 2/3로 줄일 것" - 같은 "set tics scale 1.0"이어도 pngcairo가
             # emf(네이티브 GDI)보다 실제 tic 길이를 더 길게 그리는 것으로
-            # 보임(사용자 실측 비교) - PNG만 2/3로 축소해 다른 포맷과
-            # 비슷한 길이가 되게 한다.
-            if (fmt or "").lower() == "png":
+            # 보임(사용자 실측 비교) - 직접 SVG(자체 렌더러, XML이라 tic
+            # 좌표를 직접 읽을 수 있음) vs PNG(72dpi 원본)를 같은 물리 단위
+            # (inch)로 환산해 재확인한 결과도 PNG 쪽이 확연히 더 김(SVG
+            # 0.086in vs PNG 0.194in, 약 2.3배) - PDF는 PNG와 같은 cairo
+            # 렌더러(pngcairo/pdfcairo)를 쓰므로 같은 문제가 있을 가능성이
+            # 높아(PDF는 이 환경에 rasterize 도구가 없어 직접 확인은 못 함)
+            # 같이 축소해둔다. EMF/JPG/SVG는 문제 제기가 없어 그대로 둠.
+            if (fmt or "").lower() in ("png", "pdf"):
                 tic_major_scale *= 2 / 3
                 tic_minor_scale *= 2 / 3
         else:
