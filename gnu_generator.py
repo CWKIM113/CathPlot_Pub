@@ -606,7 +606,7 @@ class GnuplotGenerator:
     def _render_legend_box(self, lines, curves, pos_raw, box_on, thick_val, id_offset,
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
                             axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None,
-                            align="Auto"):
+                            align="Auto", fmt=None):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -631,7 +631,28 @@ class GnuplotGenerator:
         # 1.35 -> 1.15 -> 1.0으로 계속 줄임(더 줄여달라는 후속 요청).
         # [수정] "Print에서 첨자(subscript) 넣으면 줄끼리 겹칠 듯하다"는 피드백으로
         # print만 1.0 -> 1.2로 다시 늘림(화면은 기존 1.0 유지).
-        ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * (2.0 if is_print_mode else 1.0)
+        # [수정 - 버그] "PNG는 legend 줄이 겹침(2.0으로 고쳐야 했음), 그런데
+        # PDF/EMF는 반대로 줄 간격이 너무 넓어짐" - 같은 폰트 pt·같은 1.2
+        # 기준값이어도 터미널(렌더러)마다 실제 그려지는 글자 높이가 달라서
+        # (pngcairo가 유독 작은 폰트에서 크게 그림 - 실측 확인) 한 배수를
+        # 전 포맷에 공유하면 한쪽은 겹치고 한쪽은 헐거워짐 - 포맷별로 따로
+        # 둔다. [수정 - 버그] "반으로/2/3로 줄여줘요"는 원래 기준(1.2)이
+        # 아니라 "지금 보고 있는(=2.0 기준) 결과" 대비 배수였음 - 1.2 기준으로
+        # 잘못 계산해서 EMF 렌더링 확인 결과 줄끼리 완전히 겹쳐버리는 심각한
+        # 회귀가 났음(직접 렌더링해서 발견) - 2.0 기준으로 다시 계산.
+        # box-title 간격(_box_w_extra_chars)도 같은 이유로 포맷별.
+        _fmt_l = (fmt or "").lower()
+        _PRINT_LEGEND_TUNING = {
+            "png": {"row_mult": 2.0, "box_chars": 14.0},
+            "pdf": {"row_mult": 2.0 * 0.5, "box_chars": 6.0},
+            "emf": {"row_mult": 2.0 * (2 / 3), "box_chars": 6.0},
+            "jpg": {"row_mult": 2.0 * (2 / 3), "box_chars": 6.0},
+            "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": 6.0},
+            "svg": {"row_mult": 2.0 * (2 / 3), "box_chars": 6.0},
+        }
+        _legend_tuning = (_PRINT_LEGEND_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0})
+                          if is_print_mode else {"row_mult": 1.0, "box_chars": 1.7})
+        ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * _legend_tuning["row_mult"]
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
         # 박스 테두리에 닿아 보인다는 피드백으로 화면에서 크게 늘렸는데(0.3),
@@ -724,7 +745,14 @@ class GnuplotGenerator:
         # 비율 대비 더 짧다" 실측 확인) - 같은 절대 길이(ROW_LINE_HEIGHT_IN)를
         # axis_w_in으로 나눠 올바른 가로 비율로 계산한다(정사각형 축이면
         # 기존과 동일).
-        SAMPLE_W = 1.3 * 1.3 * (ROW_LINE_HEIGHT_IN / max(axis_w_in, 0.5))  # style(샘플선) 길이가 너무 짧다는 피드백으로 1.3배 확대
+        # [수정 - 버그] style(샘플선) 길이는 줄 간격(ROW_LINE_HEIGHT_IN)과
+        # 수식을 공유했었는데, 위에서 줄 간격을 포맷별로 다르게 만들면서
+        # (PDF 0.5배, EMF 2/3배 등) style 길이까지 덩달아 줄어드는 부작용이
+        # 생김 - style 길이는 이 고정 기준(기존 PNG 기준과 동일한 2.0)으로
+        # 계산을 완전히 분리하고, 포맷별 최종 배율(_SAMPLE_W_FMT_MULT)만
+        # 따로 곱한다.
+        _SAMPLE_REF_ROW_HEIGHT_IN = (font_pt / 72.0) * 2.0
+        SAMPLE_W = 1.3 * 1.3 * (_SAMPLE_REF_ROW_HEIGHT_IN / max(axis_w_in, 0.5))  # style(샘플선) 길이가 너무 짧다는 피드백으로 1.3배 확대
         SAMPLE_W -= 1.5 * (char_width_in / max(axis_w_in, 0.5))  # 다시 대문자 1.5자만큼 축소 요청
         # [수정] "Print/Save에서 style 길이가 여전히 너무 짧다" - print만 2배로
         # (screen은 별도 문제 제기가 없었으므로 기존 값 유지, screen/print 마진을
@@ -737,13 +765,11 @@ class GnuplotGenerator:
         # [수정] "Legend 내 style 길이 조금 더 길게(1.2배 정도)" 요청 - screen/print
         # 공통으로 추가 확대.
         SAMPLE_W *= 1.2
-        # [수정 - 버그] "style 길이도 조금 줄여줘요 - 지금의 2/3" - 이 요청 직전에
-        # ROW_LINE_HEIGHT_IN의 print 배수를 legend 줄 겹침 버그 수정을 위해
-        # 1.2 -> 2.0으로 올렸는데, SAMPLE_W가 이 값에 비례해서 계산돼(위 첫 줄)
-        # 의도치 않게 style도 같이 길어져 버렸음(1.667배) - print만 2/3를
-        # 곱해 그 부작용을 되돌린다(줄 간격 자체는 그대로 유지).
+        # [수정 - 버그] "PDF의 style 길이=2/3로 줄일 것" - PNG/EMF/JPG/SVG는
+        # 현재(위 계산 그대로)로 문제 제기가 없어 1.0 유지, PDF만 추가로 2/3.
+        _SAMPLE_W_FMT_MULT = {"pdf": 2 / 3}
         if is_print_mode:
-            SAMPLE_W *= 2 / 3
+            SAMPLE_W *= _SAMPLE_W_FMT_MULT.get(_fmt_l, 1.0)
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
         # 그냥 len()으로 세면 숫자/콜론/대시처럼 대문자보다 좁은 문자가 많은
         # 라벨(CATHENA 변수명 특성상 흔함, 예: "MFLO:R-SDRT1>L-STLF1")은 실제
@@ -802,11 +828,21 @@ class GnuplotGenerator:
             # 고딕 기준)보다 커질 수 있어 안전 여유를 크게 둔다(tkinter 실측
             # 보정은 스레드 문제로 폐기했으므로, 여기서 고정 버퍼로 흡수한다).
             # [수정] "box와 title 간격을 대문자 4자만큼 줄여줘요" 피드백으로
-            # 18.0 -> 14.0. (이 값은 char_width_frac에 곱해져 legend font
-            # 크기에 비례하고, box_w 자체도 max_label_len을 포함하고 있어
-            # 체크된 curve/surface 중 가장 긴 라벨 글자 수에 맞춰 자동으로
-            # 넓어짐 - 둘 다 이미 요청한 대로 동작 중.)
-            _box_w_extra_chars = 14.0 if is_print_mode else 1.7
+            # 18.0 -> 14.0까지 줄였었으나, PNG를 기준으로 잡은 값이라 PDF/EMF/
+            # JPG에서는 오히려 "간격이 너무 크다(1~2자면 충분)"는 재확인
+            # 피드백을 받음 - 포맷별로 실제 필요한 안전 여유가 다르다는 뜻이라
+            # (PNG만 유독 실측 대비 텍스트 폭을 크게 그림) 위에서 정의한
+            # _legend_tuning["box_chars"]를 그대로 쓴다(PNG=14.0 유지).
+            # [참고] "EMF는 코드값 14인데도 실제로는 5자 정도 간격으로 보임"
+            # 이라는 실측 보고로 역산하면 EMF의 코드값 대비 실제 배율이
+            # 약 0.36 - 요청하신 "1~2자"를 문자 그대로(2.0) 넣으면 이 비율상
+            # 실제로는 1자도 안 남을 걸로 보여, 조금 더 여유(4.0)를 둠(직접
+            # 렌더링 확인 결과 이 정도는 겹치지 않음 - 그래도 여전히 넉넉하면
+            # 추가로 줄여도 됨). PDF/JPG/SVG는 EMF와 같은 근거가 없어 일단
+            # 동일하게 4.0을 임시로 공유(각각 재확인 필요). box_w 자체는
+            # 여전히 max_label_len을 포함해 체크된 curve/surface 중 가장 긴
+            # 라벨 글자 수에 맞춰 자동으로 넓어짐.
+            _box_w_extra_chars = _legend_tuning["box_chars"]
         # [수정] box가 title을 못 감싸는(밖으로 삐져나옴) 버그 - LABEL_GAP_FRAC
         # (샘플선<->title 간격)이 여기 폭 계산에 빠져 있어서, 그 간격을 늘릴수록
         # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
@@ -1302,6 +1338,14 @@ class GnuplotGenerator:
         tic_size = int(9 * f_scale)
         if getattr(plotdef, "is_print_mode", False):
             tic_major_scale, tic_minor_scale = PRINT_TIC_MAJOR_SCALE, PRINT_TIC_MINOR_SCALE
+            # [수정 - 버그] "PNG의 major tic이 EMF 대비 약 2배로 길게 나옴,
+            # 2/3로 줄일 것" - 같은 "set tics scale 1.0"이어도 pngcairo가
+            # emf(네이티브 GDI)보다 실제 tic 길이를 더 길게 그리는 것으로
+            # 보임(사용자 실측 비교) - PNG만 2/3로 축소해 다른 포맷과
+            # 비슷한 길이가 되게 한다.
+            if (fmt or "").lower() == "png":
+                tic_major_scale *= 2 / 3
+                tic_minor_scale *= 2 / 3
         else:
             tic_major_scale, tic_minor_scale = SCREEN_TIC_MAJOR_SCALE, SCREEN_TIC_MINOR_SCALE
         lines.append(f"set tics scale {tic_major_scale}, {tic_minor_scale}")
@@ -1466,7 +1510,7 @@ class GnuplotGenerator:
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
                 axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
                 box_w_extra_chars_override=legend_width_extra_chars,
-                align=getattr(plotdef, "legend_align", "Auto")
+                align=getattr(plotdef, "legend_align", "Auto"), fmt=fmt
             )
 
         group2_curves = [c for c in plotdef.curves if getattr(c, "legend_group", 1) == 2]
@@ -1478,7 +1522,7 @@ class GnuplotGenerator:
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
                 axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
                 box_w_extra_chars_override=legend_width_extra_chars,
-                align=getattr(plotdef, "legend2_align", "Auto")
+                align=getattr(plotdef, "legend2_align", "Auto"), fmt=fmt
             )
 
 
@@ -1522,7 +1566,19 @@ class GnuplotGenerator:
             cmd = f'"{path}" using {using_expr} notitle axes {axis} with lines lw {lw}'
 
             if color: cmd += f' lc rgb "{color}"'
-            if linestyle in DASH_PATTERNS: cmd += f" dashtype ({DASH_PATTERNS[linestyle]})"
+            if linestyle in DASH_PATTERNS:
+                cmd += f" dashtype ({DASH_PATTERNS[linestyle]})"
+                # [추가] "jpg는 curve line style이 안 나타남(실선으로만 보임)" -
+                # 실측 확인: gnuplot의 jpeg 터미널(libgd 기반)은 dashtype/
+                # termoption dashed 둘 다 무시하고 항상 실선만 그림 - gnuplot
+                # 자체의 한계라 스크립트로 고칠 방법이 없음. 매번 경고를
+                # 반복하지 않게 최초 1회만 기록.
+                if (fmt or "").lower() in ("jpg", "jpeg") and not getattr(self, "_jpg_dash_warned", False):
+                    self.warnings.append(
+                        "JPG 형식은 gnuplot 자체 한계로 점선/파선(Dash/Dot 등) 스타일을 지원하지 않아 "
+                        "실선으로 저장됩니다 - 점선이 꼭 필요하면 PNG/PDF/EMF/SVG를 사용하세요."
+                    )
+                    self._jpg_dash_warned = True
             cmd_list.append(cmd)
 
             # [수정] every-N(단순 인덱스 간격) 방식은 log축에서 시각적으로
@@ -1796,7 +1852,8 @@ class GnuplotGenerator:
         # 보이며, 마진을 딱 필요한 만큼만 잡으면 이 여유 부족분 때문에 pdf에서는
         # 괜찮던 값이 png에서만 잘림. png일 때만 마진에 15% 안전 여유를 더해서
         # 이 문제를 피한다(pdf/svg/emf는 원래도 문제 없어 그대로 둠).
-        if (fmt or "").lower() == "png":
+        _fmt_l2 = (fmt or "").lower()
+        if _fmt_l2 == "png":
             # [수정] "10x8cm처럼 작은 Manual 크기 + 축소된 폰트 조합에서 기존
             # 1.35배로도 x/y2 title이 잘리고 legend box가 곡선과 겹치는 문제가
             # 실측 확인됨" - 안전 여유를 1.35 -> 1.6으로 더 키움.
@@ -1805,6 +1862,13 @@ class GnuplotGenerator:
             need_right_in *= _png_margin_safety
             need_top_in *= _png_margin_safety
             need_bottom_in *= _png_margin_safety
+        elif _fmt_l2 == "emf":
+            # [수정 - 버그] "EMF는 Plot 상하 여백을 조금만 더 줄 것(port/land
+            # 공통)" - EMF는 png 같은 큰 잘림 문제는 없었지만 위아래가 살짝
+            # 빠듯하다는 피드백 - png(1.6배)보다 훨씬 작게, 위/아래만 소폭
+            # (1.15배) 늘린다(좌우는 문제 제기 없어 그대로 둠).
+            need_top_in *= 1.15
+            need_bottom_in *= 1.15
 
         return need_left_in, need_right_in, need_top_in, need_bottom_in
 
