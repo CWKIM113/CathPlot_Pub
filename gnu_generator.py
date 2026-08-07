@@ -775,12 +775,30 @@ class GnuplotGenerator:
         # 라벨(CATHENA 변수명 특성상 흔함, 예: "MFLO:R-SDRT1>L-STLF1")은 실제
         # 폭보다 훨씬 넓게 box가 잡혀 라벨 앞에 불필요한 빈 공간이 남았음
         # ("우측(순수 대문자)은 괜찮은데 좌측(콜론/대시 섞인 라벨)은 너무 넓음")
-        # - 문자별로 폭 비중을 달리해서(좁은 문자는 0.65자 취급) 실측 폭에 더
-        # 가깝게 라벨 길이를 추정한다(대문자 20자 vs "MFLO:..." 실측 비율로 보정).
-        _NARROW_CHARS = set("0123456789:.,-_+*/=()[]{}!?;'\"<>")
+        # - 문자별로 폭 비중을 달리해서 실측 폭에 더 가깝게 라벨 길이를 추정한다.
+        # [수정 - 버그] "space를 따로 count해야지, 대소문자로도 나눠야" - 예전엔
+        # space를 "narrow"에도 안 넣어서 대문자(1.0)와 동일하게 셌고(가장 흔한
+        # 과대평가 원인), 숫자/기호도 전부 0.65 하나로 뭉뚱그렸음 - 실측(pngcairo,
+        # Malgun Gothic 20pt, "AAAA.."/"aaaa.."/"0000.."/"A A A.."/"::::.."/
+        # "----.."/"((((.." 등을 렌더링해서 픽셀 폭 직접 측정)해 4단계로 나눔:
+        # 대문자 1.0(기준) > 소문자 0.8 ≈ 숫자 0.8 > 하이픈/괄호류 0.6 >
+        # space/마침표/쉼표/콜론류 0.35(가장 좁음, 예전엔 1.0으로 계산되던 것).
+        # [주의] 이 비율은 Malgun Gothic 실측치라 Legend Font를 다른 폰트로
+        # 바꾸면 실제 비율과 어긋날 수 있음(폰트별 실측을 다 할 수는 없음) -
+        # 정확도가 중요하면 추후 "박스 폭 직접 입력" 옵션도 고려할 만함.
+        _VERY_NARROW_CHARS = set(" .,:;'\"")          # space/마침표/쉼표/콜론류 - 실측 약 0.3~0.35
+        _MEDIUM_CHARS = set("-_()[]{}<>=*+/")          # 하이픈/괄호/기호류 - 실측 약 0.45~0.6
 
         def _weighted_label_len(title):
-            return sum(0.65 if ch in _NARROW_CHARS else 1.0 for ch in (title or "")) or 1.0
+            def _w(ch):
+                if ch in _VERY_NARROW_CHARS:
+                    return 0.35
+                if ch in _MEDIUM_CHARS:
+                    return 0.6
+                if ch.isdigit() or ch.islower():
+                    return 0.8
+                return 1.0  # 대문자 및 그 외(한글 등)는 기준(1.0) 그대로
+            return sum(_w(ch) for ch in (title or "")) or 1.0
 
         max_label_len = max((_weighted_label_len(c.title) for c in curves), default=1.0)
         char_width_frac = char_width_in / max(axis_w_in, 0.5)
