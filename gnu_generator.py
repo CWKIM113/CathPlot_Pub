@@ -97,7 +97,12 @@ DASH_PATTERNS = {
     # plot이 됨) - 콤마 뒤 공백을 넣은 "dashtype (6, 3)"는 정상 동작함을
     # 직접 렌더링 비교로 확인함. 이 파싱 특이사항 때문에 그동안 Dash/Dot 등
     # 모든 점선 스타일이 항상 조용히 실패해서 실선처럼 보였던 것.
-    "dash": "6, 3",
+    # [수정 - 버그] "Word에서 보면 dash가 short-dash나 dot처럼 보임" - 곡선이
+    # 가파르게 오르내리는 구간(CATHENA 데이터에 흔함)에서는 dash 세그먼트가
+    # 진행 방향(경로 길이) 기준이라 화면(수직) 투영 길이가 짧아져, 6pt
+    # 세그먼트가 거의 정사각형(점)처럼 보였음 - 직접 렌더링 비교로 14pt까지
+    # 늘리면 가파른 구간에서도 확실히 "선분"으로 보임을 확인.
+    "dash": "14, 7",
     "dot": "1, 2",
     "dashdot": "8, 3, 1, 3",       # dash를 길게(6->8), dot과의 틈새도 넓힘(2->3)
     "shortdash": "3, 2",
@@ -664,7 +669,9 @@ class GnuplotGenerator:
         # legend 폰트 크기(font_pt, print에서 7~8pt로 작음) 기준 추정값이라
         # 실제 렌더링에서 픽셀 몇 개(약 4px) 수준밖에 안 돼 거의 안 보였음
         # (실측 확인) - 눈에 띄는 간격이 되도록 계수를 키운다.
-        FRAME_GAP_IN = 6.0 * TIC_LEN_IN
+        # [수정] "1.5배로 해달라 했는데 왜 2배로 보이냐 - 줄여줘요" 피드백으로
+        # 6.0 -> 4.5로 축소(간격은 여전히 눈에 보이되 1.5배에 더 가깝게).
+        FRAME_GAP_IN = 4.5 * TIC_LEN_IN
         FRAME_MARGIN_X = FRAME_GAP_IN / max(axis_w_in, 0.5)  # plot 테두리(frame)와 박스 사이 가로 간격
         FRAME_MARGIN_Y = FRAME_GAP_IN / max(axis_h_in, 0.3)  # 세로 간격(동일한 물리 거리)
 
