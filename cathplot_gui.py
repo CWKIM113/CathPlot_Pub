@@ -3807,28 +3807,32 @@ class CathPlotGUI:
                           plot_title="", time_min=None, time_max=None,
                           y_min=None, y_max=None, z_min=None, z_max=None):
         os.makedirs(self.plot_dir, exist_ok=True)
-        # [수정] "Plot Title 입력칸을 따로 둬서 수정 가능하게" - 팝업의 Plot Title
-        # 입력값을 그대로 쓰고(filename_var를 무조건 쓰지 않음), 비었을 때만
-        # filename_var로 되돌아간다.
-        raw_title = (plot_title or "").strip() or self.filename_var.get().strip() or "CathPlot"
+        # [수정 - 버그] "Plot Title/axis title을 blank로 두면 plot에도 blank로
+        # 나와야 하는데, 선택도 안 한 첫 파일명이 뜸" - 팝업의 Plot Title
+        # 입력값을 그대로 쓰되(filename_var를 무조건 쓰지 않음), 저장 파일명
+        # 생성용(safe_title/base_name)에만 빈 값일 때 대체값을 쓰고, 실제
+        # 그래프에 찍히는 title(title_for_plot)은 사용자가 비웠으면 그대로
+        # 빈 채로 create_3d_script에 넘긴다(create_3d_script는 title이
+        # falsy면 "set title" 자체를 안 씀 - 완전히 안 나옴).
+        title_for_plot = (plot_title or "").strip()
+        raw_title = title_for_plot or self.filename_var.get().strip() or "CathPlot"
         safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
         next_id = self.title_counters.get(safe_title, 0) + 1
         base_name = f"{safe_title}_3D_{next_id}"
         outfile = os.path.join(self.plot_dir, f"{base_name}.plt")
         self.title_counters[safe_title] = next_id
 
-        # [추가] Surface(splot) 파일의 Z축 라벨 기본값 - curve가 없고 surface만
-        # 있을 때는 Z title 입력이 빈 값이면 surface의 공통 변수명을 쓴다.
-        zlabel = zlabel3d
-        if not zlabel and surfaces:
-            zlabel = surfaces[0].get("z_label", "")
-
         generator = GnuplotGenerator(self.plot_dir)
         try:
             generator.create_3d_script(
                 curves, outfile, fmt="interactive",
-                xlabel=xlabel3d or "Time", ylabel=ylabel3d or "Data_No", zlabel=zlabel,
-                title=raw_title,
+                # [수정 - 버그] X/Y/Z title도 같은 이유로 "or 기본값" 폴백을
+                # 없앤다 - 사용자가 비웠으면 축 title 없이 그대로 나와야 함.
+                # 기본값(Time/Data_No/surface 이름)은 다이얼로그가 열릴 때
+                # _sync_default_titles가 이미 채워주므로, 여기서 다시 덮어쓸
+                # 필요가 없다(오히려 사용자가 일부러 비운 걸 되돌리는 버그였음).
+                xlabel=xlabel3d, ylabel=ylabel3d, zlabel=zlabel3d,
+                title=title_for_plot,
                 xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
                 rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
                 annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
@@ -3844,15 +3848,14 @@ class CathPlotGUI:
                            y_min=None, y_max=None, z_min=None, z_max=None):
         """Save/Print가 공통으로 쓰는, 파일로 직접 렌더링하는 부분만 뽑은 버전
         (_execute_3d_plot의 화면(interactive) 전용 코드와 outfile/fmt만 다름)."""
-        raw_title = (plot_title or "").strip() or self.filename_var.get().strip() or "CathPlot"
-        zlabel = zlabel3d
-        if not zlabel and surfaces:
-            zlabel = surfaces[0].get("z_label", "")
+        # [수정 - 버그] blank Plot Title/axis title이 폴백값으로 되돌아가던
+        # 문제 - _execute_3d_plot과 동일하게 수정(위 주석 참고).
+        title_for_plot = (plot_title or "").strip()
         generator = GnuplotGenerator(self.plot_dir)
         generator.create_3d_script(
             curves, outfile, fmt=fmt,
-            xlabel=xlabel3d or "Time", ylabel=ylabel3d or "Data_No", zlabel=zlabel,
-            title=raw_title,
+            xlabel=xlabel3d, ylabel=ylabel3d, zlabel=zlabel3d,
+            title=title_for_plot,
             xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
             rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
             annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
@@ -3868,6 +3871,10 @@ class CathPlotGUI:
         방향/Frame 크기 선택 등 2D의 복잡한 캐시 선택 로직 없이 지금 다이얼로그
         입력값 그대로 바로 파일로 렌더링한다."""
         os.makedirs(self.plot_dir, exist_ok=True)
+        # [수정 - 버그] 저장 파일명(safe_title/default_name) 생성용 폴백은
+        # 그대로 두되(빈 파일명은 말이 안 되므로), 실제 그래프 title은
+        # plot_title을 그대로 _generate_3d_file에 넘겨서 비웠으면 비운 채로
+        # 나가게 한다(아래 self._generate_3d_file(... plot_title ...) 참고).
         raw_title = (plot_title or "").strip() or self.filename_var.get().strip() or "CathPlot"
         safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
         next_id = self.title_counters.get(safe_title, 0) + 1
