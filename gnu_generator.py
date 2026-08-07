@@ -2088,6 +2088,19 @@ class GnuplotGenerator:
                 "replot",
             ]
             lines.append("bind 'R' '" + "; ".join(_reset_cmds) + "'")
+            # [추가] "이전/다음 창 이동은 2-D, 3-D 공통으로" - gnuplot이 마우스
+            # 확대/축소 이력을 이미 내부 스택으로 관리하며 기본 키 n(다음)/
+            # p(이전)/u(전체해제)로 이동 가능함을 직접 "show bind"로 확인함.
+            # 별도 이력 관리 코드 없이 이 내장 기능에 f(forward)/b(backward)라는
+            # 더 직관적인 이름으로 별칭만 추가한다 - gnuplot bind는 커맨드
+            # 문자열이 내장 키 이름("builtin-...")과 정확히 같으면 그 내장
+            # 동작을 그대로 호출함(기본 바인딩 전체가 이 방식으로 등록돼
+            # 있는 것으로 "show bind" 출력에서 확인됨). 'b'는 gnuplot 기본
+            # 바인딩이 border 토글이지만 CathPlot에서 쓰지 않는 기능이라
+            # 재사용(사용자 확인: "r키 대신 b키로"), 'f'는 기본 바인딩이 없어
+            # 비어 있음.
+            lines.append("bind 'f' 'builtin-zoom-next'")
+            lines.append("bind 'b' 'builtin-zoom-previous'")
 
         if fmt.lower() == "interactive": lines.append("pause mouse close")
         else: lines.append("set output")
@@ -2358,12 +2371,23 @@ class GnuplotGenerator:
         # 않게 한 곳에서만 정의해 재사용한다(아래에서 쓰기 전에 rx/rz를 항상
         # 먼저 GPVAL_VIEW_ROT_X/Z로 다시 읽어와야 함 - bind별로 독립 실행돼도
         # gnuplot 변수는 전역이라 't'를 먼저 안 눌렀으면 rx/rz가 없을 수 있음).
+        # [수정] "줄이 너무 기니까 () 부분은 다음 줄로" 요청 - "\n"이 gnuplot
+        # set label 안에서 실제 줄바꿈으로 동작함을 직접 렌더링 테스트로 확인
+        # (noenhanced에서도 지원됨) - Rot X/Z 괄호 부분만 두 번째 줄로 내린다.
         _status_label_cmd = (
             'set label 9003 sprintf('
             '"지금 상태 저장/인쇄 가능 - P:PDF N:PNG J:JPG E:EMF S:SVG Ctrl+P:인쇄  '
-            't:재정렬  z:Y·Z범위복원  R:전체초기화  (Rot X=%.1f Rot Z=%.1f)", rx, rz) '
+            't:재정렬  z:Y·Z범위복원  R:전체초기화\\n(Rot X=%.1f Rot Z=%.1f)", rx, rz) '
             'at screen 0.02, screen 0.055 front noenhanced'
         )
+        # [추가] "'t' 누르면 메시지 생기는데 없어지지 않네요? Save 단축키 누르면
+        # 해당 파일명만 바뀌고..." - 지금까지 label 9003(상태 안내)/9004(저장·
+        # 인쇄 완료 안내)는 다른 동작이 있기 전까지 화면에 계속 남아있었음
+        # (자동으로 사라지는 로직이 없었음 - 9004는 다음 저장 시 문구만
+        # 바뀔 뿐 사라지지 않음). "잠깐" 뜨는 안내가 되도록 일정 시간(3초) 뒤
+        # 자동으로 사라지게 pause+unset+replot을 공통으로 정의해 재사용한다
+        # (pause 뒤 unset+replot이 정상 동작함을 직접 렌더링 테스트로 확인).
+        _AUTO_HIDE_TAIL_CMDS = "pause 3; unset label 9003; unset label 9004; replot"
         if is_interactive:
             # [주의] label 9001은 ylabel이 있을 때만 위에서 만들어지므로, 없는데
             # "set label 9001 rotate by ..."를 호출하면 존재하지 않는 라벨을
@@ -2407,6 +2431,13 @@ class GnuplotGenerator:
             # set해서, 화면에는 보이지만 저장되는 파일에는 안 나오게 한다.
             _bind_parts.append(_status_label_cmd)
             _bind_parts.append("replot")
+            # [수정] "'t' 누르면 메시지 생기는데 없어지지 않네요?" - 지금까지는
+            # 다음 저장/인쇄/t 재입력 등 다른 동작이 있기 전까지 라벨이 화면에
+            # 계속 남아 있었음(자동으로 사라지는 로직이 없었음). "잠깐" 뜨는
+            # 안내로 보이게 일정 시간(3초) 뒤 자동으로 사라지도록 pause+unset을
+            # 이어붙임(pause 뒤 unset+replot이 정상 동작함을 직접 렌더링
+            # 테스트로 확인).
+            _bind_parts.append(_AUTO_HIDE_TAIL_CMDS)
             lines.append("bind 't' '" + "; ".join(_bind_parts) + "'")
 
             # [추가] "그래도 휠을 습관적으로 쓸 텐데, Y/Z 범위가 바뀌면 입력값으로
@@ -2428,6 +2459,12 @@ class GnuplotGenerator:
                 f"bind 'R' 'set view {rot_x},{rot_z},1,1; set xrange [*:*]; "
                 f"set yrange {_reset_yr}; set zrange {_reset_zr}; replot'"
             )
+            # [추가] "이전/다음 창 이동은 2-D, 3-D 공통으로" - 2D와 동일하게
+            # gnuplot 내장 확대/축소 이력(n/p/u)에 f(forward)/b(backward)
+            # 별칭을 추가. 3D splot에서도 "show bind"로 n/p/u가 동일하게
+            # 등록되어 있음을 직접 확인함(2D와 공통 기능).
+            lines.append("bind 'f' 'builtin-zoom-next'")
+            lines.append("bind 'b' 'builtin-zoom-previous'")
 
         # [추가] "회전+재정렬한 지금 상태를 파일로 저장" - gnuplot 안에서
         # 터미널을 잠깐 바꿔 replot한 뒤 원래 터미널로 복귀하는 방식으로 가능함
@@ -2436,7 +2473,6 @@ class GnuplotGenerator:
         # 대문자로 피함. 파일명은 창 제목_view_HHMMSS로 자동 생성(같은 초에 같은
         # 형식으로 두 번 누르면 덮어써질 수 있음 - 낮은 확률이라 허용).
         if is_interactive:
-            _save_dir_esc = plot_dir.replace(chr(92), '/')
             _restore_term = f'windows title "{title_disp}" font "Malgun Gothic,11" size 1000,700'
             # [추가] "저장은 되는데 인쇄가 안 되니 넣는 게 좋겠다 - 저장 파일과
             # 많이 달라지나?" - EMF 저장('E' 키)과 완전히 같은 터미널/설정을
@@ -2461,7 +2497,8 @@ class GnuplotGenerator:
                 f'{_status_label_cmd}; '
                 'set label 9004 "인쇄 완료 (기본 프린터로 전송됨)" '
                 'at screen 0.02, screen 0.02 front noenhanced; '
-                'replot'
+                'replot; '
+                f'{_AUTO_HIDE_TAIL_CMDS}'
             )
             lines.append(f"bind 'ctrl-p' '{_print_cmd}'")
             # [수정] "저장 키를 통일성 있게 전부 대문자로(P/N/J/E/S), t는 재정렬
@@ -2474,7 +2511,11 @@ class GnuplotGenerator:
                 ('S', 'svg enhanced size 1123,797 font "Malgun Gothic,14"', 'svg'),
             ]
             for _key, _term_spec, _ext in _view_formats:
-                _outexpr = (f'sprintf("{_save_dir_esc}/{title_disp}_view_%s.{_ext}", '
+                # [수정] "FilePath도 상대위치로 적어도 무방함" - gnuplot을 이미
+                # plot_dir를 cwd로 고정해 실행하므로(2687줄 부근), 저장 시
+                # 폴더 절대경로를 안 붙이고 파일명만 써도 같은 위치에 저장되고
+                # 알림(label 9004)에도 짧은 상대경로만 표시됨.
+                _outexpr = (f'sprintf("{title_disp}_view_%s.{_ext}", '
                             f'strftime("%H%M%S", time(0)))')
                 _cmd = (
                     'unset label 9003; unset label 9004; '
@@ -2488,7 +2529,8 @@ class GnuplotGenerator:
                     f'{_status_label_cmd}; '
                     'set label 9004 sprintf("저장됨: %s", fn9004) '
                     'at screen 0.02, screen 0.02 front noenhanced; '
-                    f'replot'
+                    'replot; '
+                    f'{_AUTO_HIDE_TAIL_CMDS}'
                 )
                 lines.append(f"bind '{_key}' '{_cmd}'")
 
