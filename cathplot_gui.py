@@ -4171,6 +4171,31 @@ class CathPlotGUI:
     # 등)를 우선 후보로 시도한다.
     _HANGUL_RE = re.compile(r"[가-힣ㄱ-ㆎ]")
     _KOREAN_FALLBACK_CANDIDATES = ["맑은 고딕", "Malgun Gothic", "굴림", "Gulim", "바탕", "Batang", "돋움", "Dotum"]
+    # [수정 - 버그] "프린트/저장할 때마다 맑은 고딕 폰트가 없다고 나옴" - 실측
+    # 확인: 한글 Windows에서는 tkinter font.families()가 이 폰트를 영문 이름
+    # "Malgun Gothic"이 아니라 한글 이름("맑은 고딕")으로만 돌려줌(실제로는
+    # 당연히 설치돼 있고, gnuplot 자체도 "Malgun Gothic"으로 문제없이 찾아서
+    # 그려짐 - 별도 gnuplot 직접 렌더링 테스트로 확인). 그런데 아래
+    # _check_and_fix_fonts는 plotdef에 박혀 있는 영문 이름 그대로만 설치
+    # 목록에서 찾아서, 매번 "못 찾음"으로 오판하고 (결과적으로 똑같은 폰트인)
+    # "맑은 고딕"으로 "대체"했다는 경고를 헛되이 띄우고 있었음. 영문/한글 이름이
+    # 같은 폰트의 다른 표기일 뿐인 경우를 서로 동의어로 인식하게 한다.
+    _FONT_NAME_ALIASES = {
+        "malgun gothic": ["맑은 고딕"],
+        "gulim": ["굴림"],
+        "batang": ["바탕"],
+        "dotum": ["돋움"],
+    }
+
+    def _font_is_installed(self, name, installed):
+        """installed(소문자 폰트 이름 집합)에 name이 있는지, 영문/한글 이름이
+        서로 다른 별칭(_FONT_NAME_ALIASES)인 경우까지 포함해서 확인한다."""
+        n = (name or "").strip().lower()
+        if not n:
+            return True
+        if n in installed:
+            return True
+        return any(alias.lower() in installed for alias in self._FONT_NAME_ALIASES.get(n, []))
 
     def _pick_fallback_font(self, installed, sample_text):
         """installed(설치된 폰트 이름 소문자 집합)에서 sample_text 표시에 쓸
@@ -4221,7 +4246,7 @@ class CathPlotGUI:
         reported = set()
         for field, label, sample_text in font_fields:
             name = (getattr(plotdef, field, "") or "").strip()
-            if name and name.lower() not in installed:
+            if name and not self._font_is_installed(name, installed):
                 fallback = self._pick_fallback_font(installed, sample_text)
                 changes[field] = fallback
                 key = (name, field)
