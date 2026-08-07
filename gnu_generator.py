@@ -78,7 +78,12 @@ def _upscale_png_dpi(png_path):
         scale = _PNG_TARGET_DPI / _PNG_NATIVE_DPI
         with Image.open(png_path) as im:
             new_size = (max(1, round(im.width * scale)), max(1, round(im.height * scale)))
-            im.resize(new_size, Image.LANCZOS).save(png_path)
+            # [수정 - 버그] "PNG 해상도가 나쁘다(300dpi 아님)" - 픽셀 수는
+            # 300/72배로 늘렸지만 dpi= 없이 save()하면 PNG의 pHYs 메타데이터에
+            # 해상도가 안 남아서, Word 등에서 불러올 때 기본값(예: 96dpi)으로
+            # 간주해 실제보다 훨씬 크게 배치되거나 "해상도가 낮다"고 보임 -
+            # 실제 목표 dpi(300,300)를 메타데이터에 명시적으로 기록한다.
+            im.resize(new_size, Image.LANCZOS).save(png_path, dpi=(_PNG_TARGET_DPI, _PNG_TARGET_DPI))
     except Exception:
         pass  # 업스케일 실패해도 원본(저해상도지만 비율은 정확한) 파일은 이미 저장돼 있음
 
@@ -619,7 +624,7 @@ class GnuplotGenerator:
         # 1.35 -> 1.15 -> 1.0으로 계속 줄임(더 줄여달라는 후속 요청).
         # [수정] "Print에서 첨자(subscript) 넣으면 줄끼리 겹칠 듯하다"는 피드백으로
         # print만 1.0 -> 1.2로 다시 늘림(화면은 기존 1.0 유지).
-        ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * (1.2 if is_print_mode else 1.0)
+        ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * (2.0 if is_print_mode else 1.0)
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
         # 박스 테두리에 닿아 보인다는 피드백으로 화면에서 크게 늘렸는데(0.3),
@@ -776,7 +781,7 @@ class GnuplotGenerator:
             # 폰트가 없어 대체(Arial 등)되면 실제 렌더링 폭이 실측 계수(맑은
             # 고딕 기준)보다 커질 수 있어 안전 여유를 크게 둔다(tkinter 실측
             # 보정은 스레드 문제로 폐기했으므로, 여기서 고정 버퍼로 흡수한다).
-            _box_w_extra_chars = 5.0 if is_print_mode else 1.7
+            _box_w_extra_chars = 14.0 if is_print_mode else 1.7
         # [수정] box가 title을 못 감싸는(밖으로 삐져나옴) 버그 - LABEL_GAP_FRAC
         # (샘플선<->title 간격)이 여기 폭 계산에 빠져 있어서, 그 간격을 늘릴수록
         # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
@@ -1288,16 +1293,37 @@ class GnuplotGenerator:
         title_text, title_enh = self._render_text(plotdef.title)
         lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" {title_enh}')
 
+        # [수정 - 심각한 버그] "Print/Save에서 X title이 캔버스 맨 아래 경계에
+        # 걸쳐서 잘림" - ylabel과 같은 원인(위 ylabel 주석 참고): "at screen"
+        # 절대 마진 + 명시적 tic 간격 조합에서 gnuplot의 기본 xlabel 위치가
+        # 캔버스 맨 아래 경계에 거의 딱 붙게 나와, 정작 실제 300dpi로
+        # 업스케일한 최종 파일에서는(72dpi 미리보기에선 티가 잘 안 남 -
+        # 육안으로는 괜찮아 보여서 놓쳤던 부분) 글자 아래쪽이 진짜로 잘려
+        # 나감(픽셀 단위로 직접 확인). "offset 0,0.5"만 줘도(위로 살짝
+        # 당김) 확실한 여유가 생기는 걸 렌더링 비교로 확인함.
         effective_xlabel = plotdef.xlabel
         xlabel_text, xlabel_enh = self._render_text(effective_xlabel)
-        lines.append(f'set xlabel "{xlabel_text}" font "{plotdef.xlabel_font},{xlabel_size}" {xlabel_enh}')
+        lines.append(f'set xlabel "{xlabel_text}" font "{plotdef.xlabel_font},{xlabel_size}" offset 0,0.5 {xlabel_enh}')
 
+        # [수정 - 심각한 버그] "Manual(frame_auto 꺼짐) + png 저장에서 Y1 title이
+        # 통째로 안 보임(잘리는 게 아니라 아예 안 그려짐)" - 실측으로 원인을
+        # 새로 확인: 위에서 이미 "set lmargin at screen ..."으로 마진을 절대
+        # 위치로 고정해두면, gnuplot(pngcairo)이 ylabel의 기본 자동 위치 계산을
+        # 그 고정 마진과 맞물려 캔버스 밖(왼쪽 음수 좌표)으로 밀어버려서 통째로
+        # 안 보이게 됨 - margin을 아무리 넉넉히 잡아도(기존 1.6배 안전여유로도)
+        # 안 고쳐짐(margin 부족이 원인이 아니었음). 특히 "set ytics <간격>"처럼
+        # tic을 명시적 숫자로 지정했을 때(항상 그렇게 함 - 아래 tic 계산 참고)
+        # 더 심해져서, offset 1글자로는 부족하고 2글자는 모든 테스트 조합
+        # (여러 frame 크기/폰트 크기)에서 안전하게 캔버스 안으로 들어옴을
+        # 직접 렌더링 비교로 확인함(Y1은 오른쪽 +, Y2는 왼쪽 -). lmargin/rmargin을
+        # "at screen"으로 고정하는 경우(Print/Save 전부)에만 필요하고 부작용도
+        # 없어 항상 적용.
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
-        lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" {ylabel_enh}')
+        lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset 2,0 {ylabel_enh}')
 
         if plotdef.y2label:
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
-            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" {y2label_enh}')
+            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset -2,0 {y2label_enh}')
 
         lines.append("set ytics nomirror")
 
