@@ -3566,6 +3566,11 @@ class GnuplotGenerator:
         # 않고 누락시킴 - 실측(같은 조건에서 margin_left를 fraction 0.1645->
         # 0.35로 강제로 키우자 title이 다시 나타남)으로 확인. EMF만 별도로
         # 여백을 넉넉히(2배) 더 준다.
+        # [수정] "축 size가 안 맞음, 마진도 이상함" - 2배(_emf_margin_boost)에
+        # 2줄 전용 추가분까지 겹쳐서 마진이 좌우 합쳐 74%까지 차지하는 과함이
+        # 실측 확인됨. 1.3배로 낮추면 1줄 Y2 title이 다시 사라지고, 1.5배도
+        # 2줄 Y2의 2번째 줄이 다시 사라짐(실측) - 1.7배가 전부 정상 출력되는
+        # 최소값이라 그대로 확정.
         _emf_margin_boost = 2.0 if (fmt or "").lower() == "emf" else 1.0
         # [수정 - 심각한 버그] "Multi-plot EMF 2줄 title에서 Y2의 2번째 줄만
         # 통째로 안 보임" - EMF 바이너리로 직접 확인: EMF는 회전된 2줄
@@ -3578,13 +3583,17 @@ class GnuplotGenerator:
         # 얹어준다(단일 plot 경로와 동일한 사고방식).
         if any((p.ylabel or "").strip() for p in plots):
             _max_ylabel_size = max((float(p.ylabel_size or 11) for p in plots if (p.ylabel or "").strip()), default=11.0)
-            _y1_2line_extra = 0.5 * _floor_scale * (_max_ylabel_size / 11.0) if _any_y1_2line else 0
-            _need_left_in = (0.5 * _floor_scale * (_max_ylabel_size / 11.0) + _y1_2line_extra + _min_left_tic_in) * _emf_margin_boost
+            # [수정] 1줄 title(EMF)이 다시 사라지는 회귀 확인 - 2줄 전용 추가분을
+            # emf_margin_boost 곱셈 "안"으로 옮겨서, 1줄일 때는 원래 검증된
+            # 2.0배가 그대로 유지되게 하고 2줄 전용분만 별도로(곱해지지 않게)
+            # 더한다(실측: 1줄 boost=2.0 필요, 2줄은 그 위에 0.3배 추가로 충분).
+            _y1_2line_extra = 0.3 * _floor_scale * (_max_ylabel_size / 11.0) if _any_y1_2line else 0
+            _need_left_in = (0.5 * _floor_scale * (_max_ylabel_size / 11.0) + _min_left_tic_in) * _emf_margin_boost + _y1_2line_extra
             margin_left = max(margin_left, _need_left_in)
         if any_y2 and any_y2label:
             _max_y2label_size = max((float(p.y2label_size or 11) for p in plots if (getattr(p, "y2label", "") or "").strip()), default=11.0)
-            _y2_2line_extra = 0.5 * _floor_scale * (_max_y2label_size / 11.0) if _any_y2_2line else 0
-            _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + _y2_2line_extra + _min_right_tic_in) * _emf_margin_boost
+            _y2_2line_extra = 0.3 * _floor_scale * (_max_y2label_size / 11.0) if _any_y2_2line else 0
+            _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + _min_right_tic_in) * _emf_margin_boost + _y2_2line_extra
             margin_right = max(margin_right, _need_right_in)
 
         # [수정 - 개념 정정] "Frame(Axis) 크기는 좌표축(axis) 자체의 크기임 -
