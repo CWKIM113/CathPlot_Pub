@@ -3470,6 +3470,16 @@ class GnuplotGenerator:
             if _y2fmt_label == "Scientific": extra_right_margin_in += 0.35
             elif _y2fmt_label == "Power10": extra_right_margin_in += 0.15
             if _any_y2_2line: extra_right_margin_in += 0.10  # Y2 title 2줄 이상
+        # [추가] "2줄 title에서 X축 길이가 줄어드는데 경고창이 필요" - Auto
+        # 모드는 페이지를 칸 수로 나눠 항상 꼭 맞기 때문에(위 주석 참고) 기존
+        # shrink-to-fit 경고(Manual 전용)가 이 경우엔 안 뜨고 있었음. 2줄
+        # title로 여백이 늘어난 만큼 축(axis) 영역이 그만큼 줄어드는 것은
+        # 정상 동작이지만, 사용자가 모르고 지나칠 수 있어 별도로 안내한다.
+        if _any_y1_2line or _any_y2_2line:
+            self.last_size_warning = (
+                "Y1/Y2 title을 2줄로 설정하면 그만큼 좌우 여백이 늘어나서, "
+                "축(plot) 가로 폭이 그만큼 줄어듭니다."
+            )
         extra_bottom_margin_in = 0.0
         if _xfmt_label == "Scientific": extra_bottom_margin_in = 0.12
         elif _xfmt_label == "Power10": extra_bottom_margin_in = 0.06
