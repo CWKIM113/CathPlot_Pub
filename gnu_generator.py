@@ -2405,6 +2405,17 @@ class GnuplotGenerator:
             # 무관했음(마진을 1.4배 늘려도 겹침이 그대로였음 - 직접 렌더링
             # 비교로 확인, 되돌림) - 실제 원인/해결은 ylabel의 offset 값
             # 자체였음(아래 _ylabel_offset 참고).
+            # [수정 - 심각한 버그 발견] 위와는 별개의 문제: "Axis Frame Auto로
+            # 단일 plot EMF Save하면 Y1/Y2 title이 통째로 안 보임" - 실제
+            # GUI의 Save 경로(_compute_auto_frame_size_cm: Auto도 내부적으로
+            # frame_auto=False, 10x8cm로 변환됨)를 그대로 재현해서 확인:
+            # create_multiplot_script에서 이미 확인한 것과 같은 EMF 렌더러의
+            # 한계(margin이 부족하면 겹치는 게 아니라 title을 통째로 누락)가
+            # 여기(단일 plot Manual-frame 경로)에도 그대로 있었음 - 여기는
+            # 왼쪽/오른쪽 마진을 전혀 안 키우고 있어서 발생. 같은 배율(2배)로
+            # 왼쪽/오른쪽도 넉넉히 키운다.
+            need_left_in *= 2.0
+            need_right_in *= 2.0
 
         return need_left_in, need_right_in, need_top_in, need_bottom_in
 
