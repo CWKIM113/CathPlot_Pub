@@ -1537,7 +1537,14 @@ class GnuplotGenerator:
             # [수정] "전부 2줄"로 겹쳐 테스트하면 네 방향이 동시에 커져 체감상
             # 과하다는 피드백으로, 화면에서는 2줄 증가분을 절반으로 줄임(print는
             # 그대로 유지 - 이미 확인됨)
-            if "|" in (plotdef.ylabel or ""): _lmargin_base += 0.05 if _is_print else 0.025  # Y1 title 2줄 이상이면 여백 추가
+            # [수정 - 삭제] "2줄 title에서 Y2 tic<->title 간격이 늘어나 좌우
+            # 마진 폭이 심하게 달라짐, Y2 마진을 키우지 말 것" - offset 공식은
+            # margin 크기와 무관하게 "tic 위치 기준" 간격을 목표로 계산하는데,
+            # 여기서 마진을 추가로 키우면 tic 위치 자체가 바뀌어서(border가
+            # 같이 밀려나며 tic도 같이 밀려남) 그 목표가 어긋남 - 2줄이어도
+            # 세로 길이만 늘 뿐 좌우 폭은 1줄과 같아야 하므로, 이 추가 여백을
+            # 제거해 1줄과 동일한 tic 위치를 유지한다(Y1/Y2 대칭).
+            # if "|" in (plotdef.ylabel or ""): _lmargin_base += 0.05 if _is_print else 0.025  # Y1 title 2줄 이상이면 여백 추가
             # [추가] Plot Title이 '|'로 2줄 이상이면 상단 여백을 추가로 확보
             # (Multi-Print는 이미 반영되어 있었는데 단일 plot은 빠져 있었음)
             _title_lines = 1 + (plotdef.title or "").count("|")
@@ -1577,7 +1584,9 @@ class GnuplotGenerator:
                     # [추가] Y1과 같은 이유(위 lmargin의 소수점/음수 폭 보정 주석
                     # 참고) - Y2도 같은 방식으로 여백을 넓힌다.
                     _rmargin_base -= 0.012 * self._tic_label_extra_chars(_y2_min_val, _y2_max_val, _y2_step_val)
-                if "|" in (plotdef.y2label or ""): _rmargin_base -= 0.05 if _is_print else 0.025  # Y2 title 2줄 이상이면 여백 추가(화면은 절반)
+                # [수정 - 삭제] 위 Y1과 동일한 이유("Y2 마진을 키우지 말 것") -
+                # 이 추가 여백을 제거해 1줄과 동일한 tic 위치를 유지한다.
+                # if "|" in (plotdef.y2label or ""): _rmargin_base -= 0.05 if _is_print else 0.025  # Y2 title 2줄 이상이면 여백 추가(화면은 절반)
 
             # [추가] 위 마진들은 전부 "화면 비율(fraction)"이라서, frame_auto를 끄고
             # 작은 물리 크기(예: 10x8cm)를 직접 지정하면 같은 비율이라도 절대
