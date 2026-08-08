@@ -1183,6 +1183,7 @@ class GnuplotGenerator:
         # 침범했음. anchor 위치 기준으로 axis 경계(graph 0~1)를 넘지 않도록
         # box_w 자체를 축소한다(경고는 위에서 이미 실제 필요 크기 기준으로
         # 떴으므로 그대로 두고, 그리기에만 안전한 값을 쓴다).
+        _box_w_before_clamp = box_w
         if "right" in corner:
             box_w = min(box_w, max(ax - 0.02, 0.3))
         elif "left" in corner:
@@ -1214,6 +1215,20 @@ class GnuplotGenerator:
             n_rows = max(len(curves), 1)
             ROW_H = box_h / (n_rows + 2 * _row_margin_ratio)
             ROW_MARGIN = _row_margin_ratio * ROW_H
+
+        # [수정 - 버그] "box_w/h를 axis 안으로 눌러 넣었더니 글자가 box 테두리를
+        # 살짔 넘어 curve 쪽으로 삐져나옴(4/p Portrait 등)" - box는 줄였는데
+        # 그 안의 글자 크기(font_pt)는 원래(clamp 전) 필요했던 더 넓은 폭
+        # 기준 그대로라 안 맞음. box_w/h가 clamp로 줄어든 비율만큼 legend
+        # 텍스트 폰트도 같이 줄여서(단, box 테두리·샘플선·줄간격 등 나머지
+        # 기하는 그대로 둠 - single-plot에서 이미 검증된 "필요하면 폰트부터
+        # 줄인다" 방식을 참고) 글자가 다시 box 안에 들어가게 한다.
+        _legend_font_shrink = min(
+            box_w / _box_w_before_clamp if _box_w_before_clamp > 0 else 1.0,
+            box_h / _box_h_before_clamp if _box_h_before_clamp > 0 else 1.0,
+            1.0,
+        )
+        _label_font_pt = font_pt * _legend_font_shrink
 
         if "top" in corner:
             box_top, box_bottom = ay, ay - box_h
@@ -1278,7 +1293,7 @@ class GnuplotGenerator:
                 # 서로 달라서(예: "+"는 원/사각형보다 훨씬 작고 얇게 그려짐),
                 # 같은 font_pt로 찍어도 시각적 크기가 들쭥날쭥해 보이는 문제 -
                 # 기호별 배율을 둬서 시각적 크기를 서로 맞춘다.
-                symbol_pt = font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0)
+                symbol_pt = _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0)
                 lines.append(
                     f'set label {id_offset + 5000 + row_i + 1} "{MARKER_SYMBOL_MAP[marker_shape]}" '
                     f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front '
@@ -1287,7 +1302,7 @@ class GnuplotGenerator:
             lbl_text, lbl_enh = self._render_text(curve.title)
             lines.append(
                 f'set label {id_offset + row_i + 1} "{lbl_text}" at graph {label_x:.4f},{row_y:.4f} '
-                f'{label_just} front font "{font_name},{int(font_pt)}" {lbl_enh}'
+                f'{label_just} front font "{font_name},{max(int(_label_font_pt), 5)}" {lbl_enh}'
             )
 
     @staticmethod
