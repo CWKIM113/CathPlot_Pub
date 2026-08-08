@@ -3716,6 +3716,32 @@ class GnuplotGenerator:
             _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + _min_right_tic_in) * _emf_margin_boost + _y2_2line_extra
             margin_right = max(margin_right, _need_right_in)
 
+        # [수정 - 버그, 실제 사용자 docx 재현으로 발견] "M-P Auto/Manual 2/p
+        # Landscape에서 축이 캔버스 한복판에 작게(세로형처럼) 쪼그라들어 찍힘" -
+        # 실측(디버그 출력)으로 원인 확인: 2/p Landscape처럼 칸(cell)이 기준
+        # (10x8cm)보다 훨씬 큰 경우(font_panel_scale>1) margin_left/right
+        # 자체(_floor_scale 비례항)도 이미 커지는데, 거기에 EMF 전용
+        # _emf_margin_boost(2.0배, 작은 칸에서 title 소실을 막으려고 도입한
+        # 값)가 곱해지면서 절대 여백이 칸 폭의 70%까지 먹어버려 축이 거의
+        # 안 남았음(margin_left=margin_right=2.07in, cell_w_in=5.72in). 칸이
+        # 클수록 이 배율이 과한 것 - 작은 칸(margin 부족 시 title 소실 위험이
+        # 큰 경우)에서는 원래대로 배율을 살리고, 큰 칸에서만 margin 합이 칸
+        # 크기의 일정 비율을 넘지 않도록 비율을 유지한 채 축소한다.
+        # [주의] 0.6으로는 1/p Auto Portrait, 2/p Auto Landscape의 2줄
+        # Y2 2번째 줄(EMF)이 다시 사라지는 회귀가 실측 확인됨 - 0.68까지
+        # 올려서 1/2/4/6-per-page x portrait/landscape x Auto/Manual x
+        # PDF/EMF x 1줄/2줄 128가지 조합 전부 정상 출력(텍스트 소실 없음)
+        # 재확인 후 확정.
+        _MAX_MARGIN_FRAC = 0.68
+        if cell_w_in > 0 and (margin_left + margin_right) > cell_w_in * _MAX_MARGIN_FRAC:
+            _shrink_lr = (cell_w_in * _MAX_MARGIN_FRAC) / (margin_left + margin_right)
+            margin_left *= _shrink_lr
+            margin_right *= _shrink_lr
+        if cell_h_in > 0 and (margin_top + margin_bottom) > cell_h_in * _MAX_MARGIN_FRAC:
+            _shrink_tb = (cell_h_in * _MAX_MARGIN_FRAC) / (margin_top + margin_bottom)
+            margin_top *= _shrink_tb
+            margin_bottom *= _shrink_tb
+
         # [수정 - 버그] "1/p + Manual은 1줄이어도 '크기 축소됨' 경고가 뜬다" -
         # 위쪽(3389 부근)의 "1/p+Manual 페이지 크기 재설정" 블록은 이 margin_*
         # (tic 숫자/title 자리, 보통 pm_left/right 절대 여백보다 훨씬 큼)이
