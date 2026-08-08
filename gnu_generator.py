@@ -1158,9 +1158,17 @@ class GnuplotGenerator:
         # 가려서 미리 경고한다(정확한 렌더링 크기가 아니라 Python 추정값
         # 기준이라 완벽하진 않지만, box_w/box_h는 axis 대비 fraction이라 실제
         # 렌더링 크기와도 비례해서 신뢰할 만한 지표임).
-        if box_w > 0.5 or box_h > 0.5:
+        # [수정] "M-P 1p/2p에서 legend box가 너무 크다는 경고가 매번 뜬다" -
+        # 실제 사용자 docx로 재현·실측한 결과, 곡선명이 길면(예: 20자
+        # "MFLO:R-SDRT1>L-STLF1") legend가 축 폭의 70~85%를 차지하는 게
+        # 정상이었음(렌더링 자체는 legend가 axis 안에 잘 들어가 있고 겹침/
+        # 잘림 없음 - 계산 오류가 아니라 임계값 50%가 너무 보수적이었던
+        # 것). 사용자와 상의해 "실제 렌더링에는 손대지 않고 경고 임계값만
+        # 올리는" 방향으로 확정 - 0.5 -> 0.9로 올려서 진짜 심각한 경우(예:
+        # 90%+, 곡선이 아주 많거나 이름이 극단적으로 긴 경우)만 잡는다.
+        if box_w > 0.9 or box_h > 0.9:
             self.warnings.append(
-                f"Legend box가 axis 크기의 절반을 넘습니다(가로 {box_w*100:.0f}%, "
+                f"Legend box가 axis 크기의 90%를 넘습니다(가로 {box_w*100:.0f}%, "
                 f"세로 {box_h*100:.0f}%). Legend Font 크기, curve title 길이, "
                 f"curve 개수를 줄이거나 Frame 크기를 키워보세요."
             )
