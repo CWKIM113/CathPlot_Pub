@@ -110,6 +110,35 @@ def _resolve_gnuplot_exe():
 _PNG_TARGET_DPI = 300.0
 _PNG_NATIVE_DPI = 72.0
 
+# [추가] "PNG/JPG를 PDF 기준으로 래스터화하면 어떨까(EMF/SVG는 계속 gnuplot이
+# 직접)" 요청 - pngcairo/jpeg 터미널이 pdfcairo와 서로 다른 텍스트 엔진을 써서
+# 포맷마다 legend/폰트 크기가 어긋나는 문제(오늘 하루 종일 겪음)의 근본 원인을
+# 없애기 위해, PNG/JPG는 이미 검증된 PDF 결과를 PyMuPDF(fitz)로 그대로
+# 래스터화해서 만든다(gnuplot의 pngcairo/jpeg 터미널을 더 안 부름). 덤으로
+# JPG가 dashtype을 못 그리던 한계도 함께 해결됨(PDF는 dash를 제대로 그리므로
+# 그걸 그대로 픽셀로 옮기면 dash도 같이 옮겨짐 - 직접 렌더링해서 확인).
+# PyMuPDF가 없는 환경에서는 False를 반환해 호출자가 기존 gnuplot 자체
+# 터미널 방식으로 그대로 대체(fallback)하게 한다(하위호환).
+def _rasterize_pdf_to_image(pdf_path, out_path, fmt, dpi=_PNG_TARGET_DPI):
+    try:
+        import fitz
+    except ImportError:
+        return False
+    try:
+        doc = fitz.open(pdf_path)
+        page = doc[0]
+        zoom = dpi / 72.0
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        pix.set_dpi(int(dpi), int(dpi))
+        if (fmt or "").lower() in ("jpg", "jpeg"):
+            pix.save(out_path, jpg_quality=90)
+        else:
+            pix.save(out_path)
+        doc.close()
+        return True
+    except Exception:
+        return False
+
 def _upscale_png_dpi(png_path):
     """72dpi로 그려진 png를 _PNG_TARGET_DPI/_PNG_NATIVE_DPI배 확대해서 저장한다.
     Pillow가 없으면 조용히 건너뛴다(비율은 이미 정확하고 해상도만 낮게 남음)."""
@@ -189,11 +218,15 @@ SCREEN_TIC_MINOR_SCALE = 1.0
 #----------------------------------------------------------
 # Print / Save Output Scale
 #----------------------------------------------------------
-PRINT_FONT_SCALE = 0.80     # [수정] "screen보다 폰트가 크게 보인다" - 0.60은 너무 과해서
-# title/axis가 잘리는 회귀를 일으켰음(margin 계산이 기존 폰트 크기 기준에
-# 맞춰져 있어서). 완전한 재보정 전 임시로 더 모수한 0.80(약 1.25배 축소)만
-# 적용 - 여백까지 포함한 정확한 재보정은 추후 다시 검토 필요
-# (기존 1.60 → 1.00 → 0.60 시도(잘림, 되돌림) → 이번 0.80).
+PRINT_FONT_SCALE = 1.60     # [수정 - 버그] "PDF 그림에서 font size가 plot 대비 너무 작음(폰트
+# 크기 입력으로 해결될 사항 아님), Legend box도 너무 작음 - 폰트·legend 모두
+# 2배로" - PDF가 PNG/JPG의 기준(기준 포맷을 PyMuPDF로 래스터화)이 되면서
+# 이 문제가 셋 다에 그대로 나타났음. 원인은 여기 이 배율 자체 - 예전에
+# "screen보다 폰트가 크게 보인다"는 반대 피드백으로 1.60 → 1.00 → 0.60(잘림
+# 회귀로 되돌림) → 0.80까지 계속 줄여왔던 값인데, 결과적으로 A4보다 큰
+# 10x8in 캔버스에 7~11pt 폰트가 남아 너무 작아 보이게 됐음 - 원래
+# 시작값이었던 1.60으로 되돌린다(정확히 요청하신 "2배"). legend box/margin은
+# 모두 font_pt에 비례해 계산되므로 이 배율 하나로 같이 커짐.
 PRINT_LINE_SCALE = 1.00     # 기존 1.70
 PRINT_BORDER_SCALE = 1.00   # 기존 1.50
 PRINT_TIC_MAJOR_SCALE = 1.0
@@ -693,14 +726,40 @@ class GnuplotGenerator:
         # 잘못 계산해서 EMF 렌더링 확인 결과 줄끼리 완전히 겹쳐버리는 심각한
         # 회귀가 났음(직접 렌더링해서 발견) - 2.0 기준으로 다시 계산.
         # box-title 간격(_box_w_extra_chars)도 같은 이유로 포맷별.
+        # [수정] "parameter를 행렬형태로 fmt별로 지정하면 단순할 것 - 나중에
+        # 조정하기도 쉽고" 요청으로, 그동안 여기저기 흩어져 있던 포맷별 계수
+        # (row_mult/box_chars/style 길이 배율/PIL 실측 보정)를 fmt를 key로,
+        # 각 계수를 column으로 하는 표 하나(_FORMAT_TUNING)로 모음. 항목 뜻:
+        #   row_mult  : legend 줄 간격 배수(폰트 크기 기준)
+        #   box_chars : legend box 테두리<->curve title 사이 여백(대문자
+        #               기준 "실제 보이는" 글자 수 - text_corr 보정 이후
+        #               기준이라 격식대로 해석 가능)
+        #   sample_mult: style(샘플선) 길이의 포맷별 추가 배율(1.0=보정 없음)
+        #   text_corr : PIL로 잰 글자폭을 gnuplot이 실제로 그리는 폭에 맞게
+        #               보정하는 배율. PDF를 PyMuPDF로 직접 실측(4개의 서로
+        #               다른 라벨 문자열 각각 확인)한 결과 PIL 추정치가
+        #               gnuplot pdfcairo 실제 렌더링보다 항상 정확히 1.5배
+        #               크게 나옴(오차 0.1% 이하로 매우 일관됨) - 즉 PIL
+        #               추정폭에 2/3을 곱해야 실제 폭과 일치함.
+        #               [주의] pngcairo도 같은 cairo 엔진이라 처음엔 PDF와
+        #               동일하게 2/3을 적용했으나, 실제 렌더링해서 확인해
+        #               보니 "MFLO:R-SDRT1>L-STLF1" 같은 라벨이 box 밖으로
+        #               삐져나옴(box가 너무 작아짐) - PNG는 PDF와 별개로
+        #               "실측 대비 텍스트를 더 크게 그림"이라는 기존에 이미
+        #               알려진 자체 차이가 하나 더 있어서(PDF 실측과 다른
+        #               수치), PDF의 1.5배 계수를 그대로 재사용하면 과보정됨.
+        #               PNG 자체의 정확한 계수는 아직 실측 못 했으므로 안전하게
+        #               text_corr=1.0(보정 없음)으로 되돌리고, box_chars만
+        #               기존값에서 조금 줄인다. EMF(GDI)/JPG(libgd)는 cairo가
+        #               아니라 이 보정과 무관 - 1.0 유지.
         _fmt_l = (fmt or "").lower()
-        _PRINT_LEGEND_TUNING = {
-            "png": {"row_mult": 2.0, "box_chars": 14.0},
-            "pdf": {"row_mult": 2.0 * 0.5, "box_chars": 6.0},
-            "emf": {"row_mult": 2.0 * (2 / 3), "box_chars": 6.0},
-            "jpg": {"row_mult": 2.0 * (2 / 3), "box_chars": 6.0},
-            "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": 6.0},
-            "svg": {"row_mult": 2.0 * (2 / 3), "box_chars": 6.0},
+        _FORMAT_TUNING = {
+            "png": {"row_mult": 2.0,           "box_chars": 11.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "pdf": {"row_mult": 2.0 * 0.5,      "box_chars": 0.5, "sample_mult": (2/3)**2, "text_corr": 2 / 3},
+            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": 0.75, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "jpg": {"row_mult": 2.0 * (2 / 3),  "box_chars": 1.5, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": 1.5, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "svg": {"row_mult": 2.0 * (2 / 3),  "box_chars": 6.0, "sample_mult": 1.0,     "text_corr": 1.0},
         }
         # [수정 - 버그] "화면(screen)은 건드리지 말라고 했는데 왜 바뀌었나" -
         # 실측 확인 결과 screen의 row_mult=1.0(폰트 크기와 정확히 같은 줄
@@ -708,8 +767,17 @@ class GnuplotGenerator:
         # 있어도 줄끼리 겹쳐 보이는 문제가 있었음(직접 렌더링해서 확인 -
         # 오늘 바꾼 적 없는 값인데도 재현됨). "노트북에서 title-box 간격이
         # 대문자 5자 정도 과하다" 피드백으로 box_chars도 1.7 -> 0.5로 축소.
-        _legend_tuning = (_PRINT_LEGEND_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0})
-                          if is_print_mode else {"row_mult": 1.2, "box_chars": 0.5})
+        # [수정] "screen에서도 여백이 반영 안됨" 재확인 - PNG에서 검증 없이
+        # text_corr을 적용했다가 라벨이 box 밖으로 삐져나오는 사고가 났으므로
+        # (바로 위 주석 참고), 실측 못 한 screen도 안전하게 text_corr=1.0
+        # (보정 없음) 유지 - box_chars(0.5)만으로 대응한다.
+        # [수정] 실제 windows 창을 캡처해서 확인한 결과도 여전히 간격이 커서
+        # box_chars를 0.5 -> -0.5로 축소 + style 길이(SAMPLE_W)만큼 추가로
+        # 빼는 보정(아래) 적용. "screen_v4는 개선됐지만 대문자 1자 정도 더
+        # 줄여달라(사무실 PC에서는 더 크게 보임)" 후속 피드백으로 한 번 더
+        # -1.0 축소.
+        _legend_tuning = (_FORMAT_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0, "sample_mult": 1.0, "text_corr": 1.0})
+                          if is_print_mode else {"row_mult": 1.2, "box_chars": -0.5, "sample_mult": 1.0, "text_corr": 1.0})
         ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * _legend_tuning["row_mult"]
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
@@ -824,13 +892,13 @@ class GnuplotGenerator:
         # [수정] "Legend 내 style 길이 조금 더 길게(1.2배 정도)" 요청 - screen/print
         # 공통으로 추가 확대.
         SAMPLE_W *= 1.2
-        # [수정 - 버그] "PDF의 style 길이=2/3로 줄일 것" - PNG/EMF/JPG/SVG는
-        # 현재(위 계산 그대로)로 문제 제기가 없어 1.0 유지, PDF만 추가로 2/3.
+        # [수정 - 버그] "PDF/EMF/JPG의 style 길이=2/3로 줄일 것"(EMF/JPG는 이번에
+        # 새로 요청, PDF는 "지금 기준"으로 한 번 더) - 위 _FORMAT_TUNING의
+        # sample_mult로 통일 관리(PNG/SVG는 요청 없어 1.0 유지).
         # [수정] "화면(screen)도 style 길이를 지금의 2/3 정도로" - 화면은
-        # is_print_mode=False라 위 print 전용 분기를 안 타서 별도로 적용.
-        _SAMPLE_W_FMT_MULT = {"pdf": 2 / 3}
+        # is_print_mode=False라 _FORMAT_TUNING(print 전용)을 안 타서 별도로 적용.
         if is_print_mode:
-            SAMPLE_W *= _SAMPLE_W_FMT_MULT.get(_fmt_l, 1.0)
+            SAMPLE_W *= _legend_tuning["sample_mult"]
         else:
             SAMPLE_W *= 2 / 3
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
@@ -868,9 +936,15 @@ class GnuplotGenerator:
         # 각 curve title의 실제 렌더 폭을 직접 측정해서 쓴다(추측이 아니라
         # 실측 - 폰트를 바꿔도 자동으로 맞음). 측정 실패(모르는 폰트, Pillow
         # 없음 등)시에만 위 문자 가중치 추정으로 안전하게 대체.
+        # [수정 - 버그] "PDF/PNG legend box가 너무 큼" 근본 원인 발견 - PyMuPDF로
+        # pdfcairo가 실제로 그린 4개의 서로 다른 라벨 폭을 직접 측정해보니, PIL
+        # (freetype) 추정치가 gnuplot의 cairo 텍스트 렌더링보다 정확히(오차
+        # 0.1% 이하) 1.5배 크게 나옴 - box_chars 등 여백 계수를 아무리 줄여도
+        # 라벨 자체가 실제보다 1.5배 넓게 추정되니 box가 계속 커 보였던 것.
+        # _legend_tuning["text_corr"](위 _FORMAT_TUNING)로 포맷별 보정.
         _measured_widths_in = [_measure_text_width_in(c.title, font_name, font_pt) for c in curves]
         if curves and all(w is not None for w in _measured_widths_in):
-            max_label_len = max(_measured_widths_in) / char_width_in
+            max_label_len = max(_measured_widths_in) * _legend_tuning["text_corr"] / char_width_in
         else:
             max_label_len = max((_weighted_label_len(c.title) for c in curves), default=1.0)
         char_width_frac = char_width_in / max(axis_w_in, 0.5)
@@ -933,6 +1007,14 @@ class GnuplotGenerator:
             # 여전히 max_label_len을 포함해 체크된 curve/surface 중 가장 긴
             # 라벨 글자 수에 맞춰 자동으로 넓어짐.
             _box_w_extra_chars = _legend_tuning["box_chars"]
+        # [수정] "screen에서도 box line과 title 사이 간격이 너무 큼 - style
+        # 길이만큼 줄여야 함" - 실제 화면(windows 터미널) 창을 캡처해서
+        # 직접 확인한 결과 여전히 간격이 넓었음. 사용자가 준 정확한 기준대로
+        # box_chars가 만드는 여백(char_width_frac*box_chars)에서 style(샘플선,
+        # SAMPLE_W)의 길이만큼을 그대로 빼서 줄인다(screen 전용 - print/save는
+        # 이미 실측 기반으로 따로 맞춰서 여기서는 손대지 않음).
+        if not is_print_mode:
+            _box_w_extra_chars -= SAMPLE_W / max(char_width_frac, 1e-9)
         # [수정] box가 title을 못 감싸는(밖으로 삐져나옴) 버그 - LABEL_GAP_FRAC
         # (샘플선<->title 간격)이 여기 폭 계산에 빠져 있어서, 그 간격을 늘릴수록
         # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
@@ -1104,6 +1186,17 @@ class GnuplotGenerator:
             f_scale = PRINT_FONT_SCALE * panel_scale
             line_scale = PRINT_LINE_SCALE * panel_scale
             border_scale = PRINT_BORDER_SCALE * panel_scale
+            # [삭제] "PNG는 폰트가 크게 보임" 대응으로 넣었던 PNG 전용 0.8배 축소 -
+            # PNG/JPG가 이제 PDF를 그대로 래스터화해서 만들어지므로(fmt='png'로
+            # 이 함수까지 오지 않고 create_script 단계에서 이미 'pdf'로 바뀜)
+            # 여기 도달할 일이 없는 죽은 코드가 됨. 혼동 방지로 제거.
+            # [수정 - 버그] "EMF는 PDF보다 폰트가 크지만, 그래도 1.5배 더
+            # 키워달라(PDF/PNG/JPG를 2배로 키운 것과 맞춰서)" - EMF는 이미
+            # 자체적으로 더 크게 보이던 포맷이라 PDF와 똑같이 2배를 다 주면
+            # 과할 것으로 보여, 원래(오늘 수정 전) 기준 0.80의 1.5배인 1.2
+            # 상당(=지금 전역값 1.60의 0.75배)만 적용한다.
+            if (fmt or "").lower() == "emf":
+                f_scale *= 0.75
         else:
             f_scale = SCREEN_FONT_SCALE * panel_scale
             line_scale = SCREEN_LINE_SCALE * panel_scale
@@ -1531,13 +1624,36 @@ class GnuplotGenerator:
         # 렌더러)는 offset 단위(문자폭)의 기준 폰트가 다른 것으로 보여 2로는
         # 여전히 캔버스 밖에 남고 4는 모든 테스트에서 확실히 들어옴을 직접
         # 렌더링 비교로 확인함 - 터미널(fmt)별로 다른 offset을 쓴다.
-        _ylabel_offset = 4 if (fmt or "").lower() == "emf" else 2
+        # [수정 - 버그] "Y1 title이 tic에 겹침" - EMF 폰트를 1.5배 키우면서
+        # (위 f_scale 참고) 라벨 자체는 커졌는데, 이 offset은 "문자폭" 기준이
+        # 라벨 자신의 커진 폰트가 아니라 터미널 기본(고정) 폰트를 기준으로 잡는
+        # 것으로 보여(바로 위 2016년~ 주석 참고 - "offset 단위의 기준 폰트가
+        # 다르다") 라벨 폰트만 커지고 간격은 그대로라 침범하게 됨. offset 값을
+        # 3/6/8/10으로 바꿔가며 직접 렌더링 비교한 결과, 3~6에서는 계속 tic
+        # 숫자와 겹치다가 8에서 깨끗이 벗어나고(10은 오히려 curve 쪽을 침범) -
+        # 선형으로 조금씩 늘어나는 게 아니라 8 근처에서 갑자기 벗어나는 임계값
+        # 형태로 확인됨.
+        _ylabel_offset = 8 if (fmt or "").lower() == "emf" else 2
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
         lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset},0 {ylabel_enh}')
 
         if plotdef.y2label:
+            # [수정 - 버그] "MFLO:R-SDRT1>L-STLF1" 같은 y2 title이 tic 숫자와
+            # 겹침(port/land 공통) - 실제 저장 파일(out111_L.emf)로 재현해서
+            # 원인을 찾음: 바로 위 y1 주석의 "Y2는 왼쪽 -"라는 가정이 틀렸었음
+            # (Y1 title이 캔버스 밖으로 사라지는 것을 막을 때 대칭이라고
+            # 추정만 하고 Y2는 따로 실측 검증을 안 했던 것으로 보였음) - offset
+            # 값(0/2/4/6)을 직접 바꿔가며 렌더링 비교한 결과, 음수(-)는 y2label을
+            # 오히려 tic 숫자 쪽/플롯 안쪽으로 당겨서 겹치게 하고, y1과 같은
+            # 부호(+)로 줘야 tic 숫자 바깥쪽으로 밀려나 겹치지 않음을 확인함.
+            # [수정 - 버그] "EMF에서 Y2 title은 너무 떨어짐(마진을 현재의 반으로)" -
+            # Y1과 완전히 같은 값을 쓰면 Y1은 딱 맞아도 Y2는 항상 더 헐거워
+            # 보였던 것으로 보임(왼쪽 tic 숫자 자릿수와 오른쪽 tic 숫자 자릿수가
+            #달라 실제 필요한 간격이 다를 수 있음) - Y2만 별도로 절반 수준으로
+            # 낮춘다(Y1의 offset 인상과는 독립적으로 조정).
+            _y2label_offset = 3 if (fmt or "").lower() == "emf" else _ylabel_offset
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
-            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset -{_ylabel_offset},0 {y2label_enh}')
+            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset {_y2label_offset},0 {y2label_enh}')
 
         lines.append("set ytics nomirror")
 
@@ -1735,17 +1851,13 @@ class GnuplotGenerator:
             if color: cmd += f' lc rgb "{color}"'
             if linestyle in DASH_PATTERNS:
                 cmd += f" dashtype ({DASH_PATTERNS[linestyle]})"
-                # [추가] "jpg는 curve line style이 안 나타남(실선으로만 보임)" -
-                # 실측 확인: gnuplot의 jpeg 터미널(libgd 기반)은 dashtype/
-                # termoption dashed 둘 다 무시하고 항상 실선만 그림 - gnuplot
-                # 자체의 한계라 스크립트로 고칠 방법이 없음. 매번 경고를
-                # 반복하지 않게 최초 1회만 기록.
-                if (fmt or "").lower() in ("jpg", "jpeg") and not getattr(self, "_jpg_dash_warned", False):
-                    self.warnings.append(
-                        "JPG 형식은 gnuplot 자체 한계로 점선/파선(Dash/Dot 등) 스타일을 지원하지 않아 "
-                        "실선으로 저장됩니다 - 점선이 꼭 필요하면 PNG/PDF/EMF/SVG를 사용하세요."
-                    )
-                    self._jpg_dash_warned = True
+                # [삭제] "jpg는 curve line style이 안 나타남" 경고 - 예전엔
+                # gnuplot의 jpeg 터미널(libgd 기반)이 dashtype을 무시하고 항상
+                # 실선만 그려서 경고가 필요했지만, 이제 JPG는 이 gnuplot 명령을
+                # 직접 jpeg 터미널로 안 보내고 PDF로 먼저 그린 뒤 PyMuPDF로
+                # 래스터화해서 만듦(create_script 상단 참고) - PDF는 dash를
+                # 제대로 그리므로 그 결과가 그대로 JPG에도 남아 이 한계 자체가
+                # 없어짐(직접 렌더링해서 dash가 JPG에 남는 것을 확인함).
             cmd_list.append(cmd)
 
             # [수정] every-N(단순 인덱스 간격) 방식은 log축에서 시각적으로
@@ -2033,13 +2145,41 @@ class GnuplotGenerator:
             # [수정 - 버그] "EMF는 Plot 상하 여백을 조금만 더 줄 것(port/land
             # 공통)" - EMF는 png 같은 큰 잘림 문제는 없었지만 위아래가 살짝
             # 빠듯하다는 피드백 - png(1.6배)보다 훨씬 작게, 위/아래만 소폭
-            # (1.15배) 늘린다(좌우는 문제 제기 없어 그대로 둠).
+            # (1.15배) 늘린다.
             need_top_in *= 1.15
             need_bottom_in *= 1.15
+            # [참고] "Y1 title이 tic에 겹침" 문제는 왼쪽 마진(need_left_in) 크기와는
+            # 무관했음(마진을 1.4배 늘려도 겹침이 그대로였음 - 직접 렌더링
+            # 비교로 확인, 되돌림) - 실제 원인/해결은 ylabel의 offset 값
+            # 자체였음(아래 _ylabel_offset 참고).
 
         return need_left_in, need_right_in, need_top_in, need_bottom_in
 
     def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None, circles=None):
+        # [수정] "PNG/JPG를 PDF 기준으로" - gnuplot의 pngcairo/jpeg 터미널을
+        # 각각 따로 부르는 대신, 이미 검증된 pdfcairo 결과를 PyMuPDF로
+        # 래스터화해서 만든다(포맷 간 legend/폰트 크기 불일치의 근본 원인이던
+        # "터미널마다 다른 텍스트 렌더러" 문제를 없앰 - 오늘 직접 확인).
+        # EMF/SVG는 대상이 아니므로(EMF는 Word에서 벡터로 남아야 해서, SVG는
+        # PDF→SVG 변환 수단이 이 환경에 없어서) 그대로 gnuplot이 직접 그린다.
+        # PyMuPDF가 없는 환경이면 _rasterize_pdf_to_image가 False를 반환하니
+        # 그때만 기존 gnuplot 자체 터미널 방식으로 대체(fallback)한다.
+        _fmt_l0 = (fmt or "").lower()
+        if _fmt_l0 in ("png", "jpg", "jpeg"):
+            plot_dir0 = os.path.dirname(os.path.abspath(outfile))
+            os.makedirs(plot_dir0, exist_ok=True)
+            _tmp_pdf = os.path.join(plot_dir0, f".cathplot_raster_{uuid.uuid4().hex}.pdf")
+            try:
+                self.create_script(plotdef, _tmp_pdf, fmt="pdf", annotations=annotations, arrows=arrows, circles=circles)
+                if _rasterize_pdf_to_image(_tmp_pdf, outfile, _fmt_l0):
+                    return outfile
+                # PyMuPDF 없음 등으로 래스터화 실패 - 기존 방식으로 계속 진행
+            finally:
+                try:
+                    os.remove(_tmp_pdf)
+                except OSError:
+                    pass
+
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
 
@@ -2075,6 +2215,11 @@ class GnuplotGenerator:
         # 이미 만들어진 set xrange/yrange/y2range 줄을 그대로 다시 실행하는
         # 키를 추가한다(범위를 따로 재계산하지 않고 그대로 재사용해 항상
         # 일치하게 함). 그런 줄이 없으면(완전 auto) set autoscale로 대체.
+        # [삭제] "gnuplot에서 기본으로 p, n, u를 제공하므로 추가한 b, f, R은
+        # 삭제해도 됨(중복 필요 없음)" - f/b(n/p 별칭)는 정말 중복이라 제거.
+        # [유지] "중복이더라도 2-D의 R키도 살려둬요" - gnuplot 기본 'u'가
+        # 실질적으로 같은 결과를 내긴 하지만, 사용자 요청대로 R도 그대로
+        # 남겨둔다(같은 동작을 하는 키가 두 개(u/R) 있는 셈).
         if fmt.lower() == "interactive":
             def _find_range_cmd(prefix, autoscale_name):
                 for _l in lines:
@@ -2088,19 +2233,6 @@ class GnuplotGenerator:
                 "replot",
             ]
             lines.append("bind 'R' '" + "; ".join(_reset_cmds) + "'")
-            # [추가] "이전/다음 창 이동은 2-D, 3-D 공통으로" - gnuplot이 마우스
-            # 확대/축소 이력을 이미 내부 스택으로 관리하며 기본 키 n(다음)/
-            # p(이전)/u(전체해제)로 이동 가능함을 직접 "show bind"로 확인함.
-            # 별도 이력 관리 코드 없이 이 내장 기능에 f(forward)/b(backward)라는
-            # 더 직관적인 이름으로 별칭만 추가한다 - gnuplot bind는 커맨드
-            # 문자열이 내장 키 이름("builtin-...")과 정확히 같으면 그 내장
-            # 동작을 그대로 호출함(기본 바인딩 전체가 이 방식으로 등록돼
-            # 있는 것으로 "show bind" 출력에서 확인됨). 'b'는 gnuplot 기본
-            # 바인딩이 border 토글이지만 CathPlot에서 쓰지 않는 기능이라
-            # 재사용(사용자 확인: "r키 대신 b키로"), 'f'는 기본 바인딩이 없어
-            # 비어 있음.
-            lines.append("bind 'f' 'builtin-zoom-next'")
-            lines.append("bind 'b' 'builtin-zoom-previous'")
 
         if fmt.lower() == "interactive": lines.append("pause mouse close")
         else: lines.append("set output")
@@ -2446,7 +2578,11 @@ class GnuplotGenerator:
             # 범위 [*:*])으로 즉시 되돌리는 키. 'z' 키 사용(gnuplot 기본 바인딩과
             # 안 겹침, Z축 되돌리기라는 의미로 기억하기 쉬움).
             _reset_yr = _yr or "[*:*]"
-            _reset_zr = _zr or "[*:*]"
+            # [수정 - 버그] z가 auto(빈칸)일 때 "[*:*]"로 되돌리면 그 순간의
+            # (이미 확대된) x/y 화면 기준으로 다시 auto 계산해버려 원래
+            # 전체 데이터 기준으로 안 돌아가는 문제가 있었음 - 위에서 얼려둔
+            # _z0min/_z0max(전체 데이터 기준 최초 auto 결과)를 대신 쓴다.
+            _reset_zr = _zr or "[_z0min:_z0max]"
             lines.append(
                 f"bind 'z' 'set yrange {_reset_yr}; set zrange {_reset_zr}; replot'"
             )
@@ -2455,16 +2591,16 @@ class GnuplotGenerator:
             # 되돌린다. "set view rotx,rotz"만 쓰면 scale은 그대로 남는 것으로
             # 보여 배율까지 확실히 1,1로 되돌리려고 4개 값을 전부 명시한다.
             # gnuplot 기본 바인딩과 안 겹치는 대문자 'R'(Reset) 사용.
+            # [유지] "gnuplot 기본 p/n/u와 중복이라 b/f/R 삭제해도 됨" 요청 -
+            # b/f(n/p 별칭)는 정말 중복이라 제거했지만, 3D의 R은 gnuplot
+            # 기본 u/n/p가 다루지 않는 회전각(rot_x/rot_z)과 배율(scale)까지
+            # 함께 초기화하므로(u는 range만 원복, 회전은 그대로 남음) 그대로
+            # 유지한다(2D의 R은 range 외 보존할 상태가 없어 u와 실질적으로
+            # 같아서 제거함 - 3D만 다름).
             lines.append(
                 f"bind 'R' 'set view {rot_x},{rot_z},1,1; set xrange [*:*]; "
                 f"set yrange {_reset_yr}; set zrange {_reset_zr}; replot'"
             )
-            # [추가] "이전/다음 창 이동은 2-D, 3-D 공통으로" - 2D와 동일하게
-            # gnuplot 내장 확대/축소 이력(n/p/u)에 f(forward)/b(backward)
-            # 별칭을 추가. 3D splot에서도 "show bind"로 n/p/u가 동일하게
-            # 등록되어 있음을 직접 확인함(2D와 공통 기능).
-            lines.append("bind 'f' 'builtin-zoom-next'")
-            lines.append("bind 'b' 'builtin-zoom-previous'")
 
         # [추가] "회전+재정렬한 지금 상태를 파일로 저장" - gnuplot 안에서
         # 터미널을 잠깐 바꿔 replot한 뒤 원래 터미널로 복귀하는 방식으로 가능함
@@ -2710,6 +2846,28 @@ class GnuplotGenerator:
 
         lines.append("splot " + ", \\\n      ".join(splot_parts))
 
+        # [수정 - 버그] "s-plot에서 마우스 휠(확대/이동)을 누르자마자 z-range가
+        # 바뀜 - 오류로 보임" - 직접 실측(splot 후 x-range만 줄이고 GPVAL_Z_MIN/
+        # MAX 재조회)해서 확인한 결과, Z(min/max)를 입력칸에 안 채워 auto로
+        # 두면 gnuplot이 "현재 화면에 보이는 x/y 구간에 실제로 들어오는
+        # 점들만" 기준으로 z 자동범위를 매번 다시 계산함(x/y는 서로 영향
+        # 없이 자기 자신의 전체 데이터 기준을 유지하는데 z만 이렇게 동작함) -
+        # 그래서 마우스로 x/y를 조금만 옮기거나 확대해도(꼭 z를 직접 만지지
+        # 않아도) z range가 계속 따라 바뀌어 보임. curve(with lines)와
+        # surface(with pm3d) 양쪽 다 동일하게 재현되는 gnuplot 자체 동작이라
+        # (일반 3D에서도 원리상 같이 나지만, s-plot의 채널별 z값 편차가 더
+        # 커서 더 눈에 띄었을 뿐) z_min/z_max를 안 채운 경우엔, 방금 계산된
+        # "전체 데이터 기준" 자동범위를 이 시점(아직 확대/이동 전)에 값으로
+        # 얼려서(freeze) 고정 zrange로 다시 설정한다 - 이후 x/y를 아무리
+        # 조작해도 z는 더 이상 재계산되지 않음("초기 입력으로 바꿀 것" 요청
+        # 그대로 - 최초 auto 결과를 고정값으로 씀). 'z'/'R' 키로 되돌릴 때도
+        # 이 얼린 값을 쓴다(그래야 되돌리기 자체가 그 순간의 확대 상태를
+        # 기준으로 다시 auto 계산해버리는 같은 문제를 반복하지 않음).
+        if _zr is None:
+            lines.append("_z0min = GPVAL_Z_MIN")
+            lines.append("_z0max = GPVAL_Z_MAX")
+            lines.append("set zrange [_z0min:_z0max]")
+
         if is_interactive:
             lines.append("pause mouse close")
         else:
@@ -2769,6 +2927,28 @@ class GnuplotGenerator:
     SAVE_PAGE_MARGIN_IN = 0.3 / 2.54
 
     def create_multiplot_script(self, plots, outfile, fmt="pdf", layout_option="Auto", orientation="portrait", margins=None, spacing=None, keep_script=False, frame_auto=True, frame_width="", frame_height="", frame_unit="in", for_print=True):
+        # [수정] "PNG/JPG를 PDF 기준으로" - create_script와 동일한 이유로
+        # multiplot(Batch)도 PDF를 먼저 만들어 PyMuPDF로 래스터화한다(자세한
+        # 설명은 create_script 쪽 주석 참고). EMF/SVG는 대상 아님.
+        _fmt_l0 = (fmt or "").lower()
+        if _fmt_l0 in ("png", "jpg", "jpeg"):
+            plot_dir0 = os.path.dirname(os.path.abspath(outfile))
+            os.makedirs(plot_dir0, exist_ok=True)
+            _tmp_pdf = os.path.join(plot_dir0, f".cathplot_raster_{uuid.uuid4().hex}.pdf")
+            try:
+                self.create_multiplot_script(
+                    plots, _tmp_pdf, fmt="pdf", layout_option=layout_option, orientation=orientation,
+                    margins=margins, spacing=spacing, keep_script=keep_script, frame_auto=frame_auto,
+                    frame_width=frame_width, frame_height=frame_height, frame_unit=frame_unit, for_print=for_print,
+                )
+                if _rasterize_pdf_to_image(_tmp_pdf, outfile, _fmt_l0):
+                    return outfile
+            finally:
+                try:
+                    os.remove(_tmp_pdf)
+                except OSError:
+                    pass
+
         self.last_size_warning = None  # 이전 호출에서 남은 경고가 있으면 초기화
 
         # [추가] Print(물리적 프린터 인쇄)는 큰 여백(좌2/우1/상3/하2cm)이 필요하지만,
