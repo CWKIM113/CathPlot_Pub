@@ -3567,13 +3567,24 @@ class GnuplotGenerator:
         # 0.35로 강제로 키우자 title이 다시 나타남)으로 확인. EMF만 별도로
         # 여백을 넉넉히(2배) 더 준다.
         _emf_margin_boost = 2.0 if (fmt or "").lower() == "emf" else 1.0
+        # [수정 - 심각한 버그] "Multi-plot EMF 2줄 title에서 Y2의 2번째 줄만
+        # 통째로 안 보임" - EMF 바이너리로 직접 확인: EMF는 회전된 2줄
+        # ylabel/y2label을 "세로로 쌓지 않고 가로로 나란히" 그림(gnuplot EMF
+        # 드라이버의 한계) - 그래서 2번째 줄은 사실상 "title 폭만큼 더 필요한
+        # 별도의 텍스트"에 가까운데, 기존 +0.1in은 세로로 쌓인다고 가정한
+        # 값이라 턱없이 부족했음(Y2가 오른쪽 캔버스 경계 바로 앞이라 2번째
+        # 줄이 밀려나가 사라짐 - single-plot은 마진이 이미 넉넉해 우연히
+        # 괜찮았을 뿐). 2줄이면 label 폭만큼(_floor_scale 기준) 통째로 더
+        # 얹어준다(단일 plot 경로와 동일한 사고방식).
         if any((p.ylabel or "").strip() for p in plots):
             _max_ylabel_size = max((float(p.ylabel_size or 11) for p in plots if (p.ylabel or "").strip()), default=11.0)
-            _need_left_in = (0.5 * _floor_scale * (_max_ylabel_size / 11.0) + (0.1 if _any_y1_2line else 0) + _min_left_tic_in) * _emf_margin_boost
+            _y1_2line_extra = 0.5 * _floor_scale * (_max_ylabel_size / 11.0) if _any_y1_2line else 0
+            _need_left_in = (0.5 * _floor_scale * (_max_ylabel_size / 11.0) + _y1_2line_extra + _min_left_tic_in) * _emf_margin_boost
             margin_left = max(margin_left, _need_left_in)
         if any_y2 and any_y2label:
             _max_y2label_size = max((float(p.y2label_size or 11) for p in plots if (getattr(p, "y2label", "") or "").strip()), default=11.0)
-            _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + (0.1 if _any_y2_2line else 0) + _min_right_tic_in) * _emf_margin_boost
+            _y2_2line_extra = 0.5 * _floor_scale * (_max_y2label_size / 11.0) if _any_y2_2line else 0
+            _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + _y2_2line_extra + _min_right_tic_in) * _emf_margin_boost
             margin_right = max(margin_right, _need_right_in)
 
         # [수정 - 개념 정정] "Frame(Axis) 크기는 좌표축(axis) 자체의 크기임 -
