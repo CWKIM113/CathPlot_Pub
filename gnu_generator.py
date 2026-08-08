@@ -700,7 +700,14 @@ class GnuplotGenerator:
         if not curves:
             return
 
-        font_pt = (legend_size if legend_size else 9) * f_scale
+        # [수정 - 버그] "axis title/Plot Title은 비슷해 보이는데 legend만 너무
+        # 커 보임(10~11pt 정도가 적당해 보임)" - title/xlabel/legend 모두 같은
+        # f_scale(1.60)을 그대로 곱해서 서로간 비율은 원래와 같은데도, legend만
+        # 유독 큰 느낌이라는 피드백 - legend에서만 그 배율을 추가로 낮춘다
+        # (9pt 기준 * 1.60 * 0.7 ≈ 10.1pt로 요청하신 범위에 맞춤). 화면(screen)은
+        # 이 2배 확대 대상이 아니었으므로 손대지 않음.
+        _legend_font_extra = 0.7 if is_print_mode else 1.0
+        font_pt = (legend_size if legend_size else 9) * f_scale * _legend_font_extra
         # [주의] pngcairo가 pdfcairo보다 legend 글자를 아주 약간 더 크게 그리는
         # 경향이 실측됐지만(동일 스크립트, 터미널만 다르게 비교), 보정 계수가
         # panel_scale/legend_size에 따라 비선형으로 달라져 신뢰할 수 있는 고정
@@ -754,12 +761,12 @@ class GnuplotGenerator:
         #               아니라 이 보정과 무관 - 1.0 유지.
         _fmt_l = (fmt or "").lower()
         _FORMAT_TUNING = {
-            "png": {"row_mult": 2.0,           "box_chars": 11.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "png": {"row_mult": 2.0,           "box_chars": 13.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
             "pdf": {"row_mult": 2.0 * 0.5,      "box_chars": 0.5, "sample_mult": (2/3)**2, "text_corr": 2 / 3},
-            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": 0.75, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": -1.25, "sample_mult": (2 / 3) * 0.8, "text_corr": 1.0},
             "jpg": {"row_mult": 2.0 * (2 / 3),  "box_chars": 1.5, "sample_mult": 2 / 3,   "text_corr": 1.0},
             "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": 1.5, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "svg": {"row_mult": 2.0 * (2 / 3),  "box_chars": 6.0, "sample_mult": 1.0,     "text_corr": 1.0},
+            "svg": {"row_mult": 2.0 * (2 / 3),  "box_chars": 0.0, "sample_mult": 0.5,     "text_corr": 1.0},
         }
         # [수정 - 버그] "화면(screen)은 건드리지 말라고 했는데 왜 바뀌었나" -
         # 실측 확인 결과 screen의 row_mult=1.0(폰트 크기와 정확히 같은 줄
@@ -817,7 +824,14 @@ class GnuplotGenerator:
         # 배수는 다시 깔끔하게 "1.5 * TIC_LEN_IN" 공식으로 되돌린다(결과적으론
         # 이전 실측 기준 대비 2.25배 - "2배처럼 보였다"는 반응과 "간격이 있어야
         # 한다"는 요청 사이의 절충점).
-        TIC_LEN_IN = 1.5 * 0.00615 * font_pt
+        # [수정 - 버그] "PNG(PDF)에서 frame<->legend box 간격이 너무 큰데 maj
+        # tic은 오히려 짧아 보임 - 같은 규칙 아닌가?" - 정확한 지적. 이 계수는
+        # legend 폰트 크기(font_pt)에서 역산한 근사치일 뿐, _build_plot_commands
+        # 에서 png/pdf/svg에 따로 적용하는 실제 tic 길이 축소(2/3, 0.8배 등)를
+        # 전혀 반영하지 못해서 실제(줄어든) tic보다 간격이 상대적으로 커
+        # 보이게 됐음 - 같은 포맷별 축소 비율을 여기도 그대로 곱한다.
+        _tic_len_fmt_mult = {"png": 2 / 3, "pdf": 2 / 3, "svg": 0.8}.get((fmt or "").lower(), 1.0)
+        TIC_LEN_IN = 1.5 * 0.00615 * font_pt * _tic_len_fmt_mult
         FRAME_GAP_IN = 1.5 * TIC_LEN_IN
         FRAME_MARGIN_X = FRAME_GAP_IN / max(axis_w_in, 0.5)  # plot 테두리(frame)와 박스 사이 가로 간격
         FRAME_MARGIN_Y = FRAME_GAP_IN / max(axis_h_in, 0.3)  # 세로 간격(동일한 물리 거리)
@@ -1578,6 +1592,10 @@ class GnuplotGenerator:
             if (fmt or "").lower() in ("png", "pdf"):
                 tic_major_scale *= 2 / 3
                 tic_minor_scale *= 2 / 3
+            elif (fmt or "").lower() == "svg":
+                # [수정] "SVG는 tic 크기도 0.8배로 줄일 것" 요청.
+                tic_major_scale *= 0.8
+                tic_minor_scale *= 0.8
         else:
             tic_major_scale, tic_minor_scale = SCREEN_TIC_MAJOR_SCALE, SCREEN_TIC_MINOR_SCALE
         lines.append(f"set tics scale {tic_major_scale}, {tic_minor_scale}")
@@ -1604,7 +1622,11 @@ class GnuplotGenerator:
         # 당김) 확실한 여유가 생기는 걸 렌더링 비교로 확인함.
         effective_xlabel = plotdef.xlabel
         xlabel_text, xlabel_enh = self._render_text(effective_xlabel)
-        lines.append(f'set xlabel "{xlabel_text}" font "{plotdef.xlabel_font},{xlabel_size}" offset 0,0.5 {xlabel_enh}')
+        # [수정] "X-title과 tic 사이 간격을 소문자 두께 정도 키워달라" - offset의
+        # dy를 늘리면(위로 당김) 캔버스 아래쪽 잘림은 막아주지만 그만큼 tic
+        # 숫자와의 간격은 좁아지는 관계라, 요청대로 간격을 늘리려면 반대로
+        # dy를 줄여야 함(0.5 -> 0.15, 소문자 두께 정도인 0.35만큼 아래로).
+        lines.append(f'set xlabel "{xlabel_text}" font "{plotdef.xlabel_font},{xlabel_size}" offset 0,0.15 {xlabel_enh}')
 
         # [수정 - 심각한 버그] "Manual(frame_auto 꺼짐) + png 저장에서 Y1 title이
         # 통째로 안 보임(잘리는 게 아니라 아예 안 그려짐)" - 실측으로 원인을
@@ -1633,7 +1655,15 @@ class GnuplotGenerator:
         # 숫자와 겹치다가 8에서 깨끗이 벗어나고(10은 오히려 curve 쪽을 침범) -
         # 선형으로 조금씩 늘어나는 게 아니라 8 근처에서 갑자기 벗어나는 임계값
         # 형태로 확인됨.
-        _ylabel_offset = 8 if (fmt or "").lower() == "emf" else 2
+        # [수정 - 버그] "screen plot에서 y1 title이 tic 안쪽으로 들어가고 y2
+        # title은 안 보임" - EMF/PDF 등 print 포맷 폰트를 키우면서 8로 올린
+        # 값을 실수로 화면(interactive)에도 그대로 적용해버렸음. 화면은
+        # 폰트를 키운 적이 없으니 원래 값(2)을 그대로 써야 함 - print 포맷
+        # 여부로 분기한다.
+        # [수정] "screen plot에서 y1 title은 tic에 너무 붙음" - 화면 원래값(2)을
+        # 되돌렸지만 Y1은 그것도 빠듯하다는 재확인 - 화면만 소폭(2->3) 늘림.
+        _is_screen = (fmt or "").lower() == "interactive"
+        _ylabel_offset = 8 if not _is_screen else 3
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
         lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset},0 {ylabel_enh}')
 
@@ -1651,7 +1681,16 @@ class GnuplotGenerator:
             # 보였던 것으로 보임(왼쪽 tic 숫자 자릿수와 오른쪽 tic 숫자 자릿수가
             #달라 실제 필요한 간격이 다를 수 있음) - Y2만 별도로 절반 수준으로
             # 낮춘다(Y1의 offset 인상과는 독립적으로 조정).
-            _y2label_offset = 3 if (fmt or "").lower() == "emf" else _ylabel_offset
+            # [수정] "screen에서 y2 title은 tic 숫자와 간격을 조금 줄여줘요" -
+            # Y1(3)보다 화면에서는 Y2를 더 타이트하게(2) 별도로 낮춤.
+            if (fmt or "").lower() == "emf":
+                _y2label_offset = 3
+            elif _is_screen:
+                # [수정] "y2는 반글자나 1글자 줄이고" 후속 피드백 - 2에서 1.5로
+                # 한 번 더 축소.
+                _y2label_offset = 1.5
+            else:
+                _y2label_offset = _ylabel_offset
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
             lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset {_y2label_offset},0 {y2label_enh}')
 
