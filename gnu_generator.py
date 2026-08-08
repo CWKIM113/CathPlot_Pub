@@ -1203,6 +1203,26 @@ class GnuplotGenerator:
                 f'{label_just} front font "{font_name},{int(font_pt)}" {lbl_enh}'
             )
 
+    @staticmethod
+    def _compute_f_scale(plotdef, panel_scale, fmt):
+        """[추가 - 버그 수정] "Axis Frame W=10cm로 지정해도 실제 축 크기가 그보다
+        훨씬 작게 나옴(예: 8.7cm)" - 실측(PDF의 lmargin/rmargin at screen 값과
+        전체 캔버스 크기를 직접 비교)으로 확인: create_script가 "축+여백=전체
+        캔버스" 크기를 계산할 때는 _compute_manual_margins_in에 panel_scale만
+        (예: 1.0) 넘겼는데, 실제 그 여백을 "화면 비율"로 그리는 _build_plot_
+        commands 안에서는 여기(f_scale, 예: 1.6)로 다시 계산해서 - 두 곳이
+        서로 다른 스케일로 같은 여백을 계산하는 불일치가 있었음. 그래서 실제
+        여백이 "전체 캔버스 계산에 쓴 여백"보다 커져서, 그만큼 축이 지정한
+        크기보다 작아짐. 두 호출부(create_script/_build_plot_commands)가
+        항상 같은 값을 쓰도록 이 계산을 한 곳으로 모은다."""
+        if getattr(plotdef, "is_print_mode", False):
+            f_scale = PRINT_FONT_SCALE * (panel_scale or 1.0)
+            if (fmt or "").lower() == "emf":
+                f_scale *= 0.75
+        else:
+            f_scale = SCREEN_FONT_SCALE * (panel_scale or 1.0)
+        return f_scale
+
     def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, circles=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None, legend_scale_boost=1.0, legend_width_extra_chars=None):
         # [추가] Interactive(화면) 창은 frame_auto/frame_width와 무관하게 항상
         # 고정된 1000x700 캔버스로 뜬다(_get_terminal_cmd 참고) - 그런데 아래
@@ -1712,12 +1732,32 @@ class GnuplotGenerator:
         # (EMF의 0.75 축소도 ylabel_size 자체에 이미 반영돼 있어 별도 분기 불필요,
         # panel_scale 배율도 비율이라 자동으로 상쇄됨)에서도 항상 비슷한 여유가
         # 남게 됨. 화면(interactive)은 폰트를 키운 적이 없어 기존 값 그대로 둠.
+        # [수정 - 버그] "위 offset 공식이 tic 겹침은 없앴지만, 이번엔 title이
+        # 오히려 axis frame(테두리) 안쪽으로 들어가 버림" - 실측(PyMuPDF로
+        # 실제 axis border 사각형의 x0과 title의 x0을 직접 비교)으로 확인:
+        # tic 숫자 우측 끝(예: 122.6pt)과 axis border(예: 126.6pt) 사이의
+        # 실제 여유 공간은 폭 4pt 정도로 고정(Auto 모드에서는 border 위치
+        # 자체가 폰트 크기와 무관하게 고정됨 - 실측 확인) - 위 공식(절편 6.0)은
+        # 그 좁은 창을 넘어서 border 안쪽까지 밀어버렸음. tic 숫자와 border의
+        # 정중앙에 오도록(양쪽에 비슷한 여유) offset~size 조합을 다시 실측해서
+        # (size=11→offset≈6.2, size=36→offset≈11.2) 절편/기울기를 재계산함.
+        # [수정 - 버그] EMF만 위 비율 공식을 그대로 적용하면 오히려 더 나쁜
+        # 결과가 나옴 - 실측(offset을 -10~40까지 넓게 sweep)으로 확인: EMF(GDI
+        # 네이티브 렌더러)는 offset 1칸당 실제 이동 거리가 PDF/PNG(cairo)와
+        # 전혀 다르고(캔버스/마진 구성에 따라서도 또 달라짐), 같은 비율식을
+        # 쓰면 어떤 경우엔 border 안쪽까지 밀려 들어감(직접 렌더링으로 확인).
+        # EMF는 이번 세션 이전부터 검증돼 있던 값(Y1=8, Y2=3, 고정)을 그대로
+        # 유지하고, PDF/PNG/JPG/SVG(모두 같은 cairo 계열이라 위 실측이 그대로
+        # 적용됨)에만 새 비율 공식을 쓴다.
         _is_screen = (fmt or "").lower() == "interactive"
+        _is_emf = (fmt or "").lower() == "emf"
         _term_font_pt_ref = max(int(round(11 * (panel_scale or 1.0))), 8)
         if _is_screen:
             _ylabel_offset = 3
+        elif _is_emf:
+            _ylabel_offset = 8
         else:
-            _ylabel_offset = 6.0 + 1.293 * (ylabel_size / _term_font_pt_ref)
+            _ylabel_offset = 4.14 + 1.356 * (ylabel_size / _term_font_pt_ref)
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
         lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset:.2f},0 {ylabel_enh}')
 
@@ -1747,8 +1787,12 @@ class GnuplotGenerator:
                 # [수정] "y2는 반글자나 1글자 줄이고" 후속 피드백 - 2에서 1.5로
                 # 한 번 더 축소.
                 _y2label_offset = 1.5
+            elif _is_emf:
+                # [수정 - 버그] Y1과 같은 이유(위 y1 EMF 분기 주석 참고) - EMF는
+                # 비율 공식을 적용하지 않고 기존 검증된 고정값(3) 유지.
+                _y2label_offset = 3
             else:
-                _y2label_offset = 0.5 * (6.0 + 1.293 * (y2label_size / _term_font_pt_ref))
+                _y2label_offset = 0.5 * (4.14 + 1.356 * (y2label_size / _term_font_pt_ref))
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
             lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset {_y2label_offset:.2f},0 {y2label_enh}')
 
@@ -2294,7 +2338,18 @@ class GnuplotGenerator:
             if _axis_w_in > 0 and _axis_h_in > 0:
                 _uses_y2 = any(getattr(c, "axis", "y1") == "y2" for c in plotdef.curves)
                 _is_print = getattr(plotdef, "is_print_mode", False)
-                _nl, _nr, _nt, _nb = self._compute_manual_margins_in(plotdef, _size_scale, _is_print, _uses_y2, fmt=fmt)
+                # [수정 - 심각한 버그] "Axis Frame W=10cm로 지정했는데 실제 축이
+                # 8.7~9.2cm로 작게 나옴" - 실측(전체 캔버스 크기 vs 실제 axis
+                # border 사각형 크기 직접 비교)으로 확인: 여기서는 마진을
+                # panel_scale(_size_scale)만으로 계산해서 "축+마진=전체" 크기를
+                # 정했는데, 실제 그 마진을 화면비율로 그리는 _build_plot_commands
+                # 안에서는 f_scale(PRINT_FONT_SCALE 등이 곱해진 훨씬 큰 값)로
+                # 다시 계산해서 - 두 곳이 서로 다른 스케일로 같은 마진을 계산하는
+                # 불일치가 있었음. 실제 마진이 여기서 예산 잡은 것보다 커져서
+                # 그만큼 축이 지정한 크기보다 작아짐. _compute_f_scale로 두
+                # 호출부가 항상 같은 값을 쓰게 통일한다.
+                _margin_f_scale = self._compute_f_scale(plotdef, _size_scale, fmt)
+                _nl, _nr, _nt, _nb = self._compute_manual_margins_in(plotdef, _margin_f_scale, _is_print, _uses_y2, fmt=fmt)
                 _total_w_in = _axis_w_in + _nl + _nr
                 _total_h_in = _axis_h_in + _nt + _nb
                 _manual_size_override = f"{_total_w_in:.4f}in,{_total_h_in:.4f}in"
