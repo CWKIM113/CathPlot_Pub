@@ -1859,7 +1859,21 @@ class GnuplotGenerator:
             # [수정] "y1,y2 모두 tic<->title 간격이 너무 큼 - 지금의 반으로
             # 줄일 것" - -1.5로 실측 재확인(여전히 title 정상 출력, -4~-1
             # 안전 구간 안에 있음) 후 확정.
-            _ylabel_offset = -1.5
+            # [수정] "2줄 EMF는 y1 title 2번째 줄과 tic 숫자 사이를 2/3배로
+            # 줄일 것(축 size는 유지)" - 2줄일 때 tic에 더 가까운 쪽은 뒤쪽
+            # 줄(2번째 줄)이므로, 이 offset 하나가 그 간격을 결정한다(gnuplot은
+            # 여러 줄 라벨 전체를 한 anchor로만 옮기므로 줄 단위로 따로 줄
+            # 수는 없음) - 이전 -3->-1.5(반으로) 변경이 실측대로 간격을 절반
+            # 으로 줄였던 비율을 그대로 적용해서 -1.5*(2/3)=-1.0으로 조정.
+            _ylabel_offset = -1.0
+        elif (fmt or "").lower() == "svg":
+            # [수정] "2줄 SVG는 y1 title 2번째 줄과 tic 숫자 사이 마진을
+            # 1.5배로 늘릴 것(이전과 동일 요청 - 반영 확인)" - 공통 비율식
+            # (gap 4pt 기준)에서 SVG만 목표 gap을 6pt(4pt*1.5)로 올린다.
+            # offset 1칸당 실제 거리(약 4.05pt, 이 파일의 다른 pt<->offset
+            # 환산에서 쓰인 것과 같은 비율)를 그대로 써서 절편만 그만큼
+            # (2pt/4.05≈0.494) 낮춘다(더 음수일수록 간격이 커지는 방향).
+            _ylabel_offset = (1.874 - 1.763 * (ylabel_size / _term_font_pt_ref)) - 0.494
         else:
             # [수정] "여백이 폰트 크기와 무관하게 4pt 고정인데, 비례해야
             # 되지 않나?" - 맞는 지적. 이전 값은 gap을 모든 크기에서 4pt로
@@ -1871,6 +1885,22 @@ class GnuplotGenerator:
             # 선형관계를 이용해 재계산, size=36→gap 4->13.4pt에 해당하는
             # offset로 재조정).
             _ylabel_offset = 1.874 - 1.763 * (ylabel_size / _term_font_pt_ref)
+            # [수정] "2줄 PNG는 tic 숫자<->y1 title 여백을 지금의 1.5배로"
+            # - PNG는 PDF를 그대로 래스터화해서 만들기 때문에(create_script의
+            # png/jpg 분기 참고, 실제로는 fmt="pdf"로 다시 호출됨) 이 "else"
+            # 분기(pdf/jpg/png 공용)를 고쳐야 PNG에도 반영된다. 1줄은 그대로
+            # 두고 2줄(ylabel에 "|" 있음)일 때만 늘린다.
+            # [주의 - 부호가 1줄과 반대] 1줄에서는 절편을 낮출수록(더 음수)
+            # 간격이 커졌지만, 2줄 라벨은 PyMuPDF 실측(out111 실데이터, tic
+            # 좌측 끝 ~ 2번째 줄 우측 끝 간격 직접 측정) 결과 오히려 반대
+            # 부호로 움직임을 확인함(절편을 낮추면 2번째 줄이 tic 쪽으로
+            # 더 가까워져 겹침 발생, 절편을 높여야 멀어짐) - 기준 2줄 간격
+            # (5.3pt)을 1.5배(7.95pt)로 만드는 델타(+0.65, 1칸≈4.05pt 실측
+            # 재확인)를 그대로 더한다(1줄과 부호가 다른 이유는 다줄 라벨의
+            # anchor 기준점이 1줄과 다르기 때문으로 보임 - 정확한 내부 동작은
+            # gnuplot 소스 확인 전까지는 실측값으로만 확정).
+            if "|" in (plotdef.ylabel or ""):
+                _ylabel_offset += 0.65
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
         lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset:.2f},0 {ylabel_enh}')
 
@@ -1910,7 +1940,11 @@ class GnuplotGenerator:
             elif _is_emf:
                 # [수정] "y1,y2 모두 tic<->title 간격이 너무 큼 - 반으로 줄일
                 # 것" - 1.5로 실측 재확인(title 정상 출력) 후 확정.
-                _y2label_offset = 1.5
+                # [수정] "2줄 EMF는 y2 title 1번째 줄과 tic 숫자 사이를
+                # 반으로 줄일 것(축 size는 유지)" - 2줄일 때 tic에 더 가까운
+                # 쪽은 앞쪽 줄(1번째 줄)이므로 이 offset 하나가 그 간격을
+                # 결정함 - 이전과 같은 비율(반으로)로 1.5*0.5=0.75로 조정.
+                _y2label_offset = 0.75
             elif (fmt or "").lower() == "svg":
                 # [수정] "SVG는 y2 title 1글자 폭을 줄일 것" - 공통 비율식보다
                 # SVG만 1칸 더 타이트하게.
@@ -2432,8 +2466,57 @@ class GnuplotGenerator:
             # 왼쪽/오른쪽도 넉넉히 키운다.
             # [수정] "우측 마진도 많다 - 반으로 줄일 것" - 2.0배는 과했던 것으로
             # 보여 1.6배로 완화(1줄/2줄 모두 title 정상 출력 재확인 후 확정).
-            need_left_in *= 1.6
-            need_right_in *= 1.6
+            # [수정] "2줄 EMF는 plot 좌우 마진을 지금의 1/3으로 줄일 것(축
+            # size는 유지)" - Frame(Axis) 크기는 need_left/right_in과 무관하게
+            # 항상 요청한 axis_w_in 그대로 유지되므로(마진은 axis 밖에 더해질
+            # 뿐 axis 자체를 줄이지 않음 - create_script의 _total_w_in = axis +
+            # 마진 참고) 마진만 줄이면 축 크기는 그대로 유지된다.
+            # [주의 - 정확히 1/3(0.53배)은 실측 결과 텍스트가 통째로 사라짐]
+            # EMR_EXTTEXTOUTW 텍스트 레코드 존재 여부로 직접 스윕 실측:
+            # 1.6→0.53배(1/3) 1줄/2줄 모두 title 소실, 0.8배 2줄 일부 소실,
+            # 0.87배 Y2 2번째 줄 소실, 0.92배부터 1줄/2줄 모두 정상 출력 확인
+            # (0.95배로 여유를 더 둠). 1줄은 기존 요청(반으로 줄임)으로 이미
+            # 정확히 1.6배가 필요한 최소값으로 확정돼 있었으므로 그대로 두고,
+            # 2줄일 때만(왼쪽은 ylabel 2줄 여부, 오른쪽은 y2label 2줄 여부로
+            # 각각 독립적으로) 추가로 더 낮춘다 - 1/3 요청을 그대로 따르면
+            # title이 사라지므로, 안전하게 확인된 최소값(0.95배, 1.6배 대비
+            # 약 0.6배 수준)까지만 낮췄다는 점을 명확히 알림.
+            _emf_2line_margin_boost = 0.95
+            need_left_in *= 1.6 * (_emf_2line_margin_boost / 1.6 if ylabel_lines >= 2 else 1.0)
+            need_right_in *= 1.6 * (_emf_2line_margin_boost / 1.6 if y2label_lines >= 2 else 1.0)
+        elif _fmt_l2 == "svg":
+            # [수정] "2줄 SVG는 plot 좌우 마진을 1/3으로 할 것(이전과 동일한
+            # 요청 - 반영 확인)" - 1줄은 기존대로 별도 배율 없이 두고, 2줄
+            # (왼쪽은 ylabel, 오른쪽은 y2label 각각)일 때만 낮춘다.
+            # [주의 - 정확히 1/3은 실측 결과 title이 사라짐] SVG도 EMF처럼
+            # margin이 부족하면 겹치는 게 아니라 title 자체가 통째로 안
+            # 그려짐을 이번에 새로 확인함(기존엔 "SVG는 안 사라진다"고
+            # 잘못 알고 있었음 - 정정). 실측(PRESS/Test/MFLO/TEST 문자열
+            # 존재 여부)으로 나눗값을 스윕: 1.6배(÷1.6)까지는 1줄/2줄/
+            # 한쪽만 2줄인 경우 모두 4곳 다 정상 출력, 1.7배부터 Y1
+            # 1번째 줄과 Y2 2번째 줄이 사라짐 - 안전한 최대치인 1.6으로
+            # 확정(요청한 1/3(÷3)의 절반 수준까지만 줄였다는 점을 알림).
+            _svg_2line_div = 1.6
+            if ylabel_lines >= 2:
+                need_left_in /= _svg_2line_div
+            if y2label_lines >= 2:
+                need_right_in /= _svg_2line_div
+        else:
+            # [수정] "2줄 PNG는 plot 좌우 마진을 지금의 반으로" - PNG는 PDF를
+            # 그대로 래스터화하므로(위 "png" 분기는 PyMuPDF가 없을 때만 쓰이는
+            # fallback이라 실제로는 거의 실행되지 않음 - create_script의 상단
+            # png/jpg 재귀 호출 참고) 이 "else"(pdf/jpg 공용) 분기를 고쳐야
+            # 실제로 PNG에도 반영된다. 1줄은 그대로 두고 2줄(왼쪽은 ylabel,
+            # 오른쪽은 y2label 각각)일 때만 반으로 낮춘다. PDF/PNG는 EMF/SVG와
+            # 달리 margin이 부족해도 title이 사라지지 않고 겹치는 정도라
+            # 위험이 낮지만(text-presence는 실측으로 정상 확인), 위 y1
+            # offset의 1.5배 gap 확대와 함께 겹침(overlap) 여부까지 PyMuPDF로
+            # 직접 측정해서 확인(반으로 줄여도 겹치지 않음, gap 7.9pt 유지).
+            _png_2line_div = 2.0
+            if ylabel_lines >= 2:
+                need_left_in /= _png_2line_div
+            if y2label_lines >= 2:
+                need_right_in /= _png_2line_div
 
         return need_left_in, need_right_in, need_top_in, need_bottom_in
 
