@@ -3699,12 +3699,20 @@ class GnuplotGenerator:
             # emf_margin_boost 곱셈 "안"으로 옮겨서, 1줄일 때는 원래 검증된
             # 2.0배가 그대로 유지되게 하고 2줄 전용분만 별도로(곱해지지 않게)
             # 더한다(실측: 1줄 boost=2.0 필요, 2줄은 그 위에 0.3배 추가로 충분).
-            _y1_2line_extra = 0.3 * _floor_scale * (_max_ylabel_size / 11.0) if _any_y1_2line else 0
+            # [수정 - 버그, Multi-plot 전체 레이아웃(1/2/4/6-per-page) x Auto/
+            # Manual x PDF/EMF 64가지 조합 회귀 테스트로 새로 발견] "PDF(=PNG
+            # 공유)에서 1/p·4/p Auto + Y2 2줄이면 2번째 줄이 통째로 사라짐" -
+            # EMF 전용인 줄 알았던 이 실종 버그가 PDF cairo에서도 재현됨
+            # (fitz로 텍스트 추출 시 아예 없음, single-plot에서는 마진이
+            # 넉넉해 우연히 안 보였을 뿐). 0.3배로는 EMF만 겨우 버티는
+            # 수준이라 PDF/SVG는 여전히 부족했던 것 - 0.6배로 올려서
+            # 64가지 조합 전부 정상 출력 재확인.
+            _y1_2line_extra = 0.6 * _floor_scale * (_max_ylabel_size / 11.0) if _any_y1_2line else 0
             _need_left_in = (0.5 * _floor_scale * (_max_ylabel_size / 11.0) + _min_left_tic_in) * _emf_margin_boost + _y1_2line_extra
             margin_left = max(margin_left, _need_left_in)
         if any_y2 and any_y2label:
             _max_y2label_size = max((float(p.y2label_size or 11) for p in plots if (getattr(p, "y2label", "") or "").strip()), default=11.0)
-            _y2_2line_extra = 0.3 * _floor_scale * (_max_y2label_size / 11.0) if _any_y2_2line else 0
+            _y2_2line_extra = 0.6 * _floor_scale * (_max_y2label_size / 11.0) if _any_y2_2line else 0
             _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + _min_right_tic_in) * _emf_margin_boost + _y2_2line_extra
             margin_right = max(margin_right, _need_right_in)
 
