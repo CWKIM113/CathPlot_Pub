@@ -409,6 +409,32 @@ class GnuplotGenerator:
     def _format_number(value):
         return format(value, ".12g")
 
+    def _tic_label_extra_chars(self, min_val, max_val, step_val, baseline=2):
+        """[추가] "tic 숫자에 소수점/음수가 있으면 여백도 넓어야" - min/max/
+        tic-step으로부터 실제 찍힐 tic 숫자들의 최대 글자수를 추정해서,
+        기준(정수 2자리, 예: "10")보다 몇 글자 더 넓은지 반환한다. step을
+        모르면(수동 tic이 "auto"인 경우 등) min/max 두 값만으로 근사한다."""
+        try:
+            vmin = float(min_val)
+            vmax = float(max_val)
+        except (TypeError, ValueError):
+            return 0
+        candidates = [vmin, vmax]
+        try:
+            step = float(step_val) if step_val not in (None, "") else None
+        except (TypeError, ValueError):
+            step = None
+        if step and step > 0:
+            n0 = math.ceil(vmin / step - 1e-9)
+            n1 = math.floor(vmax / step + 1e-9)
+            if 0 <= (n1 - n0) <= 200:
+                candidates = [n * step for n in range(int(n0), int(n1) + 1)] or candidates
+        try:
+            max_len = max(len(self._format_number(v)) for v in candidates)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, max_len - baseline)
+
     def _safe_manual_range(self, min_str, max_str, is_log):
         """사용자가 직접 입력한(또는 이전에 자동 계산되어 남아있던) min/max
         문자열을 그대로 쓰되, log 스케일이 켜진 상태에서 min이 0 이하로
@@ -1319,32 +1345,47 @@ class GnuplotGenerator:
                 shared_x_range = None
 
         y1_auto_tics = ""
+        # [추가] "tic 숫자에 소수점/음수가 있으면 여백도 그만큼 넓어야 하지
+        # 않나?" - 맞는 지적(margin 계산이 Scientific/Power10 형식만 챙기고
+        # 일반 형식의 소수점·음수 폭은 전혀 반영 안 하고 있었음). 아래에서
+        # 실제로 결정된 min/max/tic-step을 담아둬서, 마진 계산 시점에 실제
+        # tic 숫자들의 최대 글자수를 추정할 수 있게 한다.
+        _y1_min_val = _y1_max_val = _y1_step_val = None
         if plotdef.yauto:
             nice_y1 = self._nice_axis_range(plotdef, "y1", is_log=getattr(plotdef, "y1log", False))
             if nice_y1:
                 ymin, ymax, y1_auto_tics = nice_y1
                 lines.append(f"set yrange [{self._format_number(ymin)}:{self._format_number(ymax)}]")
+                _y1_min_val, _y1_max_val, _y1_step_val = ymin, ymax, y1_auto_tics
             else:
                 lines.append("set autoscale y")
         else:
             _ymin, _ymax = self._safe_manual_range(plotdef.ymin, plotdef.ymax, getattr(plotdef, "y1log", False))
             lines.append(f"set yrange [{_ymin}:{_ymax}]")
+            _y1_min_val, _y1_max_val = _ymin, _ymax
+        if plotdef.ytics:
+            _y1_step_val = plotdef.ytics
 
         uses_y2 = uses_y2_for_log
 
         y2_auto_tics = ""
+        _y2_min_val = _y2_max_val = _y2_step_val = None
         if uses_y2 and not getattr(plotdef, "y2auto", True):
             _y2min, _y2max = self._safe_manual_range(plotdef.y2min, plotdef.y2max, getattr(plotdef, "y2log", False))
             lines.append(f"set y2range [{_y2min}:{_y2max}]")
+            _y2_min_val, _y2_max_val = _y2min, _y2max
         elif uses_y2:
             nice_y2 = self._nice_axis_range(plotdef, "y2", is_log=getattr(plotdef, "y2log", False))
             if nice_y2:
                 y2min, y2max, y2_auto_tics = nice_y2
                 lines.append(f"set y2range [{self._format_number(y2min)}:{self._format_number(y2max)}]")
+                _y2_min_val, _y2_max_val, _y2_step_val = y2min, y2max, y2_auto_tics
             else:
                 lines.append("set autoscale y2")
         else:
             lines.append("set link y2")
+        if uses_y2 and plotdef.y2tics:
+            _y2_step_val = plotdef.y2tics
 
         lines.append(f"set xtics {plotdef.xtics if plotdef.xtics else 'auto'}")
 
@@ -1478,6 +1519,14 @@ class GnuplotGenerator:
             _y1fmt_label = getattr(plotdef, "y1fmt", "Normal")
             if _y1fmt_label == "Scientific": _lmargin_base += 0.07
             elif _y1fmt_label == "Power10": _lmargin_base += 0.03
+            # [추가] "tic 숫자에 소수점/음수가 있으면 여백도 넓어야 하지 않나?" -
+            # Scientific/Power10만 챙기고 일반 형식의 소수점·음수 폭은 반영이
+            # 안 돼 있었음(실제로 Y1/Y2 중 한쪽만 소수점 tic이면 margin은
+            # 대칭인데 title이 상대적으로 더 좁아 보이는 원인이었음) - 실제
+            # min/max/tic-step으로 결정될 tic 숫자들의 최대 글자수를 추정해서
+            # (기준 2자리 대비 초과분) 그만큼 여백을 넓힌다.
+            elif _y1fmt_label == "Normal":
+                _lmargin_base += 0.012 * self._tic_label_extra_chars(_y1_min_val, _y1_max_val, _y1_step_val)
             # [수정] "전부 2줄"로 겹쳐 테스트하면 네 방향이 동시에 커져 체감상
             # 과하다는 피드백으로, 화면에서는 2줄 증가분을 절반으로 줄임(print는
             # 그대로 유지 - 이미 확인됨)
@@ -1517,6 +1566,10 @@ class GnuplotGenerator:
             if uses_y2:
                 if _y2fmt_label == "Scientific": _rmargin_base -= 0.07
                 elif _y2fmt_label == "Power10": _rmargin_base -= 0.03
+                elif _y2fmt_label == "Normal":
+                    # [추가] Y1과 같은 이유(위 lmargin의 소수점/음수 폭 보정 주석
+                    # 참고) - Y2도 같은 방식으로 여백을 넓힌다.
+                    _rmargin_base -= 0.012 * self._tic_label_extra_chars(_y2_min_val, _y2_max_val, _y2_step_val)
                 if "|" in (plotdef.y2label or ""): _rmargin_base -= 0.05 if _is_print else 0.025  # Y2 title 2줄 이상이면 여백 추가(화면은 절반)
 
             # [추가] 위 마진들은 전부 "화면 비율(fraction)"이라서, frame_auto를 끄고
@@ -1773,7 +1826,14 @@ class GnuplotGenerator:
             # 문제였음. gap≈4가 되는 지점(약 0.5)으로 낮춤. windows 터미널
             # 자체를 직접 잰 게 아니라 근사치이므로, 실제 화면에서 다시 확인
             # 필요.
-            _ylabel_offset = 0.5
+            # [수정] "이 기법(비례식)을 screen에도 적용해야 하지 않나 - screen도
+            # 사용자 입력 폰트 크기를 참조하지 않나?" - 맞는 지적. screen도
+            # SCREEN_FONT_SCALE(=1.0)만 다를 뿐 ylabel_size 입력을 그대로
+            # 반영하므로 고정값(0.5)은 Print와 같은 이유로 큰 폰트에서 깨짐.
+            # 같은 proxy 렌더로 ylabel_size=36까지 추가 실측(off=-2→gap≈3.9)
+            # 해서 Print와 동일한 방식(기준 크기의 gap=4pt 유지, 그 외는 비례)
+            # 으로 절편/기울기 재계산.
+            _ylabel_offset = 2.612 - 2.112 * (ylabel_size / _term_font_pt_ref)
         elif _is_emf:
             # [수정 - 버그, 실제 out111.dat로 재현] "EMF에서 y1 title이 사라짐/
             # curve에 겹침" - 실제 데이터로 직접 sweep(-15~5)해서 확인: 기존
@@ -1782,7 +1842,16 @@ class GnuplotGenerator:
             # 있게 -3으로 설정.
             _ylabel_offset = -3
         else:
-            _ylabel_offset = 0.88 - 1.119 * (ylabel_size / _term_font_pt_ref)
+            # [수정] "여백이 폰트 크기와 무관하게 4pt 고정인데, 비례해야
+            # 되지 않나?" - 맞는 지적. 이전 값은 gap을 모든 크기에서 4pt로
+            # 고정하는 것을 목표로 절편/기울기를 구했었음(작은 글씨 옆은
+            # 여유 있어 보이고 큰 글씨 옆은 상대적으로 빡빡해 보이는 부작용) -
+            # 기준 크기(ylabel_size=11, ratio≈1.545)에서의 gap(4pt)은 그대로
+            # 두고, 다른 크기에서는 그 비율(gap ∝ ratio)만큼 커지도록 목표를
+            # 다시 잡아서 절편/기울기 재계산(같은 실측 데이터의 offset↔gap
+            # 선형관계를 이용해 재계산, size=36→gap 4->13.4pt에 해당하는
+            # offset로 재조정).
+            _ylabel_offset = 1.874 - 1.763 * (ylabel_size / _term_font_pt_ref)
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
         lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset:.2f},0 {ylabel_enh}')
 
@@ -1809,9 +1878,12 @@ class GnuplotGenerator:
             # size=11→offset≈1.13, size=36→offset≈5.85 에서 간격 4pt로 균일
             # (Y1과 부호만 반대, 기울기 크기는 비슷 - digit 폭 차이로 살짝 다름).
             if _is_screen:
-                # [수정] "y2는 반글자나 1글자 줄이고" 후속 피드백 - 2에서 1.5로
-                # 한 번 더 축소.
-                _y2label_offset = 1.5
+                # [수정] "screen도 비례식 적용해야" - Y1과 동일하게 screen Y2도
+                # 고정값(1.5)이 큰 폰트에서 깨짐을 proxy 렌더로 확인(size=36
+                # 에서 gap 1.3pt까지 줄어듦) - 기준 크기(ratio=1.0)의 현재 gap
+                # (13.1pt, 기존 1.5 그대로 유지 시)을 보존하고 그 이상 크기는
+                # 비례해서 커지도록 절편/기울기 재계산.
+                _y2label_offset = -3.027 + 4.527 * (y2label_size / _term_font_pt_ref)
             elif _is_emf:
                 # [수정 - 버그] Y1과 같은 이유(위 y1 EMF 분기 주석 참고) - EMF는
                 # 비율 공식을 적용하지 않고 기존 검증된 고정값(3) 유지.
@@ -1819,9 +1891,12 @@ class GnuplotGenerator:
             elif (fmt or "").lower() == "svg":
                 # [수정] "SVG는 y2 title 1글자 폭을 줄일 것" - 공통 비율식보다
                 # SVG만 1칸 더 타이트하게.
-                _y2label_offset = (-0.881 + 1.299 * (y2label_size / _term_font_pt_ref)) - 1.0
+                _y2label_offset = (-1.871 + 1.939 * (y2label_size / _term_font_pt_ref)) - 1.0
             else:
-                _y2label_offset = -0.881 + 1.299 * (y2label_size / _term_font_pt_ref)
+                # [수정] Y1과 같은 이유("여백이 폰트 크기에 비례해야") - 기준
+                # 크기(ratio≈1.545)의 gap(4pt)은 유지하고 다른 크기에서는
+                # 비례해서 커지도록 절편/기울기 재계산.
+                _y2label_offset = -1.871 + 1.939 * (y2label_size / _term_font_pt_ref)
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
             lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset {_y2label_offset:.2f},0 {y2label_enh}')
 
