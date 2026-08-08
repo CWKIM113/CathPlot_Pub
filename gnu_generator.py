@@ -1899,7 +1899,11 @@ class GnuplotGenerator:
                 # 에서 gap 1.3pt까지 줄어듦) - 기준 크기(ratio=1.0)의 현재 gap
                 # (13.1pt, 기존 1.5 그대로 유지 시)을 보존하고 그 이상 크기는
                 # 비례해서 커지도록 절편/기울기 재계산.
-                _y2label_offset = -3.027 + 4.527 * (y2label_size / _term_font_pt_ref)
+                # [수정] "2줄 plot에서 Y2 title 2번째 줄이 잘림, tic<->title
+                # 간격이 너무 크다 - 7pt는 줄여도 될 듯" - 1칸≈4.05pt 기준
+                # 7pt만큼(약 1.73칸) 절편을 낮춰 간격을 줄이고 캔버스 안쪽으로
+                # 당긴다.
+                _y2label_offset = -4.757 + 4.527 * (y2label_size / _term_font_pt_ref)
             elif _is_emf:
                 # [수정 - 버그] Y1과 같은 이유(위 y1 EMF 분기 주석 참고) - EMF는
                 # 비율 공식을 적용하지 않고 기존 검증된 고정값(3) 유지.
