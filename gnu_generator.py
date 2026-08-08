@@ -3741,7 +3741,7 @@ class GnuplotGenerator:
         # 실측 확인됨. 1.3배로 낮추면 1줄 Y2 title이 다시 사라지고, 1.5배도
         # 2줄 Y2의 2번째 줄이 다시 사라짐(실측) - 1.7배가 전부 정상 출력되는
         # 최소값이라 그대로 확정.
-        _emf_margin_boost = 2.0 if (fmt or "").lower() == "emf" else 1.0
+        _emf_margin_boost = 2.0 if (fmt or "").lower() in ("emf", "svg") else 1.0
         # [수정 - 심각한 버그] "Multi-plot EMF 2줄 title에서 Y2의 2번째 줄만
         # 통째로 안 보임" - EMF 바이너리로 직접 확인: EMF는 회전된 2줄
         # ylabel/y2label을 "세로로 쌓지 않고 가로로 나란히" 그림(gnuplot EMF
