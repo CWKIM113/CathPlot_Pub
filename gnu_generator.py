@@ -3716,6 +3716,18 @@ class GnuplotGenerator:
             _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + _min_right_tic_in) * _emf_margin_boost + _y2_2line_extra
             margin_right = max(margin_right, _need_right_in)
 
+        # [수정 - 버그] "1/p + Manual은 1줄이어도 '크기 축소됨' 경고가 뜬다" -
+        # 위쪽(3389 부근)의 "1/p+Manual 페이지 크기 재설정" 블록은 이 margin_*
+        # (tic 숫자/title 자리, 보통 pm_left/right 절대 여백보다 훨씬 큼)이
+        # 계산되기 "전"에 page_w/page_h를 pm_left/right(작은 고정값)만으로
+        # 미리 정해버렸음 - 그래서 아래 shrink 비교에서 쓰는 실제 필요
+        # 크기(axis+margin_*)보다 page_w가 항상 작게 잡혀, 1줄/2줄과 무관하게
+        # 매번 "축소됨" 경고가 뜨고 있었음(렌더링 자체는 문제 없었지만 경고가
+        # 잘못 뜸). margin_*이 확정된 지금 다시 정확히 재계산한다.
+        if rows == 1 and cols == 1 and not frame_auto and frame_width and frame_height:
+            page_w = cell_w_in + margin_left + margin_right
+            page_h = cell_h_in + margin_top + margin_bottom
+
         # [수정 - 개념 정정] "Frame(Axis) 크기는 좌표축(axis) 자체의 크기임 -
         # 처음부터 그렇게 강조했음" - Manual에서 frame_width/height는 칸(cell,
         # 마진+legend 포함 전체)이 아니라 axis 자체의 크기다. 그래서 cell_w_in/
