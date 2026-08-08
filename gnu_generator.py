@@ -1856,7 +1856,10 @@ class GnuplotGenerator:
             # 값(8)은 커브 한복판까지 밀려 들어와 있었고, -4~-1 구간에서는
             # border 왼쪽 여백에 깨끗이 위치함(그 구간 내내 안정적) - 여유
             # 있게 -3으로 설정.
-            _ylabel_offset = -3
+            # [수정] "y1,y2 모두 tic<->title 간격이 너무 큼 - 지금의 반으로
+            # 줄일 것" - -1.5로 실측 재확인(여전히 title 정상 출력, -4~-1
+            # 안전 구간 안에 있음) 후 확정.
+            _ylabel_offset = -1.5
         else:
             # [수정] "여백이 폰트 크기와 무관하게 4pt 고정인데, 비례해야
             # 되지 않나?" - 맞는 지적. 이전 값은 gap을 모든 크기에서 4pt로
@@ -1905,9 +1908,9 @@ class GnuplotGenerator:
                 # 당긴다.
                 _y2label_offset = -4.757 + 4.527 * (y2label_size / _term_font_pt_ref)
             elif _is_emf:
-                # [수정 - 버그] Y1과 같은 이유(위 y1 EMF 분기 주석 참고) - EMF는
-                # 비율 공식을 적용하지 않고 기존 검증된 고정값(3) 유지.
-                _y2label_offset = 3
+                # [수정] "y1,y2 모두 tic<->title 간격이 너무 큼 - 반으로 줄일
+                # 것" - 1.5로 실측 재확인(title 정상 출력) 후 확정.
+                _y2label_offset = 1.5
             elif (fmt or "").lower() == "svg":
                 # [수정] "SVG는 y2 title 1글자 폭을 줄일 것" - 공통 비율식보다
                 # SVG만 1칸 더 타이트하게.
@@ -2427,8 +2430,10 @@ class GnuplotGenerator:
             # 여기(단일 plot Manual-frame 경로)에도 그대로 있었음 - 여기는
             # 왼쪽/오른쪽 마진을 전혀 안 키우고 있어서 발생. 같은 배율(2배)로
             # 왼쪽/오른쪽도 넉넉히 키운다.
-            need_left_in *= 2.0
-            need_right_in *= 2.0
+            # [수정] "우측 마진도 많다 - 반으로 줄일 것" - 2.0배는 과했던 것으로
+            # 보여 1.6배로 완화(1줄/2줄 모두 title 정상 출력 재확인 후 확정).
+            need_left_in *= 1.6
+            need_right_in *= 1.6
 
         return need_left_in, need_right_in, need_top_in, need_bottom_in
 
