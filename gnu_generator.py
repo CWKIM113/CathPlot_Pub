@@ -183,6 +183,32 @@ DASH_PATTERNS = {
     "dashdotdot": "8, 3, 1, 3, 1, 3",  # 위와 동일하게 확대
 }
 
+# [수정 - 버그] "PNG는 dot가 실선으로 보임(간격이 너무 작아 보임), 점선 dash
+# 길이를 1.5~2배로(screen/emf는 세그먼트가 2개인데 PNG는 4개 - 길이가 절반)" -
+# 실측(동일 dashtype을 pdfcairo/emf 양쪽에 그려서 300dpi로 캡처해 비교)으로
+# 확인: pdfcairo(PDF/PNG/JPG가 이제 다 이 경로) 쪽 dot("1, 2")은 세그먼트가
+# 워낙 짧아(1pt 미만) anti-aliasing에 묻혀 거의 실선처럼 보이는데, emf(GDI
+# 네이티브 렌더러)는 같은 값이어도 또렷하게 점선으로 보임 - cairo 래스터화
+# 단계에서 작은 dash 세그먼트가 뭉개지는 것으로 보임. cairo 계열(pdf/png/jpg)
+# 에만 dashtype 숫자를 키워 세그먼트를 더 굵게(살아남게) 만든다.
+_CAIRO_DASH_BOOST = 1.75  # 요청한 "1.5~2배" 범위의 중간값
+_CAIRO_DASH_BOOST_THRESHOLD = 2.0  # 이 값보다 작은 세그먼트가 있는 패턴만 대상("dash"처럼
+                                    # 세그먼트가 이미 충분히 긴 패턴은 그대로 둔다)
+def _dash_pattern_for_fmt(linestyle, fmt):
+    base = DASH_PATTERNS.get(linestyle)
+    if base is None:
+        return None
+    if (fmt or "").lower() not in ("pdf", "png", "jpg", "jpeg"):
+        return base
+    try:
+        nums = [float(v.strip()) for v in base.split(",")]
+    except ValueError:
+        return base
+    if min(nums) >= _CAIRO_DASH_BOOST_THRESHOLD:
+        return base
+    nums = [v * _CAIRO_DASH_BOOST for v in nums]
+    return ", ".join(f"{v:.3g}" for v in nums)
+
 # Legend 샘플선 위에 마커를 표시할 때 쓰는 유니코드 기호 (pointtype 번호 -> 기호)
 MARKER_SYMBOL_MAP = {
     6: "○", 7: "●",    # Circle (속빈/채운)
@@ -760,13 +786,18 @@ class GnuplotGenerator:
         #               기존값에서 조금 줄인다. EMF(GDI)/JPG(libgd)는 cairo가
         #               아니라 이 보정과 무관 - 1.0 유지.
         _fmt_l = (fmt or "").lower()
+        # [수정] 실제 GUI Save 결과(out111 등) 재확인 피드백 - "PNG는 line↔title
+        # 1글자 이상 겹침 -> 가로길이 2자 늘릴 것", "EMF는 반자 더 줄이고",
+        # "SVG는 2자 줄일 것". (PNG는 이제 PDF 래스터화 경로를 쓰므로 실제로는
+        # "pdf" 항목이 적용되지만, PyMuPDF 미탑재 등으로 레거시 경로로 빠질 때를
+        # 대비해 png 항목도 함께 조정해 둔다.)
         _FORMAT_TUNING = {
-            "png": {"row_mult": 2.0,           "box_chars": 13.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "pdf": {"row_mult": 2.0 * 0.5,      "box_chars": 0.5, "sample_mult": (2/3)**2, "text_corr": 2 / 3},
-            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": -1.25, "sample_mult": (2 / 3) * 0.8, "text_corr": 1.0},
+            "png": {"row_mult": 2.0,           "box_chars": 15.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "pdf": {"row_mult": 2.0 * 0.5,      "box_chars": 2.5, "sample_mult": (2/3)**2, "text_corr": 2 / 3},
+            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": -1.75, "sample_mult": (2 / 3) * 0.8, "text_corr": 1.0},
             "jpg": {"row_mult": 2.0 * (2 / 3),  "box_chars": 1.5, "sample_mult": 2 / 3,   "text_corr": 1.0},
             "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": 1.5, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "svg": {"row_mult": 2.0 * (2 / 3),  "box_chars": 0.0, "sample_mult": 0.5,     "text_corr": 1.0},
+            "svg": {"row_mult": 2.0 * (2 / 3),  "box_chars": -2.0, "sample_mult": 0.5,     "text_corr": 1.0},
         }
         # [수정 - 버그] "화면(screen)은 건드리지 말라고 했는데 왜 바뀌었나" -
         # 실측 확인 결과 screen의 row_mult=1.0(폰트 크기와 정확히 같은 줄
@@ -830,7 +861,7 @@ class GnuplotGenerator:
         # 에서 png/pdf/svg에 따로 적용하는 실제 tic 길이 축소(2/3, 0.8배 등)를
         # 전혀 반영하지 못해서 실제(줄어든) tic보다 간격이 상대적으로 커
         # 보이게 됐음 - 같은 포맷별 축소 비율을 여기도 그대로 곱한다.
-        _tic_len_fmt_mult = {"png": 2 / 3, "pdf": 2 / 3, "svg": 0.8}.get((fmt or "").lower(), 1.0)
+        _tic_len_fmt_mult = {"png": 2 / 3, "pdf": 2 / 3, "svg": 0.8 * 0.8}.get((fmt or "").lower(), 1.0)
         TIC_LEN_IN = 1.5 * 0.00615 * font_pt * _tic_len_fmt_mult
         FRAME_GAP_IN = 1.5 * TIC_LEN_IN
         FRAME_MARGIN_X = FRAME_GAP_IN / max(axis_w_in, 0.5)  # plot 테두리(frame)와 박스 사이 가로 간격
@@ -1128,7 +1159,8 @@ class GnuplotGenerator:
             color = curve.color or DEFAULT_COLORS[idx % len(DEFAULT_COLORS)]
             linestyle = curve.linestyle or DEFAULT_LINESTYLES[idx % len(DEFAULT_LINESTYLES)]
             lw2 = curve.linewidth * line_scale
-            dt_clause = f" dashtype ({DASH_PATTERNS[linestyle]})" if linestyle in DASH_PATTERNS else ""
+            _dash_pat = _dash_pattern_for_fmt(linestyle, fmt)
+            dt_clause = f" dashtype ({_dash_pat})" if _dash_pat else ""
             lines.append(
                 f"set arrow {id_offset + row_i + 1} from graph {sample_x1:.4f},{row_y:.4f} "
                 f"to graph {sample_x2:.4f},{row_y:.4f} nohead front "
@@ -1593,9 +1625,11 @@ class GnuplotGenerator:
                 tic_major_scale *= 2 / 3
                 tic_minor_scale *= 2 / 3
             elif (fmt or "").lower() == "svg":
-                # [수정] "SVG는 tic 크기도 0.8배로 줄일 것" 요청.
-                tic_major_scale *= 0.8
-                tic_minor_scale *= 0.8
+                # [수정] "SVG는 tic 크기도 0.8배로 줄일 것" 요청 후, 실제 GUI Save
+                # 재확인 피드백으로 "지금(이미 0.8배 적용된 상태) 대비 또
+                # 0.8배로 줄일 것" - 누적 0.8*0.8=0.64배.
+                tic_major_scale *= 0.8 * 0.8
+                tic_minor_scale *= 0.8 * 0.8
         else:
             tic_major_scale, tic_minor_scale = SCREEN_TIC_MAJOR_SCALE, SCREEN_TIC_MINOR_SCALE
         lines.append(f"set tics scale {tic_major_scale}, {tic_minor_scale}")
@@ -1662,10 +1696,30 @@ class GnuplotGenerator:
         # 여부로 분기한다.
         # [수정] "screen plot에서 y1 title은 tic에 너무 붙음" - 화면 원래값(2)을
         # 되돌렸지만 Y1은 그것도 빠듯하다는 재확인 - 화면만 소폭(2->3) 늘림.
+        # [수정 - 심각한 버그] "모든 그림에서 y1 title이 frame에 붙어서 tic
+        # 숫자와 겹침" - 위에서 8로 고정했던 값은 ylabel_size(입력)=11일 때
+        # 기준으로만 맞춰져 있었음. 실측(PyMuPDF, ylabel_size를 11/14/18/22/
+        # 28/36으로 바꿔가며 tic 숫자 우측 끝과 title 좌측 끝 간격을 직접
+        # 측정)으로 확인: offset의 "문자폭" 단위는 라벨 자신의 폰트가 아니라
+        # 터미널 기본폰트(_term_font_pt, panel_scale에만 비례 - _get_terminal_cmd
+        # 참고) 기준인데, 라벨 폰트(ylabel_size)는 그와 별도로 f_scale(EMF는
+        # 추가 0.75까지) 만큼 더 커질 수 있어서, 라벨이 커질수록 고정 8칸으로는
+        # 라벨 자신의 두꺼워진 폭을 못 따라가 결국 겹침(ylabel_size 입력=11
+        # 에선 여유+8pt였는데 22 근처부터 역전되어 겹침, 36에선 -11pt).
+        # offset(gap 8pt 간격 기준 1칸≈4.04pt, panel_scale=1/오프셋 8~12 구간
+        # 실측)과 ylabel_size/_term_font_pt 비율이 선형 관계임을 확인해서
+        # 고정값 대신 비율 기반 공식으로 바꿈 - ylabel_size가 커지는 포맷/설정
+        # (EMF의 0.75 축소도 ylabel_size 자체에 이미 반영돼 있어 별도 분기 불필요,
+        # panel_scale 배율도 비율이라 자동으로 상쇄됨)에서도 항상 비슷한 여유가
+        # 남게 됨. 화면(interactive)은 폰트를 키운 적이 없어 기존 값 그대로 둠.
         _is_screen = (fmt or "").lower() == "interactive"
-        _ylabel_offset = 8 if not _is_screen else 3
+        _term_font_pt_ref = max(int(round(11 * (panel_scale or 1.0))), 8)
+        if _is_screen:
+            _ylabel_offset = 3
+        else:
+            _ylabel_offset = 6.0 + 1.293 * (ylabel_size / _term_font_pt_ref)
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
-        lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset},0 {ylabel_enh}')
+        lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset:.2f},0 {ylabel_enh}')
 
         if plotdef.y2label:
             # [수정 - 버그] "MFLO:R-SDRT1>L-STLF1" 같은 y2 title이 tic 숫자와
@@ -1683,16 +1737,20 @@ class GnuplotGenerator:
             # 낮춘다(Y1의 offset 인상과는 독립적으로 조정).
             # [수정] "screen에서 y2 title은 tic 숫자와 간격을 조금 줄여줘요" -
             # Y1(3)보다 화면에서는 Y2를 더 타이트하게(2) 별도로 낮춤.
-            if (fmt or "").lower() == "emf":
-                _y2label_offset = 3
-            elif _is_screen:
+            # [수정 - 심각한 버그] Y1과 같은 이유(위 y1 offset 주석 참고)로 Print/
+            # Save의 y2label도 고정값(EMF=3, 그 외=Y1과 동일)이 y2label_size가
+            # 커지면 그대로 겹침. Y1과 같은 비율식을 쓰되(포맷별 f_scale 차이는
+            # y2label_size 자체에 이미 반영돼 자동 상쇄), Y2는 자릿수가 보통 더
+            # 적어 Y1보다 여유가 덜 필요하다는 기존 실측(EMF 3/8≈0.4)을 반영해
+            # 절반 비율(0.5x)로 낮춰 적용.
+            if _is_screen:
                 # [수정] "y2는 반글자나 1글자 줄이고" 후속 피드백 - 2에서 1.5로
                 # 한 번 더 축소.
                 _y2label_offset = 1.5
             else:
-                _y2label_offset = _ylabel_offset
+                _y2label_offset = 0.5 * (6.0 + 1.293 * (y2label_size / _term_font_pt_ref))
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
-            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset {_y2label_offset},0 {y2label_enh}')
+            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset {_y2label_offset:.2f},0 {y2label_enh}')
 
         lines.append("set ytics nomirror")
 
@@ -1888,8 +1946,9 @@ class GnuplotGenerator:
             cmd = f'"{path}" using {using_expr} notitle axes {axis} with lines lw {lw}'
 
             if color: cmd += f' lc rgb "{color}"'
-            if linestyle in DASH_PATTERNS:
-                cmd += f" dashtype ({DASH_PATTERNS[linestyle]})"
+            _dash_pat_curve = _dash_pattern_for_fmt(linestyle, fmt)
+            if _dash_pat_curve:
+                cmd += f" dashtype ({_dash_pat_curve})"
                 # [삭제] "jpg는 curve line style이 안 나타남" 경고 - 예전엔
                 # gnuplot의 jpeg 터미널(libgd 기반)이 dashtype을 무시하고 항상
                 # 실선만 그려서 경고가 필요했지만, 이제 JPG는 이 gnuplot 명령을

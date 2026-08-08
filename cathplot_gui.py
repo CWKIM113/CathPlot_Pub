@@ -212,21 +212,48 @@ class CathPlotGUI:
         )
         self.var_symbol_btn.pack(side="right", padx=5)
 
-        ttk.Button(
-            btn_container, text="Batch Queue", command=self.open_batch_queue_dialog
-        ).pack(side="left", padx=5)
-        ttk.Button(
-            btn_container, text="Batch Set", command=self.open_batch_set_dialog
-        ).pack(side="left", padx=5)
+        # [수정] "Batch Set이 많이 쓰일 테니까" - Batch Set <-> Batch Queue 위치 교체
+        # (Batch Set을 먼저/왼쪽에), 둘 다 색상+굵은 글씨로 강조. 3D-PLOT은 줄
+        # 가운데에 위아래 간격 없이 꽉 차는 더 큰 버튼으로 강조(ttk 대신 tk.Button을
+        # 써야 Windows에서도 배경색이 실제로 적용됨).
+        _emph_font = ("Malgun Gothic", 10, "bold")
+
+        batch_set_btn = tk.Button(
+            btn_container, text="Batch Set", command=self.open_batch_set_dialog,
+            font=_emph_font, bg="#2e7d32", fg="white",
+            activebackground="#256428", activeforeground="white",
+            relief="raised", padx=10,
+        )
+        batch_set_btn.pack(side="left", padx=5, pady=2)
+
+        batch_queue_btn = tk.Button(
+            btn_container, text="Batch Queue", command=self.open_batch_queue_dialog,
+            font=_emph_font, bg="#2e7d32", fg="white",
+            activebackground="#256428", activeforeground="white",
+            relief="raised", padx=10,
+        )
+        batch_queue_btn.pack(side="left", padx=5, pady=2)
+
         ttk.Button(
             btn_container, text="Template Save", command=self.save_template
         ).pack(side="left", padx=5)
         ttk.Button(
             btn_container, text="Template Load", command=self.load_template
         ).pack(side="left", padx=5)
-        ttk.Button(
-            btn_container, text="3D Plot", command=self.open_3d_plot_dialog
-        ).pack(side="left", padx=5)
+
+        # [수정] "좌우로 늘리지 말고 줄 중앙에 배치" - fill+expand로 버튼 자체가
+        # 늘어졌던 걸, 양옆에 빈 스페이서(expand=True)를 둬서 버튼 크기는
+        # 그대로 두고 남는 공간의 중앙에 오도록 바꿈(세로 크기는 font/pady로
+        # 키운 것 그대로 유지).
+        tk.Frame(btn_container).pack(side="left", fill="x", expand=True)
+        plot3d_btn = tk.Button(
+            btn_container, text="3D-PLOT", command=self.open_3d_plot_dialog,
+            font=("Malgun Gothic", 11, "bold"), bg="#1565c0", fg="white",
+            activebackground="#0d4c96", activeforeground="white",
+            relief="raised", padx=14, pady=4,
+        )
+        plot3d_btn.pack(side="left")
+        tk.Frame(btn_container).pack(side="left", fill="x", expand=True)
 
         self.var_frame = ttk.LabelFrame(self.root, text="Available Variables Selection")
         self.var_frame.pack(fill="x", expand=False, padx=10, pady=0)
@@ -421,12 +448,8 @@ class CathPlotGUI:
             )
         )
 
-        ttk.Label(legend1_row, text="Box Thick:").pack(side="left", padx=(3, 1))
-        ttk.Combobox(legend1_row, textvariable=self.legend_thick_var, values=thick_list, width=3, state="readonly").pack(side="left", padx=2)
-
-        marker_settings_btn = ttk.Button(legend1_row, text="Marker")
-        marker_settings_btn.pack(side="left", padx=(6, 1))
-        marker_settings_btn.configure(command=self._open_marker_settings_popup)
+        # [수정] "입력 줄들이 너무 길다" - Box Thick/Font/Marker를 아래
+        # frame_row2(원래 Axis Frame Auto 있던 자리)로 옮겨서 이 줄을 줄임.
 
         # --- Legend2 줄 (X Axis Title 줄 우측, 보조 legend box, 기본 꺼짐) ---
         # Box Thick는 Legend1/2가 같은 값을 공유함 (따로 둘 필요 없어서 Box Thick2는 없앰)
@@ -468,13 +491,8 @@ class CathPlotGUI:
             )
         )
 
-        ttk.Label(legend2_row, text="Font:").pack(side="left", padx=(6, 1))
-        legend_font_combo = ttk.Combobox(legend2_row, textvariable=self.legend_font_var, values=font_list, width=12, state="readonly")
-        legend_font_combo.pack(side="left", padx=1)
-        self._disable_combobox_wheel(legend_font_combo)
-        legend_size_combo = ttk.Combobox(legend2_row, textvariable=self.legend_size_var, values=size_list, width=2, state="readonly")
-        legend_size_combo.pack(side="left", padx=1)
-        self._disable_combobox_wheel(legend_size_combo)
+        # [수정] "입력 줄들이 너무 길다" - Font(legend_font_var/legend_size_var)를
+        # 아래 frame_row2(원래 Axis Frame Auto 있던 자리)로 옮겨서 이 줄을 줄임.
 
         # Row 1
         ttk.Label(self.plot_frame, text="X Axis Title").grid(row=1, column=0, padx=5, pady=0, sticky="w")
@@ -487,6 +505,41 @@ class CathPlotGUI:
         ttk.Combobox(x_font_frame, textvariable=self.xlabel_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
         ttk.Combobox(x_font_frame, textvariable=self.xlabel_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
 
+        # [수정] "입력 줄들이 너무 길다" - Axis Frame Auto 줄(원래 row=2)을
+        # Plot File Name 자리(row=3)로 내리고, Plot File Name은 같은 줄
+        # 우측으로 옮김. 비어진 row=2 자리엔 legend1/2 줄에서 뺀 Box Thick/
+        # Font/Marker를 옮겨와 배치한다(각 줄 길이를 줄이기 위한 재배치).
+        row2_f = ttk.Frame(self.plot_frame)
+        row2_f.grid(row=2, column=3, columnspan=3, sticky="we", padx=3, pady=0)
+
+        ttk.Label(row2_f, text="Box Thick:").pack(side="left", padx=(3, 1))
+        ttk.Combobox(row2_f, textvariable=self.legend_thick_var, values=thick_list, width=3, state="readonly").pack(side="left", padx=2)
+
+        ttk.Label(row2_f, text="Font:").pack(side="left", padx=(8, 1))
+        legend_font_combo = ttk.Combobox(row2_f, textvariable=self.legend_font_var, values=font_list, width=12, state="readonly")
+        legend_font_combo.pack(side="left", padx=1)
+        self._disable_combobox_wheel(legend_font_combo)
+        legend_size_combo = ttk.Combobox(row2_f, textvariable=self.legend_size_var, values=size_list, width=2, state="readonly")
+        legend_size_combo.pack(side="left", padx=1)
+        self._disable_combobox_wheel(legend_size_combo)
+
+        # Marker는 줄 우측 끝에 정렬(끝 맞춤)
+        marker_settings_btn = ttk.Button(row2_f, text="Marker")
+        marker_settings_btn.pack(side="right", padx=(1, 3))
+        marker_settings_btn.configure(command=self._open_marker_settings_popup)
+
+        # Row 2
+        ttk.Label(self.plot_frame, text="Y Left Title (Y1)").grid(row=2, column=0, padx=5, pady=0, sticky="w")
+        self.ylabel_entry = ttk.Entry(self.plot_frame, textvariable=self.ylabel_var, width=30)
+        self.ylabel_entry.grid(row=2, column=1, padx=5, pady=0, sticky="w")
+        self.ylabel_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.ylabel_entry))
+
+        # Row 3
+        ttk.Label(self.plot_frame, text="Y Right Title (Y2)").grid(row=3, column=0, padx=5, pady=0, sticky="w")
+        self.y2label_entry = ttk.Entry(self.plot_frame, textvariable=self.y2label_var, width=30)
+        self.y2label_entry.grid(row=3, column=1, padx=5, pady=0, sticky="w")
+        self.y2label_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.y2label_entry))
+
         # [수정] 기본값을 Auto로 변경 - 화면에서는 항상 검증된 scale=1.0 기준으로
         # 뜨게 하고, 인쇄/저장 시 특정 물리 크기가 필요할 때만 꺼서 W/H를 쓰도록 함
         self.frame_auto_var = tk.BooleanVar(value=True)
@@ -494,8 +547,11 @@ class CathPlotGUI:
         self.frame_height_var = tk.StringVar(value="8")
         self.frame_unit_var = tk.StringVar(value="cm")
 
-        frame_size_f = ttk.Frame(self.plot_frame)
-        frame_size_f.grid(row=2, column=3, columnspan=3, sticky="w", padx=3, pady=0)
+        row3_f = ttk.Frame(self.plot_frame)
+        row3_f.grid(row=3, column=3, columnspan=3, sticky="we", padx=3, pady=0)
+
+        frame_size_f = ttk.Frame(row3_f)
+        frame_size_f.pack(side="left")
 
         ttk.Checkbutton(
             frame_size_f, text="Axis Frame Auto", variable=self.frame_auto_var,
@@ -517,22 +573,14 @@ class CathPlotGUI:
         self.frame_unit_combo.pack(side="left", padx=(6, 0))
         self.toggle_frame_size_state()
 
-        # Row 2
-        ttk.Label(self.plot_frame, text="Y Left Title (Y1)").grid(row=2, column=0, padx=5, pady=0, sticky="w")
-        self.ylabel_entry = ttk.Entry(self.plot_frame, textvariable=self.ylabel_var, width=30)
-        self.ylabel_entry.grid(row=2, column=1, padx=5, pady=0, sticky="w")
-        self.ylabel_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.ylabel_entry))
-
-        # Row 3
-        ttk.Label(self.plot_frame, text="Y Right Title (Y2)").grid(row=3, column=0, padx=5, pady=0, sticky="w")
-        self.y2label_entry = ttk.Entry(self.plot_frame, textvariable=self.y2label_var, width=30)
-        self.y2label_entry.grid(row=3, column=1, padx=5, pady=0, sticky="w")
-        self.y2label_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.y2label_entry))
-
+        # [수정] "Plot File Name은 우측 끝으로(right align)" - 같은 줄(row3_f)
+        # 안에서 Axis Frame Auto 묶음 오른쪽에 배치.
+        filename_f = ttk.Frame(row3_f)
+        filename_f.pack(side="right", padx=(10, 0))
         self.filename_var = tk.StringVar(value="CathPlot")
-        ttk.Label(self.plot_frame, text="Plot File Name").grid(row=3, column=3, padx=(3, 2), pady=0, sticky="w")
-        self.filename_entry = ttk.Entry(self.plot_frame, textvariable=self.filename_var, width=20)
-        self.filename_entry.grid(row=3, column=3, padx=(115, 5), pady=0, sticky="w")
+        ttk.Label(filename_f, text="Plot File Name").pack(side="left", padx=(0, 3))
+        self.filename_entry = ttk.Entry(filename_f, textvariable=self.filename_var, width=20)
+        self.filename_entry.pack(side="left")
 
         # Row 4
         self.xlog_var = tk.BooleanVar(value=False)
