@@ -3535,13 +3535,21 @@ class GnuplotGenerator:
         # 작게(간격을 더 좁게) 잡히도록 한다.
         _min_left_tic_in = max(1, max_y1_chars) * _tick_char_width_in_mp + 0.03
         _min_right_tic_in = max(1, max_y2_chars) * _tick_char_width_in_mp + 0.03
+        # [수정 - 심각한 버그 발견] "EMF만 Multi Print/Batch Set에서 y1/y2 title이
+        # 완전히 사라짐" - EMF 바이너리를 직접 파싱해서 확인: offset 문제가
+        # 아니라(offset=0으로도 재현) margin_left/right 자체가 부족하면 EMF
+        # 렌더러가 (cairo처럼 넘치게 그리는 게 아니라) title을 통째로 그리지
+        # 않고 누락시킴 - 실측(같은 조건에서 margin_left를 fraction 0.1645->
+        # 0.35로 강제로 키우자 title이 다시 나타남)으로 확인. EMF만 별도로
+        # 여백을 넉넉히(2배) 더 준다.
+        _emf_margin_boost = 2.0 if (fmt or "").lower() == "emf" else 1.0
         if any((p.ylabel or "").strip() for p in plots):
             _max_ylabel_size = max((float(p.ylabel_size or 11) for p in plots if (p.ylabel or "").strip()), default=11.0)
-            _need_left_in = 0.5 * _floor_scale * (_max_ylabel_size / 11.0) + (0.2 if _any_y1_2line else 0) + _min_left_tic_in
+            _need_left_in = (0.5 * _floor_scale * (_max_ylabel_size / 11.0) + (0.2 if _any_y1_2line else 0) + _min_left_tic_in) * _emf_margin_boost
             margin_left = max(margin_left, _need_left_in)
         if any_y2 and any_y2label:
             _max_y2label_size = max((float(p.y2label_size or 11) for p in plots if (getattr(p, "y2label", "") or "").strip()), default=11.0)
-            _need_right_in = 0.5 * _floor_scale * (_max_y2label_size / 11.0) + (0.2 if _any_y2_2line else 0) + _min_right_tic_in
+            _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + (0.2 if _any_y2_2line else 0) + _min_right_tic_in) * _emf_margin_boost
             margin_right = max(margin_right, _need_right_in)
 
         # [수정 - 개념 정정] "Frame(Axis) 크기는 좌표축(axis) 자체의 크기임 -
@@ -3729,6 +3737,16 @@ class GnuplotGenerator:
             # [수정] "2/p는 legend box 좌우길이를 1자 정도 키우고, 4/p, 6/p는
             # 2자 줄이고" - print 기준 여유분(0.7자)에서 레이아웃별로 가감한다.
             _legend_w_extra = (0.7 + 1.0) if total_cells <= 2 else (0.7 - 2.0)
+            # [수정 - 심각한 버그 발견] "EMF만 y1/y2 title이 사라짐(Multi Print/
+            # Batch Set 등 멀티플롯 경로에서만)" - 실제 EMF 바이너리를 직접
+            # 파싱해서 확인: 원인은 title이 잘못된 위치에 그려진 게 아니라, 이
+            # 호출에 fmt가 전혀 전달되지 않아 _build_plot_commands 안의 모든
+            # fmt 분기(_is_emf, cairo dash 부스트, 포맷별 legend/tic 보정 등)가
+            # 멀티플롯에서는 늘 fmt=None(일반 분기)으로 동작하고 있었음 - EMF
+            # 전용 offset(-3/3)도 적용이 안 돼 cairo용 비율식이 EMF에 잘못
+            # 쓰이면서 (margin이 EMF의 실측값과 달라) title이 캔버스 밖으로
+            # 밀려 사라진 것. fmt를 그대로 전달해서 단일 plot(create_script)과
+            # 동일한 포맷별 분기가 항상 적용되게 한다.
             self._build_plot_commands(
                 plotdef, lines, is_multiplot=True, panel_scale=font_panel_scale,
                 annotations=getattr(plotdef, "annotations", None),
@@ -3736,6 +3754,7 @@ class GnuplotGenerator:
                 circles=getattr(plotdef, "circles", None),
                 axis_w_in=axis_right_in - axis_left_in,
                 axis_h_in=axis_top_in - axis_bottom_in,
+                fmt=fmt,
                 legend_scale_boost=_legend_boost,
                 legend_width_extra_chars=_legend_w_extra,
             )
