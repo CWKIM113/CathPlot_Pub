@@ -2499,8 +2499,15 @@ class GnuplotGenerator:
             _svg_2line_div = 1.6
             if ylabel_lines >= 2:
                 need_left_in /= _svg_2line_div
+                # [수정] "svg 2줄은 title이 약간 잘림 - 좌측 마진을 1자 더" -
+                # 위 1.6배 축소가 살짝 과했던 것으로 재확인 - tic 문자폭
+                # 1개분(tick_char_width_in)을 다시 더한다.
+                need_left_in += 1.0 * tick_char_width_in
             if y2label_lines >= 2:
                 need_right_in /= _svg_2line_div
+                # [수정] "svg 2줄은 우측 마진을 0.5글자 더" - 왼쪽과 같은
+                # 이유, 우측은 절반(0.5자)만 더한다.
+                need_right_in += 0.5 * tick_char_width_in
         else:
             # [수정] "2줄 PNG는 plot 좌우 마진을 지금의 반으로" - PNG는 PDF를
             # 그대로 래스터화하므로(위 "png" 분기는 PyMuPDF가 없을 때만 쓰이는
@@ -2517,6 +2524,10 @@ class GnuplotGenerator:
                 need_left_in /= _png_2line_div
             if y2label_lines >= 2:
                 need_right_in /= _png_2line_div
+                # [수정] "png 2줄은 plot 우측 마진을 1.5글자 더 키워요(반잘림)" -
+                # 반으로 줄인 게 y2쪽엔 과했던 것으로 재확인 - tic 문자폭
+                # 1.5개분(tick_char_width_in)을 다시 더한다.
+                need_right_in += 1.5 * tick_char_width_in
 
         return need_left_in, need_right_in, need_top_in, need_bottom_in
 
