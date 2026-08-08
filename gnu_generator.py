@@ -3462,11 +3462,14 @@ class GnuplotGenerator:
         _any_x_2line = any("|" in (getattr(p, "xlabel", "") or "") for p in plots)
         if _y1fmt_label == "Scientific": extra_left_margin_in += 0.35
         elif _y1fmt_label == "Power10": extra_left_margin_in += 0.15
-        if _any_y1_2line: extra_left_margin_in += 0.20  # Y1 title 2줄 이상
+        # [수정] "2줄 title 결과 보니 좌우 마진이 제법 크다 - 줄이고" - 0.20in은
+        # 과했던 것으로 보여 절반(0.10in)으로 축소. 그래도 용지에 안 맞으면
+        # 기존 shrink-to-fit이 그대로 처리함.
+        if _any_y1_2line: extra_left_margin_in += 0.10  # Y1 title 2줄 이상
         if any_y2:
             if _y2fmt_label == "Scientific": extra_right_margin_in += 0.35
             elif _y2fmt_label == "Power10": extra_right_margin_in += 0.15
-            if _any_y2_2line: extra_right_margin_in += 0.20  # Y2 title 2줄 이상
+            if _any_y2_2line: extra_right_margin_in += 0.10  # Y2 title 2줄 이상
         extra_bottom_margin_in = 0.0
         if _xfmt_label == "Scientific": extra_bottom_margin_in = 0.12
         elif _xfmt_label == "Power10": extra_bottom_margin_in = 0.06
@@ -3545,11 +3548,11 @@ class GnuplotGenerator:
         _emf_margin_boost = 2.0 if (fmt or "").lower() == "emf" else 1.0
         if any((p.ylabel or "").strip() for p in plots):
             _max_ylabel_size = max((float(p.ylabel_size or 11) for p in plots if (p.ylabel or "").strip()), default=11.0)
-            _need_left_in = (0.5 * _floor_scale * (_max_ylabel_size / 11.0) + (0.2 if _any_y1_2line else 0) + _min_left_tic_in) * _emf_margin_boost
+            _need_left_in = (0.5 * _floor_scale * (_max_ylabel_size / 11.0) + (0.1 if _any_y1_2line else 0) + _min_left_tic_in) * _emf_margin_boost
             margin_left = max(margin_left, _need_left_in)
         if any_y2 and any_y2label:
             _max_y2label_size = max((float(p.y2label_size or 11) for p in plots if (getattr(p, "y2label", "") or "").strip()), default=11.0)
-            _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + (0.2 if _any_y2_2line else 0) + _min_right_tic_in) * _emf_margin_boost
+            _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + (0.1 if _any_y2_2line else 0) + _min_right_tic_in) * _emf_margin_boost
             margin_right = max(margin_right, _need_right_in)
 
         # [수정 - 개념 정정] "Frame(Axis) 크기는 좌표축(axis) 자체의 크기임 -
