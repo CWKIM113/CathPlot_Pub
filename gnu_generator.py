@@ -766,7 +766,10 @@ class GnuplotGenerator:
         # 그리는 것으로 보여, cairo 계열(pdf/png/jpg - 실제로는 다 pdf 경로)에만
         # 약간의 보정 배율을 추가로 곱한다.
         if is_print_mode and (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
-            _legend_font_extra *= 1.1
+            # [수정] "1.1배 했는데 여전히 똑같아 보임" - 코드 확인 결과 정상
+            # 적용되고 있었음(fmt='pdf' 경로로 확실히 들어옴) - 10% 차이가
+            # 육안으로 구분하기엔 작았던 것으로 보여 1.2배로 상향.
+            _legend_font_extra *= 1.2
         font_pt = (legend_size if legend_size else 9) * f_scale * _legend_font_extra
         # [주의] pngcairo가 pdfcairo보다 legend 글자를 아주 약간 더 크게 그리는
         # 경향이 실측됐지만(동일 스크립트, 터미널만 다르게 비교), 보정 계수가
@@ -851,8 +854,12 @@ class GnuplotGenerator:
         # 빼는 보정(아래) 적용. "screen_v4는 개선됐지만 대문자 1자 정도 더
         # 줄여달라(사무실 PC에서는 더 크게 보임)" 후속 피드백으로 한 번 더
         # -1.0 축소.
+        # [수정] "사무실 큰 화면에서는 legend box 마진이 더 커서 title과의
+        # 간격이 늘어남 - 1글자(10pt) 더 줄여줘요" - 이전에도 같은 이유(사무실
+        # PC 화면 DPI 차이)로 한 번 줄인 적 있음(0.5->-0.5) - 같은 폭(-1.0)
+        # 만큼 추가로 축소.
         _legend_tuning = (_FORMAT_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0, "sample_mult": 1.0, "text_corr": 1.0})
-                          if is_print_mode else {"row_mult": 1.2, "box_chars": -0.5, "sample_mult": 1.0, "text_corr": 1.0})
+                          if is_print_mode else {"row_mult": 1.2, "box_chars": -1.5, "sample_mult": 1.0, "text_corr": 1.0})
         ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * _legend_tuning["row_mult"]
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
