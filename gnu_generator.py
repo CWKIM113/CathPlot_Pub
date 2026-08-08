@@ -1173,12 +1173,47 @@ class GnuplotGenerator:
                 f"curve 개수를 줄이거나 Frame 크기를 키워보세요."
             )
 
+        # [수정 - 버그, 실제 사용자 docx 재현으로 발견] "M-P 2/p Landscape에서
+        # legend box가 왼쪽 axis 경계를 넘어 tic 숫자/Y1 title과 겹침" - 원인
+        # 확인: box_w(axis 폭 대비 legend 필요 폭 비율)가 큰 폰트(예:
+        # multiplot에서 칸이 커서 font_panel_scale이 큰 경우) + 좁은 축이
+        # 겹치면 1.0을 훌쩍 넘을 수 있음(실측: 1.56, 156%) - 위 경고는 이
+        # 사실을 알려주기만 할 뿐 실제 렌더링 크기는 그대로 안 잘라서, box가
+        # anchor(ax) 기준 반대쪽으로 axis 밖까지 밀려나가 tic 숫자 자리를
+        # 침범했음. anchor 위치 기준으로 axis 경계(graph 0~1)를 넘지 않도록
+        # box_w 자체를 축소한다(경고는 위에서 이미 실제 필요 크기 기준으로
+        # 떴으므로 그대로 두고, 그리기에만 안전한 값을 쓴다).
+        if "right" in corner:
+            box_w = min(box_w, max(ax - 0.02, 0.3))
+        elif "left" in corner:
+            box_w = min(box_w, max(1.0 - ax - 0.02, 0.3))
+        else:
+            box_w = min(box_w, max(2 * min(ax, 1.0 - ax) - 0.04, 0.3))
+
         if "right" in corner:
             box_right, box_left = ax, ax - box_w
         elif "left" in corner:
             box_left, box_right = ax, ax + box_w
         else:
             box_left, box_right = ax - box_w / 2, ax + box_w / 2
+
+        # [수정 - 버그] 위 box_w와 같은 이유로 box_h(세로)도 axis 경계를
+        # 넘지 않도록 clamp한다(가로만 넘치는 경우가 대부분이었지만 방어적으로).
+        # box_h를 줄이면 그 안의 줄 간격(ROW_H/ROW_MARGIN)도 같이 다시
+        # 나눠야 실제로 그 안에 고르게 들어간다(안 그러면 clamp 전 크기
+        # 기준으로 배치된 줄들이 줄어든 box 밖으로 삐져나옴) - box_h_override
+        # 분기와 동일한 방식으로 재계산한다.
+        _box_h_before_clamp = box_h
+        if "top" in corner:
+            box_h = min(box_h, max(ay - 0.02, 0.2))
+        elif "bottom" in corner:
+            box_h = min(box_h, max(1.0 - ay - 0.02, 0.2))
+        else:
+            box_h = min(box_h, max(2 * min(ay, 1.0 - ay) - 0.04, 0.2))
+        if box_h < _box_h_before_clamp:
+            n_rows = max(len(curves), 1)
+            ROW_H = box_h / (n_rows + 2 * _row_margin_ratio)
+            ROW_MARGIN = _row_margin_ratio * ROW_H
 
         if "top" in corner:
             box_top, box_bottom = ay, ay - box_h
