@@ -192,8 +192,11 @@ DASH_PATTERNS = {
 # 단계에서 작은 dash 세그먼트가 뭉개지는 것으로 보임. cairo 계열(pdf/png/jpg)
 # 에만 dashtype 숫자를 키워 세그먼트를 더 굵게(살아남게) 만든다.
 _CAIRO_DASH_BOOST = 1.75  # 요청한 "1.5~2배" 범위의 중간값
-_CAIRO_DASH_BOOST_THRESHOLD = 2.0  # 이 값보다 작은 세그먼트가 있는 패턴만 대상("dash"처럼
-                                    # 세그먼트가 이미 충분히 긴 패턴은 그대로 둔다)
+# [수정 - 반영 안 됐던 것 재확인] "PNG legend 내 점선이 너무 짧다, 늘려달라" -
+# 처음엔 "dash"(14,3.5)는 세그먼트가 이미 길어서 괜찮을 거라 보고 최소
+# 세그먼트<2pt인 패턴("dot"/"dashdot"/"dashdotdot")에만 적용했는데, 실제
+# 화면(legend의 "dash" 스타일)으로 재확인하니 그것도 짧다는 피드백 - 문턱
+# 없이 cairo 계열 전체 dashtype에 그대로 적용한다.
 def _dash_pattern_for_fmt(linestyle, fmt):
     base = DASH_PATTERNS.get(linestyle)
     if base is None:
@@ -201,12 +204,9 @@ def _dash_pattern_for_fmt(linestyle, fmt):
     if (fmt or "").lower() not in ("pdf", "png", "jpg", "jpeg"):
         return base
     try:
-        nums = [float(v.strip()) for v in base.split(",")]
+        nums = [float(v.strip()) * _CAIRO_DASH_BOOST for v in base.split(",")]
     except ValueError:
         return base
-    if min(nums) >= _CAIRO_DASH_BOOST_THRESHOLD:
-        return base
-    nums = [v * _CAIRO_DASH_BOOST for v in nums]
     return ", ".join(f"{v:.3g}" for v in nums)
 
 # Legend 샘플선 위에 마커를 표시할 때 쓰는 유니코드 기호 (pointtype 번호 -> 기호)
@@ -1775,7 +1775,12 @@ class GnuplotGenerator:
             # 필요.
             _ylabel_offset = 0.5
         elif _is_emf:
-            _ylabel_offset = 8
+            # [수정 - 버그, 실제 out111.dat로 재현] "EMF에서 y1 title이 사라짐/
+            # curve에 겹침" - 실제 데이터로 직접 sweep(-15~5)해서 확인: 기존
+            # 값(8)은 커브 한복판까지 밀려 들어와 있었고, -4~-1 구간에서는
+            # border 왼쪽 여백에 깨끗이 위치함(그 구간 내내 안정적) - 여유
+            # 있게 -3으로 설정.
+            _ylabel_offset = -3
         else:
             _ylabel_offset = 0.88 - 1.119 * (ylabel_size / _term_font_pt_ref)
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
