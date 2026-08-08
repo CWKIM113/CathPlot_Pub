@@ -733,6 +733,14 @@ class GnuplotGenerator:
         # (9pt 기준 * 1.60 * 0.7 ≈ 10.1pt로 요청하신 범위에 맞춤). 화면(screen)은
         # 이 2배 확대 대상이 아니었으므로 손대지 않음.
         _legend_font_extra = 0.7 if is_print_mode else 1.0
+        # [수정] "Legend Font: PNG 등은 약간 작아 보임, EMF/SVG는 오케이" - EMF는
+        # f_scale 자체가 이미 0.75 축소돼 있고 SVG는 축소가 없는데도(즉 PDF/PNG와
+        # font_pt 계산이 같은데도) SVG는 괜찮고 PDF/PNG(cairo 렌더러)만 작다는
+        # 피드백 - font_pt 수식이 아니라 cairo 렌더러 자체가 같은 pt를 더 작게
+        # 그리는 것으로 보여, cairo 계열(pdf/png/jpg - 실제로는 다 pdf 경로)에만
+        # 약간의 보정 배율을 추가로 곱한다.
+        if is_print_mode and (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
+            _legend_font_extra *= 1.1
         font_pt = (legend_size if legend_size else 9) * f_scale * _legend_font_extra
         # [주의] pngcairo가 pdfcairo보다 legend 글자를 아주 약간 더 크게 그리는
         # 경향이 실측됐지만(동일 스크립트, 터미널만 다르게 비교), 보정 계수가
@@ -791,13 +799,16 @@ class GnuplotGenerator:
         # "SVG는 2자 줄일 것". (PNG는 이제 PDF 래스터화 경로를 쓰므로 실제로는
         # "pdf" 항목이 적용되지만, PyMuPDF 미탑재 등으로 레거시 경로로 빠질 때를
         # 대비해 png 항목도 함께 조정해 둔다.)
+        # [수정] 실제 GUI Save 재확인 추가 피드백 - "PNG는 1글자, EMF 0.5글자,
+        # SVG는 3글자 폭을 추가로 감소", "SVG는 legend 내 curve 간 아래위
+        # 간격을 0.8배로 축소".
         _FORMAT_TUNING = {
-            "png": {"row_mult": 2.0,           "box_chars": 15.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "pdf": {"row_mult": 2.0 * 0.5,      "box_chars": 2.5, "sample_mult": (2/3)**2, "text_corr": 2 / 3},
-            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": -1.75, "sample_mult": (2 / 3) * 0.8, "text_corr": 1.0},
+            "png": {"row_mult": 2.0,           "box_chars": 14.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "pdf": {"row_mult": 2.0 * 0.5,      "box_chars": 1.5, "sample_mult": (2/3)**2, "text_corr": 2 / 3},
+            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": -2.25, "sample_mult": (2 / 3) * 0.8, "text_corr": 1.0},
             "jpg": {"row_mult": 2.0 * (2 / 3),  "box_chars": 1.5, "sample_mult": 2 / 3,   "text_corr": 1.0},
             "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": 1.5, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "svg": {"row_mult": 2.0 * (2 / 3),  "box_chars": -2.0, "sample_mult": 0.5,     "text_corr": 1.0},
+            "svg": {"row_mult": 2.0 * (2 / 3) * 0.8, "box_chars": -5.0, "sample_mult": 0.5, "text_corr": 1.0},
         }
         # [수정 - 버그] "화면(screen)은 건드리지 말라고 했는데 왜 바뀌었나" -
         # 실측 확인 결과 screen의 row_mult=1.0(폰트 크기와 정확히 같은 줄
@@ -1753,7 +1764,10 @@ class GnuplotGenerator:
         _is_emf = (fmt or "").lower() == "emf"
         _term_font_pt_ref = max(int(round(11 * (panel_scale or 1.0))), 8)
         if _is_screen:
-            _ylabel_offset = 3
+            # [수정] "screen plot도 y1-title을 10pt 좌측으로" - print 포맷에서
+            # 실측한 1칸≈4.04pt 비율을 그대로 적용(화면도 같은 기본폰트(11)를
+            # 기준으로 offset 단위를 잡으므로 근사치로 사용) - 10pt ≈ 2.5칸.
+            _ylabel_offset = 3 + 2.5
         elif _is_emf:
             _ylabel_offset = 8
         else:
@@ -1791,6 +1805,10 @@ class GnuplotGenerator:
                 # [수정 - 버그] Y1과 같은 이유(위 y1 EMF 분기 주석 참고) - EMF는
                 # 비율 공식을 적용하지 않고 기존 검증된 고정값(3) 유지.
                 _y2label_offset = 3
+            elif (fmt or "").lower() == "svg":
+                # [수정] "SVG는 y2 title 1글자 폭을 줄일 것" - 공통 비율식보다
+                # SVG만 1칸 더 타이트하게.
+                _y2label_offset = 0.5 * (4.14 + 1.356 * (y2label_size / _term_font_pt_ref)) - 1.0
             else:
                 _y2label_offset = 0.5 * (4.14 + 1.356 * (y2label_size / _term_font_pt_ref))
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
