@@ -1743,35 +1743,38 @@ class GnuplotGenerator:
         # (EMF의 0.75 축소도 ylabel_size 자체에 이미 반영돼 있어 별도 분기 불필요,
         # panel_scale 배율도 비율이라 자동으로 상쇄됨)에서도 항상 비슷한 여유가
         # 남게 됨. 화면(interactive)은 폰트를 키운 적이 없어 기존 값 그대로 둠.
-        # [수정 - 버그] "위 offset 공식이 tic 겹침은 없앴지만, 이번엔 title이
-        # 오히려 axis frame(테두리) 안쪽으로 들어가 버림" - 실측(PyMuPDF로
-        # 실제 axis border 사각형의 x0과 title의 x0을 직접 비교)으로 확인:
-        # tic 숫자 우측 끝(예: 122.6pt)과 axis border(예: 126.6pt) 사이의
-        # 실제 여유 공간은 폭 4pt 정도로 고정(Auto 모드에서는 border 위치
-        # 자체가 폰트 크기와 무관하게 고정됨 - 실측 확인) - 위 공식(절편 6.0)은
-        # 그 좁은 창을 넘어서 border 안쪽까지 밀어버렸음. tic 숫자와 border의
-        # 정중앙에 오도록(양쪽에 비슷한 여유) offset~size 조합을 다시 실측해서
-        # (size=11→offset≈6.2, size=36→offset≈11.2) 절편/기울기를 재계산함.
-        # [수정 - 버그] EMF만 위 비율 공식을 그대로 적용하면 오히려 더 나쁜
-        # 결과가 나옴 - 실측(offset을 -10~40까지 넓게 sweep)으로 확인: EMF(GDI
-        # 네이티브 렌더러)는 offset 1칸당 실제 이동 거리가 PDF/PNG(cairo)와
-        # 전혀 다르고(캔버스/마진 구성에 따라서도 또 달라짐), 같은 비율식을
-        # 쓰면 어떤 경우엔 border 안쪽까지 밀려 들어감(직접 렌더링으로 확인).
-        # EMF는 이번 세션 이전부터 검증돼 있던 값(Y1=8, Y2=3, 고정)을 그대로
-        # 유지하고, PDF/PNG/JPG/SVG(모두 같은 cairo 계열이라 위 실측이 그대로
-        # 적용됨)에만 새 비율 공식을 쓴다.
+        # [수정 - 근본 오류 발견] "실제 GUI로 저장한 4-curve+Y2 그림(out111)에서
+        # title이 커브 한복판까지 밀려 들어와 있음" - 실측(PyMuPDF, 실제
+        # out111.dat/4-curve 조합으로 재현)으로 확인: 위에서 목표로 삼았던
+        # "tic 숫자 우측 끝 ~ axis border 사이(폭 4pt)"는 틀린 목표였음 - 그
+        # 좁은 틈에 라벨을 끼워 넣으려 했던 것 자체가 문제로, 라벨 자신의
+        # 두께(폰트 크기에 비례, 예: size=11→약 15pt)가 그 틈(4pt)보다 항상
+        # 커서 라벨 오른쪽 절반이 border 안쪽(plot 영역)까지 넘어갈 수밖에
+        # 없었음. 원래 있어야 할 자리는 tic 숫자보다도 더 왼쪽(캔버스
+        # 왼쪽 끝~tic 숫자 사이의 빈 여백)이라는 걸 재확인 - tic 숫자 "좌측"
+        # 끝과 라벨 "우측" 끝 사이 간격을 직접 실측(offset을 -4~2로 바꿔가며
+        # 비교)해서 다시 절편/기울기를 구함(size=11→offset≈-0.85,
+        # size=36→offset≈-4.92 에서 간격 4pt로 균일). EMF는 별도 검증된
+        # 값(Y1=8, Y2=3) 그대로 유지(포맷마다 offset 1칸당 실제 거리가
+        # 달라 이 공식을 적용하면 안 됨 - 위에서 확인됨).
         _is_screen = (fmt or "").lower() == "interactive"
         _is_emf = (fmt or "").lower() == "emf"
         _term_font_pt_ref = max(int(round(11 * (panel_scale or 1.0))), 8)
         if _is_screen:
-            # [수정] "screen plot도 y1-title을 10pt 좌측으로" - print 포맷에서
-            # 실측한 1칸≈4.04pt 비율을 그대로 적용(화면도 같은 기본폰트(11)를
-            # 기준으로 offset 단위를 잡으므로 근사치로 사용) - 10pt ≈ 2.5칸.
-            _ylabel_offset = 3 + 2.5
+            # [수정 - 되돌림] "screen plot도 y1-title을 10pt 좌측으로" 요청으로
+            # 3->5.5로 올렸었는데, 실제로는 frame 안쪽으로 들어가는 반대
+            # 결과가 나옴(직접 확인) - print 포맷에서 갓 찾은 진짜 원인(Y1은
+            # offset이 커질수록 오히려 tic 쪽/오른쪽으로 이동, 작아질수록
+            # 왼쪽/여유 방향)이 화면에도 똑같이 적용되는 것으로 보임. 화면은
+            # 직접 렌더링해서 측정할 방법이 없어(대화형 창) 정확한 비율식을
+            # 새로 못 구하는 상태라, 일단 이전에 검증됐던 값(3)으로 되돌리고
+            # "왼쪽으로 이동"은 추후 화면에서 직접 몇 가지 값을 비교해보고
+            # 다시 조정한다.
+            _ylabel_offset = 3
         elif _is_emf:
             _ylabel_offset = 8
         else:
-            _ylabel_offset = 4.14 + 1.356 * (ylabel_size / _term_font_pt_ref)
+            _ylabel_offset = 0.88 - 1.119 * (ylabel_size / _term_font_pt_ref)
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
         lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset:.2f},0 {ylabel_enh}')
 
@@ -1791,12 +1794,12 @@ class GnuplotGenerator:
             # 낮춘다(Y1의 offset 인상과는 독립적으로 조정).
             # [수정] "screen에서 y2 title은 tic 숫자와 간격을 조금 줄여줘요" -
             # Y1(3)보다 화면에서는 Y2를 더 타이트하게(2) 별도로 낮춤.
-            # [수정 - 심각한 버그] Y1과 같은 이유(위 y1 offset 주석 참고)로 Print/
-            # Save의 y2label도 고정값(EMF=3, 그 외=Y1과 동일)이 y2label_size가
-            # 커지면 그대로 겹침. Y1과 같은 비율식을 쓰되(포맷별 f_scale 차이는
-            # y2label_size 자체에 이미 반영돼 자동 상쇄), Y2는 자릿수가 보통 더
-            # 적어 Y1보다 여유가 덜 필요하다는 기존 실측(EMF 3/8≈0.4)을 반영해
-            # 절반 비율(0.5x)로 낮춰 적용.
+            # [수정 - 근본 오류 발견] Y1과 같은 원인(위 y1 offset 주석 참고) -
+            # 실측(실제 out111.dat 2-curve+Y2 조합, offset -실측)으로 재확인:
+            # Y2도 "tic 숫자 우측 끝 ~ border 사이"가 아니라 "tic 숫자 우측 끝
+            # ~ 캔버스 우측 끝 사이의 빈 여백"에 자리해야 함(Y1의 좌우 대칭).
+            # size=11→offset≈1.13, size=36→offset≈5.85 에서 간격 4pt로 균일
+            # (Y1과 부호만 반대, 기울기 크기는 비슷 - digit 폭 차이로 살짝 다름).
             if _is_screen:
                 # [수정] "y2는 반글자나 1글자 줄이고" 후속 피드백 - 2에서 1.5로
                 # 한 번 더 축소.
@@ -1808,9 +1811,9 @@ class GnuplotGenerator:
             elif (fmt or "").lower() == "svg":
                 # [수정] "SVG는 y2 title 1글자 폭을 줄일 것" - 공통 비율식보다
                 # SVG만 1칸 더 타이트하게.
-                _y2label_offset = 0.5 * (4.14 + 1.356 * (y2label_size / _term_font_pt_ref)) - 1.0
+                _y2label_offset = (-0.881 + 1.299 * (y2label_size / _term_font_pt_ref)) - 1.0
             else:
-                _y2label_offset = 0.5 * (4.14 + 1.356 * (y2label_size / _term_font_pt_ref))
+                _y2label_offset = -0.881 + 1.299 * (y2label_size / _term_font_pt_ref)
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
             lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset {_y2label_offset:.2f},0 {y2label_enh}')
 
