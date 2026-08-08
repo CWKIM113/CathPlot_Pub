@@ -1761,16 +1761,19 @@ class GnuplotGenerator:
         _is_emf = (fmt or "").lower() == "emf"
         _term_font_pt_ref = max(int(round(11 * (panel_scale or 1.0))), 8)
         if _is_screen:
-            # [수정 - 되돌림] "screen plot도 y1-title을 10pt 좌측으로" 요청으로
-            # 3->5.5로 올렸었는데, 실제로는 frame 안쪽으로 들어가는 반대
-            # 결과가 나옴(직접 확인) - print 포맷에서 갓 찾은 진짜 원인(Y1은
-            # offset이 커질수록 오히려 tic 쪽/오른쪽으로 이동, 작아질수록
-            # 왼쪽/여유 방향)이 화면에도 똑같이 적용되는 것으로 보임. 화면은
-            # 직접 렌더링해서 측정할 방법이 없어(대화형 창) 정확한 비율식을
-            # 새로 못 구하는 상태라, 일단 이전에 검증됐던 값(3)으로 되돌리고
-            # "왼쪽으로 이동"은 추후 화면에서 직접 몇 가지 값을 비교해보고
-            # 다시 조정한다.
-            _ylabel_offset = 3
+            # [수정 - 버그, 사용자 지적으로 재확인] "screen에서 y1 title이 지금
+            # tic 숫자 위에 표시됨 - logic이 이상한 거 아닌지?" - git log로
+            # 어젯밤/오늘 오전 "회귀 수정" 커밋(8658297, offset=3)까지 확인했지만
+            # 그 값도 실측해보니 겹침이었음: interactive는 실제로 렌더링해서
+            # 잴 방법이 없어(대화형 창) pdfcairo를 windows 터미널과 같은 크기
+            # (1000x700px≈10.42x7.29in, 같은 기본폰트 11)로 맞춘 대체 렌더로
+            # 근사 측정한 결과, offset=3에선 label이 tic 숫자 폭 전체를
+            # 덮을 만큼 겹침(gap=-6.1)을 확인 - offset을 낮출수록(0 -> gap
+            # +6.1) 겹침이 사라지는, Print 포맷에서 찾은 것과 같은 방향의
+            # 문제였음. gap≈4가 되는 지점(약 0.5)으로 낮춤. windows 터미널
+            # 자체를 직접 잰 게 아니라 근사치이므로, 실제 화면에서 다시 확인
+            # 필요.
+            _ylabel_offset = 0.5
         elif _is_emf:
             _ylabel_offset = 8
         else:
