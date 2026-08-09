@@ -3508,8 +3508,14 @@ class GnuplotGenerator:
         # 1.0을 다시 둬서 폰트를 고정하고(Manual만 이전처럼 지정 크기에 비례해
         # 커지게 둔다 - single-plot Manual과 같은 방식).
         size_scale = max(min(cell_w_in / _ref_w, cell_h_in / _ref_h), 0.3)
-        if frame_auto:
-            size_scale = min(size_scale, 1.0)
+        if frame_auto and size_scale > 1.0:
+            # [수정 - 재조정] "완전히 고정하면 큰 축에서 폰트가 상대적으로
+            # 작아 보임(1.0 상한 실측 피드백)" - 완전 고정(상한 1.0)과 이전의
+            # 완전 선형(상한 없음, "너무 커짐") 사이 중간값으로, 기준(10x8cm)
+            # 보다 칸이 N배 크면 폰트는 그 절반 배율(√N)만 커지게 한다(예:
+            # 축 4배 -> 폰트 2배). size_scale<=1(칸이 기준보다 작은 경우)은
+            # 그대로 선형 유지(이 조정과 무관, 원래도 문제 없었음).
+            size_scale = size_scale ** 0.5
         font_panel_scale = size_scale
         # [참고] "작은 Manual 칸(예: 8x6cm)에서 legend/여백이 과도하게 커서 실제
         # axis가 쪼그라든다" - 간격(spacing)을 0으로 해봐도 거의 안 바뀌는 것으로
@@ -4007,6 +4013,15 @@ class GnuplotGenerator:
             # [수정] "2/p는 legend box 좌우길이를 1자 정도 키우고, 4/p, 6/p는
             # 2자 줄이고" - print 기준 여유분(0.7자)에서 레이아웃별로 가감한다.
             _legend_w_extra = (0.7 + 1.0) if total_cells <= 2 else (0.7 - 2.0)
+            # [수정] "M-P legend line<->title 마진: EMF는 legend 폰트 기준 2자,
+            # SVG는 5자 더 줄여야 함" - single-plot 쪼(_FORMAT_TUNING의
+            # box_chars)는 이미 검증된 값이라 그대로 두고, multiplot 전용
+            # 추가분(_legend_w_extra)에서만 포맷별로 더 줄인다.
+            _fmt_l3 = (fmt or "").lower()
+            if _fmt_l3 == "emf":
+                _legend_w_extra -= 2.0
+            elif _fmt_l3 == "svg":
+                _legend_w_extra -= 5.0
             # [수정 - 심각한 버그 발견] "EMF만 y1/y2 title이 사라짐(Multi Print/
             # Batch Set 등 멀티플롯 경로에서만)" - 실제 EMF 바이너리를 직접
             # 파싱해서 확인: 원인은 title이 잘못된 위치에 그려진 게 아니라, 이
