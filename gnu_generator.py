@@ -3767,6 +3767,18 @@ class GnuplotGenerator:
         # 2줄 Y2의 2번째 줄이 다시 사라짐(실측) - 1.7배가 전부 정상 출력되는
         # 최소값이라 그대로 확정.
         _emf_margin_boost = 2.0 if (fmt or "").lower() in ("emf", "svg") else 1.0
+        # [수정 - 요청] "1p/2p Port EMF/SVG의 축 가로 폭이 single-plot 대비
+        # 너무 좁음" - 실측(실제 out111.dat+sample.dat 5-curve, EMF 바이너리
+        # rclFrame 직접 측정): 축이 페이지 폭의 57.6%(single-plot 동급은
+        # ~78%) - EMF/SVG 전용 2배 마진 부스트는 작은 칸에서 title 소실을
+        # 막으려고 필요했던 값인데, 1p/2p Auto처럼 칸이 기준(10x8cm)보다 큰
+        # 경우는 절대 공간이 넉넉해서 2배까지는 필요 없음(칸이 작을 때는
+        # font_panel_scale<=1이라 이 블록 자체가 적용 안 돼 기존 소실 방지
+        # 그대로 유지). 다만 실측으로 낮춰본 결과 1.2배는 Y1 rotated title이
+        # 다시 사라짐(EMF 텍스트 레코드로 직접 확인) - 1.4배가 텍스트 소실
+        # 없이 확인된 안전한 최소값(축 폭 57.6%->71.4%로 개선).
+        if frame_auto and font_panel_scale > 1.0:
+            _emf_margin_boost = 1.4
         # [수정 - 심각한 버그] "Multi-plot EMF 2줄 title에서 Y2의 2번째 줄만
         # 통째로 안 보임" - EMF 바이너리로 직접 확인: EMF는 회전된 2줄
         # ylabel/y2label을 "세로로 쌓지 않고 가로로 나란히" 그림(gnuplot EMF
@@ -3976,11 +3988,12 @@ class GnuplotGenerator:
         # margin의 합보다 줄여서 마주보는 두 title이 서로의 여백 쪽으로
         # 조금씩 파고들게 한다. [주의] "큰 쪽만 적용"(작은 쪽 전부 뺌)은
         # 실측 결과 두 title이 실제로 겹침(패널1 Y2 title과 패널2 Y1 title이
-        # 15pt 정도 겹침, PDF 좌표 직접 확인)이 확인돼 그대로는 못 씀 -
-        # 겹치지 않는 안전한 최대치를 실측으로 찾아 절반(0.5배)만 뺀다(1줄/
-        # 2줄 모두 겹침 없음 재확인).
+        # 15pt 정도 겹침, PDF 좌표 직접 확인)이 확인돼 그대로는 못 씀 - 절반
+        # (0.5배)은 EMF 마진 부스트를 2.0->1.4로 낮춘 뒤(축이 넓어짐) 다시
+        # 겹침이 재현돼(실측 확인), 그보다 더 줄여 0.25배로 확정(1줄/2줄
+        # 모두 겹침 없음 재확인).
         if cols > 1:
-            spacing_w_in -= min(margin_left, margin_right) * 0.5
+            spacing_w_in -= min(margin_left, margin_right) * 0.25
 
         grid_w = cell_w_in * cols + spacing_w_in * (cols - 1)
         grid_h = cell_h_in * rows + spacing_h_in * (rows - 1)
@@ -4042,8 +4055,13 @@ class GnuplotGenerator:
             # sqrt 완화가 적용된 것처럼 보이도록 _legend_boost에 보정 계수를
             # 곱해 상쇄한다(margin_scale은 이미 1.0 상한이 있어 축은 그대로,
             # legend만 커졌던 불균형을 없앤다).
+            # [수정 - 재조정] "legend가 지금의 2배는 돼야 적절해 보임" - title 등
+            # 폰트는 완전 고정(1.0)이 아니라 sqrt로 "일부만" 완화됐는데(직전
+            # 커밋), legend는 font_panel_scale로 나눠서 완전히(1.0으로) 고정해
+            # 버려서 title/xlabel보다도 오히려 더 작아졌음(실측 확인) - title과
+            # 같은 sqrt 완화 수준으로 맞춘다(완전히 상쇄하지 않고 절반만).
             if frame_auto and font_panel_scale > 1.0:
-                _legend_boost /= font_panel_scale
+                _legend_boost /= font_panel_scale ** 0.5
             # [수정] "2/p는 legend box 좌우길이를 1자 정도 키우고, 4/p, 6/p는
             # 2자 줄이고" - print 기준 여유분(0.7자)에서 레이아웃별로 가감한다.
             _legend_w_extra = (0.7 + 1.0) if total_cells <= 2 else (0.7 - 2.0)
