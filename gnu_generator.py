@@ -3864,9 +3864,27 @@ class GnuplotGenerator:
         # 있는 부분 - 위 주석 히스토리 참고), 여기 바닥값에만 이 보정을
         # 추가로 곱한다.
         _cairo_fix = CAIRO_FONT_RENDER_FIX if (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg") else 1.0
-        _floor_scale = margin_scale * _cairo_fix if total_cells >= 4 else (
-            font_panel_scale if font_panel_scale <= 1.0 else font_panel_scale ** 0.5
-        )
+        # [수정 - 재조정] "M-P Auto의 title/축 title 폰트를 single-plot과 거의
+        # 동일(완전 고정)하게" 요청으로 실제 title/xlabel/ylabel/y2label
+        # 폰트(_title_f_scale, 위 참고)를 이미 1.0 상당(+cairo 배율)으로
+        # 고정해뒀는데, 이 겹침 방지 바닥값은 여전히 "커지는 방향(칸이 기준
+        # 보다 큰 경우)"에 옛 폰트 크기(sqrt 완화된 값)를 기준으로 여백을
+        # 잡고 있어 실제로 필요한 것보다 여백을 더 크게(=axis를 더 작게)
+        # 잡고 있었음 - title이 이제 커지지 않으므로, "커지는 방향"의
+        # 바닥값도 title과 똑같이 1.0 상당(+cairo 배율)으로 고정한다(axis가
+        # 그만큼 커짐 - "M-P 2p PNG y축이 작게 나옴(마진 있음)" 피드백
+        # 대응). [주의 - 회귀 방지] 4/p·6/p(total_cells>=4)는 칸이 커도
+        # margin_scale 자체에 이미 "칸 수가 많으면 여백을 더 적극적으로
+        # 줄인다"는 0.5배가 들어있는데(위 margin_scale 계산부 참고), 이걸
+        # 무시하고 무조건 _cairo_fix로만 고정하면 4/p·6/p가 1/p·2p와 똑같은
+        # (더 큰) 여백을 갖게 되는 역행이 생김 - 1/p·2p(total_cells<4)만
+        # title과 동일하게 1.0 상당으로 고정하고, 4/p·6/p는 기존 margin_scale
+        # 기반 로직(칸 수에 따른 추가 축소 포함)을 그대로 유지한다.
+        if total_cells >= 4:
+            _floor_scale = margin_scale * _cairo_fix
+        else:
+            _underlying_scale = font_panel_scale / _cairo_fix if _cairo_fix else font_panel_scale
+            _floor_scale = _cairo_fix if _underlying_scale > 1.0 else font_panel_scale
         if any_title:
             _max_title_size = max((float(p.title_size or 14) for p in plots if (p.title or "").strip()), default=14.0)
             _need_top_in = 0.75 * _floor_scale * (_max_title_size / 14.0) * max_title_lines
