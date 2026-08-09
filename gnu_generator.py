@@ -3058,10 +3058,22 @@ class GnuplotGenerator:
         # 왼쪽 - rot_x/rot_z 둘 다 90도 경계를 넘는 횟수의 홀짝(XOR)으로 결정됨,
         # 여러 조합 직접 렌더링해 확인). 그래서 label의 graph-x 위치(0.0 vs 1.0)도
         # 같은 규칙으로 반대쪽 벽을 따라가게 해야 tic 옆에 제대로 붙는다.
-        def _side_bin(a):
-            pos = a - 360.0 * math.floor(a / 360.0)  # 0~360으로 접기(정수 아닌 값도 처리)
-            return int(math.floor(pos / 90.0)) % 2
-        _y_anchor_x = 0.0 if (_side_bin(rot_x) ^ _side_bin(rot_z)) else 1.0
+        # [수정 - 버그] "회전에 따라 title 위치가 확 바뀌는 경우 있음(90/180/270
+        # 근방)" - 위 90도-bin XOR 규칙은 rot_x=60,rot_z=90처럼 실제로 렌더링해
+        # 확인해보니 label이 축 바깥이 아니라 plot 한복판(데이터 위)에 찍히는
+        # 명백한 오류가 있었음(원인: 이 XOR는 "90도 경계를 넘은 횟수의 홀짝"만
+        # 보는 대략적인 근사였을 뿐, 실제로 어느 쪽 벽이 화면에서 바깥(farther
+        # from box center)인지와는 다른 규칙이었음).
+        # 대신 기하학적으로 다시 유도: Y축 변(edge)은 X가 0 또는 1인 두 후보
+        # 위치 중 하나인데, 두 후보의 화면투영 위치를 박스 중심 기준으로 비교하면
+        # "박스 중심에서 더 먼 쪽"이 X_dir·Z_dir(두 축의 화면투영 방향벡터 내적)의
+        # 부호로 정리됨(|Xdir-Zdir| vs |Xdir+Zdir| 비교 -> 내적 부호로 귀결).
+        # X_dir=(cos rz, -R cos rx sin rz), Z_dir=(0, R sin rx)이므로 내적은
+        # -R^2 sin(rx)cos(rx)sin(rz)에 비례 - 내적<0(=X=1이 더 바깥)일 때 anchor=1.
+        # rot_x=60,rot_z=30(기존 정상 확인된 값)과 rot_x=60,rot_z=90(신규 재현/
+        # 수정 확인) 둘 다 렌더링으로 직접 검증함.
+        _dot_xz = -math.sin(_rx_rad) * math.cos(_rx_rad) * math.sin(_rz_rad)
+        _y_anchor_x = 1.0 if _dot_xz < 0 else 0.0
         if ylabel:
             _ylabel_text, _ylabel_enh = self._render_text(ylabel)
             lines.append(f'set label 9001 "{_ylabel_text}" at graph {_y_anchor_x}, graph 0.5, graph 0 '
