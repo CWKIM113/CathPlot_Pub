@@ -282,11 +282,19 @@ class CathPlotGUI:
         btn_container = ttk.Frame(self.root)
         btn_container.pack(fill="x", padx=10, pady=0)
 
-        self.var_symbol_btn = ttk.Button(
-            btn_container, text=chr(937), width=5,
+        # [수정] "오메가 표식을 눈에 확 띄게" - ttk.Button은 Windows 기본
+        # 테마에서 배경색이 잘 안 먹혀서(clam 테마로 바꿔도 사용자 확인상
+        # 눈에 띄는 변화가 없었음), Batch Set/Queue와 동일하게 확실히 색이
+        # 반영되는 tk.Button으로 바꾸고 크고 굵게 키운다.
+        self.var_symbol_btn = tk.Button(
+            btn_container, text=chr(937), width=3,
+            font=("Malgun Gothic", 13, "bold"),
+            bg=self.PALETTE["amber"], fg="white",
+            activebackground=self.PALETTE["amber_dark"], activeforeground="white",
+            relief="raised", bd=2,
             command=self.open_permanent_symbol_window
         )
-        self.var_symbol_btn.pack(side="right", padx=5)
+        self.var_symbol_btn.pack(side="right", padx=5, pady=2)
 
         # [수정] "Batch Set이 많이 쓰일 테니까" - Batch Set <-> Batch Queue 위치 교체
         # (Batch Set을 먼저/왼쪽에), 둘 다 색상+굵은 글씨로 강조. 3D-PLOT은 줄
@@ -825,16 +833,31 @@ class CathPlotGUI:
         self.button_frame = ttk.Frame(self.root)
         self.button_frame.pack(side="bottom", fill="x", padx=10, pady=4)
 
-        ttk.Button(self.button_frame, text="PLOT", style="Plot.Accent.TButton",
-                   command=lambda: self.execute_plot_pipeline("Interactive")).pack(side="left")
-        ttk.Button(self.button_frame, text="PRINT", style="Print.Accent.TButton",
-                   command=self.execute_print_dialog).pack(side="left", padx=5)
-        ttk.Button(self.button_frame, text="SAVE", style="Save.Accent.TButton",
-                   command=self.execute_save_dialog).pack(side="left", padx=5)
-        ttk.Button(self.button_frame, text="Close All Plots", style="Danger.Accent.TButton",
-                   command=self.close_all_plot_windows).pack(side="right", padx=5)
-        ttk.Button(self.button_frame, text="Multi Print/Save", style="Multi.Accent.TButton",
-                   command=self.open_multi_plot_dialog).pack(side="left", padx=15)
+        # [수정 - 재조정] "화면이 눈에 띄게 안 바뀌었다" - ttk.Style의
+        # Accent 스타일들은 Windows 기본 테마/일부 환경에서 배경색이 실제로
+        # 안 반영되는 것으로 사용자 확인됨 - Batch Set/Queue와 똑같이 확실히
+        # 색이 먹는 tk.Button으로 주요 동작 버튼들을 전부 바꾼다.
+        def _accent_btn(parent, text, bg, dark, command, **pack_kw):
+            b = tk.Button(
+                parent, text=text, command=command,
+                font=("Malgun Gothic", 10, "bold"), bg=bg, fg="white",
+                activebackground=dark, activeforeground="white",
+                relief="raised", bd=2, padx=10,
+            )
+            b.pack(**pack_kw)
+            return b
+
+        pal = self.PALETTE
+        _accent_btn(self.button_frame, "PLOT", pal["accent"], pal["accent_dark"],
+                    lambda: self.execute_plot_pipeline("Interactive"), side="left", pady=2)
+        _accent_btn(self.button_frame, "PRINT", pal["accent3"], pal["accent3_dark"],
+                    self.execute_print_dialog, side="left", padx=5, pady=2)
+        _accent_btn(self.button_frame, "SAVE", pal["accent2"], pal["accent2_dark"],
+                    self.execute_save_dialog, side="left", padx=5, pady=2)
+        _accent_btn(self.button_frame, "Close All Plots", pal["danger"], pal["danger_dark"],
+                    self.close_all_plot_windows, side="right", padx=5, pady=2)
+        _accent_btn(self.button_frame, "Multi Print/Save", pal["amber"], pal["amber_dark"],
+                    self.open_multi_plot_dialog, side="left", padx=15, pady=2)
         ttk.Button(self.button_frame, text="Clean Past Plots", command=self.open_delete_dialog).pack(side="right", padx=5)
 
         self.add_file_row()
@@ -3509,8 +3532,14 @@ class CathPlotGUI:
         # open_permanent_symbol_window가 이미 그 로직(떠 있으면 앞으로, 없으면 새로
         # 열기)이라 그대로 재사용. 메인 창 툴바에만 버튼이 있어 3D 팝업을 띄운
         # 상태에서는 손이 안 갈 수 있으니 이 팝업 안에도 같은 버튼을 둔다.
-        ttk.Button(title_row, text=chr(937), width=3,
-                   command=self.open_permanent_symbol_window).pack(side="left", padx=(0, 10))
+        tk.Button(
+            title_row, text=chr(937), width=3,
+            font=("Malgun Gothic", 12, "bold"),
+            bg=self.PALETTE["amber"], fg="white",
+            activebackground=self.PALETTE["amber_dark"], activeforeground="white",
+            relief="raised", bd=2,
+            command=self.open_permanent_symbol_window
+        ).pack(side="left", padx=(0, 10))
 
         # [추가] "X,Y,Z title 입력박스 필요" - 2D의 xlabel/ylabel/y2label을 그대로
         # 재사용하지 않고 3D 전용으로 따로 입력받는다(3D는 Z가 y2label 자리를
