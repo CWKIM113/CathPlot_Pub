@@ -4033,18 +4033,20 @@ class GnuplotGenerator:
             # 작아 보임 - 칸이 많을 때(4/p 이상)만 legend 글자 크기를 별도로
             # 살짜 키운다(축/제목/tic 폰트는 그대로 유지).
             _legend_boost = 1.3 if total_cells >= 4 else 1.0
+            # [수정 - 근본 원인 발견] "legend가 축 대비 상대적으로 커 보임(실측:
+            # PDF에서 legend box 폭이 axis 폭의 95%+)" - 실제 원인은 legend
+            # font가 title/xlabel/ylabel과 달리 font_panel_scale을 그대로(sqrt
+            # 완화 없이) 곱해서 커졌기 때문. Axis Frame Auto + 칸이 기준보다
+            # 커서(font_panel_scale>1, 1p/2p Auto에서 흔함) title 등은 sqrt로
+            # 완화됐는데 legend는 그대로 선형으로 커져 있었음 - legend도 같은
+            # sqrt 완화가 적용된 것처럼 보이도록 _legend_boost에 보정 계수를
+            # 곱해 상쇄한다(margin_scale은 이미 1.0 상한이 있어 축은 그대로,
+            # legend만 커졌던 불균형을 없앤다).
+            if frame_auto and font_panel_scale > 1.0:
+                _legend_boost /= font_panel_scale
             # [수정] "2/p는 legend box 좌우길이를 1자 정도 키우고, 4/p, 6/p는
             # 2자 줄이고" - print 기준 여유분(0.7자)에서 레이아웃별로 가감한다.
             _legend_w_extra = (0.7 + 1.0) if total_cells <= 2 else (0.7 - 2.0)
-            # [수정] "M-P legend line<->title 마진: EMF는 legend 폰트 기준 2자,
-            # SVG는 5자 더 줄여야 함" - single-plot 쪼(_FORMAT_TUNING의
-            # box_chars)는 이미 검증된 값이라 그대로 두고, multiplot 전용
-            # 추가분(_legend_w_extra)에서만 포맷별로 더 줄인다.
-            _fmt_l3 = (fmt or "").lower()
-            if _fmt_l3 == "emf":
-                _legend_w_extra -= 2.0
-            elif _fmt_l3 == "svg":
-                _legend_w_extra -= 5.0
             # [수정 - 심각한 버그 발견] "EMF만 y1/y2 title이 사라짐(Multi Print/
             # Batch Set 등 멀티플롯 경로에서만)" - 실제 EMF 바이너리를 직접
             # 파싱해서 확인: 원인은 title이 잘못된 위치에 그려진 게 아니라, 이
