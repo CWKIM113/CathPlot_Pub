@@ -1351,7 +1351,27 @@ class GnuplotGenerator:
             if (fmt or "").lower() == "emf":
                 f_scale *= 0.75
             elif (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
-                f_scale *= CAIRO_FONT_RENDER_FIX
+                # [수정 - 요청] "single-plot도 M-P처럼 축소된 title 기준으로
+                # margin 바닥값을 같이 줄여달라" - 이 함수는 오직 margin
+                # 계산(_compute_manual_margins_in) 한 곳에만 쓰이므로(위
+                # 독스트링 참고), 여기 f_scale은 사실상 "margin 전용
+                # f_scale"이다. 폰트 자체(실제 title/label 크기, EMF/SVG와
+                # 맞추는 CAIRO_FONT_RENDER_FIX 전체 1.5배)는 그대로 두고,
+                # margin만 절반(제곱근, 약 1.22배)만 반영해 여백을 줄인다.
+                # [수정 - 버그] title/xlabel/ylabel/y2label 중 하나라도 2줄
+                # 이상("|" 포함)이면 원래도 여백이 빠듯한 경우라, 이 축소를
+                # 적용하면 실제로 텍스트가 캔버스 밖으로 잘림(실측 확인: 2줄
+                # y2label의 둘째 줄이 페이지 밖으로 6pt 정도 나감) - 2줄 이상인
+                # 라벨이 하나라도 있으면 이 축소를 건너뛰고 기존 전체 배율을
+                # 그대로 쓴다(1줄만 있는, 가장 흔한 경우에만 안전하게 축소).
+                _any_multiline = any(
+                    "|" in (getattr(plotdef, attr, "") or "")
+                    for attr in ("title", "xlabel", "ylabel", "y2label")
+                )
+                if not _any_multiline:
+                    f_scale *= CAIRO_FONT_RENDER_FIX ** 0.5
+                else:
+                    f_scale *= CAIRO_FONT_RENDER_FIX
         else:
             f_scale = SCREEN_FONT_SCALE * (panel_scale or 1.0)
         return f_scale
@@ -1409,7 +1429,9 @@ class GnuplotGenerator:
             # font_panel_scale 주석 참고), 여기서 또 곱하면 1.5배가 두 번
             # 걸려버림. 단일 plot(create_script, is_multiplot=False)만 여기서
             # 적용한다.
+            _margin_cairo_boost = 1.0
             if not is_multiplot and (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
+                _margin_cairo_boost = CAIRO_FONT_RENDER_FIX
                 f_scale *= CAIRO_FONT_RENDER_FIX
             # [수정 - 버그] "EMF는 PDF보다 폰트가 크지만, 그래도 1.5배 더
             # 키워달라(PDF/PNG/JPG를 2배로 키운 것과 맞춰서)" - EMF는 이미
@@ -1422,6 +1444,31 @@ class GnuplotGenerator:
             f_scale = SCREEN_FONT_SCALE * panel_scale
             line_scale = SCREEN_LINE_SCALE * panel_scale
             border_scale = SCREEN_BORDER_SCALE * panel_scale
+            _margin_cairo_boost = 1.0
+
+        # [수정 - 요청] "single-plot도 M-P처럼 축소된 title 기준으로 margin
+        # 바닥값을 같이 줄여달라" - single-plot(Auto)은 panel_scale이 항상
+        # 1.0이라 M-P의 "칸이 기준보다 큰 경우" 같은 캡핑 여지 자체가 없어서
+        # (font/margin이 이미 같은 비율로 같이 커짐 - 서로 어긋나는 버그가
+        # 없음), M-P와 동일한 방식은 그대로 적용할 게 없음. 대신 margin
+        # 계산에서만 cairo 보정을 완전히(1.5배) 다 반영하지 않고 절반만
+        # (제곱근, 약 1.22배) 반영해서 margin_left/right/top/bottom을 줄인다
+        # (폰트 자체 크기는 f_scale 그대로 유지 - EMF/SVG와 계속 같은 절대
+        # 크기). 실제 렌더링해서 title/xlabel/ylabel이 잘리지 않는지 직접
+        # 확인 후 안전한 값으로 확정함.
+        # [수정 - 버그] title/xlabel/ylabel/y2label 중 2줄 이상("|" 포함)이
+        # 있으면 원래도 여백이 빠듯해서 이 축소를 적용하면 실측상 텍스트가
+        # 캔버스 밖으로 잘림(2줄 y2label 둘째 줄이 페이지 밖 6pt 정도로
+        # 나가는 것 확인) - 그 경우엔 축소하지 않는다(_compute_f_scale의
+        # 동일 가드와 일관되게).
+        _any_multiline_margin = any(
+            "|" in (getattr(plotdef, attr, "") or "")
+            for attr in ("title", "xlabel", "ylabel", "y2label")
+        )
+        if _margin_cairo_boost and not _any_multiline_margin:
+            _margin_f_scale = f_scale / _margin_cairo_boost * (_margin_cairo_boost ** 0.5)
+        else:
+            _margin_f_scale = f_scale
 
         # [수정 - 요청] "M-P Auto의 Plot Title/X title/Y1 title/Y2 title 폰트가
         # single-plot보다 확연히 커 보임(1p는 59%, 2p는 29% 더 크게 실측됨)" -
@@ -1749,7 +1796,7 @@ class GnuplotGenerator:
                     # 마진은 "axis 크기 대비 fraction"이 아니라 "axis+마진(=페이지)
                     # 대비 fraction"으로 구해야 한다.
                     _need_left_in, _need_right_in, _need_top_in, _need_bottom_in = \
-                        self._compute_manual_margins_in(plotdef, f_scale, _is_print, uses_y2, fmt=fmt)
+                        self._compute_manual_margins_in(plotdef, _margin_f_scale, _is_print, uses_y2, fmt=fmt)
                     _total_w_in = _fw_in + _need_left_in + _need_right_in
                     _total_h_in = _fh_in + _need_top_in + _need_bottom_in
                     _lmargin_base = _need_left_in / _total_w_in
@@ -4177,7 +4224,12 @@ class GnuplotGenerator:
         # 값)를 더해 서로 닿지 않게 한다.
         if cols > 1:
             if any_y2 and any((p.ylabel or "").strip() for p in plots):
-                spacing_w_in += 0.15
+                # [수정 - 요청] "2p Land에서 패널간 간격이 약간 커짐(0.15in
+                # 여유가 필요 이상으로 넉넉함)" - 4/p(가장 좁은 칸, 최악의
+                # 경우)에서 0.15in 여유가 7.3pt의 실제 여유 gap을 만드는 것으로
+                # 실측 확인돼, 그보다 조금 줄여도(0.08in) 안전한지 재확인 후
+                # 적용(아래에서 직접 렌더링 검증).
+                spacing_w_in += 0.08
 
         grid_w = cell_w_in * cols + spacing_w_in * (cols - 1)
         grid_h = cell_h_in * rows + spacing_h_in * (rows - 1)
