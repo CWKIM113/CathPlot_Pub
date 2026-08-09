@@ -106,7 +106,7 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0(Test) by C.W.Kim @2026.08.05")
+        self.root.title("CathPlot V1.0 by C.W.Kim @2026.08.09")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움 - 처음엔 글꼴/위젯
         # 크기까지 같이 키우는 tk scaling도 적용해봤지만, 그러면 글자가 커져서
