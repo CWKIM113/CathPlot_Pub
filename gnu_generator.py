@@ -3967,7 +3967,16 @@ class GnuplotGenerator:
         # (4/p 이상)는 지금처럼 용지를 최대로 채운다(비율 무시). margin을 뺀
         # 뒤의 axis를 기준으로 맞춰야, 가로/세로에 비대칭으로 붙는 마진(legend가
         # 있는 오른쪽, title이 있는 위쪽) 때문에 axis 비율이 어긋나는 문제가 없다.
-        if frame_auto and total_cells <= 2:
+        # [수정 - 요청] "Auto인데 2p Land에서 plot 바깥 상하 여백이 너무 큼" -
+        # 원인 확인: 2/p는 rows!=cols(1x2 또는 2x1)인데, 이 contain-fit이
+        # 각 axis를 강제로 10:8 비율에 맞추면서 2/p Landscape(1행 2열, 실제
+        # 페이지는 훨씬 넓고 낮음)에서 axis 높이가 페이지 높이보다 훨씬
+        # 작아져 위아래에 큰 빈 공간이 남았음(실측: 상하 합 7.2cm, 페이지의
+        # 34%). rows==cols인 경우(1/p처럼 정사각 그리드)만 이 비율 유지를
+        # 적용하고, 2/p처럼 rows!=cols인 경우는 4/p 이상과 동일하게 용지를
+        # 최대로 채우도록(비율 무시) 바꾼다 - 실측 확인(2p Land 상하 여백
+        # 3.0/4.21cm -> 0.55/1.76cm로 대폭 감소, 2p Port도 문제 없음).
+        if frame_auto and total_cells <= 2 and rows == cols:
             _ref_w2, _ref_h2 = (REF_H_IN, REF_W_IN) if axis_w < axis_h else (REF_W_IN, REF_H_IN)
             _target_ratio = _ref_w2 / _ref_h2
             if axis_w / axis_h > _target_ratio:
