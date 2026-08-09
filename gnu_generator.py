@@ -766,11 +766,28 @@ class GnuplotGenerator:
         # 피드백 - font_pt 수식이 아니라 cairo 렌더러 자체가 같은 pt를 더 작게
         # 그리는 것으로 보여, cairo 계열(pdf/png/jpg - 실제로는 다 pdf 경로)에만
         # 약간의 보정 배율을 추가로 곱한다.
-        if is_print_mode and (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
-            # [수정] "1.1배 했는데 여전히 똑같아 보임" - 코드 확인 결과 정상
-            # 적용되고 있었음(fmt='pdf' 경로로 확실히 들어옴) - 10% 차이가
-            # 육안으로 구분하기엔 작았던 것으로 보여 1.2배로 상향.
-            _legend_font_extra *= 1.2
+        # [삭제 - 근본 원인 확인, 이 boost 자체가 오히려 원인이었음] "PNG 등은
+        # legend가 약간 작아 보임, EMF/SVG는 오케이"로 1.1->1.2배까지 올렸었지만
+        # "legend/title 비율이 PNG는 0.417, EMF/SVG는 0.333로 다르다"는 이번
+        # 피드백으로 재조사함. gnuplot 자체(우리 코드와 무관한 최소 재현
+        # 스크립트로 별도 확인)를 직접 실측한 결과: pdfcairo 터미널은 "font
+        # 'Name,SIZE'"로 지정한 값과 무관하게 PDF에 실제로 기록되는 폰트
+        # 크기가 title/xlabel/tic/legend 전부 예외 없이 정확히 2/3로 축소됨
+        # (지정 36->실제 24, 지정 15->실제 10 - PyMuPDF로 span.size 직접 측정,
+        # 우리 legend box 폭 추정 코드에 이미 있던 "text_corr=2/3(PIL 추정폭이
+        # 실제보다 1.5배 크게 나옴)"과 정확히 같은 현상 - 원인이 하나였음).
+        # 이 축소는 title/legend 등 "모든" 요소에 똑같이 걸리므로, legend에만
+        # 추가 배율을 곱하지 않아도 (legend/title) 비율 자체는 원래 EMF/SVG와
+        # 이미 같았음(직접 계산 확인: 이 boost를 걷어내면 PDF·PNG·SVG·EMF
+        # 넷 다 legend/title=0.333로 정확히 일치). 즉 "PNG legend가 작아
+        # 보인다"는 원래 피드백은 legend만의 문제가 아니라 PDF/PNG 텍스트
+        # 전체(title도 포함)가 2/3로 줄어 "절대 크기"가 작게 보이는 것이었는데,
+        # legend에만 국소적으로 boost를 걸어 절대 크기는 어느 정도 보완됐지만
+        # 그 대신 EMF/SVG와의 "비율 일치"가 깨진 것 - 지금 요청(포맷 간 불일치
+        # 해소)에 맞춰 boost를 제거해 비율을 맞춘다(절대 크기를 EMF/SVG 수준으로
+        # 올리려면 legend만이 아니라 title/xlabel/tic 전부에 똑같이 1.5배를
+        # 곱해야 하는데, 그러면 이미 이 "축소된" 크기 기준으로 검증돼 있는
+        # margin 여유값들도 전부 다시 맞춰야 해서 별도로 논의 필요).
         font_pt = (legend_size if legend_size else 9) * f_scale * _legend_font_extra
         # [주의] pngcairo가 pdfcairo보다 legend 글자를 아주 약간 더 크게 그리는
         # 경향이 실측됐지만(동일 스크립트, 터미널만 다르게 비교), 보정 계수가
