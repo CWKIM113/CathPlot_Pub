@@ -36,7 +36,7 @@ import win32api
 import win32print
 import pywintypes
 import pythoncom
-        
+
 from data_parser import CathenaDatParser, save_json
 from gnu_generator import PlotDefinition, CurveDefinition, GnuplotGenerator
 
@@ -106,14 +106,9 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0 by C.W.Kim @2026.08.09")
+        self.root.title("CathPlot V1.0      by C.W.Kim @2026.08.10")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
-        # 피드백으로 창 크기(아래 geometry)만 20% 키움 - 처음엔 글꼴/위젯
-        # 크기까지 같이 키우는 tk scaling도 적용해봤지만, 그러면 글자가 커져서
-        # 목록(DAT 파일/변수 선택 등)에 한 번에 보이는 줄 수가 줄어드는 부작용이
-        # 있어 되돌림. 창만 넓어지고 글꼴/여백은 그대로 유지된다.
-        # [수정] 가로는 대문자 8자 정도(-110px), 세로는 대문자 3~4자 정도(+70px)
-        # 조정해달라는 피드백 반영
+        # 피드백으로 창 크기(아래 geometry)만 20% 키움
         self.root.geometry("1200x1030")
         self.root.tk.call('tk', 'windowingsystem')
 
@@ -137,7 +132,7 @@ class CathPlotGUI:
         self.marker_size_vars = {}    # key_str -> StringVar (기본 "M")
         self.marker_maxcount_vars = {}  # key_str -> StringVar (빈 문자열 = Auto)
         self.marker_fill_vars = {}      # key_str -> BooleanVar (기본 False = 속 빔)
-            
+
         self.color_vars = {}
         self.linestyle_vars = {}
         self.linewidth_vars = {}
@@ -2746,7 +2741,7 @@ class CathPlotGUI:
 
         var.set(filename)
         r_info["filename"] = filename
-        
+
         # 1. 파서 수행
         r_info["meta"] = self.parser.parse(filename)
 
@@ -2773,7 +2768,7 @@ class CathPlotGUI:
 
             for var in dat_info.variables:
                 col_no = getattr(var, 'output_no', getattr(var, 'data_column', 0))
-                
+
                 name_str = "Time" if col_no == 0 else f"OUTPUT {col_no}"
                 if hasattr(var, 'display_name') and var.display_name and not var.display_name.startswith("var_"):
                     name_str = var.display_name
@@ -2782,7 +2777,7 @@ class CathPlotGUI:
 
                 display_text = f"[{col_no}] {name_str}"
                 self.var_listbox.insert(tk.END, display_text)
-                                
+
     def delete_dat_file_row(self, r_info):
         if "frame" in r_info and r_info["frame"].winfo_exists():
             r_info["frame"].destroy()
@@ -3239,7 +3234,7 @@ class CathPlotGUI:
                         f_x_var.set("")  # 토글 해제
                         self.sync_axis_labels()
                         return "break"  # 기본 라디오버튼 동작 방지
-                        
+
                 def make_y_excl_cmd(target_key=key_str, clicked_axis="Y1", f_x_var=file_x_var):
                     def y_excl_handler():
                         if clicked_axis == "Y1":
@@ -4738,13 +4733,13 @@ class CathPlotGUI:
             return
         self._last_plot_time = now
 
-        try:	
+        try:
             # 활성화된 Y1, Y2 키 목록 가져오기
             #active_y1_keys = [k for k, var in self.y1_vars.items() if var.get()]
             #active_y2_keys = [k for k, var in self.y2_vars.items() if var.get()]
             active_y1_keys = [k for k, var in self.selected_y1_vars.items() if var.get()]
             active_y2_keys = [k for k, var in self.selected_y2_vars.items() if var.get()]
-            
+
             if not active_y1_keys and not active_y2_keys:
                 messagebox.showwarning("Warning", "Please select at least one Y variable to plot.")
                 return
@@ -4763,7 +4758,7 @@ class CathPlotGUI:
             # 1. 각 파일별 선택된 X축을 확인하고 temp_sorted 폴더에 정렬 파일 생성
             for d_file, out_no, title, axis, key in temp_curves_info:
                 file_x_output_no = 0  # 기본값: 0 (선택되지 않았거나 첫 번째 컬럼 가정)
-                
+
                 if hasattr(self, 'file_rows'):
                     for info in self.file_rows:
                         if info.get("filename") == d_file:
@@ -4786,13 +4781,13 @@ class CathPlotGUI:
 
                 _marker_shape, _marker_size, _marker_max_count = self._get_marker_fields(key)
                 curves.append(CurveDefinition(
-                    dat_file=target_dat_file, 
-                    output_no=out_no, 
-                    title=title, 
+                    dat_file=target_dat_file,
+                    output_no=out_no,
+                    title=title,
                     axis=axis,
                     x_shift=float(self.file_xshift_vars[d_file].get() or 0.0) if d_file in self.file_xshift_vars else 0.0,
                     color=COLOR_MAP.get(self.color_vars[key].get(), None),
-                    linestyle=STYLE_MAP.get(self.linestyle_vars[key].get(), None), 
+                    linestyle=STYLE_MAP.get(self.linestyle_vars[key].get(), None),
                     linewidth=float(self.linewidth_vars[key].get() if key in self.linewidth_vars else 1.5),
                     x_output_no=file_x_output_no,   # ← 추가: 파일별로 선택된 X변수 컬럼을 곡선에도 전달
                     legend_group=int(self.legend_group_vars[key].get()) if key in self.legend_group_vars else 1,
@@ -4894,14 +4889,14 @@ class CathPlotGUI:
                 xfmt=self.xfmt_var.get(), y1fmt=self.y1fmt_var.get(), y2fmt=self.y2fmt_var.get(),
                 yauto=self.yauto_var.get(),
                 y2auto=self.y2auto_var.get(),
-                xmin=self.xmin_var.get(), 
+                xmin=self.xmin_var.get(),
                 xmax=self.xmax_var.get(),
-                ymin=self.ymin_var.get(), 
+                ymin=self.ymin_var.get(),
                 ymax=self.ymax_var.get(),
-                y2min=self.y2min_var.get(), 
+                y2min=self.y2min_var.get(),
                 y2max=self.y2max_var.get(),
-                xtics=self.xtics_var.get(), 
-                ytics=self.ytics_var.get(), 
+                xtics=self.xtics_var.get(),
+                ytics=self.ytics_var.get(),
                 y2tics=self.y2tics_var.get(),
                 mxtics=self.mxtics_var.get(),
                 mytics=self.mytics_var.get(),
