@@ -12,6 +12,7 @@
 !.gitignore
 !*.docx
 !*.pptx
+!CathPlot.spec
 *.zip
 # 남길 폴더 (하위 포함)
 #!templates/
