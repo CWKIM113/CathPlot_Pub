@@ -3408,10 +3408,14 @@ class GnuplotGenerator:
             # (margin_left 등, title/tic 라벨 자리)뿐이므로, 여기서 별도로 더할
             # 필요가 없음
             pm_left = pm_right = pm_top = pm_bottom = 0.0
-        elif for_print:
-            pm_left, pm_right = self.PAGE_MARGIN_LEFT_IN, self.PAGE_MARGIN_RIGHT_IN
-            pm_top, pm_bottom = self.PAGE_MARGIN_TOP_IN, self.PAGE_MARGIN_BOTTOM_IN
         else:
+            # [수정 - 요청] "Print 버튼을 쓰면 여백이 이중으로 크게 잡히는 것은
+            # Save와 같은 결과라야 함" - 예전엔 for_print(Print/Batch 버튼)일 때만
+            # 물리 프린터용 큰 여백(좌2/우1/상3/하2cm)을 강제로 더 얹었는데,
+            # 실제로 이 결과물이 Word에 들어가는 경우가 많아 Save와 결과가
+            # 달라지면 혼란스러움 - Print/Save 모두 항상 작은 여백(사방 0.3cm)만
+            # 쓰도록 통일한다(정말 물리 프린터로 직접 보낼 때 여백이 부족하면
+            # 그건 프린터 드라이버 쪽 설정으로 해결할 문제로 본다).
             pm_left = pm_right = pm_top = pm_bottom = self.SAVE_PAGE_MARGIN_IN
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
@@ -3672,7 +3676,12 @@ class GnuplotGenerator:
         # shrink-to-fit 경고(Manual 전용)가 이 경우엔 안 뜨고 있었음. 2줄
         # title로 여백이 늘어난 만큼 축(axis) 영역이 그만큼 줄어드는 것은
         # 정상 동작이지만, 사용자가 모르고 지나칠 수 있어 별도로 안내한다.
-        if _any_y1_2line or _any_y2_2line:
+        # [수정 - 요청] "이 경고가 2줄이기만 하면 무조건 뜬다 - 실제로 축소된
+        # 경우에만 조건부로 띄워달라(경고가 너무 많음)" - Y1/Y2 2줄로 인한
+        # 추가 여백(위에서 더한 0.10in씩)이 칸 폭(cell_w_in) 대비 일정 비율
+        # (3%) 이상을 차지할 때만, 즉 실제로 눈에 띄게 축이 줄어들 때만 띄운다.
+        _2line_extra_total = (0.10 if _any_y1_2line else 0.0) + (0.10 if _any_y2_2line else 0.0)
+        if _2line_extra_total > 0 and cell_w_in > 0 and (_2line_extra_total / cell_w_in) > 0.03:
             self.last_size_warning = (
                 "Y1/Y2 title을 2줄로 설정하면 그만큼 좌우 여백이 늘어나서, "
                 "축(plot) 가로 폭이 그만큼 줄어듭니다."
@@ -3868,7 +3877,7 @@ class GnuplotGenerator:
             if grid_h > 0:
                 shrink = min(shrink, max(printable_h / grid_h, 0.1))
             if shrink < 0.999:
-                _margin_desc = "여백(좌2/우1/상3/하2cm)" if for_print else "여백(사방 0.3cm)"
+                _margin_desc = "여백(사방 0.3cm)"
                 self.last_size_warning = (
                     f"요청한 Frame 크기({cell_w_in * 2.54:.2f}x{cell_h_in * 2.54:.2f}cm)로는 "
                     f"용지({orientation})에 {_margin_desc}을 두고 들어가지 않아, "
@@ -3958,6 +3967,20 @@ class GnuplotGenerator:
         elif not frame_auto:
             cell_w_in = axis_w + margin_left + margin_right
             cell_h_in = axis_h + margin_top + margin_bottom
+
+        # [수정 - 요청] "2p Land처럼 옆으로 나란한 칸끼리는 한쪽(패널1의 Y2
+        # 여백)+다른쪽(패널2의 Y1 여백)이 마주 보고 그대로 더해져서 그 사이
+        # 여백이 지나치게 커 보임 - 큰 쪽 하나만 적용하면 어떨지?" - 각 칸의
+        # margin_left/right는 그 칸 "혼자" 있을 때 필요한 값을 그대로 쓰지만
+        # (다른 포맷/레이아웃에 영향 없게), 칸과 칸 사이의 실제 간격만 두
+        # margin의 합보다 줄여서 마주보는 두 title이 서로의 여백 쪽으로
+        # 조금씩 파고들게 한다. [주의] "큰 쪽만 적용"(작은 쪽 전부 뺌)은
+        # 실측 결과 두 title이 실제로 겹침(패널1 Y2 title과 패널2 Y1 title이
+        # 15pt 정도 겹침, PDF 좌표 직접 확인)이 확인돼 그대로는 못 씀 -
+        # 겹치지 않는 안전한 최대치를 실측으로 찾아 절반(0.5배)만 뺀다(1줄/
+        # 2줄 모두 겹침 없음 재확인).
+        if cols > 1:
+            spacing_w_in -= min(margin_left, margin_right) * 0.5
 
         grid_w = cell_w_in * cols + spacing_w_in * (cols - 1)
         grid_h = cell_h_in * rows + spacing_h_in * (rows - 1)
