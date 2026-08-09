@@ -666,9 +666,10 @@ class CathPlotGUI:
         legend_size_combo.pack(side="left", padx=1)
         self._disable_combobox_wheel(legend_size_combo)
 
-        # Marker는 줄 우측 끝에 정렬(끝 맞춤)
+        # Marker는 줄 우측 끝에 정렬(끝 맞춤) - Curves 버튼(Legend1/2, width=7)과
+        # 크기를 통일해 달라는 요청으로 width=7 지정.
         marker_settings_btn = tk.Button(
-            row2_f, text="Marker", font=("Malgun Gothic", 9, "bold"),
+            row2_f, text="Marker", width=7, font=("Malgun Gothic", 9, "bold"),
             bg=self.PALETTE["secondary"], fg="white",
             activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
             relief="raised", bd=2,
@@ -782,20 +783,20 @@ class CathPlotGUI:
         ttk.Label(x_limit_f, text="~").pack(side="left", padx=2)
         ttk.Entry(x_limit_f, textvariable=self.xmax_var, width=9).pack(side="left")
 
-        ttk.Label(self.plot_frame, text="Y1 Min/Max", style="RowHead.TLabel").grid(row=5, column=2, sticky="w", padx=(5, 0), pady=0)
+        ttk.Label(self.plot_frame, text="Y1 Min/Max", style="RowHead.TLabel").grid(row=5, column=2, sticky="w", padx=5, pady=2)
         self.ymin_var = tk.StringVar()
         self.ymax_var = tk.StringVar()
         y1_limit_f = ttk.Frame(self.plot_frame)
-        y1_limit_f.grid(row=5, column=3, sticky="w", padx=2)
+        y1_limit_f.grid(row=5, column=3, sticky="w", padx=5)
         ttk.Entry(y1_limit_f, textvariable=self.ymin_var, width=9).pack(side="left")
         ttk.Label(y1_limit_f, text="~").pack(side="left", padx=2)
         ttk.Entry(y1_limit_f, textvariable=self.ymax_var, width=9).pack(side="left")
 
-        ttk.Label(self.plot_frame, text="Y2 Min/Max", style="RowHead.TLabel").grid(row=5, column=4, sticky="w", padx=(2, 0), pady=2)
+        ttk.Label(self.plot_frame, text="Y2 Min/Max", style="RowHead.TLabel").grid(row=5, column=4, sticky="w", padx=5, pady=2)
         self.y2min_var = tk.StringVar()
         self.y2max_var = tk.StringVar()
         y2_limit_f = ttk.Frame(self.plot_frame)
-        y2_limit_f.grid(row=5, column=5, sticky="w", padx=1)
+        y2_limit_f.grid(row=5, column=5, sticky="w", padx=5)
         ttk.Entry(y2_limit_f, textvariable=self.y2min_var, width=9).pack(side="left")
         ttk.Label(y2_limit_f, text="~").pack(side="left", padx=2)
         ttk.Entry(y2_limit_f, textvariable=self.y2max_var, width=9).pack(side="left")
@@ -3146,9 +3147,30 @@ class CathPlotGUI:
             header_f.pack(fill="x", padx=2)
             ttk.Label(header_f, text="No.  Variable", font=("Arial", 9, "bold"), width=24).pack(side="left")
 
-            ttk.Label(header_f, text="X", width=2, font=("Consolas",10,"bold")).pack(side="left")
-            ttk.Label(header_f, text="Y1", width=3, font=("Consolas",10,"bold")).pack(side="left")
-            ttk.Label(header_f, text="Y2", width=3, font=("Consolas",10,"bold")).pack(side="left")
+            # [수정 - 버그] "Y2, Color, Style이 조금씩 우측으로 밀림" - 헤더의
+            # X/Y1/Y2 라벨은 문자수(width=2/3, Consolas 10 bold) 기준으로 폭을
+            # 잡았는데, 그 아래 실제 데이터 행의 Radiobutton/Checkbutton은
+            # 그 폭과 정확히 대응한다는 보장이 없는 별개 위젯(글꼴이 아니라
+            # 테마 indicator 크기로 결정됨)이라 아주 조금씩 어긋나고, 그
+            # 오차가 오른쪽으로 갈수록(X -> Y1 -> Y2 -> Color -> Style) 누적돼
+            # 보였음. Color/Style처럼 고정 픽셀 폭 Frame(pack_propagate(False))
+            # 으로 감싸서, 안의 위젯이 무엇이든(라벨이든 체크박스든) 항상 같은
+            # 폭을 쓰게 통일한다(아래 데이터 행의 X/Y1/Y2 칸도 동일하게 적용).
+            X_COL_PX = 26
+            Y1_COL_PX = 30
+            Y2_COL_PX = 30
+            x_hdr_f = tk.Frame(header_f, width=X_COL_PX, height=22)
+            x_hdr_f.pack_propagate(False)
+            x_hdr_f.pack(side="left")
+            ttk.Label(x_hdr_f, text="X", font=("Consolas", 10, "bold")).pack(expand=True)
+            y1_hdr_f = tk.Frame(header_f, width=Y1_COL_PX, height=22)
+            y1_hdr_f.pack_propagate(False)
+            y1_hdr_f.pack(side="left")
+            ttk.Label(y1_hdr_f, text="Y1", font=("Consolas", 10, "bold")).pack(expand=True)
+            y2_hdr_f = tk.Frame(header_f, width=Y2_COL_PX, height=22)
+            y2_hdr_f.pack_propagate(False)
+            y2_hdr_f.pack(side="left")
+            ttk.Label(y2_hdr_f, text="Y2", font=("Consolas", 10, "bold")).pack(expand=True)
             COLOR_COL_PX = 65   # 최장 옵션(Magenta/Purple/Orange, 7자) 기준
             STYLE_COL_PX = 70   # 최장 옵션(Short-Dash, 10자) 기준
             # [수정] height=18이 "Color"/"Style" 글자(Consolas 10 bold) 높이보다
@@ -3229,16 +3251,28 @@ class CathPlotGUI:
                         self.sync_axis_labels()
                     return y_excl_handler
 
-                r_x = ttk.Radiobutton(row_frame, value=key_str, variable=file_x_var, command=make_x_cmd(key_str, file_x_var))
+                # [수정 - 버그] 위 헤더(X/Y1/Y2)와 폭을 정확히 맞추기 위해
+                # 헤더와 동일한 고정 픽셀 폭 Frame으로 감싼다(위 X_COL_PX/
+                # Y1_COL_PX/Y2_COL_PX 참고 - Color/Style과 같은 방식).
+                x_cell_f = tk.Frame(row_frame, width=X_COL_PX, height=22)
+                x_cell_f.pack_propagate(False)
+                x_cell_f.pack(side="left")
+                r_x = ttk.Radiobutton(x_cell_f, value=key_str, variable=file_x_var, command=make_x_cmd(key_str, file_x_var))
+                r_x.pack(expand=True)
                 # 이미 선택된 라디오버튼을 다시 클릭했을 때 해제되도록 마우스 이벤트 가로채기
                 r_x.bind("<Button-1>", on_x_radio_click)
 
-                c_y1 = ttk.Checkbutton(row_frame, variable=self.selected_y1_vars[key_str], command=make_y_excl_cmd(key_str, "Y1", file_x_var))
-                c_y2 = ttk.Checkbutton(row_frame, variable=self.selected_y2_vars[key_str], command=make_y_excl_cmd(key_str, "Y2", file_x_var))
+                y1_cell_f = tk.Frame(row_frame, width=Y1_COL_PX, height=22)
+                y1_cell_f.pack_propagate(False)
+                y1_cell_f.pack(side="left")
+                c_y1 = ttk.Checkbutton(y1_cell_f, variable=self.selected_y1_vars[key_str], command=make_y_excl_cmd(key_str, "Y1", file_x_var))
+                c_y1.pack(expand=True)
 
-                r_x.pack(side="left", padx=0)
-                c_y1.pack(side="left", padx=0)
-                c_y2.pack(side="left", padx=0)
+                y2_cell_f = tk.Frame(row_frame, width=Y2_COL_PX, height=22)
+                y2_cell_f.pack_propagate(False)
+                y2_cell_f.pack(side="left")
+                c_y2 = ttk.Checkbutton(y2_cell_f, variable=self.selected_y2_vars[key_str], command=make_y_excl_cmd(key_str, "Y2", file_x_var))
+                c_y2.pack(expand=True)
 
                 color_cell_f = tk.Frame(row_frame, width=COLOR_COL_PX, height=22)
                 color_cell_f.pack_propagate(False)
