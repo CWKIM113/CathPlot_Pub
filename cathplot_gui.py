@@ -3502,6 +3502,7 @@ class CathPlotGUI:
                 return
 
         dialog = tk.Toplevel(self.root)
+        dialog.configure(bg=self.PALETTE["bg"])
         dialog.title("3D Plot Options")
         dialog.transient(self.root)
 
@@ -4054,17 +4055,30 @@ class CathPlotGUI:
 
             messagebox.showinfo("3D Template", "3D 템플릿을 불러왔습니다.")
 
+        # [수정] "3D popup 창도 채색?" - 메인 화면과 같은 팔레트/방식(tk.Button
+        # + 명시적 bg/fg)으로 이 팝업의 주요 동작 버튼도 색을 입힌다.
+        def _dlg_accent_btn(parent, text, bg, dark, command):
+            b = tk.Button(
+                parent, text=text, command=command,
+                font=("Malgun Gothic", 9, "bold"), bg=bg, fg="white",
+                activebackground=dark, activeforeground="white",
+                relief="raised", bd=2, padx=8,
+            )
+            b.pack(side="left", padx=5)
+            return b
+
+        pal = self.PALETTE
         template3d_row = ttk.Frame(dialog)
         template3d_row.pack(fill="x", padx=10, pady=(0, 5))
-        ttk.Button(template3d_row, text="3D Template Save", command=do_save_3d_template).pack(side="left", padx=5)
-        ttk.Button(template3d_row, text="3D Template Load", command=do_load_3d_template).pack(side="left", padx=5)
+        _dlg_accent_btn(template3d_row, "3D Template Save", pal["amber"], pal["amber_dark"], do_save_3d_template)
+        _dlg_accent_btn(template3d_row, "3D Template Load", pal["amber"], pal["amber_dark"], do_load_3d_template)
 
         ok_row = ttk.Frame(dialog)
         ok_row.pack(fill="x", padx=10, pady=10)
-        ttk.Button(ok_row, text="Plot", command=do_plot).pack(side="left", padx=5)
-        ttk.Button(ok_row, text="Save", command=do_save).pack(side="left", padx=5)
-        ttk.Button(ok_row, text="Print", command=do_print).pack(side="left", padx=5)
-        ttk.Button(ok_row, text="Cancel", command=_close_3d_dialog).pack(side="left", padx=5)
+        _dlg_accent_btn(ok_row, "Plot", pal["accent"], pal["accent_dark"], do_plot)
+        _dlg_accent_btn(ok_row, "Save", pal["accent2"], pal["accent2_dark"], do_save)
+        _dlg_accent_btn(ok_row, "Print", pal["accent3"], pal["accent3_dark"], do_print)
+        _dlg_accent_btn(ok_row, "Cancel", pal["danger"], pal["danger_dark"], _close_3d_dialog)
 
     def _execute_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
                           equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
