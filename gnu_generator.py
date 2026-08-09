@@ -3585,19 +3585,25 @@ class GnuplotGenerator:
             # 그대로 선형 유지(이 조정과 무관, 원래도 문제 없었음).
             size_scale = size_scale ** 0.5
         font_panel_scale = size_scale
-        # [추가 - 근본 원인 수정] M-P(멀티플롯)의 margin_left/right/top/bottom·
-        # legend_boost 등은 이 font_panel_scale에서 바로 파생되고
+        # [추가 - 근본 원인 수정, 재조정] M-P(멀티플롯)의 margin_left/right/
+        # top/bottom·legend_boost 등은 font_panel_scale에서 바로 파생되고
         # _build_plot_commands의 f_scale(단일 plot과 공유하는 CAIRO_FONT_
         # RENDER_FIX 보정)과는 완전히 별개 변수라서, f_scale 쪽만 고쳐서는
-        # M-P의 margin이 "커진 실제 폰트 크기"를 따라가지 못해(실측: 보정
-        # 전/후 margin_left/right/top/bottom이 그대로) 텍스트가 여백을
-        # 침범할 위험이 있었음 - 여기서 font_panel_scale 자체를 미리
-        # 보정해두면 이후의 margin_scale/_floor_scale/need_*_in/legend_boost/
-        # 최종 _build_plot_commands 호출(panel_scale=font_panel_scale)까지
-        # 전부 이 보정된 값을 일관되게 쓰게 된다(단일 plot과 동일한 "한 곳만
-        # 고치면 비례하는 모든 것이 같이 커짐" 방식). _build_plot_commands
-        # 안에서는 멀티플롯 호출 시 이 보정을 중복 적용하지 않도록
-        # is_multiplot으로 걸러둠(아래 참고).
+        # M-P의 margin이 "커진 실제 폰트 크기"를 따라가지 못해 텍스트가
+        # 여백을 침범할 위험이 있었음(font_panel_scale에 이 보정을 적용).
+        # [주의 - 재발견한 버그] size_scale 자체에 곱하는 방식을 처음
+        # 시도했었는데, Auto에서는 margin_scale/layout_scale이 "size_scale>=1
+        # 이면 1.0으로 상한 + 4/p 이상은 추가로 0.5배"로 캡이 걸려 있어서
+        # (칸이 커져도 margin/간격이 무한정 커지지 않게 하는 기존 안전장치),
+        # size_scale을 아무리 키워도 4/p·6/p의 margin_scale은 항상 이 캡에
+        # 걸린 "동일한 고정값"으로 수렴해버려 폰트만 커지고 margin은 그대로인
+        # 회귀가 재현됨(실측: 4/p 렌더링에서 Panel 3/4 제목이 위 행의 X
+        # title과 겹침 - 1/p, 2/p는 font_panel_scale을 직접 쓰는 경로라
+        # 문제 없었지만 4/p, 6/p만 이 캡 때문에 보정이 무력화됨). margin_scale/
+        # layout_scale 자체(칸 크기에 따른 캡 로직)는 그대로 두고, 대신
+        # 아래 _floor_scale(4/p 이상에서 margin_scale을 그대로 쓰는 지점)에
+        # 이 보정을 별도로 곱해서 "캡이 걸린 뒤의 값"에도 이 보정이 항상
+        # 반영되게 한다(아래 _floor_scale 정의부 참고).
         if (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
             font_panel_scale *= CAIRO_FONT_RENDER_FIX
         # [참고] "작은 Manual 칸(예: 8x6cm)에서 legend/여백이 과도하게 커서 실제
@@ -3819,7 +3825,19 @@ class GnuplotGenerator:
         # plot은 여백도 줄어야") 두고, 1.0 위로는 제곱근(sqrt)으로 완만하게만
         # 커지게 한다(실제 폰트 크기에 맞춰 클리핑은 막으면서도, 선형보다는
         # 덜 커져서 여백이 과하게 크지도 않게).
-        _floor_scale = margin_scale if total_cells >= 4 else (
+        # [수정 - 버그] 4/p, 6/p(total_cells>=4)는 margin_scale(칸 크기에 따른
+        # 상한 로직 - 위 "Auto는 margin_scale만 1.0 상한" 참고)을 그대로
+        # 쓰는데, 이 margin_scale은 CAIRO_FONT_RENDER_FIX 보정 이전의
+        # size_scale에서 파생돼 그 보정을 못 담고 있음(반대로 total_cells<4는
+        # font_panel_scale을 직접 써서 이미 그 보정이 반영돼 있음) - 그 결과
+        # pdf/png/jpg에서 실제 폰트(title/xlabel)는 1.5배 커졌는데 이 겹침
+        # 방지 바닥값은 그대로라 4/p에서 아래 행 제목이 위 행 X title과
+        # 겹치는 회귀가 실측(렌더링 이미지 직접 확인)으로 발견됨. margin_
+        # scale의 "칸 크기에 따른 상한" 로직 자체는 그대로 두고(재도입 위험이
+        # 있는 부분 - 위 주석 히스토리 참고), 여기 바닥값에만 이 보정을
+        # 추가로 곱한다.
+        _cairo_fix = CAIRO_FONT_RENDER_FIX if (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg") else 1.0
+        _floor_scale = margin_scale * _cairo_fix if total_cells >= 4 else (
             font_panel_scale if font_panel_scale <= 1.0 else font_panel_scale ** 0.5
         )
         if any_title:
@@ -4101,8 +4119,20 @@ class GnuplotGenerator:
         # (0.5배)은 EMF 마진 부스트를 2.0->1.4로 낮춘 뒤(축이 넓어짐) 다시
         # 겹침이 재현돼(실측 확인), 그보다 더 줄여 0.25배로 확정(1줄/2줄
         # 모두 겹침 없음 재확인).
+        # [수정 - 버그, PDF/PNG 텍스트 절대 크기 보정(CAIRO_FONT_RENDER_FIX)
+        # 이후 재발견] margin이 커진 만큼 Y1/Y2 rotated label 자체의 실제
+        # 폭(protrusion)도 같이 커졌는데, 이 0.25배 감산은 "margin 크기"만
+        # 보고 그 안의 실제 글자 폭 변화는 반영을 못 해서, 4/p처럼 칸이 좁고
+        # Y1+Y2가 둘 다 있는 경우 서로의 title이 실제로 겹치는 회귀가 실측
+        # 확인됨(0.25배는 16.7pt, 0.10배도 8.7pt 겹침 - PDF 좌표 직접 확인).
+        # 감산 자체를 걷어내도(0배) 3.5pt 정도 잔여 겹침이 남아, 감산 배율
+        # 조정만으로는 근본 해결이 안 됨 - 대신 감산을 아예 없애고(0배,
+        # 가장 안전한 값), Y1/Y2 rotated label이 둘 다 있는 좁은 칸(cols>1)
+        # 에서만 별도의 고정 여유(0.15in - 위 3.5pt 잔여 겹침보다 넉넉한
+        # 값)를 더해 서로 닿지 않게 한다.
         if cols > 1:
-            spacing_w_in -= min(margin_left, margin_right) * 0.25
+            if any_y2 and any((p.ylabel or "").strip() for p in plots):
+                spacing_w_in += 0.15
 
         grid_w = cell_w_in * cols + spacing_w_in * (cols - 1)
         grid_h = cell_h_in * rows + spacing_h_in * (rows - 1)
