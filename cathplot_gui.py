@@ -4789,6 +4789,38 @@ class CathPlotGUI:
         cmb_layout = ttk.Combobox(layout_frame, textvariable=layout_cmb_var, values=["Auto", "1/p", "2/p (V)", "4/p (H)", "6/p (V)"], width=12, state="readonly")
         cmb_layout.pack(side="left", padx=5)
 
+        # [추가 - 버그 수정] "M-P 1-p에서 Auto/Manual 결과가 동일하게 나옴" -
+        # 이 다이얼로그에는 Axis Frame Auto/Manual을 고르는 UI가 전혀 없어서,
+        # execute_multi_plot_pipeline이 항상 메인 창(단일 plot 영역)의
+        # self.frame_auto_var/frame_width_var 등을 그대로 읽어갔음. 다이얼로그를
+        # 열기 전에 메인 창에서 이 값을 안 바꿨으면 매번 같은 설정으로 그려져
+        # "Auto/Manual이 똑같다"는 착각(또는 실제로 안 바뀐 상태)이 생겼던 것 -
+        # 같은 tk 변수를 그대로 재사용해서 이 다이얼로그에서도 직접 보고 바꿀 수
+        # 있게 한다(별도 변수를 새로 안 만들어서 메인 창과 항상 동기화됨).
+        mp_frame_size_f = ttk.Frame(dialog)
+        mp_frame_size_f.pack(fill="x", padx=15, pady=(0, 10))
+        mp_width_entry = ttk.Entry(mp_frame_size_f, textvariable=self.frame_width_var, width=6)
+        mp_height_entry = ttk.Entry(mp_frame_size_f, textvariable=self.frame_height_var, width=6)
+
+        def _mp_toggle_frame_size_state():
+            state = "disabled" if self.frame_auto_var.get() else "normal"
+            mp_width_entry.config(state=state)
+            mp_height_entry.config(state=state)
+
+        ttk.Checkbutton(
+            mp_frame_size_f, text="Axis Frame Auto", variable=self.frame_auto_var,
+            command=_mp_toggle_frame_size_state
+        ).pack(side="left", padx=5)
+        ttk.Label(mp_frame_size_f, text="W:").pack(side="left", padx=(8, 2))
+        mp_width_entry.pack(side="left")
+        ttk.Label(mp_frame_size_f, text="H:").pack(side="left", padx=(6, 2))
+        mp_height_entry.pack(side="left")
+        ttk.Combobox(
+            mp_frame_size_f, textvariable=self.frame_unit_var,
+            values=["in", "cm"], width=4, state="readonly"
+        ).pack(side="left", padx=(6, 0))
+        _mp_toggle_frame_size_state()
+
         def on_execute():
             selected_indices = plot_listbox.curselection()
             if not selected_indices:
