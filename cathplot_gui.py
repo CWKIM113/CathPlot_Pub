@@ -201,14 +201,21 @@ class CathPlotGUI:
             "amber_dark": "#a5620f",
             "danger": "#b3462c",
             "danger_dark": "#8f3620",
+            "secondary": "#5b6b8c",    # 보조 강조색(Curves/Marker/Browse/Clean Past Plots)
+            "secondary_dark": "#48557a",
+            "grey": "#8a94a6",         # Template Save/Load(회색 바탕)
+            "grey_dark": "#6d7690",
         }
         pal = self.PALETTE
         self.root.configure(bg=pal["bg"])
         style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
+        # [되돌림] theme_use("clam")을 쓰면 Checkbutton/Radiobutton의 표시(indicator)
+        # 크기가 Windows 기본 테마(vista)보다 작게 그려짐 - "radio, check box가
+        # 작아졌다" + "Dat list의 X/Y1/Y2 헤더와 그 아래 라디오/체크박스 열이
+        # 안 맞는다"는 두 증상 모두 이 때문(라디오/체크 크기가 vista 기준으로
+        # 맞춰 놓은 헤더 폭과 어긋남). 색상 버튼은 이미 전부 tk.Button으로
+        # 바꿔서 clam이 필요 없으므로, 테마 전환은 하지 않고 기본 테마 위에
+        # 색상/폰트만 얹는다.
         style.configure(".", background=pal["bg"], foreground=pal["text"])
         style.configure("TFrame", background=pal["bg"])
         style.configure("TLabel", background=pal["bg"], foreground=pal["text"])
@@ -249,6 +256,50 @@ class CathPlotGUI:
         _accent_style("Print.Accent.TButton", pal["accent3"], pal["accent3_dark"])
         _accent_style("Multi.Accent.TButton", pal["amber"], pal["amber_dark"])
         _accent_style("Danger.Accent.TButton", pal["danger"], pal["danger_dark"])
+
+        # [추가] "Setting 앞부분의 title(Plot Title 등)들을 bold/글자색으로" -
+        # ttk.Label의 foreground/font는 ttk.Button의 background와 달리 Windows
+        # 기본 테마에서도 대체로 잘 반영되는 편이라 ttk 스타일로 처리한다.
+        style.configure(
+            "RowHead.TLabel", background=pal["bg"], foreground=pal["heading"],
+            font=("Malgun Gothic", 9, "bold"),
+        )
+
+    def _mk_btn(self, parent, text, command, color="secondary", fg="white", **pack_kw):
+        # [추가] "Curves/Marker/Browse/Template/Clean Past Plots 버튼도
+        # 구별·강조" - ttk.Button은 배경색이 잘 안 먹는 환경이 확인돼서, 색을
+        # 주는 모든 버튼을 이 헬퍼(tk.Button 기반)로 통일한다. color는
+        # self.PALETTE의 키 이름(예: "secondary", "amber", "accent")이고,
+        # 그 키+"_dark"가 hover/눌림 색으로 자동 쓰인다.
+        pal = self.PALETTE
+        bg = pal.get(color, pal["secondary"])
+        dark = pal.get(color + "_dark", bg)
+        b = tk.Button(
+            parent, text=text, command=command,
+            font=("Malgun Gothic", 9, "bold"), bg=bg, fg=fg,
+            activebackground=dark, activeforeground=fg,
+            relief="raised", bd=2, padx=8,
+        )
+        b.pack(**pack_kw)
+        return b
+
+    def _mk_check(self, parent, text, variable, color="accent", command=None, **pack_kw):
+        # [추가] "Auto X Range 등 체크박스 체크시 색상도 넣어 강조" - ttk.Checkbutton은
+        # (버튼과 마찬가지로) Windows 기본 테마에서 체크 표시 색을 커스텀할 방법이
+        # 거의 없어서, 체크됐을 때 상자 자체가 지정한 색으로 채워지는 tk.Checkbutton
+        # (selectcolor 옵션 - 테마와 무관하게 항상 동작)으로 통일한다. color는
+        # self.PALETTE의 키 이름. bg는 부모(ttk.Frame 등)와 어울리도록 앱 배경색으로
+        # 맞추고, 테두리는 없앤다(Windows 기본 tk.Checkbutton의 두꺼운 포커스
+        # 테두리가 이질적으로 보이는 것을 방지).
+        pal = self.PALETTE
+        sel = pal.get(color, pal["accent"])
+        c = tk.Checkbutton(
+            parent, text=text, variable=variable, command=command,
+            bg=pal["bg"], activebackground=pal["bg"], fg=pal["text"],
+            selectcolor=sel, highlightthickness=0, bd=0,
+        )
+        c.pack(**pack_kw)
+        return c
 
     def create_widgets(self):
         self.file_frame = ttk.LabelFrame(self.root, text="DAT Files")
@@ -318,12 +369,10 @@ class CathPlotGUI:
         )
         batch_queue_btn.pack(side="left", padx=5, pady=2)
 
-        ttk.Button(
-            btn_container, text="Template Save", command=self.save_template
-        ).pack(side="left", padx=5)
-        ttk.Button(
-            btn_container, text="Template Load", command=self.load_template
-        ).pack(side="left", padx=5)
+        self._mk_btn(btn_container, "Template Save", self.save_template,
+                     color="grey", fg="#1f2937", side="left", padx=5)
+        self._mk_btn(btn_container, "Template Load", self.load_template,
+                     color="grey", fg="#1f2937", side="left", padx=5)
 
         # [수정] "좌우로 늘리지 말고 줄 중앙에 배치" - fill+expand로 버튼 자체가
         # 늘어졌던 걸, 양옆에 빈 스페이서(expand=True)를 둬서 버튼 크기는
@@ -435,7 +484,7 @@ class CathPlotGUI:
         pos_list = ["right top", "right bottom", "left top", "left bottom", "center top", "center bottom", "center center", "outside right"]
 
         # Row 0
-        ttk.Label(self.plot_frame, text="Plot Title").grid(row=0, column=0, padx=5, pady=0, sticky="w")
+        ttk.Label(self.plot_frame, text="Plot Title", style="RowHead.TLabel").grid(row=0, column=0, padx=5, pady=0, sticky="w")
         self.title_entry = ttk.Entry(self.plot_frame, textvariable=self.title_var, width=30)
         self.title_entry.grid(row=0, column=1, padx=5, pady=0, sticky="w")
         self.title_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.title_entry))
@@ -524,7 +573,12 @@ class CathPlotGUI:
                 self.in_legend1_vars[key] = tk.BooleanVar(value=True)
             self.in_legend1_vars[key].set(val)
 
-        legend1_curves_btn = ttk.Button(legend1_row, text="Curves", width=7)
+        legend1_curves_btn = tk.Button(
+            legend1_row, text="Curves", width=7, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=2,
+        )
         legend1_curves_btn.pack(side="left", padx=(3, 1))
         legend1_curves_btn.configure(
             command=lambda: self._open_curve_select_popup(
@@ -567,7 +621,12 @@ class CathPlotGUI:
                 self.legend_group_vars[key] = tk.StringVar(value="2")
             self.legend_group_vars[key].set("2" if val else "1")
 
-        legend2_curves_btn = ttk.Button(legend2_row, text="Curves", width=7)
+        legend2_curves_btn = tk.Button(
+            legend2_row, text="Curves", width=7, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=2,
+        )
         legend2_curves_btn.pack(side="left", padx=(3, 1))
         legend2_curves_btn.configure(
             command=lambda: self._open_curve_select_popup(
@@ -579,7 +638,7 @@ class CathPlotGUI:
         # 아래 frame_row2(원래 Axis Frame Auto 있던 자리)로 옮겨서 이 줄을 줄임.
 
         # Row 1
-        ttk.Label(self.plot_frame, text="X Axis Title").grid(row=1, column=0, padx=5, pady=0, sticky="w")
+        ttk.Label(self.plot_frame, text="X Axis Title", style="RowHead.TLabel").grid(row=1, column=0, padx=5, pady=0, sticky="w")
         self.xlabel_entry = ttk.Entry(self.plot_frame, textvariable=self.xlabel_var, width=30)
         self.xlabel_entry.grid(row=1, column=1, padx=5, pady=0, sticky="w")
         self.xlabel_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.xlabel_entry))
@@ -608,18 +667,23 @@ class CathPlotGUI:
         self._disable_combobox_wheel(legend_size_combo)
 
         # Marker는 줄 우측 끝에 정렬(끝 맞춤)
-        marker_settings_btn = ttk.Button(row2_f, text="Marker")
+        marker_settings_btn = tk.Button(
+            row2_f, text="Marker", font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=2,
+        )
         marker_settings_btn.pack(side="right", padx=(1, 3))
         marker_settings_btn.configure(command=self._open_marker_settings_popup)
 
         # Row 2
-        ttk.Label(self.plot_frame, text="Y Left Title (Y1)").grid(row=2, column=0, padx=5, pady=0, sticky="w")
+        ttk.Label(self.plot_frame, text="Y Left Title (Y1)", style="RowHead.TLabel").grid(row=2, column=0, padx=5, pady=0, sticky="w")
         self.ylabel_entry = ttk.Entry(self.plot_frame, textvariable=self.ylabel_var, width=30)
         self.ylabel_entry.grid(row=2, column=1, padx=5, pady=0, sticky="w")
         self.ylabel_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.ylabel_entry))
 
         # Row 3
-        ttk.Label(self.plot_frame, text="Y Right Title (Y2)").grid(row=3, column=0, padx=5, pady=0, sticky="w")
+        ttk.Label(self.plot_frame, text="Y Right Title (Y2)", style="RowHead.TLabel").grid(row=3, column=0, padx=5, pady=0, sticky="w")
         self.y2label_entry = ttk.Entry(self.plot_frame, textvariable=self.y2label_var, width=30)
         self.y2label_entry.grid(row=3, column=1, padx=5, pady=0, sticky="w")
         self.y2label_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.y2label_entry))
@@ -677,7 +741,7 @@ class CathPlotGUI:
 
         x_auto_f = ttk.Frame(self.plot_frame)
         x_auto_f.grid(row=4, column=0, sticky="w", padx=5, pady=2)
-        ttk.Checkbutton(x_auto_f, text="Auto X Range", variable=self.xauto_var).pack(side="left")
+        self._mk_check(x_auto_f, "Auto X Range", self.xauto_var, color="accent", side="left")
 
         x_log_f = ttk.Frame(self.plot_frame)
         x_log_f.grid(row=4, column=1, sticky="w", padx=5, pady=2)
@@ -688,7 +752,7 @@ class CathPlotGUI:
 
         y1_auto_f = ttk.Frame(self.plot_frame)
         y1_auto_f.grid(row=4, column=2, sticky="w", padx=5, pady=2)
-        ttk.Checkbutton(y1_auto_f, text="Auto Y1 (Left) Range", variable=self.yauto_var).pack(side="left")
+        self._mk_check(y1_auto_f, "Auto Y1 (Left) Range", self.yauto_var, color="accent", side="left")
 
         y1_log_f = ttk.Frame(self.plot_frame)
         y1_log_f.grid(row=4, column=3, sticky="w", padx=2, pady=2)
@@ -699,7 +763,7 @@ class CathPlotGUI:
 
         y2_auto_f = ttk.Frame(self.plot_frame)
         y2_auto_f.grid(row=4, column=4, sticky="w", padx=2, pady=2)
-        ttk.Checkbutton(y2_auto_f, text="Auto Y2 (Right) Range", variable=self.y2auto_var).pack(side="left")
+        self._mk_check(y2_auto_f, "Auto Y2 (Right) Range", self.y2auto_var, color="accent", side="left")
 
         y2_log_f = ttk.Frame(self.plot_frame)
         y2_log_f.grid(row=4, column=5, sticky="w", padx=2, pady=2)
@@ -709,7 +773,7 @@ class CathPlotGUI:
         self._disable_combobox_wheel(y2fmt_combo)
 
         # Row 5
-        ttk.Label(self.plot_frame, text="X Min/Max").grid(row=5, column=0, sticky="w", padx=5, pady=2)
+        ttk.Label(self.plot_frame, text="X Min/Max", style="RowHead.TLabel").grid(row=5, column=0, sticky="w", padx=5, pady=2)
         self.xmin_var = tk.StringVar()
         self.xmax_var = tk.StringVar()
         x_limit_f = ttk.Frame(self.plot_frame)
@@ -718,7 +782,7 @@ class CathPlotGUI:
         ttk.Label(x_limit_f, text="~").pack(side="left", padx=2)
         ttk.Entry(x_limit_f, textvariable=self.xmax_var, width=9).pack(side="left")
 
-        ttk.Label(self.plot_frame, text="Y1 Min/Max").grid(row=5, column=2, sticky="w", padx=(5, 0), pady=0)
+        ttk.Label(self.plot_frame, text="Y1 Min/Max", style="RowHead.TLabel").grid(row=5, column=2, sticky="w", padx=(5, 0), pady=0)
         self.ymin_var = tk.StringVar()
         self.ymax_var = tk.StringVar()
         y1_limit_f = ttk.Frame(self.plot_frame)
@@ -727,7 +791,7 @@ class CathPlotGUI:
         ttk.Label(y1_limit_f, text="~").pack(side="left", padx=2)
         ttk.Entry(y1_limit_f, textvariable=self.ymax_var, width=9).pack(side="left")
 
-        ttk.Label(self.plot_frame, text="Y2 Min/Max").grid(row=5, column=4, sticky="w", padx=(2, 0), pady=2)
+        ttk.Label(self.plot_frame, text="Y2 Min/Max", style="RowHead.TLabel").grid(row=5, column=4, sticky="w", padx=(2, 0), pady=2)
         self.y2min_var = tk.StringVar()
         self.y2max_var = tk.StringVar()
         y2_limit_f = ttk.Frame(self.plot_frame)
@@ -737,7 +801,7 @@ class CathPlotGUI:
         ttk.Entry(y2_limit_f, textvariable=self.y2max_var, width=9).pack(side="left")
 
         # Row 6
-        ttk.Label(self.plot_frame, text="X Tics/Minor").grid(row=6, column=0, sticky="w", padx=5, pady=2)
+        ttk.Label(self.plot_frame, text="X Tics/Minor", style="RowHead.TLabel").grid(row=6, column=0, sticky="w", padx=5, pady=2)
         self.xtics_var = tk.StringVar()
         self.mxtics_var = tk.StringVar()
         x_tick_f = ttk.Frame(self.plot_frame)
@@ -745,7 +809,7 @@ class CathPlotGUI:
         ttk.Entry(x_tick_f, textvariable=self.xtics_var, width=9).pack(side="left")
         ttk.Entry(x_tick_f, textvariable=self.mxtics_var, width=5).pack(side="left", padx=(5, 0))
 
-        ttk.Label(self.plot_frame, text="Y Left (Y1) Tics").grid(row=6, column=2, sticky="w", padx=5, pady=2)
+        ttk.Label(self.plot_frame, text="Y Left (Y1) Tics", style="RowHead.TLabel").grid(row=6, column=2, sticky="w", padx=5, pady=2)
         self.ytics_var = tk.StringVar()
         self.mytics_var = tk.StringVar()
         y1_tick_f = ttk.Frame(self.plot_frame)
@@ -753,7 +817,7 @@ class CathPlotGUI:
         ttk.Entry(y1_tick_f, textvariable=self.ytics_var, width=9).pack(side="left")
         ttk.Entry(y1_tick_f, textvariable=self.mytics_var, width=5).pack(side="left", padx=(5, 0))
 
-        ttk.Label(self.plot_frame, text="Y Right (Y2) Tics").grid(row=6, column=4, sticky="w", padx=5, pady=2)
+        ttk.Label(self.plot_frame, text="Y Right (Y2) Tics", style="RowHead.TLabel").grid(row=6, column=4, sticky="w", padx=5, pady=2)
         self.y2tics_var = tk.StringVar()
         self.my2tics_var = tk.StringVar()
         y2_tick_f = ttk.Frame(self.plot_frame)
@@ -858,7 +922,8 @@ class CathPlotGUI:
                     self.close_all_plot_windows, side="right", padx=5, pady=2)
         _accent_btn(self.button_frame, "Multi Print/Save", pal["amber"], pal["amber_dark"],
                     self.open_multi_plot_dialog, side="left", padx=15, pady=2)
-        ttk.Button(self.button_frame, text="Clean Past Plots", command=self.open_delete_dialog).pack(side="right", padx=5)
+        self._mk_btn(self.button_frame, "Clean Past Plots", self.open_delete_dialog,
+                     color="secondary", side="right", padx=5, pady=2)
 
         self.add_file_row()
 
@@ -910,19 +975,34 @@ class CathPlotGUI:
         combo.bind("<MouseWheel>", _on_wheel)
 
     def _bind_mousewheel(self, region_widget, target_canvas):
-        """region_widget 위에 마우스가 있는 동안만 마우스 휠을 target_canvas 스크롤에 연결한다
-        (다른 스크롤 영역끼리 휠 스크롤이 서로 간섭하지 않도록 진입/이탈 시에만 bind_all/unbind_all)"""
-        def _on_mousewheel(event):
-            target_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        """region_widget(과 그 안의 모든 자식 위젯) 위에서 마우스 휠을 굴리면
+        target_canvas가 스크롤되도록 한다.
+        [수정] "마우스 scroll이 가끔 안 됨" 버그 - 이전에는 region_widget에만
+        <Enter>/<Leave>로 bind_all을 붙였다 뗐다 했는데, Tk는 마우스가
+        region_widget의 배경에서 그 안의 자식 위젯(버튼/콤보박스/체크박스/
+        엔트리 등) 위로 넘어가는 순간 그 자식 위젯을 "현재 포인터 위젯"으로
+        보고 부모(region_widget)에 <Leave>를 보냄(자식 쪽엔 이 바인딩이 없음).
+        그러면 곧바로 unbind_all이 실행돼 버려서, 목록 안의 배경(빈 여백)
+        위에서는 휠이 되는데 그 안에 촘촘히 들어찬 버튼/콤보박스/체크박스
+        위에서는 휠이 안 먹는 현상이 생겼던 것("가끔 안 되는" 것처럼 보인
+        이유). 자식 하나하나에 다시 바인딩하는 대신, bind_all은 한 번만 걸어
+        두고, 이벤트가 실제로 전달된 위젯(event.widget)에서 조상(master)
+        방향으로 올라가며 어느 region_widget에 속하는지 찾아 그 target_canvas를
+        스크롤하는 전역 핸들러 하나로 통일한다 - 자식이 몇 겹이든 항상 동작함."""
+        if not hasattr(self, "_wheel_regions"):
+            self._wheel_regions = []
+            self.root.bind_all("<MouseWheel>", self._on_global_mousewheel)
+        self._wheel_regions.append((region_widget, target_canvas))
 
-        def _on_enter(_event):
-            region_widget.bind_all("<MouseWheel>", _on_mousewheel)
-
-        def _on_leave(_event):
-            region_widget.unbind_all("<MouseWheel>")
-
-        region_widget.bind("<Enter>", _on_enter)
-        region_widget.bind("<Leave>", _on_leave)
+    def _on_global_mousewheel(self, event):
+        w = event.widget
+        while w is not None:
+            for region_widget, target_canvas in self._wheel_regions:
+                if w is region_widget:
+                    target_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                    return "break"
+            w = getattr(w, "master", None)
+        return None
 
     def open_delete_dialog(self):
         files = glob.glob(os.path.join(self.plot_dir, "*.plt"))
@@ -2610,10 +2690,11 @@ class CathPlotGUI:
         row.pack(fill="x", padx=5, pady=0)
 
         ttk.Entry(row, textvariable=var, width=60).pack(side="left", padx=5)
-        ttk.Button(
-            row, text="Browse",
-            command=lambda v=var, r_info=info: self.load_dat_file(v, r_info)
-        ).pack(side="left")
+        self._mk_btn(
+            row, "Browse",
+            lambda v=var, r_info=info: self.load_dat_file(v, r_info),
+            color="secondary", side="left",
+        )
 
         ttk.Button(
             row, text="X", width=2,
@@ -3646,7 +3727,7 @@ class CathPlotGUI:
             srow = ttk.Frame(set_frame)
             srow.pack(fill="x", pady=1)
             v = tk.BooleanVar(value=True)
-            ttk.Checkbutton(srow, variable=v, text=f"[Curve] {c['label']}").pack(side="left")
+            self._mk_check(srow, f"[Curve] {c['label']}", v, color="accent", side="left")
             shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
             size_var = tk.StringVar(value="M")
             style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
@@ -3662,8 +3743,8 @@ class CathPlotGUI:
             srow = ttk.Frame(set_frame)
             srow.pack(fill="x", pady=1)
             v = tk.BooleanVar(value=True)
-            ttk.Checkbutton(srow, variable=v,
-                             text=f"[Surface] {s['label']} (채널 {s['n_outputs']}개, Z={s['z_label']})").pack(side="left")
+            self._mk_check(srow, f"[Surface] {s['label']} (채널 {s['n_outputs']}개, Z={s['z_label']})", v,
+                            color="amber", side="left")
             shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
             size_var = tk.StringVar(value="M")
             style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])

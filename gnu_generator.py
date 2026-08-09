@@ -4,6 +4,7 @@ from data_parser import CathenaDatParser  # 파서 모듈 임포트
 from dataclasses import dataclass, field
 import math
 import os
+import sys
 import re
 import shutil
 import subprocess
@@ -2871,17 +2872,28 @@ class GnuplotGenerator:
 
         _xlabel_rot = _axis_label_rotate_deg(math.cos(_rz_rad), -_R_3D * math.cos(_rx_rad) * math.sin(_rz_rad))
         _ylabel_rot = _axis_label_rotate_deg(math.sin(_rz_rad), _R_3D * math.cos(_rx_rad) * math.cos(_rz_rad))
-        # [수정 - 실측 확인] gnuplot의 "windows"(대화형) 터미널은 3D xlabel/ylabel의
-        # 임의 각도 "rotate by"를 지원하지 않고 그냥 무시(항상 가로로 표시)함 -
-        # 실제 라이브 창을 스크린샷으로 직접 캡처해 확인함. zlabel의 90도만
-        # 됐던 건 90이 예외적으로 지원되는 값이었을 뿐. pdf/png(pdfcairo)는
+        # [수정 - 실측 확인] gnuplot의 "windows"(대화형) 터미널은 3D 네이티브
+        # xlabel의 임의 각도 "rotate by"를 지원하지 않고 그냥 무시(항상 가로로
+        # 표시)함 - 실제 라이브 창을 스크린샷으로 직접 캡처해 확인함. zlabel의
+        # 90도만 됐던 건 90이 예외적으로 지원되는 값이었을 뿐. pdf/png(pdfcairo)는
         # 임의 각도가 정상 동작함(별도 렌더링 테스트로 확인). 그래서 interactive는
-        # 0/90/-90 중 가장 가까운 값으로 스냅해서 최소한 가로/세로는 맞춘다.
+        # xlabel만 0/90/-90 중 가장 가까운 값으로 스냅해서 최소한 가로/세로는 맞춘다.
+        # [수정 - 버그] "3D Plot 초기 화면의 Y-title이 축과 평행하지 않고(t를
+        # 눌러야 평행해짐)" - 원인: 이 스냅을 ylabel_rot에도 똑같이 걸고 있었는데,
+        # ylabel은 (위 주석대로) 네이티브 set ylabel이 아니라 set label로 대체
+        # 렌더링해서 interactive에서도 임의 각도 rotate가 정상 동작함 - 그런데도
+        # xlabel과 똑같이 0/90/-90으로 스냅해버려서, 초기 화면(스크립트 생성
+        # 시점의 rot_x/rot_z 기준 계산값)은 실제 각도가 아닌 엉뚱한 스냅값으로
+        # 나오고, 'R'/'u' 등으로 이 초기 상태로 되돌아갈 때도 계속 스냅값이
+        # 나옴. 't' 키를 누르면 그 순간의 회전각으로 다시 계산하는 bind(위
+        # _bind_parts, yr 계산)는 이 스냅 로직이 전혀 없어서(진짜 각도 그대로
+        # 적용) 그제서야 축과 평행하게 보였던 것. xlabel만 스냅하고 ylabel은
+        # 계산된 실제 각도를 그대로 쓴다(초기 화면도 't'를 누른 것과 동일한
+        # 각도로 나오게 함).
         if is_interactive:
             def _snap90(a):
                 return min((0, 90, -90), key=lambda c: abs(a - c))
             _xlabel_rot = _snap90(_xlabel_rot)
-            _ylabel_rot = _snap90(_ylabel_rot)
         # [수정] "3-D title의 _,^ 첨자 처리 문제, 그리스 문자 가능하게 (2-D처럼
         # 첨자 등 입력 가능하게)" - 예전엔 "_"를 무조건 "\\_"로 이스케이프해서
         # 항상 리터럴로만 나왔는데, 2D는 "_{...}"/"^{...}"(중괄호) 형태일 때만
@@ -3585,9 +3597,24 @@ class GnuplotGenerator:
             # 상쇄돼버렸던 이전 버그와 달리, bottom에만 넣으면 위쪽 칸-아래쪽
             # 칸 사이 간격은 실제로 줄고 아래쪽 바깥 여백(마지막 행의 bottom)만
             # 커진다.
+            # [수정 - 버그 발견] margin_bottom은 모든 칸(패널)이 공유하는 값이라
+            # 이 "간격->마진 이전"이 순가치는 0(간격에서 뺀 만큼 마진에 더함)
+            # 이어야 하는데, 실제로는 margin_bottom이 "칸 사이"뿐 아니라 그
+            # 값을 쓰는 모든 패널(2/p Port면 위/아래 둘 다)의 axis_h를 각자
+            # 그만큼 깎아버림 - 그런데 그 여백이 "필요한" 곳은 위 칸 하나뿐
+            # (위 칸의 bottom<->아래 칸의 top 사이 간격용)이라, 아래 칸(맨
+            # 마지막 행)은 그 여백이 전혀 필요 없는데도 axis_h만 손해를 봄
+            # ("2p Port 아래위가 작아짐, 아래 마진을 줄여달라" 피드백과 일치).
+            # rows>1(실제로 위아래로 쌓이는 2/p Port)에서만 이 문제가 생기므로
+            # 그 경우엔 이 보정 자체를 걷어내(margin_bottom을 원래 값 그대로
+            # 둬서 axis_h를 돌려주고, spacing_h_in 축소분만큼 칸 사이 간격도
+            # 같이 줄어들게) 둔다. rows==1(2/p Landscape, 칸이 가로로만 나란함)은
+            # 이 "칸 사이 세로 간격" 개념 자체가 없어 원래도 실질적 부작용이
+            # 없었으므로 기존 동작을 그대로 유지한다.
             if total_cells == 2:
                 spacing_h_in = max(spacing_h_in - _title_char_h_in, 0.0)
-                _extra_bottom_in = _title_char_h_in
+                if rows == 1:
+                    _extra_bottom_in = _title_char_h_in
         else:
             spacing_h_in = spacing_w_in = spacing_in
         if frame_auto:
@@ -3777,7 +3804,13 @@ class GnuplotGenerator:
         # 그대로 유지). 다만 실측으로 낮춰본 결과 1.2배는 Y1 rotated title이
         # 다시 사라짐(EMF 텍스트 레코드로 직접 확인) - 1.4배가 텍스트 소실
         # 없이 확인된 안전한 최소값(축 폭 57.6%->71.4%로 개선).
-        if frame_auto and font_panel_scale > 1.0:
+        # [수정 - 버그 발견] 위 완화(1.4)가 fmt 조건 없이 걸려 있어서, 이 boost가
+        # 원래 필요 없는 PDF/PNG(cairo는 여백이 부족해도 텍스트를 "넘치게"
+        # 그릴 뿐 통째로 지우지 않음 - EMF/SVG만의 문제)까지 EMF/SVG와 똑같이
+        # 1.4배 마진을 먹어서, "2p Land에서 x축(가로)이 너무 좁다" 피드백의
+        # 실측 원인 중 하나로 확인됨(PDF/PNG margin_left/right가 EMF/SVG와
+        # 완전히 동일한 값으로 나오고 있었음). EMF/SVG에만 이 완화를 적용한다.
+        if frame_auto and font_panel_scale > 1.0 and (fmt or "").lower() in ("emf", "svg"):
             _emf_margin_boost = 1.4
         # [수정 - 심각한 버그] "Multi-plot EMF 2줄 title에서 Y2의 2번째 줄만
         # 통째로 안 보임" - EMF 바이너리로 직접 확인: EMF는 회전된 2줄
@@ -4071,6 +4104,15 @@ class GnuplotGenerator:
             # 같은 sqrt 완화 수준으로 맞춘다(완전히 상쇄하지 않고 절반만).
             if frame_auto and font_panel_scale > 1.0:
                 _legend_boost /= font_panel_scale ** 0.5
+            if os.environ.get("_CATHPLOT_DEBUG_SCALE") and i == 0:
+                print(f"[DEBUG] fmt={fmt} layout={layout_option} orient={orientation} rows={rows} cols={cols} "
+                      f"font_panel_scale={font_panel_scale:.4f} legend_boost={_legend_boost:.4f} "
+                      f"axis_w_in={axis_right_in-axis_left_in:.4f} axis_h_in={axis_top_in-axis_bottom_in:.4f} "
+                      f"cell_w_in={cell_w_in:.4f} cell_h_in={cell_h_in:.4f} "
+                      f"margin_left={margin_left:.4f} margin_right={margin_right:.4f} "
+                      f"margin_top={margin_top:.4f} margin_bottom={margin_bottom:.4f} "
+                      f"spacing_w_in={spacing_w_in:.4f} spacing_h_in={spacing_h_in:.4f} "
+                      f"page_w={page_w:.4f} page_h={page_h:.4f}", file=sys.stderr)
             # [수정] "2/p는 legend box 좌우길이를 1자 정도 키우고, 4/p, 6/p는
             # 2자 줄이고" - print 기준 여유분(0.7자)에서 레이아웃별로 가감한다.
             _legend_w_extra = (0.7 + 1.0) if total_cells <= 2 else (0.7 - 2.0)
