@@ -534,7 +534,7 @@ class CathPlotGUI:
 
         # --- Legend1 줄 (Plot Title 줄 우측) ---
         legend1_row = ttk.Frame(self.plot_frame)
-        legend1_row.grid(row=0, column=3, columnspan=3, padx=3, pady=0, sticky="w")
+        legend1_row.grid(row=0, column=3, columnspan=3, padx=3, pady=0, sticky="we")
         ttk.Checkbutton(legend1_row, text="Legend1 On", variable=self.legend_on_var).pack(side="left", padx=3)
         ttk.Checkbutton(legend1_row, text="Box", variable=self.legend_box_var).pack(side="left", padx=3)
         ttk.Label(legend1_row, text="Pos1:").pack(side="left", padx=2)
@@ -579,7 +579,11 @@ class CathPlotGUI:
             activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
             relief="raised", bd=2,
         )
-        legend1_curves_btn.pack(side="left", padx=(3, 1))
+        # [수정 - 요청] "Curves와 Marker 버튼을 우측 맞춤" - legend1_row/
+        # legend2_row/row2_f가 전부 같은 grid 칸(row=0~2, column=3~5)에
+        # 쌓여 있어서, 셋 다 sticky="we"로 칸 전체 폭을 채우게 하고 버튼을
+        # side="right"로 packing하면 항상 같은 오른쪽 경계에서 맞춰진다.
+        legend1_curves_btn.pack(side="right", padx=(1, 3))
         legend1_curves_btn.configure(
             command=lambda: self._open_curve_select_popup(
                 legend1_curves_btn, "Legend1 Curves", _legend1_get, _legend1_set
@@ -594,7 +598,7 @@ class CathPlotGUI:
         # 어느 curve가 Legend1/2 중 어디에 나타날지는 아래 "Available Variables Selection"
         # 표의 Leg 열(1 또는 2)에서 변수별로 고른다
         legend2_row = ttk.Frame(self.plot_frame)
-        legend2_row.grid(row=1, column=3, columnspan=3, padx=3, pady=0, sticky="w")
+        legend2_row.grid(row=1, column=3, columnspan=3, padx=3, pady=0, sticky="we")
         ttk.Checkbutton(legend2_row, text="Legend2 On", variable=self.legend2_on_var).pack(side="left", padx=3)
         ttk.Checkbutton(legend2_row, text="Box", variable=self.legend2_box_var).pack(side="left", padx=3)
         ttk.Label(legend2_row, text="Pos2:").pack(side="left", padx=2)
@@ -627,7 +631,7 @@ class CathPlotGUI:
             activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
             relief="raised", bd=2,
         )
-        legend2_curves_btn.pack(side="left", padx=(3, 1))
+        legend2_curves_btn.pack(side="right", padx=(1, 3))
         legend2_curves_btn.configure(
             command=lambda: self._open_curve_select_popup(
                 legend2_curves_btn, "Legend2 Curves", _legend2_get, _legend2_set

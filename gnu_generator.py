@@ -1423,6 +1423,30 @@ class GnuplotGenerator:
             line_scale = SCREEN_LINE_SCALE * panel_scale
             border_scale = SCREEN_BORDER_SCALE * panel_scale
 
+        # [수정 - 요청] "M-P Auto의 Plot Title/X title/Y1 title/Y2 title 폰트가
+        # single-plot보다 확연히 커 보임(1p는 59%, 2p는 29% 더 크게 실측됨)" -
+        # single-plot과 "거의 동일하게(완전 고정)"으로 맞춰달라는 요청. M-P
+        # Auto가 칸(cell)이 기준(10x8cm)보다 큰 경우 font_panel_scale이
+        # sqrt로 완화는 되지만 여전히 1.0을 넘게(예: 1p는 1.62) 커지는데,
+        # tic/legend/margin은 이 완화된 값을 그대로 써야 하는 반면(안 그러면
+        # 여백이 부족해짐) title/xlabel/ylabel/y2label 네 가지만 별도로
+        # panel_scale을 1.0로 상한을 둬서(=single-plot의 항상-1.0 방식과
+        # 동일) 계산한다.
+        # [수정 - 버그] 멀티플롯의 panel_scale(=font_panel_scale)은 "칸 크기에
+        # 따른 완화된 배율"과 "CAIRO_FONT_RENDER_FIX(pdf/png 전용 1.5배)"가
+        # 이미 곱해져 하나로 합쳐진 값이라, 단순히 min(panel_scale, 1.0)로
+        # 자르면 칸 크기 배율뿐 아니라 cairo 보정까지 같이 잘려나가 PDF/PNG
+        # M-P의 title이 EMF/SVG보다 다시 작아지는 회귀가 생김(실측: PDF
+        # title이 22, EMF/SVG는 16이어야 할 자리에 서로 안 맞음) - 멀티플롯
+        # cairo 보정 배율만 별도로 구해서 상한을 적용한 뒤 다시 곱해준다
+        # (EMF/SVG는 이 배율이 1.0이라 기존과 동일).
+        _title_cairo_mult = CAIRO_FONT_RENDER_FIX if (is_multiplot and (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg")) else 1.0
+        if is_multiplot:
+            _title_panel_scale = min(panel_scale / _title_cairo_mult, 1.0) * _title_cairo_mult
+        else:
+            _title_panel_scale = panel_scale
+        _title_f_scale = f_scale * (_title_panel_scale / panel_scale) if panel_scale else f_scale
+
         uses_y2_for_log = any(getattr(curve, "axis", "y1") == "y2" for curve in plotdef.curves)
         # [수정] gnuplot은 "비선형(log) 축은 link를 풀기 전에 먼저 선형으로
         # 되돌려야 한다"고 요구함 (에러: "you must clear nonlinear x2 or y2
@@ -1849,10 +1873,10 @@ class GnuplotGenerator:
         lines.append(f"set ytics font '{plotdef.ylabel_font},{tic_size}'")
         lines.append(f"set y2tics font '{plotdef.y2label_font},{tic_size}'")
 
-        title_size = int(float(plotdef.title_size) * f_scale)
-        xlabel_size = int(float(plotdef.xlabel_size) * f_scale)
-        ylabel_size = int(float(plotdef.ylabel_size) * f_scale)
-        y2label_size = int(float(plotdef.y2label_size) * f_scale)
+        title_size = int(float(plotdef.title_size) * _title_f_scale)
+        xlabel_size = int(float(plotdef.xlabel_size) * _title_f_scale)
+        ylabel_size = int(float(plotdef.ylabel_size) * _title_f_scale)
+        y2label_size = int(float(plotdef.y2label_size) * _title_f_scale)
 
         title_text, title_enh = self._render_text(plotdef.title)
         lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" {title_enh}')
@@ -1939,7 +1963,10 @@ class GnuplotGenerator:
         # 달라 이 공식을 적용하면 안 됨 - 위에서 확인됨).
         _is_screen = (fmt or "").lower() == "interactive"
         _is_emf = (fmt or "").lower() == "emf"
-        _term_font_pt_ref = max(int(round(11 * (panel_scale or 1.0))), 8)
+        # [수정] title_size 등에 위 _title_f_scale(panel_scale 상한 적용)을 쓰게
+        # 바뀌었으므로, 이 기준값도 같은 _title_panel_scale로 맞춰야 ylabel_size/
+        # _term_font_pt_ref 비율(아래 offset 보간식의 입력)이 어긋나지 않는다.
+        _term_font_pt_ref = max(int(round(11 * (_title_panel_scale or 1.0))), 8)
         if _is_screen:
             # [수정 - 버그, 사용자 지적으로 재확인] "screen에서 y1 title이 지금
             # tic 숫자 위에 표시됨 - logic이 이상한 거 아닌지?" - git log로
@@ -4199,8 +4226,14 @@ class GnuplotGenerator:
             # 커밋), legend는 font_panel_scale로 나눠서 완전히(1.0으로) 고정해
             # 버려서 title/xlabel보다도 오히려 더 작아졌음(실측 확인) - title과
             # 같은 sqrt 완화 수준으로 맞춘다(완전히 상쇄하지 않고 절반만).
+            # [수정 - 재조정] title은 이후 요청으로 "거의 완전 고정(1.0)"으로
+            # 더 줄었지만(_title_f_scale 참고), legend는 반대로 "EMF/SVG에서
+            # 계속 작게 나온다"는 피드백이라 title과 반대 방향으로 더
+            # 키워야 함 - title 변경과 무관하게 legend만 독립적으로 나눗셈
+            # 지수를 0.5(제곱근)에서 0.3으로 낮춰(나누는 값이 작아짐 ->
+            # legend가 더 커짐) 추가로 키운다.
             if frame_auto and font_panel_scale > 1.0:
-                _legend_boost /= font_panel_scale ** 0.5
+                _legend_boost /= font_panel_scale ** 0.3
             if os.environ.get("_CATHPLOT_DEBUG_SCALE") and i == 0:
                 print(f"[DEBUG] fmt={fmt} layout={layout_option} orient={orientation} rows={rows} cols={cols} "
                       f"font_panel_scale={font_panel_scale:.4f} legend_boost={_legend_boost:.4f} "
