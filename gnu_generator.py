@@ -3494,12 +3494,22 @@ class GnuplotGenerator:
         # 나오게 한다(안 그러면 landscape 칸이 더 크게 스케일되어 legend/폰트가
         # 상대적으로 커 보이는 문제가 있었음).
         _ref_w, _ref_h = (REF_H_IN, REF_W_IN) if cell_w_in < cell_h_in else (REF_W_IN, REF_H_IN)
-        # [수정 - 캡 철회] "x:y 비율은 유지하되, Auto는 용지 최대치까지 확대해서
-        # 쓰자" - 1.0 상한을 두면 칸이 커져도 폰트/마진이 기준(10x8) 크기에
-        # 고정돼 축만 커지고 글자/legend는 비율에 안 맞게 작아 보임. 대신 비율
-        # 유지(contain-fit, 아래 total_cells<=2 블록)로 칸 자체를 기준 비율에
-        # 맞추고 나면, 그 커진 칸에 맞춰 폰트/마진도 함께(선형) 커지게 둔다.
+        # [수정 - 재검토, 캡 재도입] "M-P 결과의 폰트가 single-plot보다 확연히
+        # 커 보임 - single-plot을 기준으로 축소/확대함이 좋겠다" - 실제
+        # single-plot Auto(_compute_size_scale)는 frame_auto일 때 항상 scale=
+        # 1.0(폰트 고정, 축만 페이지 크기에 맞춰 커짐/작아짐)인데, multiplot
+        # Auto는 여기서 칸이 기준(10x8cm)보다 크면(1/p처럼 거의 한 페이지를
+        # 다 쓰는 경우 특히) 폰트도 같이 비례해서 키워서, 같은 내용의
+        # single-plot Auto보다 글자가 훨씬 크게 나오는 것으로 실측 확인됨(예:
+        # 1/p Auto A4 전체 - font_panel_scale이 2배 이상). 예전에 이 상한을
+        # 없앤 이유("칸이 커져도 폰트가 안 커지면 비율이 안 맞아 보임")는
+        # single-plot과 나란히 비교하지 않은 상태에서의 판단이었던 것으로
+        # 보임 - Axis Frame Auto일 때는 single-plot Auto와 동일하게 상한
+        # 1.0을 다시 둬서 폰트를 고정하고(Manual만 이전처럼 지정 크기에 비례해
+        # 커지게 둔다 - single-plot Manual과 같은 방식).
         size_scale = max(min(cell_w_in / _ref_w, cell_h_in / _ref_h), 0.3)
+        if frame_auto:
+            size_scale = min(size_scale, 1.0)
         font_panel_scale = size_scale
         # [참고] "작은 Manual 칸(예: 8x6cm)에서 legend/여백이 과도하게 커서 실제
         # axis가 쪼그라든다" - 간격(spacing)을 0으로 해봐도 거의 안 바뀌는 것으로
