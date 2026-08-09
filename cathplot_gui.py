@@ -168,11 +168,87 @@ class CathPlotGUI:
         self.warning_log_path = os.path.join(self.plot_dir, "cathplot_warnings.log")
         os.makedirs(self.plot_dir, exist_ok=True)
 
+        self._setup_theme()
         self.create_widgets()
         self.root.after(10, self.update_plot_file_list)
         self.root.after(50, self._warmup_gnuplot)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def _setup_theme(self):
+        # [추가] "CathPlot 화면을 채색 등을 고려해서 이쁘게 해달라" - 과학
+        # 계산도구(CATHENA 열수력 데이터)라는 성격에 맞게 차분하지만 또렷한
+        # "슬레이트 블루 + 앰버 포인트" 팔레트로 정리한다. Windows 기본 ttk
+        # 테마(vista/xpnative)는 버튼 배경색을 대부분 무시하는 것으로 이미
+        # 확인돼 있어서(아래 Batch Set/Queue 버튼이 tk.Button을 쓰는 이유 -
+        # 기존 주석 참고), 배경색까지 확실히 반영되는 'clam' 테마로 바꾸고
+        # 그 위에 팔레트를 입힌다. 폰트 크기는 그대로 둬서(키우면 목록에
+        # 보이는 줄 수가 줄어드는 부작용이 있었음 - 위 geometry 주석 참고)
+        # 색상/여백 중심으로만 다듬는다.
+        self.PALETTE = {
+            "bg": "#eef1f6",           # 창 전체 배경(옅은 슬레이트)
+            "panel": "#f8f9fb",        # LabelFrame/입력 영역 배경
+            "border": "#c7cddb",       # 테두리
+            "text": "#1f2937",         # 기본 글자색
+            "heading": "#2b3a67",      # LabelFrame 제목(진한 슬레이트 블루)
+            "accent": "#3457a8",       # 주 강조색(PLOT 등 1차 동작)
+            "accent_dark": "#26407e",
+            "accent2": "#0e7c86",      # 보조 강조색(SAVE)
+            "accent2_dark": "#0b626a",
+            "accent3": "#7a4fb5",      # 보조 강조색(PRINT)
+            "accent3_dark": "#623d92",
+            "amber": "#c9791b",        # 포인트색(Multi Print/Save)
+            "amber_dark": "#a5620f",
+            "danger": "#b3462c",
+            "danger_dark": "#8f3620",
+        }
+        pal = self.PALETTE
+        self.root.configure(bg=pal["bg"])
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure(".", background=pal["bg"], foreground=pal["text"])
+        style.configure("TFrame", background=pal["bg"])
+        style.configure("TLabel", background=pal["bg"], foreground=pal["text"])
+        style.configure(
+            "TLabelframe", background=pal["panel"], bordercolor=pal["border"],
+            relief="groove",
+        )
+        style.configure(
+            "TLabelframe.Label", background=pal["bg"], foreground=pal["heading"],
+            font=("Malgun Gothic", 9, "bold"),
+        )
+        style.configure("TCheckbutton", background=pal["bg"], foreground=pal["text"])
+        style.configure("TRadiobutton", background=pal["bg"], foreground=pal["text"])
+        style.configure("TNotebook", background=pal["bg"])
+        style.configure("TNotebook.Tab", background=pal["panel"], foreground=pal["text"], padding=(10, 4))
+        style.map("TNotebook.Tab", background=[("selected", pal["accent"])], foreground=[("selected", "white")])
+        style.configure(
+            "TButton", background=pal["panel"], foreground=pal["text"],
+            bordercolor=pal["border"], focusthickness=1, padding=4,
+        )
+        style.map("TButton", background=[("active", "#e3e7ef")])
+        style.configure("TEntry", fieldbackground="white", bordercolor=pal["border"])
+        style.configure("TCombobox", fieldbackground="white", background=pal["panel"])
+
+        # [추가] 주요 동작 버튼(PLOT/SAVE/PRINT/Multi Print/Save)용 강조 스타일 -
+        # 각각 다른 강조색을 둬서 한눈에 구분되게 한다(Batch Set/Queue의
+        # 기존 초록색과도 겹치지 않는 팔레트로 골랐음).
+        def _accent_style(name, base, active):
+            style.configure(
+                name, background=base, foreground="white",
+                bordercolor=base, focusthickness=1, padding=6,
+                font=("Malgun Gothic", 9, "bold"),
+            )
+            style.map(name, background=[("active", active), ("pressed", active)])
+
+        _accent_style("Plot.Accent.TButton", pal["accent"], pal["accent_dark"])
+        _accent_style("Save.Accent.TButton", pal["accent2"], pal["accent2_dark"])
+        _accent_style("Print.Accent.TButton", pal["accent3"], pal["accent3_dark"])
+        _accent_style("Multi.Accent.TButton", pal["amber"], pal["amber_dark"])
+        _accent_style("Danger.Accent.TButton", pal["danger"], pal["danger_dark"])
 
     def create_widgets(self):
         self.file_frame = ttk.LabelFrame(self.root, text="DAT Files")
@@ -749,11 +825,16 @@ class CathPlotGUI:
         self.button_frame = ttk.Frame(self.root)
         self.button_frame.pack(side="bottom", fill="x", padx=10, pady=4)
 
-        ttk.Button(self.button_frame, text="PLOT", command=lambda: self.execute_plot_pipeline("Interactive")).pack(side="left")
-        ttk.Button(self.button_frame, text="PRINT", command=self.execute_print_dialog).pack(side="left", padx=5)
-        ttk.Button(self.button_frame, text="SAVE", command=self.execute_save_dialog).pack(side="left", padx=5)
-        ttk.Button(self.button_frame, text="Close All Plots", command=self.close_all_plot_windows).pack(side="right", padx=5)
-        ttk.Button(self.button_frame, text="Multi Print/Save", command=self.open_multi_plot_dialog).pack(side="left", padx=15)
+        ttk.Button(self.button_frame, text="PLOT", style="Plot.Accent.TButton",
+                   command=lambda: self.execute_plot_pipeline("Interactive")).pack(side="left")
+        ttk.Button(self.button_frame, text="PRINT", style="Print.Accent.TButton",
+                   command=self.execute_print_dialog).pack(side="left", padx=5)
+        ttk.Button(self.button_frame, text="SAVE", style="Save.Accent.TButton",
+                   command=self.execute_save_dialog).pack(side="left", padx=5)
+        ttk.Button(self.button_frame, text="Close All Plots", style="Danger.Accent.TButton",
+                   command=self.close_all_plot_windows).pack(side="right", padx=5)
+        ttk.Button(self.button_frame, text="Multi Print/Save", style="Multi.Accent.TButton",
+                   command=self.open_multi_plot_dialog).pack(side="left", padx=15)
         ttk.Button(self.button_frame, text="Clean Past Plots", command=self.open_delete_dialog).pack(side="right", padx=5)
 
         self.add_file_row()
