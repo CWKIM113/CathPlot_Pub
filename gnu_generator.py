@@ -256,6 +256,17 @@ PRINT_FONT_SCALE = 1.60     # [수정 - 버그] "PDF 그림에서 font size가 p
 # 모두 font_pt에 비례해 계산되므로 이 배율 하나로 같이 커짐.
 PRINT_LINE_SCALE = 1.00     # 기존 1.70
 PRINT_BORDER_SCALE = 1.00   # 기존 1.50
+
+# [추가 - 근본 원인 발견] gnuplot의 pdfcairo 터미널(png/jpg도 PDF를 거쳐
+# 만들어지므로 동일)은 "font 'Name,SIZE'"로 지정한 값과 무관하게 실제
+# PDF에 기록되는 폰트 크기가 항상 정확히 2/3로 줄어드는 자체 특성이 있음
+# (우리 코드와 무관한 최소 재현 스크립트로 확인 - 지정 36 -> 실제 24,
+# 지정 40 -> 실제 26.667 등 예외 없이 정확한 2/3. PyMuPDF span.size로
+# 직접 측정). EMF/SVG는 지정한 값 그대로 렌더링됨(이 축소가 없음). 이
+# 상수(2/3의 역수)를 f_scale에 곱해 pdf/png/jpg 전용으로 상쇄한다 -
+# f_scale에 비례하는 모든 값(font_pt, margin 여유값)이 같이 커져서
+# EMF/SVG와 절대 크기가 맞아떨어지게 된다.
+CAIRO_FONT_RENDER_FIX = 1.5
 PRINT_TIC_MAJOR_SCALE = 1.0
 PRINT_TIC_MINOR_SCALE = 0.5
 
@@ -1339,6 +1350,8 @@ class GnuplotGenerator:
             f_scale = PRINT_FONT_SCALE * (panel_scale or 1.0)
             if (fmt or "").lower() == "emf":
                 f_scale *= 0.75
+            elif (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
+                f_scale *= CAIRO_FONT_RENDER_FIX
         else:
             f_scale = SCREEN_FONT_SCALE * (panel_scale or 1.0)
         return f_scale
@@ -1376,6 +1389,28 @@ class GnuplotGenerator:
             # PNG/JPG가 이제 PDF를 그대로 래스터화해서 만들어지므로(fmt='png'로
             # 이 함수까지 오지 않고 create_script 단계에서 이미 'pdf'로 바뀜)
             # 여기 도달할 일이 없는 죽은 코드가 됨. 혼동 방지로 제거.
+            # [추가 - 근본 원인 수정] gnuplot pdfcairo 터미널이 지정한 폰트
+            # 크기를 실제로는 항상 정확히 2/3만 PDF에 기록한다는 사실을
+            # 최소 재현 스크립트(코드와 무관)로 확인함 - title/xlabel/tic/
+            # legend 전부 동일 비율로 축소되는 걸 PyMuPDF span.size로 직접
+            # 측정 확인. f_scale 자체에 그 역수(1.5)를 곱해두면, f_scale에
+            # 비례하는 모든 것(font_pt는 물론, margin 여유값도 전부 f_scale에
+            # 비례하는 식이라 - _compute_manual_margins_in/멀티플롯 margin
+            # floor 참고) 같이 커져서 별도로 margin을 하나하나 다시 맞출
+            # 필요가 없다(실제 렌더링 크기가 커지는 만큼 필요 여백도 그
+            # 비율만큼 커지는 게 정확히 맞는 방향). PNG/JPG(fmt='png'가
+            # 단일 plot에서는 위 주석대로 'pdf'로 이미 바뀌어 들어오지만,
+            # 멀티플롯은 fmt='png' 그대로 들어오므로 둘 다 명시).
+            # EMF/SVG는 이 축소가 없어(별도 확인) 대상에서 제외.
+            # [주의 - 중복 적용 방지] 멀티플롯(is_multiplot=True) 호출은
+            # panel_scale 자체(=font_panel_scale)가 create_multiplot_script
+            # 쪽에서 이미 이 보정을 적용한 채로 넘어오므로(margin_left/right/
+            # top/bottom도 그 보정된 값 기준으로 계산돼야 하기 때문 - 위
+            # font_panel_scale 주석 참고), 여기서 또 곱하면 1.5배가 두 번
+            # 걸려버림. 단일 plot(create_script, is_multiplot=False)만 여기서
+            # 적용한다.
+            if not is_multiplot and (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
+                f_scale *= CAIRO_FONT_RENDER_FIX
             # [수정 - 버그] "EMF는 PDF보다 폰트가 크지만, 그래도 1.5배 더
             # 키워달라(PDF/PNG/JPG를 2배로 키운 것과 맞춰서)" - EMF는 이미
             # 자체적으로 더 크게 보이던 포맷이라 PDF와 똑같이 2배를 다 주면
@@ -3550,6 +3585,21 @@ class GnuplotGenerator:
             # 그대로 선형 유지(이 조정과 무관, 원래도 문제 없었음).
             size_scale = size_scale ** 0.5
         font_panel_scale = size_scale
+        # [추가 - 근본 원인 수정] M-P(멀티플롯)의 margin_left/right/top/bottom·
+        # legend_boost 등은 이 font_panel_scale에서 바로 파생되고
+        # _build_plot_commands의 f_scale(단일 plot과 공유하는 CAIRO_FONT_
+        # RENDER_FIX 보정)과는 완전히 별개 변수라서, f_scale 쪽만 고쳐서는
+        # M-P의 margin이 "커진 실제 폰트 크기"를 따라가지 못해(실측: 보정
+        # 전/후 margin_left/right/top/bottom이 그대로) 텍스트가 여백을
+        # 침범할 위험이 있었음 - 여기서 font_panel_scale 자체를 미리
+        # 보정해두면 이후의 margin_scale/_floor_scale/need_*_in/legend_boost/
+        # 최종 _build_plot_commands 호출(panel_scale=font_panel_scale)까지
+        # 전부 이 보정된 값을 일관되게 쓰게 된다(단일 plot과 동일한 "한 곳만
+        # 고치면 비례하는 모든 것이 같이 커짐" 방식). _build_plot_commands
+        # 안에서는 멀티플롯 호출 시 이 보정을 중복 적용하지 않도록
+        # is_multiplot으로 걸러둠(아래 참고).
+        if (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
+            font_panel_scale *= CAIRO_FONT_RENDER_FIX
         # [참고] "작은 Manual 칸(예: 8x6cm)에서 legend/여백이 과도하게 커서 실제
         # axis가 쪼그라든다" - 간격(spacing)을 0으로 해봐도 거의 안 바뀌는 것으로
         # 실측 확인(원인은 spacing이 아니라 margin/legend 자체) - 폰트(글자
