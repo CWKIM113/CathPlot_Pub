@@ -1068,6 +1068,7 @@ class CathPlotGUI:
     LAYOUT_GRID = {
         "1/p": (1, 1),
         "2/p": (2, 1),
+        "3/p": (1, 3),
         "4/p": (2, 2),
         "6/p": (3, 2),
     }
@@ -1108,7 +1109,7 @@ class CathPlotGUI:
         ttk.Label(dialog, text="Layout:").pack(anchor="w", padx=10, pady=(10, 0))
         layout_combo = ttk.Combobox(
             dialog, textvariable=self.layout_var,
-            values=["Auto", "1/p", "2/p", "4/p", "6/p"], state="readonly"
+            values=["Auto", "1/p", "2/p", "3/p", "4/p", "6/p"], state="readonly"
         )
         layout_combo.pack(fill="x", padx=10, pady=5)
 

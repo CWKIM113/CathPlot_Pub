@@ -3652,38 +3652,50 @@ class GnuplotGenerator:
 
         self.last_size_warning = None  # 이전 호출에서 남은 경고가 있으면 초기화
 
+        # [수정 - 요청] "M-P에서 페이지당 plot을 정하지 않고 print/save 할 때만
+        # (Layout=Auto) 용지 가득 사용, Layout을 1/p~6/p로 명시했을 때는 Axis
+        # Frame Auto도 single-plot과 똑같이 '고정 default 크기'를 쓰고 그 이후는
+        # Manual(명시 크기)과 똑같은 경로(용지에 안 맞으면 축소, 4p/6p는 남으면
+        # 확대)를 타야 한다" - Layout이 "Auto"가 아닌데 frame_auto=True로 들어온
+        # 경우, 여기서 미리 요청 크기를 default(10x8cm)로 바꿔주고 frame_auto를
+        # False로 내려서, 아래의 기존 Manual 처리 경로를 그대로 재사용한다(별도
+        # 코드 경로를 새로 만들지 않아 회귀 위험을 최소화). Layout=Auto는 그대로
+        # (지금까지와 동일하게) 용지를 채우는 경로를 그대로 쓴다.
+        if frame_auto and layout_option != "Auto":
+            frame_width, frame_height, frame_unit = "10.00", "8.00", "cm"
+            frame_auto = False
+
         # [추가] Print(물리적 프린터 인쇄)는 큰 여백(좌2/우1/상3/하2cm)이 필요하지만,
         # Save(파일 저장)는 그런 물리적 제약이 없으므로 작은 여백만 사용한다.
-        # [수정] Auto(칸 크기를 페이지에 맞춰 알아서 채우는 모드)는 인쇄용 물리
-        # 여백을 강제로 크게 두지 않고, 최소 여백만 두고 자동으로 채운다("여백을
-        # 강제하지 말고 자동에 맡기는" 사용자 요청) - Print/Save든 동일하게 최소
-        # 여백만 사용
-        if frame_auto:
-            # [수정] Auto는 절대 여백을 전혀 적용하지 않는다("Auto size에는 적용하지
-            # 말 것") - 페이지를 실제로 다 채우는 건 어차피 plot 자체 여백
-            # (margin_left 등, title/tic 라벨 자리)뿐이므로, 여기서 별도로 더할
-            # 필요가 없음
-            pm_left = pm_right = pm_top = pm_bottom = 0.0
-        else:
-            # [수정 - 요청] "Print 버튼을 쓰면 여백이 이중으로 크게 잡히는 것은
-            # Save와 같은 결과라야 함" - 예전엔 for_print(Print/Batch 버튼)일 때만
-            # 물리 프린터용 큰 여백(좌2/우1/상3/하2cm)을 강제로 더 얹었는데,
-            # 실제로 이 결과물이 Word에 들어가는 경우가 많아 Save와 결과가
-            # 달라지면 혼란스러움 - Print/Save 모두 항상 작은 여백(사방 0.3cm)만
-            # 쓰도록 통일한다(정말 물리 프린터로 직접 보낼 때 여백이 부족하면
-            # 그건 프린터 드라이버 쪽 설정으로 해결할 문제로 본다).
-            pm_left = pm_right = pm_top = pm_bottom = self.SAVE_PAGE_MARGIN_IN
+        # [수정 - 재확인] Auto(칸 크기를 페이지에 맞춰 알아서 채우는 모드)는 한동안
+        # 절대 여백을 전혀 적용하지 않았음("Auto size에는 적용하지 말 것") - Save로
+        # Word 등에 넣을 땐 Word 자체 여백에 맡기면 되니 문제 없었지만, 실제
+        # 물리 프린터로 직접 Print해 보니 용지 가장자리까지 꽉 차게 나와(대부분의
+        # 프린터는 가장자리를 완전히 인쇄 못 하는 하드웨어 여백이 있음) 잘릴 위험이
+        # 있다는 피드백 - Manual과 동일하게 Auto도 Print/Save 모두 최소 여백(사방
+        # 0.3cm)을 적용하도록 되돌린다(더 이상 Auto/Manual을 구분하지 않음).
+        pm_left = pm_right = pm_top = pm_bottom = self.SAVE_PAGE_MARGIN_IN
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
         nplot = len(plots)
 
+        # [추가 - 요청] "3/p" - 2/p와 같은 사고방식으로 방향에 맞춰 한 줄로
+        # 배치한다: Land(가로가 넓은 용지)는 나란히 3칸(1행 3열, 각 칸은
+        # 세로가 긴 모양), Port(세로가 긴 용지)는 위아래로 3칸(3행 1열, 각
+        # 칸은 가로가 넓은 모양) - 그래야 3장이 용지를 가득 채움(4/p처럼
+        # 2x2에 3장만 넣어 한 칸이 비는 것보다 나음).
         if layout_option == "Auto":
             if nplot <= 1: rows, cols = 1, 1
             elif nplot == 2: rows, cols = (1, 2) if orientation == "landscape" else (2, 1)
+            elif nplot == 3: rows, cols = (1, 3) if orientation == "landscape" else (3, 1)
             elif nplot <= 4: rows, cols = 2, 2
-            else: rows, cols = 3, 2
+            # [수정 - 버그] 5·6장(else 버킷)은 6/p와 똑같은 격자를 쓰는데, 여기는
+            # 방향(orientation)을 안 보고 항상 (3,2)였음 - 6/p 자체 규칙(land는
+            # 가로로 넓은 2행3열, port는 3행2열)과 안 맞았던 것- 통일한다.
+            else: rows, cols = (2, 3) if orientation == "landscape" else (3, 2)
         elif layout_option in ["1/p", "1"]: rows, cols = 1, 1
         elif "2/p" in layout_option: rows, cols = (1, 2) if orientation == "landscape" else (2, 1)
+        elif "3/p" in layout_option: rows, cols = (1, 3) if orientation == "landscape" else (3, 1)
         elif "4/p" in layout_option: rows, cols = 2, 2
         elif "6/p" in layout_option: rows, cols = (2, 3) if orientation == "landscape" else (3, 2)
         else: rows, cols = 1, 1
@@ -3750,8 +3762,8 @@ class GnuplotGenerator:
         # 100% 꽉 채우면 바깥쪽이 딱 붙어 보이므로 살짜 못 미치게(가로 95%,
         # 세로 90%) 채운다. 칸이 적을 때(1/p, 2/p)는 비율 유지(contain-fit)
         # 자체가 이미 여유를 만들어주므로 그대로 100% 기준을 쓴다.
-        _auto_fill_w = 0.95 if total_cells >= 4 else 1.0
-        _auto_fill_h = 0.90 if total_cells >= 4 else 1.0
+        _auto_fill_w = 0.95 if total_cells >= 3 else 1.0
+        _auto_fill_h = 0.90 if total_cells >= 3 else 1.0
         if frame_auto:
             cell_w_in = (printable_w * _auto_fill_w - CELL_SPACING_IN * (cols - 1)) / cols
             cell_h_in = (printable_h * _auto_fill_h - CELL_SPACING_IN * (rows - 1)) / rows
@@ -3857,7 +3869,7 @@ class GnuplotGenerator:
         # 문제가 있었음(Auto 4/p 실측: 축 h=38pt까지 쪼그라듦) - 이 적극적 축소는
         # "칸이 기준보다 작을 때(size_scale<1)"에만 의미가 있으므로, 그 경우에만
         # 적용하고 그 외(size_scale>=1)에는 선형을 유지한다.
-        _margin_aggr = 3.0 if total_cells >= 4 else 1.0
+        _margin_aggr = 3.0 if total_cells >= 3 else 1.0
         margin_scale = size_scale ** _margin_aggr if size_scale < 1.0 else size_scale
         layout_scale = size_scale ** _margin_aggr if size_scale < 1.0 else size_scale
         # [수정] "plot간 여백/간격이 너무 큼, 좌우 여백도 최소화(절대마진
@@ -3881,7 +3893,7 @@ class GnuplotGenerator:
             # (MPa)"/"Temperature (C)"가 옆 칸과 겹침). 대신 아래(margin_left/
             # right 계산부)에 top/bottom과 똑같은 방식의 floor(최소 절대 여백)를
             # 추가해서, 겹치지 않는 한도까지만 최대한 줄어들게 한다.
-            if total_cells >= 4:
+            if total_cells >= 3:
                 margin_scale *= 0.5
                 layout_scale *= 0.5
         spacing_in = CELL_SPACING_IN * layout_scale
@@ -4098,7 +4110,7 @@ class GnuplotGenerator:
         # (더 큰) 여백을 갖게 되는 역행이 생김 - 1/p·2p(total_cells<4)만
         # title과 동일하게 1.0 상당으로 고정하고, 4/p·6/p는 기존 margin_scale
         # 기반 로직(칸 수에 따른 추가 축소 포함)을 그대로 유지한다.
-        if total_cells >= 4:
+        if total_cells >= 3:
             _floor_scale = margin_scale * _cairo_fix
         else:
             _underlying_scale = font_panel_scale / _cairo_fix if _cairo_fix else font_panel_scale
@@ -4339,7 +4351,7 @@ class GnuplotGenerator:
             # 유지) 오히려 반대로 용지를 채우도록 grid 전체를 키운다(비율 유지,
             # 위 축소와 동일한 방식의 반대 방향). 1/p, 2/p는 지정 크기를 그대로
             # 존중하므로 이 확대는 적용하지 않는다.
-            if total_cells >= 4:
+            if total_cells >= 3:
                 grid_w = cell_w_in * cols + spacing_in * (cols - 1)
                 grid_h = cell_h_in * rows + spacing_in * (rows - 1)
                 # [수정] 100%까지 꽉 채우면 용지에 딱 붙어 보인다는 피드백
@@ -4451,11 +4463,33 @@ class GnuplotGenerator:
         origin_left = pad_left + max(0, (printable_w - grid_w) / 2)
         origin_top = (page_h - pad_top) - max(0, (printable_h - grid_h) / 2)
         cell_positions_in = []
-        for i in range(total_cells):
-            row_idx, col_idx = i // cols, i % cols
-            cell_left_in = origin_left + col_idx * (cell_w_in + spacing_w_in)
-            cell_top_in = origin_top - row_idx * (cell_h_in + spacing_h_in)
-            cell_positions_in.append((cell_left_in, cell_left_in + cell_w_in, cell_top_in, cell_top_in - cell_h_in))
+        # [추가 - 요청] "Auto로 5장을 그리면 6/p 격자에 1칸이 빈 채로 나오는데,
+        # 그보다는 꽉 찬 줄(3장) + 가운데로 맞춘 줄(2장)이 보기 좋다" - 6/p와
+        # 같은 칸 크기·격자(rows,cols)는 그대로 쓰되, 이 경우만 배치(row/col
+        # 인덱스)를 행렬 순서(row-major) 대신 "꽉 찬 줄을 먼저 순서대로, 남는
+        # 줄은 그 줄의 중앙에 오도록 0.5칸씩 어긋난 위치"로 특수 처리한다
+        # (다른 개수는 기존 로직 그대로 - nplot==5일 때만 해당). cell_rc는
+        # 아래 마주보는 여백 재배분(LR/TB) 계산에서 실제 배치된 row/col을
+        # 그대로 참고하도록(단순 i//cols, i%cols로 재계산하면 이 특수
+        # 배치와 안 맞아 잘못된 칸에 재배분될 수 있음) 별도로 저장한다.
+        cell_rc = []
+        if layout_option == "Auto" and nplot == 5:
+            if rows == 3:  # Port: 왼쪽 열 3장(row 0,1,2) + 오른쪽 열 2장(가운데)
+                _idx_map = [(0, 0), (1, 0), (2, 0), (0.5, 1), (1.5, 1)]
+            else:  # Land: 위쪽 행 3장(col 0,1,2) + 아래쪽 행 2장(가운데)
+                _idx_map = [(0, 0), (0, 1), (0, 2), (1, 0.5), (1, 1.5)]
+            for row_idx, col_idx in _idx_map:
+                cell_left_in = origin_left + col_idx * (cell_w_in + spacing_w_in)
+                cell_top_in = origin_top - row_idx * (cell_h_in + spacing_h_in)
+                cell_positions_in.append((cell_left_in, cell_left_in + cell_w_in, cell_top_in, cell_top_in - cell_h_in))
+                cell_rc.append((row_idx, col_idx))
+        else:
+            for i in range(total_cells):
+                row_idx, col_idx = i // cols, i % cols
+                cell_left_in = origin_left + col_idx * (cell_w_in + spacing_w_in)
+                cell_top_in = origin_top - row_idx * (cell_h_in + spacing_h_in)
+                cell_positions_in.append((cell_left_in, cell_left_in + cell_w_in, cell_top_in, cell_top_in - cell_h_in))
+                cell_rc.append((row_idx, col_idx))
 
         size_override = f"{page_w:.3f}in,{page_h:.3f}in"
         lines = [
@@ -4492,17 +4526,24 @@ class GnuplotGenerator:
             _reclaimed_tb = (rows - 1) * (1 - _interior_k) * (margin_top + margin_bottom)
             _extra_outer_tb = _reclaimed_tb / 2.0
 
+        # [수정 - 버그] 5장 가운데 배치 특수 케이스(row/col이 0.5 등 정수가 아님)는
+        # 이 재배분(마주보는 칸끼리 안쪽 여백 절반, 바깥쪽에 얹기) 대상이 아님 -
+        # 애초에 "꽉 채운 줄" 옆에 "덜 채운 줄"을 중앙 정렬한 것이라 안쪽 여백이
+        # 남는 게 정상(사용자 의도: "아래위 마진은 당연히 많아짐")인데, 정수
+        # row/col 기준(==0/==rows-1)에 안 맞아 그대로 두면 "안쪽"으로 잘못
+        # 분류돼 오히려 마진이 반으로 줄어버림 - 이 케이스는 재배분 없이 원래
+        # margin_left/right/top/bottom을 그대로 쓴다.
+        _is_centered5 = (layout_option == "Auto" and nplot == 5)
         for i, plotdef in enumerate(plots):
             cell_left_in, cell_right_in, cell_top_in, cell_bottom_in = cell_positions_in[i]
-            _col_idx = i % cols
-            _row_idx = i // cols
-            if cols > 1:
+            _row_idx, _col_idx = cell_rc[i]
+            if cols > 1 and not _is_centered5:
                 _eff_margin_left = (margin_left + _extra_outer_lr) if _col_idx == 0 else margin_left * _interior_k
                 _eff_margin_right = (margin_right + _extra_outer_lr) if _col_idx == cols - 1 else margin_right * _interior_k
             else:
                 _eff_margin_left = margin_left
                 _eff_margin_right = margin_right
-            if rows > 1:
+            if rows > 1 and not _is_centered5:
                 _eff_margin_top = (margin_top + _extra_outer_tb) if _row_idx == 0 else margin_top * _interior_k
                 _eff_margin_bottom = (margin_bottom + _extra_outer_tb) if _row_idx == rows - 1 else margin_bottom * _interior_k
             else:
@@ -4537,7 +4578,7 @@ class GnuplotGenerator:
             # 줄이면서 axis가 커진 만큼, legend(font_panel_scale 그대로)는 상대적으로
             # 작아 보임 - 칸이 많을 때(4/p 이상)만 legend 글자 크기를 별도로
             # 살짜 키운다(축/제목/tic 폰트는 그대로 유지).
-            _legend_boost = 1.3 if total_cells >= 4 else 1.0
+            _legend_boost = 1.3 if total_cells >= 3 else 1.0
             # [수정 - 근본 원인 발견] "legend가 축 대비 상대적으로 커 보임(실측:
             # PDF에서 legend box 폭이 axis 폭의 95%+)" - 실제 원인은 legend
             # font가 title/xlabel/ylabel과 달리 font_panel_scale을 그대로(sqrt
