@@ -11,7 +11,13 @@ binaries = []
 # 코드 자체는 try/except로 안전하게 fallback해서 exe가 죽지는 않지만, 그
 # fallback 경로가 "PNG는 300dpi 업스케일 없이 72dpi로 저장"이라 최근
 # 지적된 "Word 이미지 해상도가 떨어진다" 증상의 실제 원인으로 보임.
-hiddenimports = ['PIL']
+# [수정 - 더 심각한 원인 발견] PNG/JPG는 이제 PDF를 PyMuPDF(fitz)로
+# 래스터화하는 방식이 기준인데, 이 fitz도 같은 방식(함수 내 try/except
+# 지연 import)이라 PyInstaller가 못 찾아서 exe에서 통째로 빠져 있었음 -
+# 없으면 legend box 크기 추정이 옛날(레거시 pngcairo 전용) 기준으로
+# 조용히 폴백해서 "legend box가 축의 107%로 커짐" 버그가 재현됨. 실제로
+# pip install PyMuPDF 설치 후 재현 안 됨을 직접 확인함.
+hiddenimports = ['PIL', 'fitz']
 tmp_ret = collect_all('pywin32')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
