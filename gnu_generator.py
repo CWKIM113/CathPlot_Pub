@@ -1376,7 +1376,7 @@ class GnuplotGenerator:
             f_scale = SCREEN_FONT_SCALE * (panel_scale or 1.0)
         return f_scale
 
-    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, circles=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None, legend_scale_boost=1.0, legend_width_extra_chars=None):
+    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, circles=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None, legend_scale_boost=1.0, legend_width_extra_chars=None, frame_auto=None):
         # [추가] Interactive(화면) 창은 frame_auto/frame_width와 무관하게 항상
         # 고정된 1000x700 캔버스로 뜬다(_get_terminal_cmd 참고) - 그런데 아래
         # 절대 여백 보정(축소 시 title/label이 사라지는 것 방지 등)은 "캔버스가
@@ -1488,6 +1488,16 @@ class GnuplotGenerator:
         # cairo 보정 배율만 별도로 구해서 상한을 적용한 뒤 다시 곱해준다
         # (EMF/SVG는 이 배율이 1.0이라 기존과 동일).
         _title_cairo_mult = CAIRO_FONT_RENDER_FIX if (is_multiplot and (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg")) else 1.0
+        # [주의 - 시도했다가 되돌림] "1/p Manual 40x30cm처럼 기준(10x8cm)보다
+        # 훨씬 큰 Manual 크기에서 title이 tic/legend 대비 작게 나옴"을 고치려고
+        # Manual일 때 이 상한을 없애봤으나, f_scale 자체가 tic 등 다른 요소용
+        # 배율(cairo 보정 등 여러 배수가 이미 곱해진 큰 값)이라 title에 그대로
+        # 적용하면 title이 화면을 다 덮을 정도로 폭주함(실측: 40x30cm에서
+        # title 126pt, 렌더링 결과 title이 plot 전체를 가림 - 원래(33pt, 작음)
+        # 보다 훨씬 심각한 회귀). 상한을 없애는 대신 완화(sqrt 등) 계수가
+        # 필요한데 안전하게 확정할 시간이 없어 일단 원래(항상 상한 1.0) 동작
+        # 으로 되돌림 - Manual 극단 크기에서 title이 작게 보이는 문제는
+        # 미해결 상태로 남겨둠(별도 검토 필요).
         if is_multiplot:
             _title_panel_scale = min(panel_scale / _title_cairo_mult, 1.0) * _title_cairo_mult
         else:
@@ -4356,6 +4366,7 @@ class GnuplotGenerator:
                 fmt=fmt,
                 legend_scale_boost=_legend_boost,
                 legend_width_extra_chars=_legend_w_extra,
+                frame_auto=frame_auto,
             )
 
         lines.append("unset multiplot")
