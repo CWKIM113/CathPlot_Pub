@@ -271,14 +271,15 @@ PRINT_TIC_MAJOR_SCALE = 1.0
 PRINT_TIC_MINOR_SCALE = 0.5
 
 #----------------------------------------------------------
-# Page (physical paper) absolute margins - PRINT/SAVE 공통
-# (나중에 조정하기 쉽도록 파일 앞쪽에 파라미터로 배치)
+# [수정 - 죽은 코드 제거] PAGE_MARGIN_LEFT/RIGHT/TOP/BOTTOM_CM, SAVE_PAGE_
+# MARGIN_CM(모듈 레벨) - 예전 "Print는 물리 프린터용 큰 비대칭 여백(좌2·
+# 우1·상3·하2cm), Save는 작은 여백"이라는 설계의 잔재였는데, "Print/Save가
+# 결과 다르면 혼란스럽다"는 요청으로 이미 통일돼서(create_multiplot_script
+# 안의 로컬 SAVE_PAGE_MARGIN_IN = 0.3/2.54를 Print/Save 둘 다 씀) 이
+# 5개 모듈 상수는 grep 결과 파일 전체(gnu_generator.py, cathplot_gui.py)
+# 어디에서도 실제로 참조되지 않는 죽은 값이었음 - 남겨두면 "Print가 아직도
+# 이 큰 여백을 쓴다"고 오해하기 쉬워 제거함.
 #----------------------------------------------------------
-PAGE_MARGIN_LEFT_CM = 2.0
-PAGE_MARGIN_RIGHT_CM = 1.0
-PAGE_MARGIN_TOP_CM = 3.0
-PAGE_MARGIN_BOTTOM_CM = 2.0
-SAVE_PAGE_MARGIN_CM = 0.3  # Save(파일 저장)는 물리적 인쇄 불가 영역 제약이 없어 최소 여백만 사용
 
 # gnuplot의 emf 터미널이 실제로 EMF 헤더(rclFrame)에 기록하는 기준 해상도.
 # gdi32.GetEnhMetaFileHeader로 알려진 픽셀 크기(예: 1000x800)의 EMF를 만들어
@@ -3644,8 +3645,17 @@ class GnuplotGenerator:
                 if (frame_unit or "in") == "cm":
                     _fw_in /= 2.54
                     _fh_in /= 2.54
-                page_w = _fw_in * cols + CELL_SPACING_IN * (cols - 1) + pm_left + pm_right
-                page_h = _fh_in * rows + CELL_SPACING_IN * (rows - 1) + pm_top + pm_bottom
+                # [수정 - 불일치 발견] 아래(실제 레이아웃)의 칸 사이 간격은
+                # spacing_in = CELL_SPACING_IN * layout_scale로 칸 크기에 비례해
+                # 커지는데, 여기(페이지 크기 추정)는 CELL_SPACING_IN을 그대로
+                # (배율 없이) 써서 서로 다른 간격 값을 썼음(실제 영향은 작음 -
+                # 칸이 2배 커져도 간격 차이는 0.1in 수준). layout_scale은 이
+                # 시점에는 아직 계산 전(cell_w_in 등에 의존)이라 그대로 쓸 수
+                # 없어, 같은 기준(10x8cm)으로 미리 근사치를 구해 일관되게 한다.
+                _early_scale_est = min(_fw_in / (10.0 / 2.54), _fh_in / (8.0 / 2.54), 2.0)
+                _early_spacing = CELL_SPACING_IN * max(_early_scale_est, 0.3)
+                page_w = _fw_in * cols + _early_spacing * (cols - 1) + pm_left + pm_right
+                page_h = _fh_in * rows + _early_spacing * (rows - 1) + pm_top + pm_bottom
             except ValueError:
                 pass
         printable_w = page_w - pm_left - pm_right
