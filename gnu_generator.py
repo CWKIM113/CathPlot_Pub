@@ -3598,15 +3598,23 @@ class GnuplotGenerator:
         # 같다" 실측 확인) - 단일 plot(rows=cols=1) + Manual일 때는 단일 plot
         # create_script와 동일한 개념("Frame 크기 = 축 크기, 페이지 = 축+여백")
         # 으로, 페이지 크기 자체를 frame_width/height + 여백으로 다시 잡는다.
-        if rows == 1 and cols == 1 and not frame_auto and frame_width and frame_height:
+        # [수정 - 버그] 위 수정이 rows==1 and cols==1 조건 때문에 1/p에만
+        # 적용되고 2/p 이상(칸이 여러 개)에는 전혀 적용 안 돼 있었음 - 실측
+        # 확인: 2/p는 Manual/Auto 구분 없이 항상 이 A4 기본값 그대로 나옴
+        # ("Manual이 지정 크기 유지 안 됨" 재현). "Manual은 지정한 axis
+        # 크기를 기준으로 save/print하고, 용지에 안 맞으면 그 다음에 축소"
+        # 원칙에 맞춰 칸이 여러 개일 때도 (칸 크기 x 칸 수 + 칸 사이 간격 +
+        # 여백)으로 페이지 크기를 다시 잡는다 - 이후의 shrink-to-fit 로직이
+        # 이렇게 계산된 페이지가 실제 용지보다 크면 그때 비율 유지하며 축소한다.
+        if not frame_auto and frame_width and frame_height:
             try:
                 _fw_in = float(frame_width)
                 _fh_in = float(frame_height)
                 if (frame_unit or "in") == "cm":
                     _fw_in /= 2.54
                     _fh_in /= 2.54
-                page_w = _fw_in + pm_left + pm_right
-                page_h = _fh_in + pm_top + pm_bottom
+                page_w = _fw_in * cols + CELL_SPACING_IN * (cols - 1) + pm_left + pm_right
+                page_h = _fh_in * rows + CELL_SPACING_IN * (rows - 1) + pm_top + pm_bottom
             except ValueError:
                 pass
         printable_w = page_w - pm_left - pm_right
