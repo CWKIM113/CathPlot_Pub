@@ -107,5 +107,7 @@
             "alias": ""
         }
     ],
-    "data_start_line": 4
+    "data_start_line": 4,
+    "is_surface": false,
+    "surface_base_name": ""
 }
