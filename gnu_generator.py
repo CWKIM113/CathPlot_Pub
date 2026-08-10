@@ -2549,7 +2549,20 @@ class GnuplotGenerator:
             REFERENCE_WIDTH_IN, REFERENCE_HEIGHT_IN = REFERENCE_HEIGHT_IN, REFERENCE_WIDTH_IN
         width_ratio = fw / REFERENCE_WIDTH_IN
         height_ratio = fh / REFERENCE_HEIGHT_IN
-        return max(min(width_ratio, height_ratio), 0.3)  # 너무 작아지지 않게 하한
+        # [수정 - 버그] 상한이 전혀 없어서 기준(10x8cm)보다 훨씬 큰 Manual
+        # 크기(예: 40x30cm)를 입력하면 title 폰트가 배율을 그대로 따라가
+        # 100pt 이상으로 폭주해서 title 텍스트가 plot 전체를 뒤덮어버리는
+        # 문제가 실측 확인됨(single-plot도 동일하게 재현 - multiplot만의
+        # 문제가 아니었음). 실무적으로 쓰는 Manual 크기(20x16cm 이내)는
+        # 이 상한 밑이라 영향 없고, 그보다 훨씬 큰 값만 여기서 안전하게
+        # 눌러준다.
+        _raw_ratio = min(width_ratio, height_ratio)
+        if _raw_ratio > 2.0:
+            self.warnings.append(
+                f"Frame 크기가 기준(10x8cm) 대비 {_raw_ratio:.1f}배로 너무 커서 "
+                f"폰트 배율을 2.0배로 제한했습니다. 이보다 작은 Manual 크기를 권장합니다."
+            )
+        return max(min(width_ratio, height_ratio, 2.0), 0.3)  # 하한 0.3, 상한 2.0
 
     def _compute_manual_margins_in(self, plotdef, f_scale, is_print_mode, uses_y2, fmt=None):
         """[추가] "Frame(Axis) 크기 = 좌표축(axis) 자체의 크기" - Manual(frame_auto=
@@ -3679,7 +3692,19 @@ class GnuplotGenerator:
         # 보임 - Axis Frame Auto일 때는 single-plot Auto와 동일하게 상한
         # 1.0을 다시 둬서 폰트를 고정하고(Manual만 이전처럼 지정 크기에 비례해
         # 커지게 둔다 - single-plot Manual과 같은 방식).
-        size_scale = max(min(cell_w_in / _ref_w, cell_h_in / _ref_h), 0.3)
+        # [수정 - 버그] single-plot _compute_size_scale과 동일한 문제 - 상한이
+        # 없어서 기준(10x8cm)보다 훨씬 큰 Manual 칸(예: 40x30cm)에서 title이
+        # 폭주해 plot을 뒤덮는 문제가 실측 확인됨 - 같은 상한(2.0)을 공유한다.
+        # [주의] 이 경고는 Manual일 때만 낸다 - Auto는 1/p A4 전면처럼 정상적
+        # 사용에서도 흔히 2배를 넘어가므로(아래 sqrt 완화로 별도 처리됨) 경고
+        # 대상이 아님.
+        _raw_cell_ratio = min(cell_w_in / _ref_w, cell_h_in / _ref_h)
+        if not frame_auto and _raw_cell_ratio > 2.0:
+            self.warnings.append(
+                f"Frame 크기가 기준(10x8cm) 대비 {_raw_cell_ratio:.1f}배로 너무 커서 "
+                f"폰트 배율을 2.0배로 제한했습니다. 이보다 작은 Manual 크기를 권장합니다."
+            )
+        size_scale = max(min(cell_w_in / _ref_w, cell_h_in / _ref_h, 2.0), 0.3)
         if frame_auto and size_scale > 1.0:
             # [수정 - 재조정] "완전히 고정하면 큰 축에서 폰트가 상대적으로
             # 작아 보임(1.0 상한 실측 피드백)" - 완전 고정(상한 1.0)과 이전의
