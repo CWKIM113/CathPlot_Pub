@@ -5310,10 +5310,12 @@ class CathPlotGUI:
                     except ValueError:
                         w, h = 10.0, 8.0
                     unit = self.frame_unit_var.get()
-                    is_landscape_shape = w >= h
-                    wants_landscape = (orientation == "landscape")
-                    if is_landscape_shape != wants_landscape:
-                        w, h = h, w
+                    # [수정 - 재검토] "가로/세로는 그대로 두고 위치만 가로세로로
+                    # 두면 어떨까"라는 지적으로 여기 있던 orientation 기반 w/h
+                    # 스왑을 없앰 - Manual로 지정한 축 크기의 x:y는 orientation
+                    # 선택과 무관하게 항상 그대로 유지된다(_compute_auto_frame_size_cm
+                    # 주석 참고 - 실제 인쇄 단계가 EMF 비율은 유지한 채 페이지만
+                    # 돌리므로 스왑이 애초에 불필요했음).
                 return dataclasses.replace(pd, frame_auto=False, frame_width=str(w), frame_height=str(h), frame_unit=unit)
 
             if chosen_plotdef is not None:
@@ -5351,8 +5353,8 @@ class CathPlotGUI:
                     except ValueError:
                         w, h = 10.0, 8.0
                     unit = _orig_unit
-                if (w >= h) != (orientation == "landscape"):
-                    w, h = h, w
+                # [수정 - 재검토] orientation 기반 w/h 스왑 제거 (위
+                # _apply_orientation_to_plotdef 주석과 동일한 이유).
                 self.frame_auto_var.set(False)
                 self.frame_width_var.set(str(w))
                 self.frame_height_var.set(str(h))
@@ -5872,8 +5874,10 @@ class CathPlotGUI:
                     h = float((_orig_h or "8").strip() or 8.0)
                 except ValueError:
                     w, h = 10.0, 8.0
-                if (w >= h) != (orientation == "landscape"):
-                    w, h = h, w
+                # [수정 - 재검토] orientation 기반 w/h 스왑 제거 - Save는
+                # "페이지" 개념이 없어(캔버스=frame 그 자신) 스왑하면 Manual로
+                # 지정한 x:y가 orientation 선택만으로 뒤집혀버림(왜곡). 사용자
+                # 확인 후 Print와 동일하게 스왑 없이 그대로 유지하기로 함.
                 unit = _orig_unit
             self.frame_auto_var.set(False)
             self.frame_width_var.set(str(w))
@@ -5907,8 +5911,8 @@ class CathPlotGUI:
             except ValueError:
                 w, h = 10.0, 8.0
             unit_out = self.frame_unit_var.get()
-            if (w >= h) != (orientation == "landscape"):
-                w, h = h, w
+            # [수정 - 재검토] orientation 기반 w/h 스왑 제거 (위 두 곳과 동일한
+            # 이유 - Save도 Manual 지정 x:y를 orientation과 무관하게 유지).
         save_plotdef = dataclasses.replace(
             chosen_plotdef, is_print_mode=True, frame_auto=False,
             frame_width=str(w), frame_height=str(h), frame_unit=unit_out,
@@ -5989,12 +5993,21 @@ class CathPlotGUI:
         그러면 종이 모양(세로로 긴 비율)에 축(x:y)이 그대로 맞춰져 심하게
         왜곡됐음("Auto size는 좌우상하 비율을 너무 많이 왜곡시킴") - 대신 항상
         기본(Default) 크기(10x8cm, frame_width/height 입력칸의 기본값과 동일)를
-        그대로 쓰고, 선택한 용지 방향에 맞춰 가로/세로만 맞바꿔서 비율을
-        유지한다. (cm, cm) 튜플의 문자열을 반환한다."""
-        w, h = 10.0, 8.0
-        if (w >= h) != (orientation == "landscape"):
-            w, h = h, w
-        return f"{w:.2f}", f"{h:.2f}"
+        그대로 쓴다.
+        [수정 - 재검토] 그 다음엔 "선택한 용지 방향에 맞춰 가로/세로를 맞바꿔서"
+        고쳤었는데, 이러면 orientation 선택 하나로 plot 자신의 x:y 비율이
+        10:8 <-> 8:10으로 뒤집혀버려 똑같은 데이터가 방향 선택에 따라 다르게
+        보이는(왜곡) 문제가 다시 생김("가로/세로는 그대로 두고 위치만
+        가로세로로 두면 어떨까"라는 지적으로 재확인). 실제 인쇄 단계
+        (_print_emf_and_cleanup)를 보면 EMF 자신의 rclFrame 비율은 그대로
+        유지한 채 인쇄 페이지 중앙에 배치하고, 용지 방향은 DEVMODE로 페이지
+        자체를 돌리는 것으로 이미 처리되고 있어(스왑이 여기서는 애초에
+        불필요) - Save(파일로 직접 저장, "페이지" 개념이 없어 캔버스=frame
+        가로세로 그 자체)도 사용자 확인 결과 동일하게 스왑을 없애기로 함.
+        이제 orientation은 이 함수의 반환값에 영향을 주지 않는다(인쇄 페이지
+        회전에만 쓰임 - 호출부 참고). 파라미터는 호출부 시그니처를 유지하기
+        위해 남겨둔다. (cm, cm) 튜플의 문자열을 반환한다."""
+        return "10.00", "8.00"
 
     @staticmethod
     def _resolve_marker_shape(shape_label, fill_on):

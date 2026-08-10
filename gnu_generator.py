@@ -267,6 +267,12 @@ PRINT_BORDER_SCALE = 1.00   # 기존 1.50
 # f_scale에 비례하는 모든 값(font_pt, margin 여유값)이 같이 커져서
 # EMF/SVG와 절대 크기가 맞아떨어지게 된다.
 CAIRO_FONT_RENDER_FIX = 1.5
+# [추가 - 재실측] EMF는 같은 pt에서 PDF/PNG(cairo)보다 오히려 작게 나옴
+# (실측: 20pt에서 EMF 글자 높이가 PNG의 84.7%, 40pt에서 74.5% - 같은 물리
+# 캔버스, 각 이미지 실제 DPI로 정규화한 title 글자 높이 비교). 기존에 있던
+# "EMF가 더 크다"는 전제로 축소(0.75)하던 값은 방향이 틀렸었음 - CAIRO_
+# FONT_RENDER_FIX와 같은 목표(EMF/SVG 수준 절대 크기에 맞춤)에 맞게 확대.
+EMF_FONT_RENDER_FIX = 1.8
 PRINT_TIC_MAJOR_SCALE = 1.0
 PRINT_TIC_MINOR_SCALE = 0.5
 
@@ -1350,11 +1356,11 @@ class GnuplotGenerator:
         if getattr(plotdef, "is_print_mode", False):
             f_scale = PRINT_FONT_SCALE * (panel_scale or 1.0)
             if (fmt or "").lower() == "emf":
-                # [시도했다가 되돌림] _build_plot_commands 쪽과 같은 이유로
-                # 1.8로 바꿔봤다가 멀티플롯 EMF에서 심각한 회귀(tic/legend
-                # 겹침)가 발생해 원복함 - 아래 _build_plot_commands의 동일
-                # 상수 옆 주석 참고.
-                f_scale *= 0.75
+                # [수정 - 근본 원인 재확인] 이 함수(_compute_f_scale)는 오직
+                # single-plot margin 계산에만 쓰이므로(멀티플롯은 별도 경로,
+                # font_panel_scale 쪽에서 이미 처리) 중복 적용 위험이 없음 -
+                # _build_plot_commands와 동일하게 EMF_FONT_RENDER_FIX로 통일.
+                f_scale *= EMF_FONT_RENDER_FIX
             elif (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
                 # [수정 - 요청] "single-plot도 M-P처럼 축소된 title 기준으로
                 # margin 바닥값을 같이 줄여달라" - 이 함수는 오직 margin
@@ -1438,19 +1444,16 @@ class GnuplotGenerator:
             if not is_multiplot and (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
                 _margin_cairo_boost = CAIRO_FONT_RENDER_FIX
                 f_scale *= CAIRO_FONT_RENDER_FIX
-            # [시도했다가 되돌림 - 2025 재검토] 실측(같은 pt, 같은 물리 캔버스
-            # 기준 title 글자 높이 정규화 비교: 20pt에서 EMF가 PNG의 84.7%,
-            # 40pt에서 74.5%)으로는 0.75(축소)가 방향이 틀렸고 약 1.8배(확대)가
-            # 필요해 보였으나, 실제 적용해 멀티플롯 1/p EMF를 렌더링해보니 tic
-            # 숫자가 축 테두리를 침범하고 legend와 겹치는 심각한 회귀가 발생함
-            # (폰트만 키우고, margin/tic 공간 확보 쪽의 EMF 관련 계수(_cairo_fix
-            # 등)는 이 배율을 전혀 모르는 채 그대로 남아있어서 - "마진도 같이
-            # 커져야 하는 경우를 고려하지 않음"). title 글자 크기 자체의 실측은
-            # 유효하지만, 안전하게 반영하려면 margin/tic 여유 공식들도 전부
-            # 같이 재조정해야 하는 별도 작업이 필요함 - 그 작업 전까지 원래
-            # 값(0.75)으로 되돌려 회귀를 막는다.
-            if (fmt or "").lower() == "emf":
-                f_scale *= 0.75
+            # [수정 - 근본 원인, cairo와 동일 패턴으로 재구현] 실측(20pt에서
+            # EMF가 PNG의 84.7%, 40pt에서 74.5%)으로 기존 0.75(축소)는 방향이
+            # 틀렸고 EMF_FONT_RENDER_FIX(1.8, 확대)가 맞음을 확인. 처음엔
+            # 여기서만 1.8을 곱해서 멀티플롯에서 tic/legend가 margin을 침범하는
+            # 회귀가 났었는데(margin 계산이 이 배율을 모름), cairo와 똑같이
+            # "멀티플롯은 caller(create_multiplot_script)가 font_panel_scale에
+            # 이미 반영해서 넘겨주므로 여기서 또 곱하면 중복" 패턴을 EMF에도
+            # 적용해서 해결한다 - 단일 plot만 여기서 적용.
+            if not is_multiplot and (fmt or "").lower() == "emf":
+                f_scale *= EMF_FONT_RENDER_FIX
         else:
             f_scale = SCREEN_FONT_SCALE * panel_scale
             line_scale = SCREEN_LINE_SCALE * panel_scale
@@ -1975,7 +1978,30 @@ class GnuplotGenerator:
         # tic 숫자와 거의 붙음) - 폰트가 커지는 배율(_title_f_scale)만큼 이
         # 간격도 같이 키운다(기준 크기에서는 _title_f_scale≈1.0이라 기존
         # 튜닝값과 동일하게 유지됨 - 회귀 없음).
-        _xlabel_gap = 0.15 * _title_f_scale
+        # [수정 - 근본 원인, 방향이 반대였음] 위 fix가 single-plot EMF에서
+        # "Time"이 "400" tic 숫자와 겹치는 새 버그를 유발함 - 직접 렌더링+PIL
+        # 측정으로 재확인한 결과 위 주석의 방향 자체가 틀렸었음: offset의 dy를
+        # "늘리면" 오히려 tic 쪽(위)으로 당겨져 간격이 좁아지고, "줄이면"(음수
+        # 포함) 아래로 밀려 간격이 벌어짐(바로 위 1970년 주석이 원래 맞는
+        # 방향이었는데, 이 fix가 그와 반대로 폰트가 커질수록 dy를 "늘려서"
+        # 오히려 더 겹치게 만들었음). PDF 10x8/40x30cm, EMF 10x8/30x24cm를
+        # 실제로 렌더링해서(gnuplot 직접 호출 + PyMuPDF/PIL 크롭 측정) 새로
+        # 잰 결과: cairo(pdf/png/jpg)는 기준 크기(_title_panel_scale=1)에서는
+        # 기존 값(0.36)이 이미 안전하고 2배 크기(scale=2)에서만 과함(0.72는
+        # 겹침, ~0.10 필요) - EMF는 기준 크기에서부터 이미 겹쳐서(scale=1에서
+        # -0.20, scale=2에서 -0.50 필요) cairo보다 훨씬 더 큰 폭으로 아래로
+        # 밀어야 함(포맷마다 offset 1칸당 실제 거리가 달라 같은 공식을 못
+        # 쓴다는 게 ylabel/y2label의 기존 포맷별 분기와 동일한 이유). 이
+        # single-plot 대상 재보정은 M-P(멀티플롯, is_multiplot=True)는 건드리지
+        # 않음(멀티플롯은 이미 여러 번 검증된 상태라 "지금 잘되는 M-P는 그대로
+        # 두라"는 요청에 따름) - 멀티플롯은 기존 공식 그대로 유지.
+        _fmt_l = (fmt or "").lower()
+        if not is_multiplot and _fmt_l in ("pdf", "png", "jpg", "jpeg"):
+            _xlabel_gap = 0.36 - 0.26 * ((_title_panel_scale or 1.0) - 1.0)
+        elif not is_multiplot and _fmt_l == "emf":
+            _xlabel_gap = -0.20 - 0.30 * ((_title_panel_scale or 1.0) - 1.0)
+        else:
+            _xlabel_gap = 0.15 * _title_f_scale
         lines.append(f'set xlabel "{xlabel_text}" font "{plotdef.xlabel_font},{xlabel_size}" offset 0,{_xlabel_gap:.3f} {xlabel_enh}')
 
         # [수정 - 심각한 버그] "Manual(frame_auto 꺼짐) + png 저장에서 Y1 title이
@@ -2163,7 +2189,20 @@ class GnuplotGenerator:
                 # 반으로 줄일 것(축 size는 유지)" - 2줄일 때 tic에 더 가까운
                 # 쪽은 앞쪽 줄(1번째 줄)이므로 이 offset 하나가 그 간격을
                 # 결정함 - 이전과 같은 비율(반으로)로 1.5*0.5=0.75로 조정.
-                _y2label_offset = 0.75
+                # [수정 - 근본 원인] single-plot EMF에서 이 고정값(0.75)이
+                # y2label_size 크기와 무관하게 그대로라, 이번 세션에서 EMF
+                # 폰트 보정(EMF_FONT_RENDER_FIX)이 제대로 반영되어 y2label이
+                # 커진 뒤로는(예: 31pt) tic 숫자("40","30","20","10")와 항상
+                # 겹침(직접 렌더링으로 확인 - "S"/"D"/"R" 등이 숫자 위에 얹힘).
+                # 실측(10x8cm/30x24cm 두 크기, offset을 0.75~6.0까지 바꿔가며
+                # 렌더링+크롭 비교)으로 재보정: 두 크기 모두 겹침이 사라지는
+                # 지점이 대략 2.0~2.5로 비슷해(ylabel/xlabel처럼 크기에 따라
+                # 크게 달라지지 않음) 크기 무관 고정값 2.5로 안전하게 확정.
+                # 멀티플롯(is_multiplot=True)은 font_panel_scale 산정 방식이
+                # 달라 y2label_size가 이 정도로 커지지 않고, 이미 여러 번
+                # 검증되어 문제 없는 상태라 - "지금 잘되는 M-P는 그대로 두라"는
+                # 요청에 따라 그대로(0.75) 둔다.
+                _y2label_offset = 0.75 if is_multiplot else 2.5
             elif (fmt or "").lower() == "svg":
                 # [수정] "SVG는 y2 title 1글자 폭을 줄일 것" - 공통 비율식보다
                 # SVG만 1칸 더 타이트하게.
@@ -3768,6 +3807,21 @@ class GnuplotGenerator:
         # 반영되게 한다(아래 _floor_scale 정의부 참고).
         if (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
             font_panel_scale *= CAIRO_FONT_RENDER_FIX
+        elif (fmt or "").lower() == "emf":
+            # [수정 - 근본 원인, cairo와 같은 패턴 적용] EMF도 실제 폰트 크기가
+            # (아래 _build_plot_commands의 f_scale에서) PDF/PNG와 다른 배율로
+            # 조정되는데, 그 조정이 font_panel_scale에는 전혀 반영이 안 돼서
+            # margin_left/right/top/bottom·tick_char_width_in_mp 등(모두
+            # font_panel_scale에서 파생)이 "커진 실제 EMF 폰트 크기"를 전혀
+            # 모른 채 계산됨 - 그래서 폰트만 키우면 margin이 안 따라와서 tic/
+            # legend가 겹치는 회귀가 났었음(오늘 먼저 시도했다가 되돌린 것).
+            # cairo와 동일하게 여기(font_panel_scale)에서 미리 반영해서 margin
+            # 계산도 같이 커지게 한다. 실측(같은 pt·같은 물리 캔버스에서 title
+            # 높이 정규화 비교, 20pt=0.847배/40pt=0.745배)으로 EMF가 PDF/PNG
+            # 대비 작게 나옴을 확인 - CAIRO_FONT_RENDER_FIX(1.5)와 같은 목표
+            # (EMF/SVG 수준의 절대 크기)에 맞추려면 EMF_FONT_RENDER_FIX(1.8)가
+            # 필요.
+            font_panel_scale *= EMF_FONT_RENDER_FIX
         # [참고] "작은 Manual 칸(예: 8x6cm)에서 legend/여백이 과도하게 커서 실제
         # axis가 쪼그라든다" - 간격(spacing)을 0으로 해봐도 거의 안 바뀌는 것으로
         # 실측 확인(원인은 spacing이 아니라 margin/legend 자체) - 폰트(글자
@@ -3998,7 +4052,16 @@ class GnuplotGenerator:
         # scale의 "칸 크기에 따른 상한" 로직 자체는 그대로 두고(재도입 위험이
         # 있는 부분 - 위 주석 히스토리 참고), 여기 바닥값에만 이 보정을
         # 추가로 곱한다.
-        _cairo_fix = CAIRO_FONT_RENDER_FIX if (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg") else 1.0
+        # [수정 - 근본 원인] font_panel_scale에 EMF도 이제 자체 보정(EMF_FONT_
+        # RENDER_FIX)을 받으므로, margin_scale 기반 4/p·6/p 겹침방지 바닥값도
+        # 같은 보정을 알아야 한다(cairo와 동일한 이유 - 위 font_panel_scale
+        # 주석 참고).
+        if (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
+            _cairo_fix = CAIRO_FONT_RENDER_FIX
+        elif (fmt or "").lower() == "emf":
+            _cairo_fix = EMF_FONT_RENDER_FIX
+        else:
+            _cairo_fix = 1.0
         # [수정 - 재조정] "M-P Auto의 title/축 title 폰트를 single-plot과 거의
         # 동일(완전 고정)하게" 요청으로 실제 title/xlabel/ylabel/y2label
         # 폰트(_title_f_scale, 위 참고)를 이미 1.0 상당(+cairo 배율)으로
