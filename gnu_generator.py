@@ -1350,6 +1350,10 @@ class GnuplotGenerator:
         if getattr(plotdef, "is_print_mode", False):
             f_scale = PRINT_FONT_SCALE * (panel_scale or 1.0)
             if (fmt or "").lower() == "emf":
+                # [시도했다가 되돌림] _build_plot_commands 쪽과 같은 이유로
+                # 1.8로 바꿔봤다가 멀티플롯 EMF에서 심각한 회귀(tic/legend
+                # 겹침)가 발생해 원복함 - 아래 _build_plot_commands의 동일
+                # 상수 옆 주석 참고.
                 f_scale *= 0.75
             elif (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
                 # [수정 - 요청] "single-plot도 M-P처럼 축소된 title 기준으로
@@ -1434,11 +1438,17 @@ class GnuplotGenerator:
             if not is_multiplot and (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
                 _margin_cairo_boost = CAIRO_FONT_RENDER_FIX
                 f_scale *= CAIRO_FONT_RENDER_FIX
-            # [수정 - 버그] "EMF는 PDF보다 폰트가 크지만, 그래도 1.5배 더
-            # 키워달라(PDF/PNG/JPG를 2배로 키운 것과 맞춰서)" - EMF는 이미
-            # 자체적으로 더 크게 보이던 포맷이라 PDF와 똑같이 2배를 다 주면
-            # 과할 것으로 보여, 원래(오늘 수정 전) 기준 0.80의 1.5배인 1.2
-            # 상당(=지금 전역값 1.60의 0.75배)만 적용한다.
+            # [시도했다가 되돌림 - 2025 재검토] 실측(같은 pt, 같은 물리 캔버스
+            # 기준 title 글자 높이 정규화 비교: 20pt에서 EMF가 PNG의 84.7%,
+            # 40pt에서 74.5%)으로는 0.75(축소)가 방향이 틀렸고 약 1.8배(확대)가
+            # 필요해 보였으나, 실제 적용해 멀티플롯 1/p EMF를 렌더링해보니 tic
+            # 숫자가 축 테두리를 침범하고 legend와 겹치는 심각한 회귀가 발생함
+            # (폰트만 키우고, margin/tic 공간 확보 쪽의 EMF 관련 계수(_cairo_fix
+            # 등)는 이 배율을 전혀 모르는 채 그대로 남아있어서 - "마진도 같이
+            # 커져야 하는 경우를 고려하지 않음"). title 글자 크기 자체의 실측은
+            # 유효하지만, 안전하게 반영하려면 margin/tic 여유 공식들도 전부
+            # 같이 재조정해야 하는 별도 작업이 필요함 - 그 작업 전까지 원래
+            # 값(0.75)으로 되돌려 회귀를 막는다.
             if (fmt or "").lower() == "emf":
                 f_scale *= 0.75
         else:
