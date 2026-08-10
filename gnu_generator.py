@@ -1952,7 +1952,15 @@ class GnuplotGenerator:
         # dy를 늘리면(위로 당김) 캔버스 아래쪽 잘림은 막아주지만 그만큼 tic
         # 숫자와의 간격은 좁아지는 관계라, 요청대로 간격을 늘리려면 반대로
         # dy를 줄여야 함(0.5 -> 0.15, 소문자 두께 정도인 0.35만큼 아래로).
-        lines.append(f'set xlabel "{xlabel_text}" font "{plotdef.xlabel_font},{xlabel_size}" offset 0,0.15 {xlabel_enh}')
+        # [수정 - 버그] "X title이 tic 숫자에 거의 붙어 보임(Manual 큰 크기에서
+        # 특히 심함)" - offset 0.15가 고정값이라, 큰 Manual 크기에서 폰트가
+        # 커져도(_title_f_scale) 이 간격은 그대로라 상대적으로 거의 안 보이게
+        # 됨(실측: 40x30cm에서 xlabel 52pt인데 간격은 여전히 0.15자 몫뿐이라
+        # tic 숫자와 거의 붙음) - 폰트가 커지는 배율(_title_f_scale)만큼 이
+        # 간격도 같이 키운다(기준 크기에서는 _title_f_scale≈1.0이라 기존
+        # 튜닝값과 동일하게 유지됨 - 회귀 없음).
+        _xlabel_gap = 0.15 * _title_f_scale
+        lines.append(f'set xlabel "{xlabel_text}" font "{plotdef.xlabel_font},{xlabel_size}" offset 0,{_xlabel_gap:.3f} {xlabel_enh}')
 
         # [수정 - 심각한 버그] "Manual(frame_auto 꺼짐) + png 저장에서 Y1 title이
         # 통째로 안 보임(잘리는 게 아니라 아예 안 그려짐)" - 실측으로 원인을
