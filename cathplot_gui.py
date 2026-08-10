@@ -5218,7 +5218,14 @@ class CathPlotGUI:
             keep_script=(mode == "Save"),
             frame_auto=final_frame_auto, frame_width=final_frame_width,
             frame_height=final_frame_height, frame_unit=final_frame_unit,
-            for_print=(mode != "Save"),
+            # [수정 - 버그] "Print/Save가 왜 다르게 나오나" - 바로 위
+            # is_print_mode=(mode != "Interactive")와 개념적으로 같은 값(화면 vs
+            # 파일출력)인데 for_print=(mode != "Save")로 서로 다른 로직을 쓰고
+            # 있었음 - Save일 때만 False가 돼서 create_multiplot_script 내부의
+            # 0.0055(파일)/0.0049(화면) 글자폭 계수 분기에서 Save만 "화면용"
+            # 계수를 잘못 쓰게 됨(Print는 0.0055, Save는 0.0049) - is_print_mode와
+            # 동일한 기준으로 통일한다.
+            for_print=(mode != "Interactive"),
         )
 
         if generator.last_size_warning:
