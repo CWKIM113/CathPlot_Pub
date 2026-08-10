@@ -13,6 +13,15 @@
 !CathPlot.spec
 !requirements.txt
 *.zip
+# 지난 디버깅용 비교/검증 스냅샷 - 이미 지난 자료라 git 추적 제외(로컬엔 유지)
+CathPlot_Mult-Plot비교(auto-1p,2p).docx
+CathPlot_Mult-Plot비교Manual-1p,2p).docx
+CathPlot_PDF기준_포맷비교-1.docx
+CathPlot_PDF기준_포맷비교.docx
+CathPlot_PNG_vs_EMF_비교.docx
+CathPlot_PNG_검증.docx
+mp_2pland_before_after.docx
+multiplot_regression_check.docx
 # 남길 폴더 (하위 포함)
 #!templates/
 #!templates/**
