@@ -3158,18 +3158,31 @@ class CathPlotGUI:
             X_COL_PX = 26
             Y1_COL_PX = 30
             Y2_COL_PX = 30
+            # [수정 - 버그] "X/Y1/Y2 헤더가 그 아래 입력 박스(Radio/Checkbutton)
+            # 대비 우측으로 밀림" - 프레임/위젯의 요청 폭 자체는 정중앙에 오게
+            # 맞춰놨는데도(place relx=0.5) 여전히 어긋나 보임 - 실측 확인:
+            # vista 테마의 Radiobutton/Checkbutton은 도형(indicator) 자체가
+            # OS 네이티브 렌더링(UxTheme)이라 그 도형이 위젯 박스 내부에서
+            # 정확히 중앙이 아니라 왼쪽으로 치우쳐 그려짐(ttk layout/style로는
+            # 손댈 수 없는 부분) - Label 텍스트는 진짜 중앙에 오는데 그 아래
+            # 도형은 왼쪽에 있어서 "헤더가 우측으로 밀린 것처럼" 보였던 것.
+            # ttk 쪽을 고칠 수 없으니 Label을 도형 위치에 맞춰 같은 만큼(약
+            # 1글자, 7px) 왼쪽으로 옮겨서 맞춘다.
+            # 대문자 1자 폭 실측(Consolas 10pt, PIL 기준) = 5.5px. 처음 -7px(약
+            # 1.3자)이 과했다는 피드백으로 반 글자(~2.75px) 되돌려 보정.
+            _HDR_NUDGE_PX = -4
             x_hdr_f = tk.Frame(header_f, width=X_COL_PX, height=22)
             x_hdr_f.pack_propagate(False)
             x_hdr_f.pack(side="left")
-            ttk.Label(x_hdr_f, text="X", font=("Consolas", 10, "bold")).pack(expand=True)
+            ttk.Label(x_hdr_f, text="X", font=("Consolas", 10, "bold")).place(relx=0.5, x=_HDR_NUDGE_PX, rely=0.5, anchor="center")
             y1_hdr_f = tk.Frame(header_f, width=Y1_COL_PX, height=22)
             y1_hdr_f.pack_propagate(False)
             y1_hdr_f.pack(side="left")
-            ttk.Label(y1_hdr_f, text="Y1", font=("Consolas", 10, "bold")).pack(expand=True)
+            ttk.Label(y1_hdr_f, text="Y1", font=("Consolas", 10, "bold")).place(relx=0.5, x=_HDR_NUDGE_PX, rely=0.5, anchor="center")
             y2_hdr_f = tk.Frame(header_f, width=Y2_COL_PX, height=22)
             y2_hdr_f.pack_propagate(False)
             y2_hdr_f.pack(side="left")
-            ttk.Label(y2_hdr_f, text="Y2", font=("Consolas", 10, "bold")).pack(expand=True)
+            ttk.Label(y2_hdr_f, text="Y2", font=("Consolas", 10, "bold")).place(relx=0.5, x=_HDR_NUDGE_PX, rely=0.5, anchor="center")
             COLOR_COL_PX = 65   # 최장 옵션(Magenta/Purple/Orange, 7자) 기준
             STYLE_COL_PX = 70   # 최장 옵션(Short-Dash, 10자) 기준
             # [수정] height=18이 "Color"/"Style" 글자(Consolas 10 bold) 높이보다
@@ -3257,7 +3270,7 @@ class CathPlotGUI:
                 x_cell_f.pack_propagate(False)
                 x_cell_f.pack(side="left")
                 r_x = ttk.Radiobutton(x_cell_f, value=key_str, variable=file_x_var, command=make_x_cmd(key_str, file_x_var))
-                r_x.pack(expand=True)
+                r_x.place(relx=0.5, rely=0.5, anchor="center")
                 # 이미 선택된 라디오버튼을 다시 클릭했을 때 해제되도록 마우스 이벤트 가로채기
                 r_x.bind("<Button-1>", on_x_radio_click)
 
@@ -3265,13 +3278,13 @@ class CathPlotGUI:
                 y1_cell_f.pack_propagate(False)
                 y1_cell_f.pack(side="left")
                 c_y1 = ttk.Checkbutton(y1_cell_f, variable=self.selected_y1_vars[key_str], command=make_y_excl_cmd(key_str, "Y1", file_x_var))
-                c_y1.pack(expand=True)
+                c_y1.place(relx=0.5, rely=0.5, anchor="center")
 
                 y2_cell_f = tk.Frame(row_frame, width=Y2_COL_PX, height=22)
                 y2_cell_f.pack_propagate(False)
                 y2_cell_f.pack(side="left")
                 c_y2 = ttk.Checkbutton(y2_cell_f, variable=self.selected_y2_vars[key_str], command=make_y_excl_cmd(key_str, "Y2", file_x_var))
-                c_y2.pack(expand=True)
+                c_y2.place(relx=0.5, rely=0.5, anchor="center")
 
                 color_cell_f = tk.Frame(row_frame, width=COLOR_COL_PX, height=22)
                 color_cell_f.pack_propagate(False)
