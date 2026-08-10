@@ -4149,6 +4149,8 @@ class GnuplotGenerator:
         # 줄이 밀려나가 사라짐 - single-plot은 마진이 이미 넉넉해 우연히
         # 괜찮았을 뿐). 2줄이면 label 폭만큼(_floor_scale 기준) 통째로 더
         # 얹어준다(단일 plot 경로와 동일한 사고방식).
+        _need_left_in = 0.0
+        _need_right_in = 0.0
         if any((p.ylabel or "").strip() for p in plots):
             _max_ylabel_size = max((float(p.ylabel_size or 11) for p in plots if (p.ylabel or "").strip()), default=11.0)
             # [수정] 1줄 title(EMF)이 다시 사라지는 회귀 확인 - 2줄 전용 추가분을
@@ -4163,12 +4165,22 @@ class GnuplotGenerator:
             # 넉넉해 우연히 안 보였을 뿐). 0.3배로는 EMF만 겨우 버티는
             # 수준이라 PDF/SVG는 여전히 부족했던 것 - 0.6배로 올려서
             # 64가지 조합 전부 정상 출력 재확인.
-            _y1_2line_extra = 0.6 * _floor_scale * (_max_ylabel_size / 11.0) if _any_y1_2line else 0
+            # [수정 - 버그, 병합 후 재발견] 4/p·6/p Manual + 작은 명시 크기(예:
+            # 6x5cm)에서는 margin_scale이 "작은 칸일수록 적극적으로 줄인다"는
+            # 세제곱 축소(size_scale**3)를 받아 _floor_scale이 아주 작아지는데,
+            # 2번째 줄이 실제로 차지하는 물리적 폭은 이 "여백 편의상 축소"와
+            # 무관하게 폰트 크기(EMF_FONT_RENDER_FIX 등이 반영된 font_panel_
+            # scale)에 그대로 비례하는 하드 요구치라, _floor_scale 기준으로
+            # 구하면 실제 필요량보다 작게 나와 텍스트가 잘림(실측: 4/p·6/p
+            # Manual EMF/PDF/SVG 2줄 조합에서 panel2/4/6 텍스트 소실 -
+            # 96-combo 회귀로 발견). font_panel_scale(캡 없는 실제 배율) 기준으로
+            # 바꿔서, 칸이 작다는 이유로 이 하드 요구치까지 같이 줄지 않게 한다.
+            _y1_2line_extra = 0.6 * font_panel_scale * (_max_ylabel_size / 11.0) if _any_y1_2line else 0
             _need_left_in = (0.5 * _floor_scale * (_max_ylabel_size / 11.0) + _min_left_tic_in) * _emf_margin_boost + _y1_2line_extra
             margin_left = max(margin_left, _need_left_in)
         if any_y2 and any_y2label:
             _max_y2label_size = max((float(p.y2label_size or 11) for p in plots if (getattr(p, "y2label", "") or "").strip()), default=11.0)
-            _y2_2line_extra = 0.6 * _floor_scale * (_max_y2label_size / 11.0) if _any_y2_2line else 0
+            _y2_2line_extra = 0.6 * font_panel_scale * (_max_y2label_size / 11.0) if _any_y2_2line else 0
             _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + _min_right_tic_in) * _emf_margin_boost + _y2_2line_extra
             margin_right = max(margin_right, _need_right_in)
 
@@ -4188,11 +4200,43 @@ class GnuplotGenerator:
         # 올려서 1/2/4/6-per-page x portrait/landscape x Auto/Manual x
         # PDF/EMF x 1줄/2줄 128가지 조합 전부 정상 출력(텍스트 소실 없음)
         # 재확인 후 확정.
+        # [수정 - 버그, 병합 후 회귀 발견] EMF_FONT_RENDER_FIX(1.8) 도입으로
+        # _need_left_in/_need_right_in(2줄 Y1/Y2 라벨이 안 잘리기 위한
+        # 최소 필요치)이 커졌는데, 이 0.68 상한이 그 최소치 밑으로까지
+        # 눌러버려서(4/p 등 좁은 칸에서) EMF가 여백 부족을 텍스트 통째로
+        # 누락으로 처리하는 문제가 재발함(실측: 4/p Auto EMF 2줄 조합에서
+        # panel2/4의 Y1/Y2 2번째 줄 소실 - 96-combo 회귀로 발견). 0.68
+        # 상한 자체(다른 128가지 조합에서 검증된 값)는 그대로 두고, 축소한
+        # 뒤에도 "텍스트 소실을 막기 위한 최소치" 밑으로는 안 내려가게
+        # 최종적으로 다시 그 값으로 떠받친다(축이 그만큼 더 좁아질 수
+        # 있지만, 텍스트가 조용히 사라지는 것보다는 나음).
         _MAX_MARGIN_FRAC = 0.68
         if cell_w_in > 0 and (margin_left + margin_right) > cell_w_in * _MAX_MARGIN_FRAC:
             _shrink_lr = (cell_w_in * _MAX_MARGIN_FRAC) / (margin_left + margin_right)
-            margin_left *= _shrink_lr
-            margin_right *= _shrink_lr
+            margin_left = max(margin_left * _shrink_lr, _need_left_in)
+            margin_right = max(margin_right * _shrink_lr, _need_right_in)
+            # [수정 - 버그] 위에서 "텍스트 소실 방지 최소치보다 작아지지
+            # 않게" 떠받쳤는데, 두 최소치(_need_left_in+_need_right_in)를
+            # 합친 값 자체가 이미 cell_w_in을 넘는 극단적인 경우(칸이 아주
+            # 좁은데 Y1+Y2가 둘 다 2줄인 경우 등)에는 이 떠받침이 axis_w를
+            # 음수로 만들어버려, gnuplot이 그 칸 전체를 렌더링하지 못해
+            # (여백 부족보다 더 나쁜) 텍스트 소실이 남(실측: 4/p Auto EMF
+            # 2줄에서 axis_w=-0.94in로 확인). 최소치를 지키는 것보다 axis가
+            # 최소한 양수로는 남는 게 우선이므로, 합이 cell_w_in을 넘으면
+            # (약간의 여유 0.3in만 axis에 남기고) 두 마진을 각자 비율대로
+            # 다시 줄인다 - 이 경우 2번째 줄이 여전히 빠듯할 수 있지만,
+            # axis 자체가 사라지는 것보다는 낫다.
+            # [수정 - 재조정] 처음엔 최소 0.3in을 강제로 보장하려 했으나, 그러면
+            # "축이 음수가 되진 않지만 0.3in보다는 넉넉히 남았을" 경우까지도
+            # 불필요하게 0.3in로 깎아버려, 오히려 이전엔(이 안전장치 없이도)
+            # 문제없던 조합(예: 8x6cm Manual)까지 새로 텍스트가 사라지는
+            # 역행이 생겼음(실측). "축이 진짜로 음수가 되는 것만" 막도록
+            # 문턱을 낮춘다(기존 axis_w의 0.05in 하한과 동일한 기준).
+            if margin_left + margin_right > cell_w_in - 0.05:
+                _budget = max(cell_w_in - 0.05, 0.1)
+                _fit_lr = _budget / (margin_left + margin_right)
+                margin_left *= _fit_lr
+                margin_right *= _fit_lr
         if cell_h_in > 0 and (margin_top + margin_bottom) > cell_h_in * _MAX_MARGIN_FRAC:
             _shrink_tb = (cell_h_in * _MAX_MARGIN_FRAC) / (margin_top + margin_bottom)
             margin_top *= _shrink_tb
