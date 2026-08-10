@@ -2203,6 +2203,26 @@ class GnuplotGenerator:
                 # 검증되어 문제 없는 상태라 - "지금 잘되는 M-P는 그대로 두라"는
                 # 요청에 따라 그대로(0.75) 둔다.
                 _y2label_offset = 0.75 if is_multiplot else 2.5
+                # [수정 - 버그, 실측으로 근본 원인 발견] "Manual 소형 칸(예: 2/p
+                # 7.0cm 근방)에서 Y2 2줄 title의 둘째 줄이 EMF 파일에 텍스트
+                # 레코드 자체가 통째로 안 씀" - margin_right를 키워도(0.62->
+                # 0.79in) 전혀 안 고쳐져 "margin 부족"이 아님을 확인, EMF
+                # 바이너리 직접 파싱(rclFrame vs 텍스트 rx)으로 1번째 줄
+                # anchor가 이미 프레임 우측 끝에서 0.1in밖에 안 남을 만큼
+                # 바깥쪽에 찍혀 있어 2번째 줄이 캔버스 밖으로 밀려 gnuplot이
+                # 그 레코드를 통째로 안 쓰는 것으로 확인됨(offset 값을 0.7~3.0
+                # 으로 바꿔가며 재현 - 0.65 이하에서만 정상 출력). tic<->1번째
+                # 줄 간격(offset)을 줄여 1번째 줄을 tic 쪽으로 당기면 2번째
+                # 줄이 쓸 캔버스 여유가 생김 - Y1(ylabel)은 2줄일 때 반대로
+                # +0.65(간격을 늘림)로 이미 대응돼 있는데(줄 순서가 y2와 반대:
+                # Y1은 안쪽[tic]줄이 뒤쪽 줄이라 부호가 다름) Y2는 이 대응이
+                # 빠져 있었던 것 - 2/p Manual 6x5cm 기본 크기 기준 offset 값을
+                # 실측 스윕(0.7~-0.5)한 결과 절대값이 -0.3 이하여야 정상 출력
+                # (0, -0.1, -0.2는 여전히 소실, -0.3부터 정상) - 기준값 0.75
+                # 대비 1.1을 빼 -0.35(여유 포함)로 확정, 96-combo 회귀로 4/p·
+                # 6/p 등 이미 정상인 조합에 부작용 없음 재확인.
+                if "|" in (plotdef.y2label or ""):
+                    _y2label_offset -= 1.1
             elif (fmt or "").lower() == "svg":
                 # [수정] "SVG는 y2 title 1글자 폭을 줄일 것" - 공통 비율식보다
                 # SVG만 1칸 더 타이트하게.
@@ -4445,12 +4465,53 @@ class GnuplotGenerator:
         ]
         lines.append(f"set multiplot layout {rows},{cols}")
 
+        # [수정 - 요청] "옆으로 나란한 칸끼리 마주보는 안쪽(내부) 여백은 서로
+        # 여유를 나눠 쓸 수 있는데(양쪽 다 이미 그 칸 하나만 있어도 필요한
+        # 만큼 꽉 채워져 있어 실제로는 남는 공간), 맨 왼쪽/맨 오른쪽 바깥쪽
+        # 가장자리는 그런 여유가 전혀 없어(용지 끝) 2줄 Y2 title이 잘리는
+        # 사례가 그쪽에서만 남음" - 실측 확인: 내부(패널 사이) 마주보는 합산
+        # 여백(margin_right+spacing+margin_left)이 각 칸 axis 폭보다도 커서
+        # (예: 4/p 26.7% > axis 25.2%) 과도했음. 내부(다른 칸과 마주보는) 쪽
+        # margin은 절반으로 줄이고, 그렇게 아낀 만큼을 맨 왼쪽 칸의 바깥쪽
+        # margin_left/맨 오른쪽 칸의 바깥쪽 margin_right에 절반씩 얹어준다
+        # (한쪽에만 몰아주면 반대쪽만 계속 여유로워 보이는 것을 막기 위해
+        # 반씩 분배 - 사용자 확인). 합계(margin_left+margin_right 총량)는
+        # 그대로 보존되므로 전체 grid_w/축소 배율에는 영향이 없다.
+        _interior_k = 0.5
+        _extra_outer_lr = 0.0
+        if cols > 1:
+            _reclaimed_lr = (cols - 1) * (1 - _interior_k) * (margin_left + margin_right)
+            _extra_outer_lr = _reclaimed_lr / 2.0
+        # [수정 - 요청] "4/p, 6/p 등 위아래로도 같은 방식으로" - 위와 완전히
+        # 같은 개념을 세로(행) 방향에도 적용한다. 위 칸의 margin_bottom(xlabel
+        # 자리)과 아래 칸의 margin_top(title 자리)이 마주보는 내부 간격도
+        # 절반으로 줄이고, 아낀 만큼을 맨 위 칸의 바깥쪽 margin_top/맨 아래
+        # 칸의 바깥쪽 margin_bottom에 반씩 얹는다(총량 보존, rows>1일 때만).
+        _extra_outer_tb = 0.0
+        if rows > 1:
+            _reclaimed_tb = (rows - 1) * (1 - _interior_k) * (margin_top + margin_bottom)
+            _extra_outer_tb = _reclaimed_tb / 2.0
+
         for i, plotdef in enumerate(plots):
             cell_left_in, cell_right_in, cell_top_in, cell_bottom_in = cell_positions_in[i]
-            axis_left_in = cell_left_in + margin_left
-            axis_right_in = cell_right_in - margin_right
-            axis_top_in = cell_top_in - margin_top
-            axis_bottom_in = cell_bottom_in + margin_bottom
+            _col_idx = i % cols
+            _row_idx = i // cols
+            if cols > 1:
+                _eff_margin_left = (margin_left + _extra_outer_lr) if _col_idx == 0 else margin_left * _interior_k
+                _eff_margin_right = (margin_right + _extra_outer_lr) if _col_idx == cols - 1 else margin_right * _interior_k
+            else:
+                _eff_margin_left = margin_left
+                _eff_margin_right = margin_right
+            if rows > 1:
+                _eff_margin_top = (margin_top + _extra_outer_tb) if _row_idx == 0 else margin_top * _interior_k
+                _eff_margin_bottom = (margin_bottom + _extra_outer_tb) if _row_idx == rows - 1 else margin_bottom * _interior_k
+            else:
+                _eff_margin_top = margin_top
+                _eff_margin_bottom = margin_bottom
+            axis_left_in = cell_left_in + _eff_margin_left
+            axis_right_in = cell_right_in - _eff_margin_right
+            axis_top_in = cell_top_in - _eff_margin_top
+            axis_bottom_in = cell_bottom_in + _eff_margin_bottom
 
             # [정리] 예전에 여기 있던 "if i > 0: unset title / set xtics auto / ..."
             # 리셋 코드는 실제로는 죽은 코드였음 - 바로 아래 _build_plot_commands가

@@ -13,6 +13,7 @@
 !*.docx
 !*.pptx
 !CathPlot.spec
+!requirements.txt
 *.zip
 # 남길 폴더 (하위 포함)
 #!templates/

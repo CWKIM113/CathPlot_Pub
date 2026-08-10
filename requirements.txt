@@ -1,0 +1,5 @@
+# CathPlot 실행에 필요한 외부 패키지 (표준 라이브러리/gnuplot 제외).
+# 설치: pip install -r requirements.txt
+pywin32          # win32api/win32con/win32gui/win32print/win32ui/pywintypes/pythoncom (Print/GUI)
+Pillow           # PIL - PNG 300dpi 업스케일·메타데이터, 폰트 폭 추정 (gnu_generator.py)
+PyMuPDF          # fitz - PDF를 PNG/JPG로 래스터화 (gnu_generator.py)
