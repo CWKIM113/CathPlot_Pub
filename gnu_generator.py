@@ -1683,7 +1683,12 @@ class GnuplotGenerator:
         if effective_minor_grid: grid_parts += ["mxtics", "mytics"]
 
         if grid_parts:
-            lines.append(f"set grid {' '.join(grid_parts)} lw 1.5, lw 1.0")
+            # [수정 - 발견] grid 선에 dashtype을 명시 안 해서, 터미널 기본값이
+            # 서로 달라 EMF(굵은 대시)와 PDF/PNG(촘촘한 점선)가 다르게 보임
+            # (버그가 아니라 "명시 안 한 값이 터미널마다 다름" - Print vs Save
+            # 재현 비교 중 발견). dashtype을 명시해서 포맷 간 통일한다(오늘
+            # 확인한 "dashtype은 콤마 뒤 공백 필요" 규칙 적용).
+            lines.append(f"set grid {' '.join(grid_parts)} lw 1.5 dashtype (1, 2), lw 1.0 dashtype (1, 2)")
         else:
             lines.append("unset grid")
 
