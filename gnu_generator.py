@@ -1401,7 +1401,7 @@ class GnuplotGenerator:
             f_scale = SCREEN_FONT_SCALE * (panel_scale or 1.0)
         return f_scale
 
-    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, circles=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None, legend_scale_boost=1.0, legend_width_extra_chars=None, frame_auto=None, ylabel_margin_ratio=1.0, y2label_margin_ratio=1.0):
+    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, circles=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None, legend_scale_boost=1.0, legend_width_extra_chars=None, frame_auto=None, ylabel_margin_ratio=1.0, y2label_margin_ratio=1.0, title_margin_ratio=1.0, xlabel_margin_ratio=1.0):
         # [추가] Interactive(화면) 창은 frame_auto/frame_width와 무관하게 항상
         # 고정된 1000x700 캔버스로 뜬다(_get_terminal_cmd 참고) - 그런데 아래
         # 절대 여백 보정(축소 시 title/label이 사라지는 것 방지 등)은 "캔버스가
@@ -1969,7 +1969,18 @@ class GnuplotGenerator:
         y2label_size = int(float(plotdef.y2label_size) * _title_f_scale)
 
         title_text, title_enh = self._render_text(plotdef.title)
-        lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" {title_enh}')
+        # [추가 - 요청] "Auto 4칸 이상 + 다행 레이아웃의 세로 확대"를 켜려면,
+        # margin_top이 안쪽 면 축소로 줄어들 때 Plot Title도 ylabel/y2label처럼
+        # 그 축소분만큼 축 쪽으로 당겨줘야 함(안 그러면 title이 위 칸의 tic와
+        # 겹침) - title은 지금까지 offset 자체가 없어(gnuplot 기본 위치 그대로)
+        # ylabel처럼 "기존 offset에 비율을 곱하는" 방식이 아니라, 축소된 비율
+        # (1-title_margin_ratio)에 비례해 새로 음수 offset을 만들어 준다(단일
+        # plot·margin 안 줄어든 칸은 비율=1.0이라 offset 0, 기존과 동일).
+        if is_multiplot and title_margin_ratio < 0.999:
+            _title_gap = -1.0 * (1.0 - title_margin_ratio) * _title_f_scale
+            lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" offset 0,{_title_gap:.3f} {title_enh}')
+        else:
+            lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" {title_enh}')
 
         # [수정 - 심각한 버그] "Print/Save에서 X title이 캔버스 맨 아래 경계에
         # 걸쳐서 잘림" - ylabel과 같은 원인(위 ylabel 주석 참고): "at screen"
@@ -2032,6 +2043,13 @@ class GnuplotGenerator:
             _xlabel_gap = -0.20 - 0.30 * ((_title_panel_scale or 1.0) - 1.0)
         else:
             _xlabel_gap = 0.15 * _title_f_scale
+            # [추가 - 요청] title과 같은 이유(Auto 다행 세로 확대 대비) - margin_bottom이
+            # 안쪽 면 축소로 줄어들면 xlabel도 tic 쪽으로 더 당겨줘야 함. 이 gap은
+            # 양수일수록 위(tic 쪽)로 당겨지는 방향이라(주석 1984행 참고), 축소
+            # 비율(1-xlabel_margin_ratio)만큼 더해서 커지게 한다(줄어든 여백 안에
+            # xlabel이 들어가도록).
+            if xlabel_margin_ratio < 0.999:
+                _xlabel_gap += 1.0 * (1.0 - xlabel_margin_ratio) * _title_f_scale
         lines.append(f'set xlabel "{xlabel_text}" font "{plotdef.xlabel_font},{xlabel_size}" offset 0,{_xlabel_gap:.3f} {xlabel_enh}')
 
         # [수정 - 심각한 버그] "Manual(frame_auto 꺼짐) + png 저장에서 Y1 title이
@@ -4738,22 +4756,17 @@ class GnuplotGenerator:
                 _budget_h2 = printable_h - sum(_row_gap_t) - sum(_row_gap_b) - spacing_h_in * (rows - 1)
                 _cand_w = (_budget_w2 / (axis_w * cols)) if _budget_w2 > 0 else 0.0
                 _cand_h = (_budget_h2 / (axis_h * rows)) if _budget_h2 > 0 else 0.0
-                # [수정 - 버그 발견, 세로 확대 제한 필요] "Auto 6/p Landscape
-                # (2행)에서 세로로 확대했더니 아래 행 Plot Title이 위 행
-                # xlabel/tic과 실제로 겹침(실측 -23.6pt)" - 원인: ylabel/
-                # y2label은 eff_margin 축소 비율만큼 offset도 같이 줄이는
-                # 장치(ylabel_margin_ratio)가 있어 축소된 여백 안에 항상
-                # 들어가지만, title/xlabel은 그런 장치가 아예 없어 gnuplot이
-                # 자체 폰트 크기 기준으로 위치를 잡음. 게다가 total_cells>=4
-                # 구간은 _need_top_in/_need_bottom_in 계산에 쓰는 _floor_scale이
-                # font_panel_scale이 아니라 margin_scale을 쓰는데(실측: 이
-                # 케이스 font_panel_scale=0.906, margin_scale=0.371 - 2.4배
-                # 차이) 실제 폰트보다 필요 여백을 과소평가함. title/xlabel
-                # offset 연동은 아직 없으므로(추후 별도 보정 필요), 이 겹침
-                # 위험이 실측된 total_cells>=4 + 다행(rows>1) 조합에서는 세로
-                # 확대를 하지 않는다(가로 확대와 3칸 이하는 실측으로 안전
-                # 확인됨 - 그대로 유지).
-                _h_grow_safe = rows <= 1 or total_cells < 4
+                # [수정 - 재활성화] "Auto 6/p Landscape(2행)에서 세로로 확대했더니
+                # 아래 행 Plot Title이 위 행 xlabel/tic과 실제로 겹침(실측
+                # -23.6pt)" - 원인은 ylabel/y2label과 달리 title/xlabel은 eff_margin
+                # 축소 비율만큼 offset을 같이 줄여주는 장치가 없어서였음(gnuplot이
+                # 자체 폰트 크기 기준 기본 위치를 그대로 씀) - ylabel_margin_ratio와
+                # 동일한 개념의 title_margin_ratio/xlabel_margin_ratio를 새로 만들어
+                # _build_plot_commands의 title/xlabel offset에 반영했으므로(위쪽
+                # 참고) 세로 확대를 다시 켠다. PDF/EMF, 1줄/2줄, 4/p·6/p(Port/Land)
+                # 전부 좌표 기반(PyMuPDF/EMF 텍스트 레코드 직접 파싱)으로 행간
+                # 겹침 없음 재확인 후 확정.
+                _h_grow_safe = True
                 # [수정 - 요청] "Auto 3/p Portrait처럼 가로는 이미 꽉 찼는데
                 # 세로만 남는 경우, 비율을 지키느라 가로에 발목 잡혀 세로가
                 # 거의 안 커짐" - Manual(비율 유지 확정, 오늘 앞선 수정)과
@@ -4961,6 +4974,12 @@ class GnuplotGenerator:
             # 1열·1행뿐인 레이아웃은 비율≈1.0이라 기존과 동일 - 회귀 없음).
             _y1_margin_ratio = (_eff_margin_left / margin_left) if margin_left > 1e-6 else 1.0
             _y2_margin_ratio = (_eff_margin_right / margin_right) if margin_right > 1e-6 else 1.0
+            # [추가 - 요청] "Auto 4칸 이상 + 다행 레이아웃 세로 확대" 재활성화 대비 -
+            # ylabel/y2label과 동일한 개념을 Plot Title(margin_top)/xlabel(margin_bottom)
+            # 에도 적용해서, 안쪽 면 축소로 margin이 줄어들 때 title/xlabel도 축 쪽으로
+            # 당겨지게 한다(위 y1/y2와 동일한 비율 계산 방식).
+            _title_margin_ratio = (_eff_margin_top / margin_top) if margin_top > 1e-6 else 1.0
+            _xlabel_margin_ratio = (_eff_margin_bottom / margin_bottom) if margin_bottom > 1e-6 else 1.0
             self._build_plot_commands(
                 plotdef, lines, is_multiplot=True, panel_scale=font_panel_scale,
                 annotations=getattr(plotdef, "annotations", None),
@@ -4974,6 +4993,8 @@ class GnuplotGenerator:
                 frame_auto=frame_auto,
                 ylabel_margin_ratio=_y1_margin_ratio,
                 y2label_margin_ratio=_y2_margin_ratio,
+                title_margin_ratio=_title_margin_ratio,
+                xlabel_margin_ratio=_xlabel_margin_ratio,
             )
 
         if "왼쪽" in _warned_sides or "오른쪽" in _warned_sides:
