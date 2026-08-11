@@ -4459,7 +4459,14 @@ class GnuplotGenerator:
             #않도록(margin_scale과 font_panel_scale 중 큰 쪽) 떠받친다 - 이 값은
             # margin-need 계산에만 쓰여 "부족했던 여백을 필요한 만큼 키우는" 방향
             # 뿐이라 텍스트 소실 회귀 위험이 없음(오히려 안전 여유가 늘어남).
-            _floor_scale = max(margin_scale, font_panel_scale) * _cairo_fix
+            # [수정 - 요청] "겹치지만 않으면 되는데 마진이 과도하게 큼, 지금의
+            # 반 이하로" - font_panel_scale을 그대로(1.0배) 쓰면 안전 여유가
+            # 45~60pt(TB)/40~50pt(LR)로 필요 이상으로 넉넉함 - 이분 탐색 실측
+            # 결과 0.7배까지 줄여도(1줄 14~23pt, Y1/Y2 2줄 12~23pt, X 2줄은
+            # _need_bottom_in에 별도 가산이 있어 오히려 39~48pt로 더 넉넉해짐)
+            # 전부 안전(겹침 없음, 텍스트 소실 없음) - 0.5배부터는 다시 겹침
+            # 재현돼 0.7배로 확정.
+            _floor_scale = max(margin_scale, font_panel_scale * 0.7) * _cairo_fix
         else:
             _underlying_scale = font_panel_scale / _cairo_fix if _cairo_fix else font_panel_scale
             _floor_scale = _cairo_fix if _underlying_scale > 1.0 else font_panel_scale
