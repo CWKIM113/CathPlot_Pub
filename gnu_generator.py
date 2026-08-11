@@ -2017,11 +2017,17 @@ class GnuplotGenerator:
         # [수정 - 재보정, CAIRO/EMF_FONT_RENDER_FIX 원복에 따라] 위 -1.2는
         # CAIRO_FONT_RENDER_FIX=1.5가 걸려있던 상태(폰트가 더 큼) 기준이었는데,
         # 그 배율 자체를 없앤 뒤(폰트가 작아짐) 좌표 기반으로 재스윕한 결과
-        # 10x8cm는 -0.5, 40x30cm는 -0.3~-0.5 둘 다 충분(둘 다 비슷한 값으로
-        # 충분 - scale 의존이 크지 않음), 고정값 -0.4로 재확정.
+        # 10x8cm는 -0.5, 40x30cm는 -0.3~-0.5 둘 다 충분해서 처음엔 고정값
+        # -0.4로 정했었음.
+        # [수정 - 재지적, 고정값의 문제] "작은 plot에선 여백이 과하고 큰
+        # plot에선 부족하지 않냐"는 지적이 맞음 - 실측(5x4cm, 폰트 5.3pt)
+        # 해보니 고정 -0.4가 만드는 간격(6.8pt)이 폰트 크기(5.3pt)보다도 커서
+        # 상대적으로 과했음. 폰트 크기(_title_f_scale)에 비례하는 공식으로
+        # 바꾼다 - 기준(10x8cm, f_scale=1.6)에서 검증된 -0.4가 나오도록
+        # 계수를 역산(-0.4/1.6=-0.25)해서 -0.25*_title_f_scale로 재확정.
         _fmt_l = (fmt or "").lower()
         if not is_multiplot and _fmt_l in ("pdf", "png", "jpg", "jpeg"):
-            _xlabel_gap = -0.4
+            _xlabel_gap = -0.25 * _title_f_scale
         elif not is_multiplot and _fmt_l == "emf":
             _xlabel_gap = -0.20 - 0.30 * ((_title_panel_scale or 1.0) - 1.0)
         else:
@@ -4196,6 +4202,8 @@ class GnuplotGenerator:
         else:
             _underlying_scale = font_panel_scale / _cairo_fix if _cairo_fix else font_panel_scale
             _floor_scale = _cairo_fix if _underlying_scale > 1.0 else font_panel_scale
+        _need_top_in = 0.0
+        _need_bottom_in = 0.0
         if any_title:
             _max_title_size = max((float(p.title_size or 14) for p in plots if (p.title or "").strip()), default=14.0)
             _need_top_in = 0.75 * _floor_scale * (_max_title_size / 14.0) * max_title_lines
@@ -4644,6 +4652,75 @@ class GnuplotGenerator:
             # scale*PRINT_FONT_SCALE*포맷별 보정)을 근사로 재사용, 15% 여유.
             return (float(size_input or 11) * font_panel_scale * PRINT_FONT_SCALE * _fix_chk / 72.0) * 1.15
 
+        # [수정 - 근본 원인 발견] "M-P 3/p 등 Manual 다중 열/행에서 axis x:y
+        # 비율이 single-plot과 달라짐(3/p 10x8cm 실측 비율 1.393, single-plot은
+        # 정확히 1.250)" - 원인: 아래 _eff_margin_left/right(안쪽 면끼리 마주보는
+        # 쪽은 절반만 예약)로 "아낀" 여백을, 지금까지는 "그 칸의 axis를 그만큼
+        # 더 넓힌다"(cell 경계=cell_left_in/cell_right_in은 고정인 채 eff_margin만
+        # 줄여 axis_left_in~axis_right_in 사이 폭이 넓어짐)로 써왔음. 3/p처럼
+        # rows=1인 레이아웃은 가로(cols>1)만 이렇게 넓어지고 세로는 원래 그대로라
+        # 비율이 깨짐(실측: axis_w 3.5834->3.9934in로 커지는데 axis_h는 그대로).
+        # "Manual = 지정 크기를 균일 배율로만 유지"라는 원칙에 맞게, 모든 칸의
+        # axis 크기는 항상 위에서 정한 공용 axis_w/axis_h(단일 plot과 동일 계산,
+        # 비율 유지)로 고정하고, 안쪽 면에서 아낀 여백은 axis를 키우는 대신
+        # 옆(위/아래) 칸과의 실제 간격을 줄이는 데만 쓰이도록 누적 위치 방식으로
+        # 다시 계산한다(칸을 순서대로 이어붙이며 위치 결정). 부수 효과로, 3칸
+        # 이상일 때 가운데 칸만 옆칸보다 살짝 넓게 나오던 잔여 불균일 문제도
+        # 함께 해소됨(모든 axis가 완전히 같은 크기가 됨). 5장 중앙정렬 특수
+        # 배치(_is_centered5)는 애초에 interior_k를 안 쓰므로(여백 그대로) 이
+        # 대상에서 제외 - 기존 cell 기반 계산을 그대로 둔다.
+        if not _is_centered5:
+            # [수정 - 버그, 위 ratio fix 도입 직후 재발견] "Auto 6/p처럼 칸이
+            # 작을 때 안쪽(interior) 면끼리 마주보는 Y1/Y2 title이 완전히
+            # 겹쳐 보임" - _interior_k(0.5)로 절반만 예약한 안쪽 여백이,
+            # margin_left/right(위에서 이미 "이 라벨이 안 잘리려면 최소
+            # 이만큼 필요"로 계산해 둔 _need_left_in/_need_right_in 바닥값)의
+            # 절반보다도 작아지는 경우가 있어(Auto는 칸이 작아 margin 자체가
+            # 이미 빠듯한 최소치 근처) 실측 확인(좌우 두 title이 거의 같은
+            # x좌표에 겹쳐 그려짐). 안쪽 면 예약은 "절반(0.5배)"과 "실제로
+            # 안 겹치는 데 필요한 최소치(_need_*_in)" 중 큰 쪽으로 하고(단,
+            # 혼자 있을 때 값인 margin_* 자체는 넘지 않음), 그 결과 칸 전체
+            # 폭/높이가 용지에 안 들어가면 - 마진이 아니라 - axis(plot 크기)
+            # 쪽만 균일 배율로 줄여서 맞춘다(가로/세로 같은 배율 -> 비율 유지,
+            # "plot 크기를 줄이되 x:y는 유지"라는 요청과 일치).
+            _col_gap_l = [margin_left if (c == 0 or cols == 1) else max(margin_left * _interior_k, min(margin_left, _need_left_in)) for c in range(cols)]
+            _col_gap_r = [margin_right if (c == cols - 1 or cols == 1) else max(margin_right * _interior_k, min(margin_right, _need_right_in)) for c in range(cols)]
+            _row_gap_t = [margin_top if (r == 0 or rows == 1) else max(margin_top * _interior_k, min(margin_top, _need_top_in)) for r in range(rows)]
+            _row_gap_b = [margin_bottom if (r == rows - 1 or rows == 1) else max(margin_bottom * _interior_k, min(margin_bottom, _need_bottom_in)) for r in range(rows)]
+
+            _row_w_total = sum(axis_w + _col_gap_l[c] + _col_gap_r[c] for c in range(cols)) + spacing_w_in * (cols - 1)
+            _col_h_total = sum(axis_h + _row_gap_t[r] + _row_gap_b[r] for r in range(rows)) + spacing_h_in * (rows - 1)
+            _axis_fit_scale = 1.0
+            if _row_w_total > printable_w > 0:
+                _budget_w = printable_w - sum(_col_gap_l) - sum(_col_gap_r) - spacing_w_in * (cols - 1)
+                if axis_w * cols > 0:
+                    _axis_fit_scale = min(_axis_fit_scale, max(_budget_w, 0.05 * cols) / (axis_w * cols))
+            if _col_h_total > printable_h > 0:
+                _budget_h = printable_h - sum(_row_gap_t) - sum(_row_gap_b) - spacing_h_in * (rows - 1)
+                if axis_h * rows > 0:
+                    _axis_fit_scale = min(_axis_fit_scale, max(_budget_h, 0.05 * rows) / (axis_h * rows))
+            if _axis_fit_scale < 0.999:
+                axis_w *= _axis_fit_scale
+                axis_h *= _axis_fit_scale
+                _row_w_total = sum(axis_w + _col_gap_l[c] + _col_gap_r[c] for c in range(cols)) + spacing_w_in * (cols - 1)
+                _col_h_total = sum(axis_h + _row_gap_t[r] + _row_gap_b[r] for r in range(rows)) + spacing_h_in * (rows - 1)
+
+            _col_axis_left = [0.0] * cols
+            _col_axis_right = [0.0] * cols
+            _cx = pad_left + max(0.0, (printable_w - _row_w_total) / 2)
+            for c in range(cols):
+                _col_axis_left[c] = _cx + _col_gap_l[c]
+                _col_axis_right[c] = _col_axis_left[c] + axis_w
+                _cx = _col_axis_right[c] + _col_gap_r[c] + spacing_w_in
+
+            _row_axis_top = [0.0] * rows
+            _row_axis_bottom = [0.0] * rows
+            _cy = (page_h - pad_top) - max(0.0, (printable_h - _col_h_total) / 2)
+            for r in range(rows):
+                _row_axis_top[r] = _cy - _row_gap_t[r]
+                _row_axis_bottom[r] = _row_axis_top[r] - axis_h
+                _cy = _row_axis_bottom[r] - _row_gap_b[r] - spacing_h_in
+
         for i, plotdef in enumerate(plots):
             cell_left_in, cell_right_in, cell_top_in, cell_bottom_in = cell_positions_in[i]
             _row_idx, _col_idx = cell_rc[i]
@@ -4660,21 +4737,34 @@ class GnuplotGenerator:
                 # 그래도 가운데 칸(양쪽 다 진짜 안쪽)은 절반이라 옆(=바깥쪽 있는
                 # 칸)보다 조금 넓게 나올 수 있지만, "title이 안 보이는 것"보다는
                 # 훨씬 나은 절충안.
-                _eff_margin_left = margin_left if _col_idx == 0 else margin_left * _interior_k
-                _eff_margin_right = margin_right if _col_idx == cols - 1 else margin_right * _interior_k
+                # [수정 - 일관성] 실제 axis 위치 계산에 쓰는 _col_gap_l/r(바로
+                # 위, 겹침 방지 최소치로 떠받친 값)과 다른 값을 쓰면 경고 판단/
+                # offset 축소 비율이 실제 그려지는 여백과 어긋나므로, 같은
+                # 값을 그대로 재사용한다(단일 소스).
+                _eff_margin_left = _col_gap_l[_col_idx]
+                _eff_margin_right = _col_gap_r[_col_idx]
             else:
                 _eff_margin_left = margin_left
                 _eff_margin_right = margin_right
             if rows > 1 and not _is_centered5:
-                _eff_margin_top = margin_top if _row_idx == 0 else margin_top * _interior_k
-                _eff_margin_bottom = margin_bottom if _row_idx == rows - 1 else margin_bottom * _interior_k
+                _eff_margin_top = _row_gap_t[_row_idx]
+                _eff_margin_bottom = _row_gap_b[_row_idx]
             else:
                 _eff_margin_top = margin_top
                 _eff_margin_bottom = margin_bottom
-            axis_left_in = cell_left_in + _eff_margin_left
-            axis_right_in = cell_right_in - _eff_margin_right
-            axis_top_in = cell_top_in - _eff_margin_top
-            axis_bottom_in = cell_bottom_in + _eff_margin_bottom
+            if _is_centered5:
+                axis_left_in = cell_left_in + _eff_margin_left
+                axis_right_in = cell_right_in - _eff_margin_right
+                axis_top_in = cell_top_in - _eff_margin_top
+                axis_bottom_in = cell_bottom_in + _eff_margin_bottom
+            else:
+                # [수정 - 근본 원인 수정] axis 크기를 cell 경계 기준(가변)이 아니라
+                # 위에서 미리 계산한 공용 고정 크기(axis_w/axis_h, 모든 칸 동일,
+                # single-plot과 같은 비율)로 둔다 - 위 주석 참고.
+                axis_left_in = _col_axis_left[_col_idx]
+                axis_right_in = _col_axis_right[_col_idx]
+                axis_top_in = _row_axis_top[_row_idx]
+                axis_bottom_in = _row_axis_bottom[_row_idx]
 
             if (plotdef.ylabel or "").strip() and "왼쪽" not in _warned_sides:
                 if (_eff_margin_left - _min_left_tic_in) < _approx_label_in(plotdef.ylabel_size):
