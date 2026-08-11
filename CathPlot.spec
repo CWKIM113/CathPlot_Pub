@@ -17,7 +17,11 @@ binaries = []
 # 없으면 legend box 크기 추정이 옛날(레거시 pngcairo 전용) 기준으로
 # 조용히 폴백해서 "legend box가 축의 107%로 커짐" 버그가 재현됨. 실제로
 # pip install PyMuPDF 설치 후 재현 안 됨을 직접 확인함.
-hiddenimports = ['PIL', 'fitz']
+# [수정] Print/Save 경고 미리보기 창(신규 기능)이 PIL.ImageTk로 렌더 결과를
+# Tkinter 창에 띄우는데, 이 서브모듈은 지금까지 코드 어디서도 import된 적이
+# 없어서 위 PIL 하나만으로는 PyInstaller가 확실히 같이 안 묶을 수 있음(Tk
+# 연동 C확장 _imagingtk 포함 여부가 불확실) - 위와 같은 이유로 명시 추가.
+hiddenimports = ['PIL', 'PIL.ImageTk', 'fitz']
 tmp_ret = collect_all('pywin32')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 

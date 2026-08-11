@@ -1213,12 +1213,16 @@ class CathPlotGUI:
 
                 fmt = os.path.splitext(filepath)[1].replace(".", "").lower()
 
-                self.execute_multi_plot_pipeline(
+                _result_path = self.execute_multi_plot_pipeline(
                     selected_defs, mode, filepath, fmt
                 )
 
                 dialog.destroy()
-                messagebox.showinfo("Success", f"Saved: {os.path.basename(filepath)}")
+                # [수정] 경고 미리보기에서 취소하면 execute_multi_plot_pipeline이
+                # None을 반환하고 파일도 이미 지운 상태 - 이때는 "저장됨" 메시지를
+                # 띄우면 안 됨(실제로 저장이 취소됐으므로).
+                if _result_path:
+                    messagebox.showinfo("Success", f"Saved: {os.path.basename(filepath)}")
 
             else:
                 idx = 1
@@ -5101,7 +5105,7 @@ class CathPlotGUI:
             self.layout_var.set(layout_cmb_var.get())
 
             # 1. 먼저 멀티플롯 이미지/PDF 파일을 생성합니다.
-            self.execute_multi_plot_pipeline(selected_defs, mode, filepath, fmt)
+            _result_path = self.execute_multi_plot_pipeline(selected_defs, mode, filepath, fmt)
 
             # 2. 인쇄(Print) 모드일 때만 프린터를 고른 뒤 인쇄합니다
             # (EMF로 만들었으니 PDF 뷰어를 거치는 ShellExecute 대신 EMF 전용 헬퍼 사용)
@@ -5123,7 +5127,9 @@ class CathPlotGUI:
             dialog.destroy()
 
             # Save일 때만 성공 메시지를 띄웁니다 (인쇄 시에는 윈도우 시스템 창이 뜨므로 생략)
-            if mode == "Save":
+            # [수정] 경고 미리보기에서 취소하면 _result_path가 None(파일도 이미
+            # 삭제됨) - 이때는 "성공" 메시지를 띄우지 않는다.
+            if mode == "Save" and _result_path:
                 messagebox.showinfo("Success", f"Successfully generated multiplot: {os.path.basename(filepath)}")
 
         btn_frame = ttk.Frame(dialog)
@@ -5229,12 +5235,16 @@ class CathPlotGUI:
             for_print=(mode != "Interactive"),
         )
 
-        if generator.last_size_warning:
-            messagebox.showwarning("Plot 크기 자동 조정", generator.last_size_warning)
-
-        _all_warn = _font_warn + generator.warnings
-        if _all_warn:
-            messagebox.showwarning("Multi Print/Save 경고", "\n\n".join(_all_warn))
+        # [수정 - 요청] "문제 있을 때 창에 결과를 보여줄 순 없나요? 저장/인쇄
+        # 전에" - 기존엔 경고 텍스트만 띄우고 그대로 진행됐음(파일은 이미
+        # 써진 뒤). 경고가 하나라도 있으면 실제 결과를 미리보기로 보여주고
+        # 진행/취소를 다시 묻는다 - 취소하면 방금 만든 파일을 지우고 None을
+        # 반환해서, 호출부(Save의 "Success" 메시지, Print의 프린터 전송 단계)가
+        # 자연스럽게 건너뛰어지게 한다(Print 쪽은 이미 "if os.path.exists(...)"
+        # 로 게이트돼 있어 파일 삭제만으로 충분 - 코드 변경 불필요).
+        _all_warn = ([generator.last_size_warning] if generator.last_size_warning else []) + _font_warn + generator.warnings
+        if _all_warn and not self._show_result_preview_and_confirm(outfile, _all_warn):
+            return None
 
         self.update_plot_file_list()
         return outfile
@@ -5460,6 +5470,86 @@ class CathPlotGUI:
 
         self.root.wait_window(dlg)
         return result["choice"]
+
+    def _load_preview_image(self, filepath):
+        """Save/Print 결과 파일(pdf/png/jpg/emf)을 미리보기용 PIL Image로 연다.
+        [추가] "문제 있을 때 창에 결과를 보여줄 순 없나요? 저장/인쇄 전에" 요청으로
+        신설 - PIL/PyMuPDF(fitz) 둘 다 지연 import(이미 hiddenimports에 등록돼
+        있어 exe에서도 정상 동작 - CathPlot.spec 참고). 실패하면 None(호출부가
+        "미리보기 없이 경고 텍스트만" 으로 대체)."""
+        ext = os.path.splitext(filepath)[1].lower()
+        try:
+            from PIL import Image
+            if ext == ".pdf":
+                import fitz
+                doc = fitz.open(filepath)
+                pix = doc[0].get_pixmap(dpi=150)
+                return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            elif ext == ".emf":
+                im = Image.open(filepath)
+                im.load(dpi=(150, 150))
+                return im.convert("RGB")
+            elif ext in (".png", ".jpg", ".jpeg", ".bmp"):
+                return Image.open(filepath).convert("RGB")
+        except Exception:
+            pass
+        return None  # svg 등 미지원 포맷 또는 로드 실패 - 미리보기 생략
+
+    def _show_result_preview_and_confirm(self, filepath, warnings_list):
+        """[추가 - 요청] "문제 있을 때(경고) 창에 결과를 보여줄 순 없나요? 저장/
+        인쇄 전에" - Save/Print가 실제로 파일에 쓰기 직전이 아니라 이미 쓴
+        "직후"(파일이 있어야 미리보기가 가능하므로)에, 경고가 있는 경우에만
+        그 결과 파일을 그대로 렌더링해서 보여주고 진행/취소를 다시 확인받는다.
+        취소하면 방금 만든 파일을 지우고 False를 반환해서(호출부가 이 반환값을
+        보고 이후 단계 - 성공 메시지, 프린터로 전송 등 - 를 건너뛰게 함) 마치
+        저장/인쇄가 아예 없었던 것처럼 되돌린다. 경고가 없으면 미리보기 없이
+        바로 True(항상 뜨면 매번 확인창이라 번거로움 - 사용자 확인)."""
+        if not warnings_list:
+            return True
+        win = tk.Toplevel(self.root)
+        win.title("저장/인쇄 결과 확인 - 경고 있음")
+        win.transient(self.root)
+        win.grab_set()
+        result = {"proceed": False}
+
+        img = self._load_preview_image(filepath)
+        if img is not None:
+            _max_w, _max_h = 760, 480
+            _scale = min(_max_w / img.width, _max_h / img.height, 1.0)
+            _disp = img.resize((max(1, int(img.width * _scale)), max(1, int(img.height * _scale))))
+            from PIL import ImageTk
+            _photo = ImageTk.PhotoImage(_disp)
+            img_label = ttk.Label(win, image=_photo)
+            img_label.image = _photo  # GC 방지(참조 유지 안 하면 즉시 사라짐)
+            img_label.pack(padx=10, pady=(10, 0))
+        else:
+            ttk.Label(win, text="(이 포맷은 미리보기를 지원하지 않습니다 - 경고 내용만 확인하세요)").pack(padx=10, pady=(10, 0))
+
+        warn_frame = ttk.Frame(win)
+        warn_frame.pack(fill="x", padx=10, pady=10)
+        ttk.Label(warn_frame, text="\n\n".join(warnings_list), wraplength=740, foreground="#a05a00", justify="left").pack(anchor="w")
+
+        def _on_proceed():
+            result["proceed"] = True
+            win.destroy()
+
+        def _on_cancel():
+            result["proceed"] = False
+            win.destroy()
+
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(btn_frame, text="취소(다시 설정)", command=_on_cancel).pack(side="right", padx=5)
+        ttk.Button(btn_frame, text="이대로 진행", command=_on_proceed).pack(side="right", padx=5)
+        win.protocol("WM_DELETE_WINDOW", _on_cancel)
+        win.wait_window()
+
+        if not result["proceed"]:
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+        return result["proceed"]
 
     def _pick_printer_dialog(self):
         """설치된 프린터 목록을 직접 열거해서 자체 선택창으로 고르게 한다

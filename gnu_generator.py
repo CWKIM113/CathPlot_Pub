@@ -867,13 +867,27 @@ class GnuplotGenerator:
         # [수정] 실제 GUI Save 재확인 추가 피드백 - "PNG는 1글자, EMF 0.5글자,
         # SVG는 3글자 폭을 추가로 감소", "SVG는 legend 내 curve 간 아래위
         # 간격을 0.8배로 축소".
+        # [수정 - 근본 원인, 요청으로 재보정] "box 왼쪽 테두리<->title 텍스트
+        # 여백이 포맷마다 제각각이고 대체로 과함(PDF/SVG는 글자 3~7자 폭,
+        # EMF는 거의 0) - 전부 legend font 기준 '1글자'로 통일" - box_chars가
+        # 곧바로 "몇 글자 여백"을 뜻하는 값이 아니라(box_w 공식에 max_label_len
+        # 추정치와 함께 얽혀 있어 실제 렌더 결과와 선형이 아님) 직접 렌더링 +
+        # PyMuPDF(pdf)/픽셀(EMF) 실측으로 재보정: PDF는 box_chars=1.5일 때
+        # 실제 여백이 7.4자였고, -4.4로 낮추니 정확히 1.00자로 확인됨. SVG는
+        # PDF와 같은 텍스트 폭 기준(anchor 고정, box_left만 이동)으로 역산해
+        # 비슷한 -4.6으로 추정. EMF는 반대로 기존(-2.25)이 이미 거의 0자(글자가
+        # 테두리에 붙어 보임)였음을 실측 확인 - 여백을 오히려 늘려야 해서
+        # 0.0으로 재보정(실측: "A" 1글자 기준 근소한 여백 확인). PNG/JPG/JPEG는
+        # 단일 plot(create_script)에서 PDF 경로로 리다이렉트돼 이 표 자체가
+        # 실제로는 안 쓰이지만(레거시 폴백 대비 값은 남겨둠), 만약을 대비해
+        # PDF와 동일하게 맞춰 둔다.
         _FORMAT_TUNING = {
-            "png": {"row_mult": 2.0,           "box_chars": 14.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "pdf": {"row_mult": 2.0 * 0.5,      "box_chars": 1.5, "sample_mult": (2/3)**2, "text_corr": 2 / 3},
-            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": -2.25, "sample_mult": (2 / 3) * 0.8, "text_corr": 1.0},
-            "jpg": {"row_mult": 2.0 * (2 / 3),  "box_chars": 1.5, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": 1.5, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "svg": {"row_mult": 2.0 * (2 / 3) * 0.8, "box_chars": -5.0, "sample_mult": 0.5, "text_corr": 1.0},
+            "png": {"row_mult": 2.0,           "box_chars": -4.4, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "pdf": {"row_mult": 2.0 * 0.5,      "box_chars": -4.4, "sample_mult": (2/3)**2, "text_corr": 2 / 3},
+            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": 0.0, "sample_mult": (2 / 3) * 0.8, "text_corr": 1.0},
+            "jpg": {"row_mult": 2.0 * (2 / 3),  "box_chars": -4.4, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": -4.4, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "svg": {"row_mult": 2.0 * (2 / 3) * 0.8, "box_chars": -4.6, "sample_mult": 0.5, "text_corr": 1.0},
         }
         # [수정 - 버그] "화면(screen)은 건드리지 말라고 했는데 왜 바뀌었나" -
         # 실측 확인 결과 screen의 row_mult=1.0(폰트 크기와 정확히 같은 줄
@@ -1387,7 +1401,7 @@ class GnuplotGenerator:
             f_scale = SCREEN_FONT_SCALE * (panel_scale or 1.0)
         return f_scale
 
-    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, circles=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None, legend_scale_boost=1.0, legend_width_extra_chars=None, frame_auto=None):
+    def _build_plot_commands(self, plotdef, lines, is_multiplot=False, annotations=None, arrows=None, circles=None, panel_scale=1.0, axis_w_in=None, axis_h_in=None, fmt=None, legend_scale_boost=1.0, legend_width_extra_chars=None, frame_auto=None, ylabel_margin_ratio=1.0, y2label_margin_ratio=1.0):
         # [추가] Interactive(화면) 창은 frame_auto/frame_width와 무관하게 항상
         # 고정된 1000x700 캔버스로 뜬다(_get_terminal_cmd 참고) - 그런데 아래
         # 절대 여백 보정(축소 시 title/label이 사라지는 것 방지 등)은 "캔버스가
@@ -2073,6 +2087,14 @@ class GnuplotGenerator:
         # [수정] title_size 등에 위 _title_f_scale(panel_scale 상한 적용)을 쓰게
         # 바뀌었으므로, 이 기준값도 같은 _title_panel_scale로 맞춰야 ylabel_size/
         # _term_font_pt_ref 비율(아래 offset 보간식의 입력)이 어긋나지 않는다.
+        # [시도했다가 되돌림 - M-P 3/p 좁은 칸 겹침] 이 바닥값(8)이 원인이라
+        # 보고 없애봤으나(1로 낮춤), 실측(PyMuPDF 좌표 비교, 2/p·3/p Manual
+        # 6x4cm)해보니 오히려 겹침이 더 심해짐(예: 3/p 겹침 폭 5.46pt->
+        # 6.41pt) - ratio가 커지면서 offset이 "+"쪽으로 더 커졌는데(공식이
+        # +기울기), y2label은 offset이 커질수록(+) 오히려 옆 칸 쪽으로 더
+        # 밀려나는 방향이라(반대는 ylabel) 방향을 잘못 짚었던 것. 원인은
+        # 이 바닥값이 아닌 다른 곳에 있으므로 원래 값(8)으로 되돌리고 계속
+        # 조사한다.
         _term_font_pt_ref = max(int(round(11 * (_title_panel_scale or 1.0))), 8)
         if _is_screen:
             # [수정 - 버그, 사용자 지적으로 재확인] "screen에서 y1 title이 지금
@@ -2146,6 +2168,19 @@ class GnuplotGenerator:
             # gnuplot 소스 확인 전까지는 실측값으로만 확정).
             if "|" in (plotdef.ylabel or ""):
                 _ylabel_offset += 0.65
+        # [수정 - 근본 원인, 사용자 지적] "offset 공식이 실제 예약된 margin
+        # 값을 몰라서" 여러 회귀가 났던 것 - 위 4가지(_is_screen/_is_emf/svg/
+        # else) 분기는 전부 "이 패널이 한 페이지에 혼자 있다"고 가정하고
+        # 계산된 값이라, M-P에서 옆 칸과 마진을 나눠 쓰는 안쪽(interior) 칸은
+        # 실제 여백이 그보다 작은데도 이 값을 그대로 씀 - 그 결과가 "2/p·4/p
+        # 오른쪽 열 Y1 title이 왼쪽 칸의 Y2 title과 겹침"으로 나타남(원인
+        # 규명: create_multiplot_script의 _eff_margin_left/right가 안쪽 면은
+        # _interior_k=0.5로 절반만 예약하는데, 여기 offset은 그 사정을 몰라
+        # 절반이 아닌 "혼자 있을 때" 기준 위치를 그대로 요구했던 것). 실제
+        # 예약된 여백 비율(ylabel_margin_ratio - 안쪽 면이면 0.5, 바깥쪽/
+        # 단일 plot이면 1.0)만큼 offset도 같이 줄여서, 줄어든 여백 안에
+        # 맞춰 들어가게 한다(single-plot은 항상 1.0이라 회귀 없음).
+        _ylabel_offset *= ylabel_margin_ratio
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
         lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset:.2f},0 {ylabel_enh}')
 
@@ -2232,6 +2267,10 @@ class GnuplotGenerator:
                 # 크기(ratio≈1.545)의 gap(4pt)은 유지하고 다른 크기에서는
                 # 비례해서 커지도록 절편/기울기 재계산.
                 _y2label_offset = -1.871 + 1.939 * (y2label_size / _term_font_pt_ref)
+            # [수정 - 근본 원인, 위 ylabel과 동일한 이유] M-P 안쪽(interior) 칸은
+            # margin_right도 절반만(_interior_k=0.5) 예약되는데 이 offset은 그걸
+            # 몰랐음 - 실제 예약 비율(y2label_margin_ratio)만큼 같이 줄인다.
+            _y2label_offset *= y2label_margin_ratio
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
             lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset {_y2label_offset:.2f},0 {y2label_enh}')
 
@@ -3740,8 +3779,27 @@ class GnuplotGenerator:
                 # 없어, 같은 기준(10x8cm)으로 미리 근사치를 구해 일관되게 한다.
                 _early_scale_est = min(_fw_in / (10.0 / 2.54), _fh_in / (8.0 / 2.54), 2.0)
                 _early_spacing = CELL_SPACING_IN * max(_early_scale_est, 0.3)
-                page_w = _fw_in * cols + _early_spacing * (cols - 1) + pm_left + pm_right
-                page_h = _fh_in * rows + _early_spacing * (rows - 1) + pm_top + pm_bottom
+                # [수정 - 근본 원인 발견] "칸(cell) 크기"를 축(axis) 크기와
+                # 똑같이 취급해서(margin_left/right/top/bottom을 전혀 안 더함)
+                # 페이지 크기를 추정하고 있었음 - 그런데 몇 줄 아래 "실제" 칸
+                # 크기(cell_w_in = axis_w + margin_left + margin_right)는 title/
+                # tic/xlabel/legend용 여백을 반드시 포함함. 그 결과 이 초기
+                # 추정치가 실제보다 항상 작게 나와서(실측: 2/p Manual 10x8cm
+                # Land에서 추정 page_h=3.39in인데 실제 필요한 cell_h는 5.29in -
+                # margin_top+bottom 2.14in을 통째로 빠뜨림), 아래 shrink-to-fit이
+                # "용지가 실제로는 부족하지 않은데도 부족하다"고 오판해 불필요한
+                # 큰 축소(예: 64%)를 걸어버림 - 그 축소가 다시 margin_*·offset
+                # 등 다른 계산과 맞물려 옆 칸끼리 라벨이 겹치는 문제로 이어짐
+                # ("2/p·4/p 오른쪽 열 Y1/Y2 title 겹침" 재현·원인 규명 과정에서
+                # 발견). 정확한 margin은 이 시점엔 아직 계산 전(폰트/legend에
+                # 의존)이라 그대로 못 쓰므로, 기준 margin 상수(MARGIN_LEFT/RIGHT/
+                # TOP/BOTTOM_IN)를 같은 _early_scale_est로 근사해서 더한다 -
+                # 정확하지 않아도 되고(최종 배치는 실제 계산이 다시 하므로),
+                # 그동안 빠져있던 "여백 몫"만 추정치에 반영되면 충분하다.
+                _early_margin_w = (MARGIN_LEFT_IN + MARGIN_RIGHT_IN) * max(_early_scale_est, 0.3)
+                _early_margin_h = (MARGIN_TOP_IN + MARGIN_BOTTOM_IN) * max(_early_scale_est, 0.3)
+                page_w = (_fw_in + _early_margin_w) * cols + _early_spacing * (cols - 1) + pm_left + pm_right
+                page_h = (_fh_in + _early_margin_h) * rows + _early_spacing * (rows - 1) + pm_top + pm_bottom
             except ValueError:
                 pass
         printable_w = page_w - pm_left - pm_right
@@ -3869,7 +3927,15 @@ class GnuplotGenerator:
         # 문제가 있었음(Auto 4/p 실측: 축 h=38pt까지 쪼그라듦) - 이 적극적 축소는
         # "칸이 기준보다 작을 때(size_scale<1)"에만 의미가 있으므로, 그 경우에만
         # 적용하고 그 외(size_scale>=1)에는 선형을 유지한다.
-        _margin_aggr = 3.0 if total_cells >= 3 else 1.0
+        # [수정 - 버그, 3/p 추가 때 놓침] 위 주석은 처음부터 "4/p 이상"이라고
+        # 명시했는데 실제 조건은 total_cells>=3이라 3/p까지 이 세제곱 축소를
+        # 받고 있었음 - 실측(3/p, Manual 6x4cm)으로 재현: margin_scale이
+        # 0.5**3=0.125까지 줄어들어(2/p였다면 0.5**1=0.5) title이 확보된 여백
+        # 밖으로 밀려나 PDF에서 완전히 안 그려짐(텍스트 자체는 PDF 안에 있으나
+        # 렌더링 가능 영역 밖 - PyMuPDF 좌표로 직접 확인). 주석이 원래부터
+        # 뜻했던 대로 4로 바로잡는다(3/p는 1/p·2p와 같은 "지정 크기 최대한
+        # 유지" 그룹에 속함 - 단일 행/열 배치라는 점도 1/p·2p와 같음).
+        _margin_aggr = 3.0 if total_cells >= 4 else 1.0
         margin_scale = size_scale ** _margin_aggr if size_scale < 1.0 else size_scale
         layout_scale = size_scale ** _margin_aggr if size_scale < 1.0 else size_scale
         # [수정] "plot간 여백/간격이 너무 큼, 좌우 여백도 최소화(절대마진
@@ -4110,7 +4176,12 @@ class GnuplotGenerator:
         # (더 큰) 여백을 갖게 되는 역행이 생김 - 1/p·2p(total_cells<4)만
         # title과 동일하게 1.0 상당으로 고정하고, 4/p·6/p는 기존 margin_scale
         # 기반 로직(칸 수에 따른 추가 축소 포함)을 그대로 유지한다.
-        if total_cells >= 3:
+        # [수정 - 버그, 3/p 추가 때 놓침] 바로 위 주석이 이미 "total_cells<4"/
+        # ">=4"라고 명시했는데 실제 조건은 >=3이었음 - 위 margin_scale/
+        # _margin_aggr과 같은 원인의 같은 버그(3/p가 margin_scale 기반(더
+        # 작은) 값을 floor로 쓰게 돼 title이 밀려 안 보이는 문제 - 실측
+        # 확인). 주석대로 4로 바로잡는다.
+        if total_cells >= 4:
             _floor_scale = margin_scale * _cairo_fix
         else:
             _underlying_scale = font_panel_scale / _cairo_fix if _cairo_fix else font_panel_scale
@@ -4534,6 +4605,27 @@ class GnuplotGenerator:
         # 분류돼 오히려 마진이 반으로 줄어버림 - 이 케이스는 재배분 없이 원래
         # margin_left/right/top/bottom을 그대로 쓴다.
         _is_centered5 = (layout_option == "Auto" and nplot == 5)
+        # [추가 - 요청] "경고문은 문제 있을 때만, 좌우/위아래 어디인지 포함해서" -
+        # 옆 칸/위아래 칸과 마진을 나눠 쓰는 안쪽 면(_interior_k=0.5로 절반만
+        # 예약)에서, 실제 라벨이 필요로 하는 물리적 공간(폰트 크기 기반 근사)이
+        # 그 절반 예약분보다 크면 겹칠 위험이 있다고 보고 경고한다(전 칸에
+        # 무조건 뜨는 게 아니라 실제 위험한 면만) - 같은 방향 문제가 여러
+        # 칸에서 반복되면 한 번만 안내(중복 방지).
+        _warned_sides = set()
+        _fmt_l_chk = (fmt or "").lower()
+        if _fmt_l_chk in ("pdf", "png", "jpg", "jpeg"):
+            _fix_chk = CAIRO_FONT_RENDER_FIX
+        elif _fmt_l_chk == "emf":
+            _fix_chk = EMF_FONT_RENDER_FIX
+        else:
+            _fix_chk = 1.0
+
+        def _approx_label_in(size_input):
+            # ylabel/y2label/title 텍스트 한 줄이 차지하는 대략적 물리 폭(회전
+            # 라벨은 폭≈글자 높이) - 실제 offset 계산과 동일한 배율(font_panel_
+            # scale*PRINT_FONT_SCALE*포맷별 보정)을 근사로 재사용, 15% 여유.
+            return (float(size_input or 11) * font_panel_scale * PRINT_FONT_SCALE * _fix_chk / 72.0) * 1.15
+
         for i, plotdef in enumerate(plots):
             cell_left_in, cell_right_in, cell_top_in, cell_bottom_in = cell_positions_in[i]
             _row_idx, _col_idx = cell_rc[i]
@@ -4553,6 +4645,18 @@ class GnuplotGenerator:
             axis_right_in = cell_right_in - _eff_margin_right
             axis_top_in = cell_top_in - _eff_margin_top
             axis_bottom_in = cell_bottom_in + _eff_margin_bottom
+
+            if (plotdef.ylabel or "").strip() and "왼쪽" not in _warned_sides:
+                if (_eff_margin_left - _min_left_tic_in) < _approx_label_in(plotdef.ylabel_size):
+                    _warned_sides.add("왼쪽")
+            if (plotdef.y2label or "").strip() and "오른쪽" not in _warned_sides:
+                if (_eff_margin_right - _min_right_tic_in) < _approx_label_in(plotdef.y2label_size):
+                    _warned_sides.add("오른쪽")
+            if (plotdef.title or "").strip() and rows > 1 and "위아래" not in _warned_sides:
+                if _eff_margin_top < margin_top * 0.9:
+                    _approx_title_in = _approx_label_in(plotdef.title_size) * 0.9  # title은 회전 없이 가로 텍스트라 필요 높이만 비교
+                    if _eff_margin_top < _approx_title_in:
+                        _warned_sides.add("위아래")
 
             # [정리] 예전에 여기 있던 "if i > 0: unset title / set xtics auto / ..."
             # 리셋 코드는 실제로는 죽은 코드였음 - 바로 아래 _build_plot_commands가
@@ -4623,6 +4727,14 @@ class GnuplotGenerator:
             # 쓰이면서 (margin이 EMF의 실측값과 달라) title이 캔버스 밖으로
             # 밀려 사라진 것. fmt를 그대로 전달해서 단일 plot(create_script)과
             # 동일한 포맷별 분기가 항상 적용되게 한다.
+            # [추가 - 근본 원인 수정] "옆 칸끼리 Y1/Y2 title 겹침" - 위
+            # _eff_margin_left/right(이 칸이 실제로 받은 여백, 안쪽 면은
+            # _interior_k=0.5로 절반만)를, offset 계산이 가정하는 "혼자 있을
+            # 때" 기준값(margin_left/margin_right)과 비교한 비율로 넘겨서
+            # _build_plot_commands가 offset도 같이 줄이게 한다(바깥쪽 면/
+            # 1열·1행뿐인 레이아웃은 비율≈1.0이라 기존과 동일 - 회귀 없음).
+            _y1_margin_ratio = (_eff_margin_left / margin_left) if margin_left > 1e-6 else 1.0
+            _y2_margin_ratio = (_eff_margin_right / margin_right) if margin_right > 1e-6 else 1.0
             self._build_plot_commands(
                 plotdef, lines, is_multiplot=True, panel_scale=font_panel_scale,
                 annotations=getattr(plotdef, "annotations", None),
@@ -4634,6 +4746,23 @@ class GnuplotGenerator:
                 legend_scale_boost=_legend_boost,
                 legend_width_extra_chars=_legend_w_extra,
                 frame_auto=frame_auto,
+                ylabel_margin_ratio=_y1_margin_ratio,
+                y2label_margin_ratio=_y2_margin_ratio,
+            )
+
+        if "왼쪽" in _warned_sides or "오른쪽" in _warned_sides:
+            _side_txt = "/".join(s for s in ("왼쪽", "오른쪽") if s in _warned_sides)
+            self.warnings.append(
+                f"{_side_txt} Y title이 옆 칸의 title과 겹쳐 보일 수 있습니다(칸이 "
+                f"여러 개라 그쪽 여백을 나눠 씁니다). 겹쳐 보이면 Y2 title을 "
+                f"비우거나(tic 숫자만 표시), Plot Title을 지우거나, 칸 수를 "
+                f"줄이는 걸 권장합니다."
+            )
+        if "위아래" in _warned_sides:
+            self.warnings.append(
+                "Plot Title이 위 행(row)의 X title/tic과 겹쳐 보일 수 있습니다"
+                "(위아래로 여러 칸이라 그쪽 여백을 나눠 씁니다). 겹쳐 보이면 "
+                "Plot Title을 지우거나 행 수를 줄이는 걸 권장합니다."
             )
 
         lines.append("unset multiplot")
