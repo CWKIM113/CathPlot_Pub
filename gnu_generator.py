@@ -141,6 +141,42 @@ def _rasterize_pdf_to_image(pdf_path, out_path, fmt, dpi=_PNG_TARGET_DPI):
     except Exception:
         return False
 
+# [추가 - 근본 원인 재해결] "SVG는 PDF→SVG 변환 수단이 이 환경에 없어서
+# 그대로 gnuplot이 직접 그린다"고 알고 있었는데, PyMuPDF(fitz)에 이미
+# Page.get_svg_image()가 있음을 재확인함 - PNG/JPG와 똑같은 이유(gnuplot의
+# svg 터미널이 pdfcairo와 별개로 구현된 렌더러라 폰트 절대 크기/legend
+# 폭/여백이 서로 어긋남 - 이번 세션에 EMF/SVG 폰트 비율, single-plot 극소형
+# 여백 등을 하나씩 고쳤는데도 "text-anchor(오른쪽/가운데 정렬)를 렌더러가
+# 지키지 않아 legend 텍스트가 box 밖으로 밀려나거나 tic 숫자가 frame과
+# 겹치는" 문제가 실측(fitz get_text로 렌더링된 실제 글자 bbox 좌표 직접
+# 확인)으로 새로 드러남 - "text-anchor에 의존하는 gnuplot svg 터미널을
+# 패치"보다 "PNG/JPG처럼 이미 검증된 PDF를 그대로 SVG로 변환"이 더 근본적
+# 이라고 판단해 SVG도 이 방식으로 전환한다.
+# [주의] get_svg_image(text_as_path=0)(진짜 <text>, 검색/선택 가능)을 먼저
+# 시도했으나, 그 결과물을 fitz 자신의 SVG 임포터로 다시 열어 렌더링하면
+# 회전된 텍스트(Y1/Y2 title)가 깨져서 나옴(fitz의 SVG import가 자신이 만든
+# tspan-x-array 방식을 제대로 못 읽는 비대칭 - 실측 확인) - 기본값인
+# text_as_path=1(글자를 도형 윤곽선으로 변환)로 확정한다. 텍스트 검색/선택은
+# 안 되지만(EMF/PNG는 여전히 필요하면 사용), 어떤 렌더러로 열어도 PDF와
+# 완전히 동일한 절대 위치/크기로 나온다는 게 실측으로 확인됨(fitz로 재렌더링
+# 결과 legend 겹침/tic 겹침/제목 중심 이탈 등 오늘 발견된 문제 전부 재현 안 됨).
+def _convert_pdf_to_svg(pdf_path, out_path):
+    try:
+        import fitz
+    except ImportError:
+        return False
+    try:
+        doc = fitz.open(pdf_path)
+        page = doc[0]
+        svg_text = page.get_svg_image(text_as_path=1)
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(svg_text)
+        doc.close()
+        return True
+    except Exception:
+        return False
+
+
 def _upscale_png_dpi(png_path):
     """72dpi로 그려진 png를 _PNG_TARGET_DPI/_PNG_NATIVE_DPI배 확대해서 저장한다.
     Pillow가 없으면 조용히 건너뛴다(비율은 이미 정확하고 해상도만 낮게 남음)."""
@@ -3005,18 +3041,25 @@ class GnuplotGenerator:
 
     def _check_text_loss(self, outfile, fmt, want_texts):
         """[추가 - 요청] "text가 잘리거나 소실되면 경고 띄우고 사용자가 판단하게
-        함 (가능성이 아니라 생겼을 때)" - EMF/SVG 드라이버는 캔버스 밖으로
-        나가는 텍스트 레코드를 통째로 버리는 경우가 있음(PDF/PNG는 잘리기만
-        하고 레코드 자체는 남아 실측상 문제 없음 - 이 세션에서 실측 확인됨).
+        함 (가능성이 아니라 생겼을 때)" - EMF 드라이버는 캔버스 밖으로 나가는
+        텍스트 레코드를 통째로 버리는 경우가 있음(PDF/PNG는 잘리기만 하고
+        레코드 자체는 남아 실측상 문제 없음 - 이 세션에서 실측 확인됨).
         추측이 아니라 렌더링 "직후" 실제로 만들어진 결과 파일을 검사해서,
         title/xlabel/ylabel/y2label(2줄이면 각 줄) 문자열이 실제로 빠졌는지
         확인하고, 빠진 경우에만 self.warnings에 채운다. 기존 Save/Print
         플로우가 이미 self.warnings/self.last_size_warning이 있으면
         _show_result_preview_and_confirm으로 결과 미리보기 + 계속/취소를
         묻는 구조라(cathplot_gui.py), 여기서 채우기만 하면 새 UI 없이도
-        바로 그 "경고, 사용자 판단" 흐름에 자동으로 올라탄다."""
+        바로 그 "경고, 사용자 판단" 흐름에 자동으로 올라탄다.
+        [수정 - 근본 원인 재해결에 따라 SVG 제외] SVG는 이제 PDF를 PyMuPDF로
+        직접 변환해서 만들므로(_convert_pdf_to_svg, text_as_path=1) 글자가
+        검색 가능한 텍스트가 아니라 도형 윤곽선이 됨 - 이 함수의 "문자열이
+        파일에 있는지" 검사 자체가 통하지 않게 됨(항상 오탐으로 "빠짐" 보고).
+        SVG의 실제 텍스트 소실 위험은 원본인 PDF와 동일(PDF는 잘리기만 하고
+        레코드가 안 빠짐 - 이미 별도로 안전함이 검증됨)하므로 검사 대상에서
+        뺀다."""
         fmt_l = (fmt or "").lower()
-        if fmt_l not in ("emf", "svg"):
+        if fmt_l not in ("emf",):
             return
         want = [w for w in want_texts if w]
         if not want:
@@ -3045,20 +3088,33 @@ class GnuplotGenerator:
         # 각각 따로 부르는 대신, 이미 검증된 pdfcairo 결과를 PyMuPDF로
         # 래스터화해서 만든다(포맷 간 legend/폰트 크기 불일치의 근본 원인이던
         # "터미널마다 다른 텍스트 렌더러" 문제를 없앰 - 오늘 직접 확인).
-        # EMF/SVG는 대상이 아니므로(EMF는 Word에서 벡터로 남아야 해서, SVG는
-        # PDF→SVG 변환 수단이 이 환경에 없어서) 그대로 gnuplot이 직접 그린다.
-        # PyMuPDF가 없는 환경이면 _rasterize_pdf_to_image가 False를 반환하니
-        # 그때만 기존 gnuplot 자체 터미널 방식으로 대체(fallback)한다.
+        # [수정 - 근본 원인 재해결] SVG도 같은 이유로 여기 합류 - gnuplot의 svg
+        # 터미널이 PDF와 별개 렌더러라 폰트 절대 크기 차이(EMF/SVG 폰트 비율
+        # 재보정으로 이미 고침)뿐 아니라 "text-anchor(오른쪽/가운데 정렬)를
+        # 렌더러가 지키지 않아 legend가 box 밖으로 밀리고 tic 숫자가 frame과
+        # 겹치는" 문제가 실측(fitz get_text로 실제 글자 좌표 확인)으로 새로
+        # 드러남 - PyMuPDF의 Page.get_svg_image()로 이미 검증된 PDF를 SVG로
+        # 그대로 변환한다(_convert_pdf_to_svg 참고 - text_as_path=1이라 글자가
+        # 도형 윤곽선이 되어 검색/선택은 안 되지만, 위치·비율은 PDF와 완전히
+        # 동일함이 실측 확인됨). EMF만 대상이 아님(Word에서 벡터+텍스트로 남아야
+        # 해서 gnuplot이 직접 그리는 방식 유지 - EMF는 SVG 같은 text-anchor
+        # 문제가 실측상 없었음).
+        # PyMuPDF가 없는 환경이면 _rasterize_pdf_to_image/_convert_pdf_to_svg가
+        # False를 반환하니 그때만 기존 gnuplot 자체 터미널 방식으로 대체
+        # (fallback)한다.
         _fmt_l0 = (fmt or "").lower()
-        if _fmt_l0 in ("png", "jpg", "jpeg"):
+        if _fmt_l0 in ("png", "jpg", "jpeg", "svg"):
             plot_dir0 = os.path.dirname(os.path.abspath(outfile))
             os.makedirs(plot_dir0, exist_ok=True)
             _tmp_pdf = os.path.join(plot_dir0, f".cathplot_raster_{uuid.uuid4().hex}.pdf")
             try:
                 self.create_script(plotdef, _tmp_pdf, fmt="pdf", annotations=annotations, arrows=arrows, circles=circles)
-                if _rasterize_pdf_to_image(_tmp_pdf, outfile, _fmt_l0):
+                if _fmt_l0 == "svg":
+                    if _convert_pdf_to_svg(_tmp_pdf, outfile):
+                        return outfile
+                elif _rasterize_pdf_to_image(_tmp_pdf, outfile, _fmt_l0):
                     return outfile
-                # PyMuPDF 없음 등으로 래스터화 실패 - 기존 방식으로 계속 진행
+                # PyMuPDF 없음 등으로 변환 실패 - 기존 방식으로 계속 진행
             finally:
                 try:
                     os.remove(_tmp_pdf)
@@ -3853,9 +3909,14 @@ class GnuplotGenerator:
     def create_multiplot_script(self, plots, outfile, fmt="pdf", layout_option="Auto", orientation="portrait", margins=None, spacing=None, keep_script=False, frame_auto=True, frame_width="", frame_height="", frame_unit="in", for_print=True):
         # [수정] "PNG/JPG를 PDF 기준으로" - create_script와 동일한 이유로
         # multiplot(Batch)도 PDF를 먼저 만들어 PyMuPDF로 래스터화한다(자세한
-        # 설명은 create_script 쪽 주석 참고). EMF/SVG는 대상 아님.
+        # 설명은 create_script 쪽 주석 참고).
+        # [수정 - 근본 원인 재해결] SVG도 create_script와 동일한 이유(gnuplot
+        # svg 터미널의 text-anchor 미준수 - 자세한 설명은 create_script 쪽
+        # 주석 참고)로 여기 합류. EMF는 대상 아님(Word에서 벡터+텍스트로 남아야
+        # 하고, SVG 같은 text-anchor 문제가 실측상 없었음 - print와 직결되는
+        # 포맷이라 이번 세션의 M-P 폰트 재보정/margin 수정을 그대로 유지).
         _fmt_l0 = (fmt or "").lower()
-        if _fmt_l0 in ("png", "jpg", "jpeg"):
+        if _fmt_l0 in ("png", "jpg", "jpeg", "svg"):
             plot_dir0 = os.path.dirname(os.path.abspath(outfile))
             os.makedirs(plot_dir0, exist_ok=True)
             _tmp_pdf = os.path.join(plot_dir0, f".cathplot_raster_{uuid.uuid4().hex}.pdf")
@@ -3865,7 +3926,10 @@ class GnuplotGenerator:
                     margins=margins, spacing=spacing, keep_script=keep_script, frame_auto=frame_auto,
                     frame_width=frame_width, frame_height=frame_height, frame_unit=frame_unit, for_print=for_print,
                 )
-                if _rasterize_pdf_to_image(_tmp_pdf, outfile, _fmt_l0):
+                if _fmt_l0 == "svg":
+                    if _convert_pdf_to_svg(_tmp_pdf, outfile):
+                        return outfile
+                elif _rasterize_pdf_to_image(_tmp_pdf, outfile, _fmt_l0):
                     return outfile
             finally:
                 try:
