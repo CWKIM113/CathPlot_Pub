@@ -2898,8 +2898,8 @@ class GnuplotGenerator:
             # 공통)" - EMF는 png 같은 큰 잘림 문제는 없었지만 위아래가 살짝
             # 빠듯하다는 피드백 - png(1.6배)보다 훨씬 작게, 위/아래만 소폭
             # (1.15배) 늘린다.
-            need_top_in *= 1.15
-            need_bottom_in *= 1.15
+            need_top_in *= 1.4
+            need_bottom_in *= 1.4
             # [참고] "Y1 title이 tic에 겹침" 문제는 왼쪽 마진(need_left_in) 크기와는
             # 무관했음(마진을 1.4배 늘려도 겹침이 그대로였음 - 직접 렌더링
             # 비교로 확인, 되돌림) - 실제 원인/해결은 ylabel의 offset 값
@@ -2930,7 +2930,7 @@ class GnuplotGenerator:
             # 각각 독립적으로) 추가로 더 낮춘다 - 1/3 요청을 그대로 따르면
             # title이 사라지므로, 안전하게 확인된 최소값(0.95배, 1.6배 대비
             # 약 0.6배 수준)까지만 낮췄다는 점을 명확히 알림.
-            _emf_2line_margin_boost = 0.95
+            _emf_2line_margin_boost = 1.6
             need_left_in *= 1.6 * (_emf_2line_margin_boost / 1.6 if ylabel_lines >= 2 else 1.0)
             need_right_in *= 1.6 * (_emf_2line_margin_boost / 1.6 if y2label_lines >= 2 else 1.0)
         elif _fmt_l2 == "svg":
@@ -2945,7 +2945,7 @@ class GnuplotGenerator:
             # 한쪽만 2줄인 경우 모두 4곳 다 정상 출력, 1.7배부터 Y1
             # 1번째 줄과 Y2 2번째 줄이 사라짐 - 안전한 최대치인 1.6으로
             # 확정(요청한 1/3(÷3)의 절반 수준까지만 줄였다는 점을 알림).
-            _svg_2line_div = 1.6
+            _svg_2line_div = 1.0
             if ylabel_lines >= 2:
                 need_left_in /= _svg_2line_div
                 # [수정] "svg 2줄은 title이 약간 잘림 - 좌측 마진을 1자 더" -
