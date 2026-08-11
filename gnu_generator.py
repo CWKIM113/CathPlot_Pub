@@ -384,7 +384,14 @@ MARGIN_TOP_IN = 0.6
 MARGIN_TOP_NO_TITLE_IN = 0.08 
 MARGIN_TOP_PER_EXTRA_LINE_IN = 0.35  
 MARGIN_BOTTOM_IN = 0.7        
-CELL_SPACING_IN = 0.10  # [수정 - 되돌림] 0.05로 줄였다가 Manual EMF 4/p·6/p Y1·Y2 둘 다 2줄인 극단 조합에서 텍스트 소실 재발 확인 - 되돌림(Auto 전용 간격 축소만 유지)
+CELL_SPACING_IN = 0.03  # [수정 - 재축소] 이전엔 0.05도 Manual EMF 4/p·6/p Y1·Y2
+# 둘 다 2줄인 극단 조합에서 텍스트 소실이 나서 0.10으로 되돌렸었는데, 그
+# 사이 margin-need 안전 배율 재조정(EMF 1.15->1.4 등)이 들어가 지금은
+# 0.0까지 줄여도(재검증) 그 극단 조합(6x5cm 포함)에서 텍스트 소실이 없음 -
+# "칸 사이 간격 최소화" 요청으로 0.03(거의 0에 가깝지만 칸 사이 시각적
+# 구분이 아예 없어지진 않는 값)으로 확정. 줄어든 만큼은 기존 axis-확대
+# 재사용 장치(_col_gap_l/r, _row_gap_t/b 기반 grow)가 그대로 axis 크기로
+# 돌려줌.
 
 @dataclass
 class CurveDefinition:
@@ -4228,8 +4235,11 @@ class GnuplotGenerator:
             # 값인데, 그만큼 axis가 작아지는 대가가 있음(아래 grow 단계가 이
             # 간격을 줄인 만큼 axis를 키워줌) - 절반으로 줄여 axis 확보에
             # 더 쓴다.
-            spacing_h_in = spacing_in * 1.5
-            spacing_w_in = 1 * _title_char_w_in
+            # [수정 - 재축소] "M-P 칸 사이 간격 최소화(2/p~6/p, Auto/Manual 전부)"
+            # 요청으로 기존 1.5배/1자 폭을 더 줄임 - 아래에서 2/p~6/p x Port/
+            # Land x Y1/Y2 2줄 조합 전부 텍스트 소실/겹침 없음 재확인 후 확정.
+            spacing_h_in = spacing_in * 0.5
+            spacing_w_in = 0.4 * _title_char_w_in
             # [수정] "2/p 상하 간격을 title 대문자 1자 높이만큼 줄이고, 이를
             # bottom 마진에 넣어달라" - margin_top은 그대로 두고 margin_bottom
             # 에만 더한다(뒤에서 margin_bottom 계산 후 반영, 여기선 줄일 양/
