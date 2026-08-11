@@ -4769,6 +4769,18 @@ class GnuplotGenerator:
                     if _grow_scale > 1.001:
                         axis_w *= _grow_scale
                         axis_h *= _grow_scale
+                        # [수정 - 요청] "그림(axis)은 커졌는데 폰트/legend는 그대로라
+                        # 상대적으로 작아 보임" - margin/font를 그대로 두고 axis만
+                        # 키웠더니, 오늘 앞서 힘들게 맞춘 "legend 폭이 axis의
+                        # 1/3~1/4" 같은 비율이 axis만 커진 만큼 깨짐(legend/폰트가
+                        # 상대적으로 작아 보임 - 사용자 확인). font_panel_scale도
+                        # 같은 배율로 키워 폰트·legend가 axis와 함께 커지게 한다.
+                        # [주의] margin(_col_gap_l/r, _row_gap_t/b)은 이미 이
+                        # 키우기 "전"의(더 작은) font_panel_scale 기준으로 정해져
+                        # 있어, 폰트를 키우면 이론적으로 그 여백이 빠듯해질 수
+                        # 있음 - 아래에서 2/p, 3/p, 6/p Manual 전부 실측(좌표)
+                        # 재검증해서 겹침/잘림 없는 것 확인 후 확정.
+                        font_panel_scale *= _grow_scale
                 else:
                     _grow_w = _cand_w if (_budget_w2 > 0 and _cand_w > 1.0) else 1.0
                     _grow_h = _cand_h if (_h_grow_safe and _budget_h2 > 0 and _cand_h > 1.0) else 1.0
@@ -4776,6 +4788,16 @@ class GnuplotGenerator:
                         axis_w *= _grow_w
                     if _grow_h > 1.001:
                         axis_h *= _grow_h
+                    # [수정 - 요청, 위 ratio_locked 경로와 동일 이유] 가로/세로를
+                    # 독립 배율로 키우는 이 경로(Auto 2칸 이상)도 axis만 커지고
+                    # 폰트/legend가 그대로면 상대적으로 작아 보이므로 같이
+                    # 키운다. 두 방향 배율이 다를 수 있어 기하평균(면적 기준
+                    # 중간값)을 폰트 배율로 쓴다 - 더 작은 쪽(_h_grow_safe=False라
+                    # 세로가 아예 안 커진 경우 등) 방향에 과하게 맞춰 폰트가
+                    # 너무 커지지 않도록.
+                    _font_grow = (_grow_w * _grow_h) ** 0.5
+                    if _font_grow > 1.001:
+                        font_panel_scale *= _font_grow
                 _row_w_total = sum(axis_w + _col_gap_l[c] + _col_gap_r[c] for c in range(cols)) + spacing_w_in * (cols - 1)
                 _col_h_total = sum(axis_h + _row_gap_t[r] + _row_gap_b[r] for r in range(rows)) + spacing_h_in * (rows - 1)
 
