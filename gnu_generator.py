@@ -4975,17 +4975,26 @@ class GnuplotGenerator:
                 _budget_h2 = printable_h - sum(_row_gap_t) - sum(_row_gap_b) - spacing_h_in * (rows - 1)
                 _cand_w = (_budget_w2 / (axis_w * cols)) if _budget_w2 > 0 else 0.0
                 _cand_h = (_budget_h2 / (axis_h * rows)) if _budget_h2 > 0 else 0.0
-                # [수정 - 재활성화] "Auto 6/p Landscape(2행)에서 세로로 확대했더니
-                # 아래 행 Plot Title이 위 행 xlabel/tic과 실제로 겹침(실측
-                # -23.6pt)" - 원인은 ylabel/y2label과 달리 title/xlabel은 eff_margin
-                # 축소 비율만큼 offset을 같이 줄여주는 장치가 없어서였음(gnuplot이
-                # 자체 폰트 크기 기준 기본 위치를 그대로 씀) - ylabel_margin_ratio와
-                # 동일한 개념의 title_margin_ratio/xlabel_margin_ratio를 새로 만들어
-                # _build_plot_commands의 title/xlabel offset에 반영했으므로(위쪽
-                # 참고) 세로 확대를 다시 켠다. PDF/EMF, 1줄/2줄, 4/p·6/p(Port/Land)
-                # 전부 좌표 기반(PyMuPDF/EMF 텍스트 레코드 직접 파싱)으로 행간
-                # 겹침 없음 재확인 후 확정.
-                _h_grow_safe = True
+                # [수정 - 재활성화 시도 후 회귀 재발견, 원복] 어젯밤 title_margin_ratio/
+                # xlabel_margin_ratio(안쪽 면 축소 비율만큼 offset도 같이 줄이는
+                # 장치, ylabel_margin_ratio와 동일 개념)를 추가하고 이걸로 세로
+                # 확대(_h_grow_safe=True)를 다시 켰는데, 오늘 재검증(PyMuPDF 좌표
+                # 직접 측정)에서 Auto 4/p Landscape 맨 위 행 Plot Title이 페이지
+                # 밖으로 밀려나고(bbox y0=-7.86, 페이지 밖) 6/p Landscape는 아래
+                # 행 title이 위 행 xlabel과 겹치는(실측 확인, "Panel Title"과
+                # "Time"이 같은 자리에 겹쳐 그려짐) 회귀가 재현됨. 원인 재분석:
+                # title_margin_ratio/xlabel_margin_ratio 장치는 "안쪽(인접 칸과
+                # 마주보는) 면"의 margin 축소만 다루는데, 이번에 문제가 되는 건
+                # "맨 위/맨 아래 행"의 바깥쪽(margin_ratio=1.0, 장치가 적용 안 됨)
+                # 여백임 - axis_h가 커지면서 페이지의 "미사용 중앙정렬 여유
+                # ((printable_h-consumed)/2)"가 0으로 줄어드는데, 그 여유가 사실은
+                # (font_panel_scale과 무관하게 결정되는) 맨 위/아래 행 margin_top/
+                # margin_bottom이 원래도 빠듯했던 것을 우연히 가려주고 있었을 뿐
+                # -> 여유가 사라지자 그 빠듯함이 그대로 드러남(font 확대와는 무관,
+                # font_panel_scale을 안 키운 채로도 재현됨 - 직접 확인). 이 바깥쪽
+                # 여백까지 안전하게 다루려면 추가 작업이 필요해 일단 안전했던
+                # 이전 조건으로 되돌린다(3칸 이하/가로 확대는 계속 안전, 그대로 유지).
+                _h_grow_safe = rows <= 1 or total_cells < 4
                 # [수정 - 요청] "Auto 3/p Portrait처럼 가로는 이미 꽉 찼는데
                 # 세로만 남는 경우, 비율을 지키느라 가로에 발목 잡혀 세로가
                 # 거의 안 커짐" - Manual(비율 유지 확정, 오늘 앞선 수정)과
@@ -5027,6 +5036,9 @@ class GnuplotGenerator:
                     # 중간값)을 폰트 배율로 쓴다 - 더 작은 쪽(_h_grow_safe=False라
                     # 세로가 아예 안 커진 경우 등) 방향에 과하게 맞춰 폰트가
                     # 너무 커지지 않도록.
+                    # [주의] _h_grow_safe가 total_cells>=4+다행에서 다시 False로
+                    # 돌아갔으므로(위 참고) _grow_h는 그 경우 이미 1.0으로 고정돼
+                    # 있음 - 이 식은 그대로 두어도 안전.
                     _font_grow = (_grow_w * _grow_h) ** 0.5
                     if _font_grow > 1.001:
                         font_panel_scale *= _font_grow
