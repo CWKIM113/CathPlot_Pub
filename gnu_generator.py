@@ -257,28 +257,50 @@ PRINT_FONT_SCALE = 1.60     # [수정 - 버그] "PDF 그림에서 font size가 p
 PRINT_LINE_SCALE = 1.00     # 기존 1.70
 PRINT_BORDER_SCALE = 1.00   # 기존 1.50
 
-# [추가 - 근본 원인 발견, 이후 되돌림] gnuplot의 pdfcairo 터미널(png/jpg도
-# PDF를 거쳐 만들어지므로 동일)은 "font 'Name,SIZE'"로 지정한 값과 무관하게
-# 실제 PDF에 기록되는 폰트 크기가 항상 정확히 2/3로 줄어드는 자체 특성이
-# 있음(우리 코드와 무관한 최소 재현 스크립트로 확인 - 지정 36 -> 실제 24
-# 등 예외 없이 정확한 2/3. PyMuPDF span.size로 직접 측정 - 이 관찰 자체는
-# 지금도 사실로 보임). 이 축소를 "EMF/SVG와 절대 크기를 맞춘다"는 목표로
-# 상쇄(역수 1.5를 곱함)하려 했었는데, 실측(legend box 폭 vs axis 폭 비율)
-# 재확인 결과 이 보정이 오히려 전체적으로 지나치게 커지는 원인이었음(예:
-# legend box가 axis 폭의 55%, "1/3~1/4가 정상"이라는 지적과 실측이 일치 -
-# 이 보정을 1.0으로 되돌리면 정확히 그 근처(37%)로 돌아옴, single-plot
-# 10x8cm에서 Y title이 1줄이면 축소 없이도 들어가던 것도 이 보정이 없던
-# 상태에서나 맞던 전제였음). 즉 "EMF/SVG 수준에 맞춘다"는 목표 자체가
-# 처음부터 잘못된 기준이었던 것으로 보임(EMF/SVG도 같이 너무 컸을 가능성) -
-# 보정을 없앤다(1.0 = 사실상 미적용, 상수는 남겨 이후 다시 필요해지면
-# 참고할 수 있게 함).
+# [추가 - 근본 원인 발견, 이후 되돌림, 다시 방향 전환] gnuplot의 pdfcairo
+# 터미널(png/jpg도 PDF를 거쳐 만들어지므로 동일)은 "font 'Name,SIZE'"로
+# 지정한 값과 무관하게 실제 PDF에 기록되는 폰트 크기가 항상 정확히 2/3로
+# 줄어드는 자체 특성이 있음(우리 코드와 무관한 최소 재현 스크립트로 확인 -
+# 지정 36 -> 실제 24 등 예외 없이 정확한 2/3. PyMuPDF span.size로 직접
+# 측정 - 이 관찰 자체는 지금도 사실). 한때 이 축소를 "EMF/SVG와 절대
+# 크기를 맞춘다"는 목표로 상쇄(1.5배)했다가, legend box가 axis의 55%까지
+# 커지는 부작용으로 되돌린 적 있음(CAIRO_FONT_RENDER_FIX=1.0). 그런데 그
+# 되돌림 이후 box_chars/margin 등 전체 계산이 "PDF가 2/3로 작게 나오는
+# 상태"를 기준으로 다시 맞춰졌고, 이 상태의 PDF 결과물이 지금은 "정상
+# 기준"으로 확정됨 - 사용자 확인: "EMF가 PDF 대비 상대적으로 크게 보이니
+# EMF/SVG를 PDF 수준으로 조정하라"(PDF를 키우는 방향이 아니라 EMF/SVG를
+# 줄이는 방향). PDF는 그대로 두고(CAIRO_FONT_RENDER_FIX=1.0 유지), EMF와
+# SVG의 절대 렌더 크기를 PDF에 맞춰 줄인다(아래 EMF_FONT_RENDER_FIX/
+# SVG_FONT_RENDER_FIX 참고).
 CAIRO_FONT_RENDER_FIX = 1.0
-# [추가 - 재실측, 이후 되돌림] EMF는 같은 pt에서 PDF/PNG(cairo)보다 오히려
-# 작게 나옴(실측: 20pt에서 EMF 글자 높이가 PNG의 84.7%, 40pt에서 74.5%)은
-# 관찰 자체는 사실로 보이나, 바로 위 CAIRO_FONT_RENDER_FIX와 같은 이유로
-# "그 차이를 상쇄해 절대 크기를 맞춘다"는 목표가 잘못이었음 - 이 보정도
-# 없앤다.
+# [수정 - 방향 전환, 범위 한정] "EMF가 PDF보다 상대적으로 크게 나온다"
+# 지적으로 실측 재확인(EMF 파일의 EMR_EXTCREATEFONTINDIRECTW.lfHeight를
+# 직접 읽어 pt로 환산 후 PyMuPDF로 잰 PDF 실제 렌더 크기와 비교) -
+# title/xlabel/ylabel/y2label/tic/legend 전부 예외 없이 정확히 1.5배(EMF가
+# 큼, 10x8/20x16/5x4cm 세 크기 모두 동일 비율 재확인, single-plot 기준).
+# 이전에 "EMF가 PDF보다 작게 나온다"고 실측했던 것(0.745~0.847배)은 그
+# CAIRO_FONT_RENDER_FIX=1.5가 적용 중이던 상태(PDF가 그만큼 커져 있던
+# 상태)와 비교한 값이라, 지금(PDF 보정 없음, 원래 작은 상태)과는 비교
+# 기준 자체가 다름 - 지금 기준으로 EMF를 1/1.5=0.667배로 줄여 PDF와 절대
+# 크기를 맞춘다.
+# [범위 한정 - 요청] "지금은 single-plot부터 맞추는 작업" - EMF_FONT_
+# RENDER_FIX는 M-P(create_multiplot_script의 font_panel_scale)에도 같이
+# 쓰이는 공용 상수라, 이 값 자체를 바꾸면 M-P의 이미 검증된 margin-need
+# 공식들(_need_left_in 등, 전부 이 상수가 반영된 font_panel_scale 기준으로
+# 튜닝됨)이 갑자기 다른 폰트 크기를 전제로 계산하게 돼 4/p·6/p Manual
+# 2줄 조합에서 텍스트 소실 회귀가 실측 확인됨. M-P는 손대지 않고 이후
+# 별도로 재보정하기로 하고, single-plot 전용 상수(SP_ 접두사)를 새로
+# 만들어 single-plot 경로에서만 쓴다 - EMF_FONT_RENDER_FIX/SVG_FONT_
+# RENDER_FIX 자체는 M-P 호환을 위해 1.0(미적용)으로 유지.
 EMF_FONT_RENDER_FIX = 1.0
+SP_EMF_FONT_RENDER_FIX = 1.0 / 1.5
+# [추가 - 신규] SVG도 PDF 대비 실측 1.125배 크게 나옴(같은 방법 - SVG는
+# lfHeight 대신 XML의 font-size 속성을 직접 읽음, 세 크기 모두 동일 비율,
+# single-plot 기준). EMF와 같은 이유로 PDF 수준에 맞춰 1/1.125=0.889배로
+# 줄인다 - 지금까지는 SVG 전용 보정 자체가 없었음(EMF만 있었음). single-plot
+# 전용 상수로만 도입(M-P는 아직 손대지 않음) - _compute_f_scale과
+# _build_plot_commands의 단일 plot 전용(not is_multiplot) 분기 2곳에 적용.
+SP_SVG_FONT_RENDER_FIX = 1.0 / 1.125
 PRINT_TIC_MAJOR_SCALE = 1.0
 PRINT_TIC_MINOR_SCALE = 0.5
 
@@ -310,7 +332,7 @@ MARGIN_TOP_IN = 0.6
 MARGIN_TOP_NO_TITLE_IN = 0.08 
 MARGIN_TOP_PER_EXTRA_LINE_IN = 0.35  
 MARGIN_BOTTOM_IN = 0.7        
-CELL_SPACING_IN = 0.10        
+CELL_SPACING_IN = 0.10  # [수정 - 되돌림] 0.05로 줄였다가 Manual EMF 4/p·6/p Y1·Y2 둘 다 2줄인 극단 조합에서 텍스트 소실 재발 확인 - 되돌림(Auto 전용 간격 축소만 유지)
 
 @dataclass
 class CurveDefinition:
@@ -1373,8 +1395,9 @@ class GnuplotGenerator:
                 # [수정 - 근본 원인 재확인] 이 함수(_compute_f_scale)는 오직
                 # single-plot margin 계산에만 쓰이므로(멀티플롯은 별도 경로,
                 # font_panel_scale 쪽에서 이미 처리) 중복 적용 위험이 없음 -
-                # _build_plot_commands와 동일하게 EMF_FONT_RENDER_FIX로 통일.
-                f_scale *= EMF_FONT_RENDER_FIX
+                # _build_plot_commands와 동일하게 SP_EMF_FONT_RENDER_FIX로 통일
+                # (M-P와 공유하는 EMF_FONT_RENDER_FIX는 건드리지 않음).
+                f_scale *= SP_EMF_FONT_RENDER_FIX
             elif (fmt or "").lower() in ("pdf", "png", "jpg", "jpeg"):
                 # [수정 - 요청] "single-plot도 M-P처럼 축소된 title 기준으로
                 # margin 바닥값을 같이 줄여달라" - 이 함수는 오직 margin
@@ -1397,6 +1420,12 @@ class GnuplotGenerator:
                     f_scale *= CAIRO_FONT_RENDER_FIX ** 0.5
                 else:
                     f_scale *= CAIRO_FONT_RENDER_FIX
+            elif (fmt or "").lower() == "svg":
+                # [추가 - 방향 전환] "EMF뿐 아니라 SVG도 PDF 대비 상대적으로
+                # 크게 나온다" - 실측(lfHeight/XML font-size 직접 비교) 결과
+                # SVG가 PDF보다 1.125배 크게 나옴을 확인, EMF와 동일한 방식으로
+                # SP_SVG_FONT_RENDER_FIX(1/1.125)를 곱해 PDF 수준으로 줄인다.
+                f_scale *= SP_SVG_FONT_RENDER_FIX
         else:
             f_scale = SCREEN_FONT_SCALE * (panel_scale or 1.0)
         return f_scale
@@ -1467,7 +1496,12 @@ class GnuplotGenerator:
             # 이미 반영해서 넘겨주므로 여기서 또 곱하면 중복" 패턴을 EMF에도
             # 적용해서 해결한다 - 단일 plot만 여기서 적용.
             if not is_multiplot and (fmt or "").lower() == "emf":
-                f_scale *= EMF_FONT_RENDER_FIX
+                f_scale *= SP_EMF_FONT_RENDER_FIX
+            # [추가 - 방향 전환] EMF와 같은 이유로 SVG도 단일 plot에서만
+            # SP_SVG_FONT_RENDER_FIX(1/1.125)를 적용 - 멀티플롯은 caller가
+            # font_panel_scale에 이미 반영해서 넘기므로 여기서 또 곱하면 중복.
+            if not is_multiplot and (fmt or "").lower() == "svg":
+                f_scale *= SP_SVG_FONT_RENDER_FIX
         else:
             f_scale = SCREEN_FONT_SCALE * panel_scale
             line_scale = SCREEN_LINE_SCALE * panel_scale
@@ -2040,7 +2074,13 @@ class GnuplotGenerator:
         if not is_multiplot and _fmt_l in ("pdf", "png", "jpg", "jpeg"):
             _xlabel_gap = -0.25 * _title_f_scale
         elif not is_multiplot and _fmt_l == "emf":
-            _xlabel_gap = -0.20 - 0.30 * ((_title_panel_scale or 1.0) - 1.0)
+            # [수정 - 원칙 정정] "폰트/축 크기에 따라 배율이 달라지면 안 됨 -
+            # 항상 같은 비율로 적용돼야 함" - 기존 절편식(-0.20 - 0.30*(scale-1))
+            # 은 scale=1.0에서만 -0.20이고 그 외 크기에서는 비례가 아닌 어긋난
+            # 값이 나오는 구조라(PDF는 이미 -0.25*_title_f_scale로 순수 비례식
+            # 으로 고쳐져 있었는데 EMF만 안 고쳐져 있었음), 같은 기준점(scale=1.0
+            # 일 때 -0.20)을 지나는 순수 비례식으로 통일한다.
+            _xlabel_gap = -0.20 * (_title_panel_scale or 1.0)
         else:
             _xlabel_gap = 0.15 * _title_f_scale
             # [추가 - 요청] title과 같은 이유(Auto 다행 세로 확대 대비) - margin_bottom이
@@ -2290,8 +2330,17 @@ class GnuplotGenerator:
                 # (0, -0.1, -0.2는 여전히 소실, -0.3부터 정상) - 기준값 0.75
                 # 대비 1.1을 빼 -0.35(여유 포함)로 확정, 96-combo 회귀로 4/p·
                 # 6/p 등 이미 정상인 조합에 부작용 없음 재확인.
+                # [수정 - 원칙 정정, 범위 한정] "폰트/축 크기와 무관하게 항상
+                # 같은 비율로 적용돼야 함"이라는 지적은 맞지만, M-P(base=0.75)
+                # 용으로 이미 검증된 고정값(-1.1)을 건드리면 M-P 4/p·6/p Manual
+                # 양쪽 2줄 조합에 회귀가 재현됨(실측 확인) - M-P는 그대로 두고,
+                # single-plot(base=2.5)에만 비례식(_title_f_scale 기준, 10x8cm
+                # 실측으로 계수 2.5 확정)을 적용해 분리한다.
                 if "|" in (plotdef.y2label or ""):
-                    _y2label_offset -= 1.1
+                    if is_multiplot:
+                        _y2label_offset -= 1.1
+                    else:
+                        _y2label_offset -= 2.5 * _title_f_scale
             elif (fmt or "").lower() == "svg":
                 # [수정] "SVG는 y2 title 1글자 폭을 줄일 것" - 공통 비율식보다
                 # SVG만 1칸 더 타이트하게.
@@ -4009,8 +4058,13 @@ class GnuplotGenerator:
             _title_font_ratio = max((_font_width_ratio(p.title_font) for p in plots if (p.title or "").strip()), default=1.0)
             _title_char_w_in *= _title_font_ratio  # 폰트 대체 시 실제 폭 비율로 보정
             _title_char_h_in = _title_pt_sp / 72.0  # 대문자 1자 "높이"(요청대로 폭이 아니라 높이)
-            spacing_h_in = spacing_in * 3.0
-            spacing_w_in = 2 * _title_char_w_in
+            # [수정 - 요청] "plot간 간격은 최소로 하든지 없애서 각 plot을 조금이라도
+            # 키울 것" - 기존 3.0배/2자 폭은 미관을 위해 일부러 넉넉하게 둔
+            # 값인데, 그만큼 axis가 작아지는 대가가 있음(아래 grow 단계가 이
+            # 간격을 줄인 만큼 axis를 키워줌) - 절반으로 줄여 axis 확보에
+            # 더 쓴다.
+            spacing_h_in = spacing_in * 1.5
+            spacing_w_in = 1 * _title_char_w_in
             # [수정] "2/p 상하 간격을 title 대문자 1자 높이만큼 줄이고, 이를
             # bottom 마진에 넣어달라" - margin_top은 그대로 두고 margin_bottom
             # 에만 더한다(뒤에서 margin_bottom 계산 후 반영, 여기선 줄일 양/
