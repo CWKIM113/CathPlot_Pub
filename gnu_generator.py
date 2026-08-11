@@ -257,22 +257,28 @@ PRINT_FONT_SCALE = 1.60     # [수정 - 버그] "PDF 그림에서 font size가 p
 PRINT_LINE_SCALE = 1.00     # 기존 1.70
 PRINT_BORDER_SCALE = 1.00   # 기존 1.50
 
-# [추가 - 근본 원인 발견] gnuplot의 pdfcairo 터미널(png/jpg도 PDF를 거쳐
-# 만들어지므로 동일)은 "font 'Name,SIZE'"로 지정한 값과 무관하게 실제
-# PDF에 기록되는 폰트 크기가 항상 정확히 2/3로 줄어드는 자체 특성이 있음
-# (우리 코드와 무관한 최소 재현 스크립트로 확인 - 지정 36 -> 실제 24,
-# 지정 40 -> 실제 26.667 등 예외 없이 정확한 2/3. PyMuPDF span.size로
-# 직접 측정). EMF/SVG는 지정한 값 그대로 렌더링됨(이 축소가 없음). 이
-# 상수(2/3의 역수)를 f_scale에 곱해 pdf/png/jpg 전용으로 상쇄한다 -
-# f_scale에 비례하는 모든 값(font_pt, margin 여유값)이 같이 커져서
-# EMF/SVG와 절대 크기가 맞아떨어지게 된다.
-CAIRO_FONT_RENDER_FIX = 1.5
-# [추가 - 재실측] EMF는 같은 pt에서 PDF/PNG(cairo)보다 오히려 작게 나옴
-# (실측: 20pt에서 EMF 글자 높이가 PNG의 84.7%, 40pt에서 74.5% - 같은 물리
-# 캔버스, 각 이미지 실제 DPI로 정규화한 title 글자 높이 비교). 기존에 있던
-# "EMF가 더 크다"는 전제로 축소(0.75)하던 값은 방향이 틀렸었음 - CAIRO_
-# FONT_RENDER_FIX와 같은 목표(EMF/SVG 수준 절대 크기에 맞춤)에 맞게 확대.
-EMF_FONT_RENDER_FIX = 1.8
+# [추가 - 근본 원인 발견, 이후 되돌림] gnuplot의 pdfcairo 터미널(png/jpg도
+# PDF를 거쳐 만들어지므로 동일)은 "font 'Name,SIZE'"로 지정한 값과 무관하게
+# 실제 PDF에 기록되는 폰트 크기가 항상 정확히 2/3로 줄어드는 자체 특성이
+# 있음(우리 코드와 무관한 최소 재현 스크립트로 확인 - 지정 36 -> 실제 24
+# 등 예외 없이 정확한 2/3. PyMuPDF span.size로 직접 측정 - 이 관찰 자체는
+# 지금도 사실로 보임). 이 축소를 "EMF/SVG와 절대 크기를 맞춘다"는 목표로
+# 상쇄(역수 1.5를 곱함)하려 했었는데, 실측(legend box 폭 vs axis 폭 비율)
+# 재확인 결과 이 보정이 오히려 전체적으로 지나치게 커지는 원인이었음(예:
+# legend box가 axis 폭의 55%, "1/3~1/4가 정상"이라는 지적과 실측이 일치 -
+# 이 보정을 1.0으로 되돌리면 정확히 그 근처(37%)로 돌아옴, single-plot
+# 10x8cm에서 Y title이 1줄이면 축소 없이도 들어가던 것도 이 보정이 없던
+# 상태에서나 맞던 전제였음). 즉 "EMF/SVG 수준에 맞춘다"는 목표 자체가
+# 처음부터 잘못된 기준이었던 것으로 보임(EMF/SVG도 같이 너무 컸을 가능성) -
+# 보정을 없앤다(1.0 = 사실상 미적용, 상수는 남겨 이후 다시 필요해지면
+# 참고할 수 있게 함).
+CAIRO_FONT_RENDER_FIX = 1.0
+# [추가 - 재실측, 이후 되돌림] EMF는 같은 pt에서 PDF/PNG(cairo)보다 오히려
+# 작게 나옴(실측: 20pt에서 EMF 글자 높이가 PNG의 84.7%, 40pt에서 74.5%)은
+# 관찰 자체는 사실로 보이나, 바로 위 CAIRO_FONT_RENDER_FIX와 같은 이유로
+# "그 차이를 상쇄해 절대 크기를 맞춘다"는 목표가 잘못이었음 - 이 보정도
+# 없앤다.
+EMF_FONT_RENDER_FIX = 1.0
 PRINT_TIC_MAJOR_SCALE = 1.0
 PRINT_TIC_MINOR_SCALE = 0.5
 
@@ -867,27 +873,21 @@ class GnuplotGenerator:
         # [수정] 실제 GUI Save 재확인 추가 피드백 - "PNG는 1글자, EMF 0.5글자,
         # SVG는 3글자 폭을 추가로 감소", "SVG는 legend 내 curve 간 아래위
         # 간격을 0.8배로 축소".
-        # [수정 - 근본 원인, 요청으로 재보정] "box 왼쪽 테두리<->title 텍스트
-        # 여백이 포맷마다 제각각이고 대체로 과함(PDF/SVG는 글자 3~7자 폭,
-        # EMF는 거의 0) - 전부 legend font 기준 '1글자'로 통일" - box_chars가
-        # 곧바로 "몇 글자 여백"을 뜻하는 값이 아니라(box_w 공식에 max_label_len
-        # 추정치와 함께 얽혀 있어 실제 렌더 결과와 선형이 아님) 직접 렌더링 +
-        # PyMuPDF(pdf)/픽셀(EMF) 실측으로 재보정: PDF는 box_chars=1.5일 때
-        # 실제 여백이 7.4자였고, -4.4로 낮추니 정확히 1.00자로 확인됨. SVG는
-        # PDF와 같은 텍스트 폭 기준(anchor 고정, box_left만 이동)으로 역산해
-        # 비슷한 -4.6으로 추정. EMF는 반대로 기존(-2.25)이 이미 거의 0자(글자가
-        # 테두리에 붙어 보임)였음을 실측 확인 - 여백을 오히려 늘려야 해서
-        # 0.0으로 재보정(실측: "A" 1글자 기준 근소한 여백 확인). PNG/JPG/JPEG는
-        # 단일 plot(create_script)에서 PDF 경로로 리다이렉트돼 이 표 자체가
-        # 실제로는 안 쓰이지만(레거시 폴백 대비 값은 남겨둠), 만약을 대비해
-        # PDF와 동일하게 맞춰 둔다.
+        # [수정 - 근본 원인, 재작업] "box 왼쪽 테두리<->title 텍스트 여백을
+        # legend font 기준 '1글자'로 통일" - 1차 보정 때 실수로 짧은 문자열
+        # ("PRESS:PRSTNK(1)")만 재서 확인했는데, box_w는 실제로 max_label_len
+        # (둘 중 더 긴 "MFLO:R-SDRT1>L-STLF1")을 기준으로 정해지므로 그
+        # 문자열로 재야 맞았음(사용자 지적으로 재확인 - 실제로 긴 문자열은
+        # box 밖까지 삐져나가 있었음). 긴 문자열 기준으로 PyMuPDF 재실측한
+        # 결과 PDF는 box_chars=1.0에서 정확히 1.00자로 확인됨 - 나머지
+        # 포맷도 같은 방식으로 다시 실측해서 확정한다(아래 각 값 옆 주석 참고).
         _FORMAT_TUNING = {
-            "png": {"row_mult": 2.0,           "box_chars": -4.4, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "pdf": {"row_mult": 2.0 * 0.5,      "box_chars": -4.4, "sample_mult": (2/3)**2, "text_corr": 2 / 3},
-            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": 0.0, "sample_mult": (2 / 3) * 0.8, "text_corr": 1.0},
-            "jpg": {"row_mult": 2.0 * (2 / 3),  "box_chars": -4.4, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": -4.4, "sample_mult": 2 / 3,   "text_corr": 1.0},
-            "svg": {"row_mult": 2.0 * (2 / 3) * 0.8, "box_chars": -4.6, "sample_mult": 0.5, "text_corr": 1.0},
+            "png": {"row_mult": 2.0,           "box_chars": 1.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "pdf": {"row_mult": 2.0 * 0.5,      "box_chars": 1.0, "sample_mult": (2/3)**2, "text_corr": 2 / 3},
+            "emf": {"row_mult": 2.0 * (2 / 3),  "box_chars": 1.0, "sample_mult": (2 / 3) * 0.8, "text_corr": 1.0},
+            "jpg": {"row_mult": 2.0 * (2 / 3),  "box_chars": 1.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "jpeg": {"row_mult": 2.0 * (2 / 3), "box_chars": 1.0, "sample_mult": 2 / 3,   "text_corr": 1.0},
+            "svg": {"row_mult": 2.0 * (2 / 3) * 0.8, "box_chars": 1.0, "sample_mult": 0.5, "text_corr": 1.0},
         }
         # [수정 - 버그] "화면(screen)은 건드리지 말라고 했는데 왜 바뀌었나" -
         # 실측 확인 결과 screen의 row_mult=1.0(폰트 크기와 정확히 같은 줄
@@ -2009,9 +2009,19 @@ class GnuplotGenerator:
         # single-plot 대상 재보정은 M-P(멀티플롯, is_multiplot=True)는 건드리지
         # 않음(멀티플롯은 이미 여러 번 검증된 상태라 "지금 잘되는 M-P는 그대로
         # 두라"는 요청에 따름) - 멀티플롯은 기존 공식 그대로 유지.
+        # [수정 - 재확인, 위 "0.36이 기준크기에서 안전"이 틀렸었음] 위 판단은
+        # 크롭 이미지를 눈으로만 보고 내린 것이었는데, 실제로 PyMuPDF로
+        # "Time" bbox와 tic 숫자 bbox를 좌표로 직접 재보니 0.36에서 -9.9pt
+        # 겹침(눈으로는 못 알아챔)이 있었음(사용자 지적으로 재확인). 10x8cm/
+        # 40x30cm 둘 다 좌표 기반으로 다시 스윕해서 -1.2로 확정했었음.
+        # [수정 - 재보정, CAIRO/EMF_FONT_RENDER_FIX 원복에 따라] 위 -1.2는
+        # CAIRO_FONT_RENDER_FIX=1.5가 걸려있던 상태(폰트가 더 큼) 기준이었는데,
+        # 그 배율 자체를 없앤 뒤(폰트가 작아짐) 좌표 기반으로 재스윕한 결과
+        # 10x8cm는 -0.5, 40x30cm는 -0.3~-0.5 둘 다 충분(둘 다 비슷한 값으로
+        # 충분 - scale 의존이 크지 않음), 고정값 -0.4로 재확정.
         _fmt_l = (fmt or "").lower()
         if not is_multiplot and _fmt_l in ("pdf", "png", "jpg", "jpeg"):
-            _xlabel_gap = 0.36 - 0.26 * ((_title_panel_scale or 1.0) - 1.0)
+            _xlabel_gap = -0.4
         elif not is_multiplot and _fmt_l == "emf":
             _xlabel_gap = -0.20 - 0.30 * ((_title_panel_scale or 1.0) - 1.0)
         else:
@@ -4582,20 +4592,28 @@ class GnuplotGenerator:
         # (한쪽에만 몰아주면 반대쪽만 계속 여유로워 보이는 것을 막기 위해
         # 반씩 분배 - 사용자 확인). 합계(margin_left+margin_right 총량)는
         # 그대로 보존되므로 전체 grid_w/축소 배율에는 영향이 없다.
+        # [수정 - 버그, 3/p 이상에서 재발견] 위 "바깥쪽에 얹어준다"를 맨
+        # 왼쪽/맨 오른쪽 칸(col_idx==0/cols-1)에만 적용하고 있어서, 3칸 이상
+        # 일 때 가운데 칸(양쪽 다 "안쪽")은 이 보너스를 전혀 못 받아 옆 칸들
+        # 보다 눈에 띄게 넓게(margin 총량이 작게) 나옴 - 실측 확인(3/p Manual
+        # 6x4cm: 1번째/3번째 칸 axis 폭 0.1984, 가운데 칸 0.2775 - 같은
+        # 칸인데 폭이 다름). "여러 칸이 전부 같은 모양이어야 한다"는 요청에
+        # 맞춰 "얹어주는 보너스"(합계를 늘리는 부분)는 없애기로 함.
+        # [수정 - 심각한 버그, 바로 위 정리로 새로 유발] 보너스뿐 아니라
+        # "안쪽처럼 절반으로 줄이는 것"까지 맨 왼쪽/맨 오른쪽(그리고 위아래도
+        # 맨 위/맨 아래)에 적용해버려서, 우측 끝 패널의 Y2 title/맨 위 행의
+        # Plot Title이 필요한 공간보다 여백이 부족해져 EMF/PDF가 아예 그
+        # title을 통째로 안 그림(실측 확인 - 페이지 텍스트 추출로 우측 패널
+        # Y2 title이 존재 자체를 안 하는 것, 맨 위 행 title이 페이지 경계
+        # 밖으로 밀려 안 보이는 것 둘 다 재현). 결론: 맨 왼쪽/오른쪽(열),
+        # 맨 위/아래(행)는 "보너스"는 없어도(합계 보존 목적 포기) "혼자
+        # 있을 때 필요한 만큼"(margin_* 그대로, 절반으로 줄이지 않음)은
+        # 반드시 유지해야 하고, 오직 두 칸이 서로 마주보는 "진짜 안쪽" 면만
+        # 절반(_interior_k)으로 줄인다. 이 경우 가운데 칸(양쪽 다 안쪽)은
+        # 옆(바깥쪽 있는) 칸보다 살짜 넓게/크게 남을 수 있지만("완전 균일"
+        # 목표에는 못 미침), "title이 안 보이는 것"보다는 훨씬 나은 절충안 -
+        # 사용자 확인 후 이 방식으로 확정.
         _interior_k = 0.5
-        _extra_outer_lr = 0.0
-        if cols > 1:
-            _reclaimed_lr = (cols - 1) * (1 - _interior_k) * (margin_left + margin_right)
-            _extra_outer_lr = _reclaimed_lr / 2.0
-        # [수정 - 요청] "4/p, 6/p 등 위아래로도 같은 방식으로" - 위와 완전히
-        # 같은 개념을 세로(행) 방향에도 적용한다. 위 칸의 margin_bottom(xlabel
-        # 자리)과 아래 칸의 margin_top(title 자리)이 마주보는 내부 간격도
-        # 절반으로 줄이고, 아낀 만큼을 맨 위 칸의 바깥쪽 margin_top/맨 아래
-        # 칸의 바깥쪽 margin_bottom에 반씩 얹는다(총량 보존, rows>1일 때만).
-        _extra_outer_tb = 0.0
-        if rows > 1:
-            _reclaimed_tb = (rows - 1) * (1 - _interior_k) * (margin_top + margin_bottom)
-            _extra_outer_tb = _reclaimed_tb / 2.0
 
         # [수정 - 버그] 5장 가운데 배치 특수 케이스(row/col이 0.5 등 정수가 아님)는
         # 이 재배분(마주보는 칸끼리 안쪽 여백 절반, 바깥쪽에 얹기) 대상이 아님 -
@@ -4630,14 +4648,26 @@ class GnuplotGenerator:
             cell_left_in, cell_right_in, cell_top_in, cell_bottom_in = cell_positions_in[i]
             _row_idx, _col_idx = cell_rc[i]
             if cols > 1 and not _is_centered5:
-                _eff_margin_left = (margin_left + _extra_outer_lr) if _col_idx == 0 else margin_left * _interior_k
-                _eff_margin_right = (margin_right + _extra_outer_lr) if _col_idx == cols - 1 else margin_right * _interior_k
+                # [수정 - 심각한 버그, 방금 위 통일이 유발] "우측 끝 패널의 Y2
+                # title이 통째로 안 보임" - 바깥쪽(용지 쪽) 보너스를 없애면서
+                # 맨 오른쪽 칸의 margin_right까지 안쪽처럼 절반으로 깎아버려서,
+                # Y2 title이 실제로 필요한 공간보다 여백이 부족해져 EMF/PDF가
+                # 통째로 안 그림(실측 확인 - 페이지 전체 텍스트 추출로 우측
+                # 패널의 Y2 title이 존재 자체를 안 함). 맨 왼쪽/맨 오른쪽은
+                # "보너스"(추가로 더 주기)는 없애더라도 "안쪽처럼 절반으로
+                # 줄이는 것"까지는 하면 안 됨 - 원래 그 칸 혼자 있을 때 필요한
+                # 만큼(margin_left/right 그대로, 보너스 없이)은 유지한다.
+                # 그래도 가운데 칸(양쪽 다 진짜 안쪽)은 절반이라 옆(=바깥쪽 있는
+                # 칸)보다 조금 넓게 나올 수 있지만, "title이 안 보이는 것"보다는
+                # 훨씬 나은 절충안.
+                _eff_margin_left = margin_left if _col_idx == 0 else margin_left * _interior_k
+                _eff_margin_right = margin_right if _col_idx == cols - 1 else margin_right * _interior_k
             else:
                 _eff_margin_left = margin_left
                 _eff_margin_right = margin_right
             if rows > 1 and not _is_centered5:
-                _eff_margin_top = (margin_top + _extra_outer_tb) if _row_idx == 0 else margin_top * _interior_k
-                _eff_margin_bottom = (margin_bottom + _extra_outer_tb) if _row_idx == rows - 1 else margin_bottom * _interior_k
+                _eff_margin_top = margin_top if _row_idx == 0 else margin_top * _interior_k
+                _eff_margin_bottom = margin_bottom if _row_idx == rows - 1 else margin_bottom * _interior_k
             else:
                 _eff_margin_top = margin_top
                 _eff_margin_bottom = margin_bottom
