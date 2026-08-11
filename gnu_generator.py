@@ -4445,7 +4445,21 @@ class GnuplotGenerator:
         # 작은) 값을 floor로 쓰게 돼 title이 밀려 안 보이는 문제 - 실측
         # 확인). 주석대로 4로 바로잡는다.
         if total_cells >= 4:
-            _floor_scale = margin_scale * _cairo_fix
+            # [수정 - 버그 발견] "Auto 4/p·6/p Land/Port에서 아래 행 Plot Title이
+            # 위 행 xlabel/tic과 실제로 겹침(실측: 4/p -8.3pt, 6/p -15.1pt)" -
+            # spacing/폰트 확대와 무관하게 어제 첫 커밋(ee2bf43)에도 이미 있던
+            # 문제였음(재현 확인). 원인: total_cells>=4는 _need_top_in/
+            # _need_bottom_in 계산에 margin_scale 기반 _floor_scale을 쓰는데,
+            # 실측(font_panel_scale=0.906, margin_scale=0.371 - 2.4배 차이)
+            # 결과 실제 렌더링되는 폰트보다 필요 여백을 과소평가함 - margin_top/
+            # margin_bottom 자체가 "그 폰트 하나만 있을 때도" 이미 부족했던 것이라
+            # (안쪽 여백 공유/축소와 무관), _row_gap_t/_row_gap_b가 halving 없이
+            # 그대로 margin_top/margin_bottom(=_need_top/bottom_in, 서로 같은 값)을
+            # 써도 여전히 겹침. _floor_scale이 실제 font_panel_scale보다 작아지지
+            #않도록(margin_scale과 font_panel_scale 중 큰 쪽) 떠받친다 - 이 값은
+            # margin-need 계산에만 쓰여 "부족했던 여백을 필요한 만큼 키우는" 방향
+            # 뿐이라 텍스트 소실 회귀 위험이 없음(오히려 안전 여유가 늘어남).
+            _floor_scale = max(margin_scale, font_panel_scale) * _cairo_fix
         else:
             _underlying_scale = font_panel_scale / _cairo_fix if _cairo_fix else font_panel_scale
             _floor_scale = _cairo_fix if _underlying_scale > 1.0 else font_panel_scale
