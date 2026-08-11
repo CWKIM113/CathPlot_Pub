@@ -7,6 +7,7 @@ import os
 import sys
 import re
 import shutil
+import struct
 import subprocess
 
 # gnuplot.exe(콘솔 프로그램)를 실행할 때마다 배경에서 콘솔창이 잠깐 깜빡이는 것을
@@ -2944,6 +2945,66 @@ class GnuplotGenerator:
 
         return need_left_in, need_right_in, need_top_in, need_bottom_in
 
+    @staticmethod
+    def _extract_emf_texts(data):
+        """EMF 파일(바이너리)에서 EMR_EXTTEXTOUTA/W(레코드 타입 83/84) 레코드의
+        실제 문자열들을 모두 뽑아낸다. lfHeight 실측(font_compare.py)과 동일한
+        레코드 구조 해석 - Record Header(Type 4 + Size 4) + Bounds RECTL(16) +
+        iGraphicsMode(4) + exScale(4) + eyScale(4) = offset 36에서 EmrText
+        {Reference PointL(8) + nChars(4) + offString(4)} 시작."""
+        texts = []
+        i, n = 0, len(data)
+        while i + 8 <= n:
+            rt, rs = struct.unpack_from("<II", data, i)
+            if rs < 8 or i + rs > n:
+                break
+            if rt in (83, 84):
+                base = i + 8 + 16 + 4 + 4 + 4
+                if base + 16 <= i + rs:
+                    _rx, _ry, n_chars, off_string = struct.unpack_from("<iiII", data, base)
+                    if off_string and n_chars and i + off_string + n_chars * 2 <= n:
+                        s = data[i + off_string:i + off_string + n_chars * 2].decode("utf-16-le", errors="replace")
+                        texts.append(s)
+            i += rs
+        return "\n".join(texts)
+
+    def _check_text_loss(self, outfile, fmt, want_texts):
+        """[추가 - 요청] "text가 잘리거나 소실되면 경고 띄우고 사용자가 판단하게
+        함 (가능성이 아니라 생겼을 때)" - EMF/SVG 드라이버는 캔버스 밖으로
+        나가는 텍스트 레코드를 통째로 버리는 경우가 있음(PDF/PNG는 잘리기만
+        하고 레코드 자체는 남아 실측상 문제 없음 - 이 세션에서 실측 확인됨).
+        추측이 아니라 렌더링 "직후" 실제로 만들어진 결과 파일을 검사해서,
+        title/xlabel/ylabel/y2label(2줄이면 각 줄) 문자열이 실제로 빠졌는지
+        확인하고, 빠진 경우에만 self.warnings에 채운다. 기존 Save/Print
+        플로우가 이미 self.warnings/self.last_size_warning이 있으면
+        _show_result_preview_and_confirm으로 결과 미리보기 + 계속/취소를
+        묻는 구조라(cathplot_gui.py), 여기서 채우기만 하면 새 UI 없이도
+        바로 그 "경고, 사용자 판단" 흐름에 자동으로 올라탄다."""
+        fmt_l = (fmt or "").lower()
+        if fmt_l not in ("emf", "svg"):
+            return
+        want = [w for w in want_texts if w]
+        if not want:
+            return
+        try:
+            if fmt_l == "emf":
+                with open(outfile, "rb") as f:
+                    found_text = self._extract_emf_texts(f.read())
+            else:  # svg
+                with open(outfile, "r", encoding="utf-8", errors="replace") as f:
+                    found_text = f.read()
+        except OSError:
+            return
+
+        missing = [w for w in want if found_text.count(w) < 1]
+        if missing:
+            _missing_disp = ", ".join(f"'{m}'" for m in missing)
+            self.warnings.append(
+                f"{fmt_l.upper()} 파일에서 일부 텍스트({_missing_disp})가 캔버스 "
+                f"밖으로 밀려나 표시되지 않았습니다(실측 확인). Frame 크기를 "
+                f"늘리거나 title/label을 줄여 보세요."
+            )
+
     def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None, circles=None):
         # [수정] "PNG/JPG를 PDF 기준으로" - gnuplot의 pngcairo/jpeg 터미널을
         # 각각 따로 부르는 대신, 이미 검증된 pdfcairo 결과를 PyMuPDF로
@@ -3080,6 +3141,11 @@ class GnuplotGenerator:
 
             if fmt.lower() == "png":
                 _upscale_png_dpi(outfile)
+
+            _want_texts = []
+            for _raw in (plotdef.title, plotdef.xlabel, plotdef.ylabel, plotdef.y2label):
+                _want_texts.extend(_ln.strip() for _ln in (_raw or "").split("|") if _ln.strip())
+            self._check_text_loss(outfile, fmt, _want_texts)
 
         return outfile
 
@@ -5108,5 +5174,11 @@ class GnuplotGenerator:
 
         if fmt.lower() == "png":
             _upscale_png_dpi(outfile)
+
+        _want_texts = []
+        for _pd in plots:
+            for _raw in (_pd.title, _pd.xlabel, _pd.ylabel, _pd.y2label):
+                _want_texts.extend(_ln.strip() for _ln in (_raw or "").split("|") if _ln.strip())
+        self._check_text_loss(outfile, fmt, _want_texts)
 
         return outfile
