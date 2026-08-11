@@ -4685,6 +4685,22 @@ class GnuplotGenerator:
             # "plot 크기를 줄이되 x:y는 유지"라는 요청과 일치).
             _col_gap_l = [margin_left if (c == 0 or cols == 1) else max(margin_left * _interior_k, min(margin_left, _need_left_in)) for c in range(cols)]
             _col_gap_r = [margin_right if (c == cols - 1 or cols == 1) else max(margin_right * _interior_k, min(margin_right, _need_right_in)) for c in range(cols)]
+            # [수정 - 회귀 발견] 위 LR과 똑같이 "최소치 바닥"을 TB에도 적용했더니,
+            # margin_top/bottom이 이미 자기 자신의 need 바닥값과 같은(=바닥이
+            # 이미 이겨서 정해진) 흔한 경우엔 절반(_interior_k)이 이 바닥값보다
+            # 항상 작아 결국 항상 "안 줄임"이 돼버려, 위아래로 여러 칸일 때
+            # (예: Auto 3/p Portrait) 칸 사이 간격이 지나치게 커짐(실측: margin_top=
+            # need_top=0.75in, margin_bottom=need_bottom=0.85in로 정확히 일치하는
+            # 흔한 경우라 절반 축소가 전혀 적용 안 됨). 하지만 이걸 단순
+            # 절반으로 되돌려봤더니 - 실측 확인 - Auto 6/p Landscape(2행)에서
+            # 아래 행 Plot Title이 위 행 xlabel/tic과 실제로 9.5pt 겹치는
+            # 회귀가 재현됨(title은 ylabel/y2label과 달리 margin 축소에 맞춰
+            # offset을 같이 줄여주는 장치가 아직 없어서, 절반으로 줄인 여백
+            # 안에 안 들어가고 넘침). 그 offset 연동은 아직 구현이 안 돼 있어
+            # (추후 별도 보정 필요), 지금은 안전한 최소치 바닥을 다시 쓰고,
+            # "간격이 커 보인다"는 원래 불만은 아래 axis 확대(그로우) 단계로
+            # 완화한다(칸 자체가 커지면 같은 절대 간격도 상대적으로 덜 커
+            # 보임).
             _row_gap_t = [margin_top if (r == 0 or rows == 1) else max(margin_top * _interior_k, min(margin_top, _need_top_in)) for r in range(rows)]
             _row_gap_b = [margin_bottom if (r == rows - 1 or rows == 1) else max(margin_bottom * _interior_k, min(margin_bottom, _need_bottom_in)) for r in range(rows)]
 
@@ -4702,6 +4718,64 @@ class GnuplotGenerator:
             if _axis_fit_scale < 0.999:
                 axis_w *= _axis_fit_scale
                 axis_h *= _axis_fit_scale
+                _row_w_total = sum(axis_w + _col_gap_l[c] + _col_gap_r[c] for c in range(cols)) + spacing_w_in * (cols - 1)
+                _col_h_total = sum(axis_h + _row_gap_t[r] + _row_gap_b[r] for r in range(rows)) + spacing_h_in * (rows - 1)
+
+            # [추가 - 요청] "칸 사이 간격을 줄인 만큼 남는 공간을 그냥 버리지
+            # 말고 axis(plot 크기)를 키우는 데 써라" - 안쪽 면 절반 축소로
+            # 여백은 줄었는데, Auto는 axis_w/axis_h가 이미 (줄이기 전) margin
+            # 기준으로 고정돼 있었고 Manual은 axis를 일부러 고정(비율 버그
+            # 수정)해 둬서, 둘 다 이 절약분이 빈 공간으로 남기만 했음(실측:
+            # Auto 3/p Portrait에서 위아래 빈 공간이 페이지의 상당 부분).
+            # 남는 여백만큼 axis_w/axis_h를 가로세로 같은 배율로 키운다(비율
+            # 유지) - Manual의 "1/p, 2/p는 지정 크기 그대로" 원칙은 지켜야 하니
+            # 그 둘은 제외하고 3칸 이상(기존 shrink-to-fit도 3칸부터 적용되던
+            # 것과 동일 기준)에서만, 그리고 Auto는 애초에 "용지를 채운다"는
+            # 원칙이라 칸 수 제한 없이 적용한다. margin/font는 그대로 두고
+            # axis(순수 그림 영역)만 키운다.
+            if (frame_auto or total_cells >= 3) and cols > 0 and rows > 0 and axis_w > 0 and axis_h > 0:
+                _budget_w2 = printable_w - sum(_col_gap_l) - sum(_col_gap_r) - spacing_w_in * (cols - 1)
+                _budget_h2 = printable_h - sum(_row_gap_t) - sum(_row_gap_b) - spacing_h_in * (rows - 1)
+                _cand_w = (_budget_w2 / (axis_w * cols)) if _budget_w2 > 0 else 0.0
+                _cand_h = (_budget_h2 / (axis_h * rows)) if _budget_h2 > 0 else 0.0
+                # [수정 - 버그 발견, 세로 확대 제한 필요] "Auto 6/p Landscape
+                # (2행)에서 세로로 확대했더니 아래 행 Plot Title이 위 행
+                # xlabel/tic과 실제로 겹침(실측 -23.6pt)" - 원인: ylabel/
+                # y2label은 eff_margin 축소 비율만큼 offset도 같이 줄이는
+                # 장치(ylabel_margin_ratio)가 있어 축소된 여백 안에 항상
+                # 들어가지만, title/xlabel은 그런 장치가 아예 없어 gnuplot이
+                # 자체 폰트 크기 기준으로 위치를 잡음. 게다가 total_cells>=4
+                # 구간은 _need_top_in/_need_bottom_in 계산에 쓰는 _floor_scale이
+                # font_panel_scale이 아니라 margin_scale을 쓰는데(실측: 이
+                # 케이스 font_panel_scale=0.906, margin_scale=0.371 - 2.4배
+                # 차이) 실제 폰트보다 필요 여백을 과소평가함. title/xlabel
+                # offset 연동은 아직 없으므로(추후 별도 보정 필요), 이 겹침
+                # 위험이 실측된 total_cells>=4 + 다행(rows>1) 조합에서는 세로
+                # 확대를 하지 않는다(가로 확대와 3칸 이하는 실측으로 안전
+                # 확인됨 - 그대로 유지).
+                _h_grow_safe = rows <= 1 or total_cells < 4
+                # [수정 - 요청] "Auto 3/p Portrait처럼 가로는 이미 꽉 찼는데
+                # 세로만 남는 경우, 비율을 지키느라 가로에 발목 잡혀 세로가
+                # 거의 안 커짐" - Manual(비율 유지 확정, 오늘 앞선 수정)과
+                # Auto 1/p(비율 유지 원칙, rows==cols)는 가로세로를 같은
+                # 배율로만 키우지만, Auto 2/p 이상(원래도 "비율 무시하고
+                # 채운다"는 기존 원칙 - 사용설명서 5절 참고)은 가로/세로를
+                # 각자 남는 만큼 독립적으로 키운다.
+                _ratio_locked_grow = (not frame_auto) or (total_cells <= 2 and rows == cols)
+                if _ratio_locked_grow:
+                    if not _h_grow_safe:
+                        _cand_h = 1.0
+                    _grow_scale = max(1.0, min(_cand_w, _cand_h)) if (_budget_w2 > 0 and _budget_h2 > 0) else 1.0
+                    if _grow_scale > 1.001:
+                        axis_w *= _grow_scale
+                        axis_h *= _grow_scale
+                else:
+                    _grow_w = _cand_w if (_budget_w2 > 0 and _cand_w > 1.0) else 1.0
+                    _grow_h = _cand_h if (_h_grow_safe and _budget_h2 > 0 and _cand_h > 1.0) else 1.0
+                    if _grow_w > 1.001:
+                        axis_w *= _grow_w
+                    if _grow_h > 1.001:
+                        axis_h *= _grow_h
                 _row_w_total = sum(axis_w + _col_gap_l[c] + _col_gap_r[c] for c in range(cols)) + spacing_w_in * (cols - 1)
                 _col_h_total = sum(axis_h + _row_gap_t[r] + _row_gap_b[r] for r in range(rows)) + spacing_h_in * (rows - 1)
 
@@ -4836,7 +4910,17 @@ class GnuplotGenerator:
                       f"page_w={page_w:.4f} page_h={page_h:.4f}", file=sys.stderr)
             # [수정] "2/p는 legend box 좌우길이를 1자 정도 키우고, 4/p, 6/p는
             # 2자 줄이고" - print 기준 여유분(0.7자)에서 레이아웃별로 가감한다.
-            _legend_w_extra = (0.7 + 1.0) if total_cells <= 2 else (0.7 - 2.0)
+            # [수정 - 버그, 오늘 legend box_chars 재보정 후 재검증 안 함] "3/p
+            # 이상에서 legend title이 box 왼쪽 테두리를 넘어 삐져나옴" - 이
+            # "-2.0자" 감산은 CAIRO_FONT_RENDER_FIX(폰트가 실제보다 크게
+            # 부풀려지던 시절)에 맞춰 정한 값인데, 그 폰트 확대 버그를 이미
+            # 제거하고 box_chars(테두리-텍스트 여백)도 최댓값 문자열 기준으로
+            # 다시 보정해서 지금은 여유가 거의 없음 - 여기 추가 감산까지 겹치면
+            # 실제로 넘침(실측: PDF 좌표로 텍스트 시작점이 box 왼쪽 테두리보다
+            # 7.15pt 더 왼쪽에서 시작 = 겹쳐 나옴). 3개 이상 칸에서 box를 좁혀야
+            # 할 근거가 지금은 없으므로(재측정 필요해지면 그때 다시 조정)
+            # 감산을 없앤다.
+            _legend_w_extra = 0.7 + (1.0 if total_cells <= 2 else 0.0)
             # [수정 - 심각한 버그 발견] "EMF만 y1/y2 title이 사라짐(Multi Print/
             # Batch Set 등 멀티플롯 경로에서만)" - 실제 EMF 바이너리를 직접
             # 파싱해서 확인: 원인은 title이 잘못된 위치에 그려진 게 아니라, 이
