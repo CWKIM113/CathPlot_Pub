@@ -302,6 +302,21 @@ SP_EMF_FONT_RENDER_FIX = 1.0 / 1.5
 # 전용 상수로만 도입(M-P는 아직 손대지 않음) - _compute_f_scale과
 # _build_plot_commands의 단일 plot 전용(not is_multiplot) 분기 2곳에 적용.
 SP_SVG_FONT_RENDER_FIX = 1.0 / 1.125
+# [추가 - 후속 작업] "M-P의 EMF/SVG 폰트-비율도 같은 방식으로 재보정" - single-
+# plot과 같은 실측(1/p: EMF/PDF=1.497~1.500, SVG/PDF=1.125 균일 - single-plot과
+# 정확히 동일한 드라이버 자체 비율)을 M-P에도 확인함. 단 4/p·6/p 등 칸이 작은
+# Auto 레이아웃에서는 이미 존재하는 클리핑 방지용 축소 로직(font_panel_scale의
+# floor/shrink, fmt='emf'/'svg' 조건부)이 일부 겹쳐 있어 실측 비율이 더 낮음
+# (1.217~1.332) - font_panel_scale 자체(margin-need 계산에도 쓰이는 공용 값,
+# EMF_FONT_RENDER_FIX와 같은 이유로 손대면 4/p·6/p Manual 2줄 회귀 재현 위험)는
+# 그대로 두고, 실제 gnuplot에 보내는 최종 pt 숫자(title/xlabel/ylabel/y2label/
+# tic/legend)에만 이 비율을 곱해 "항상 그대로거나 더 작게"만 만든다(절대 커지지
+# 않음 - margin은 이 축소를 모르는 채 기존(더 큰 값 기준)대로 남아 여유가 늘어나는
+# 방향이라 텍스트 소실 회귀 위험이 없음). 1/p는 정확히 일치, 4/p·6/p는 기존 축소가
+# 이미 일부 반영돼 있어 PDF보다 살짝 작아지는 정도로 남음(더 크게 보이는 원래
+# 문제의 반대 방향이라 안전).
+MP_EMF_FONT_RENDER_FIX = 1.0 / 1.5
+MP_SVG_FONT_RENDER_FIX = 1.0 / 1.125
 PRINT_TIC_MAJOR_SCALE = 1.0
 PRINT_TIC_MINOR_SCALE = 0.5
 
@@ -1567,6 +1582,19 @@ class GnuplotGenerator:
             _title_panel_scale = panel_scale
         _title_f_scale = f_scale * (_title_panel_scale / panel_scale) if panel_scale else f_scale
 
+        # [추가 - 후속 작업] "M-P의 EMF/SVG 폰트-비율도 같은 방식으로 재보정" -
+        # MP_EMF_FONT_RENDER_FIX/MP_SVG_FONT_RENDER_FIX 참고. f_scale/_title_
+        # f_scale 자체(margin-need 계산에도 쓰임)는 그대로 두고, 실제로 gnuplot에
+        # 보내는 최종 pt 숫자(아래 tic_size/title_size 등, _render_legend_box에
+        # 넘기는 f_scale)에만 곱해 "커지지 않고 그대로거나 작아지기만" 하게 한다.
+        _mp_font_fix = 1.0
+        if is_multiplot:
+            _fmt_l_for_fix = (fmt or "").lower()
+            if _fmt_l_for_fix == "emf":
+                _mp_font_fix = MP_EMF_FONT_RENDER_FIX
+            elif _fmt_l_for_fix == "svg":
+                _mp_font_fix = MP_SVG_FONT_RENDER_FIX
+
         uses_y2_for_log = any(getattr(curve, "axis", "y1") == "y2" for curve in plotdef.curves)
         # [수정] gnuplot은 "비선형(log) 축은 link를 풀기 전에 먼저 선형으로
         # 되돌려야 한다"고 요구함 (에러: "you must clear nonlinear x2 or y2
@@ -1968,7 +1996,7 @@ class GnuplotGenerator:
         # 블록 자체를 axis_w_in/axis_h_in이 확정된 뒤로 옮긴다(_render_circles
         # 참고, 아래로 이동).
 
-        tic_size = int(9 * f_scale)
+        tic_size = int(9 * f_scale * _mp_font_fix)
         if getattr(plotdef, "is_print_mode", False):
             tic_major_scale, tic_minor_scale = PRINT_TIC_MAJOR_SCALE, PRINT_TIC_MINOR_SCALE
             # [수정 - 버그] "PNG의 major tic이 EMF 대비 약 2배로 길게 나옴,
@@ -1998,10 +2026,17 @@ class GnuplotGenerator:
         lines.append(f"set ytics font '{plotdef.ylabel_font},{tic_size}'")
         lines.append(f"set y2tics font '{plotdef.y2label_font},{tic_size}'")
 
-        title_size = int(float(plotdef.title_size) * _title_f_scale)
-        xlabel_size = int(float(plotdef.xlabel_size) * _title_f_scale)
+        title_size = int(float(plotdef.title_size) * _title_f_scale * _mp_font_fix)
+        xlabel_size = int(float(plotdef.xlabel_size) * _title_f_scale * _mp_font_fix)
+        # [주의] ylabel_size/y2label_size는 아래 _ylabel_offset/_y2label_offset
+        # 보간식(_term_font_pt_ref 대비 비율)의 입력으로도 그대로 쓰이므로 여기서
+        # _mp_font_fix를 곱하면 그 튜닝된 비율(offset 공식)까지 같이 틀어짐 -
+        # 실제 font 문자열에 넣을 축소된 값은 별도(_ylabel_size_emit/
+        # _y2label_size_emit)로 따로 계산해서 offset 계산과 분리한다.
         ylabel_size = int(float(plotdef.ylabel_size) * _title_f_scale)
         y2label_size = int(float(plotdef.y2label_size) * _title_f_scale)
+        _ylabel_size_emit = int(round(ylabel_size * _mp_font_fix))
+        _y2label_size_emit = int(round(y2label_size * _mp_font_fix))
 
         title_text, title_enh = self._render_text(plotdef.title)
         # [추가 - 요청] "Auto 4칸 이상 + 다행 레이아웃의 세로 확대"를 켜려면,
@@ -2257,7 +2292,7 @@ class GnuplotGenerator:
         # 맞춰 들어가게 한다(single-plot은 항상 1.0이라 회귀 없음).
         _ylabel_offset *= ylabel_margin_ratio
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
-        lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{ylabel_size}" offset {_ylabel_offset:.2f},0 {ylabel_enh}')
+        lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{_ylabel_size_emit}" offset {_ylabel_offset:.2f},0 {ylabel_enh}')
 
         if plotdef.y2label:
             # [수정 - 버그] "MFLO:R-SDRT1>L-STLF1" 같은 y2 title이 tic 숫자와
@@ -2356,7 +2391,7 @@ class GnuplotGenerator:
             # 몰랐음 - 실제 예약 비율(y2label_margin_ratio)만큼 같이 줄인다.
             _y2label_offset *= y2label_margin_ratio
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
-            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{y2label_size}" offset {_y2label_offset:.2f},0 {y2label_enh}')
+            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{_y2label_size_emit}" offset {_y2label_offset:.2f},0 {y2label_enh}')
 
         lines.append("set ytics nomirror")
 
@@ -2486,7 +2521,7 @@ class GnuplotGenerator:
             legend_thick_val = min(float(getattr(plotdef, "legend_thick", "1.5") or 1.5), _frame_border_lw)
             self._render_legend_box(
                 lines, group1_curves, plotdef.legend_pos, plotdef.legend_box,
-                legend_thick_val, 8000, f_scale * legend_scale_boost, line_scale, panel_scale,
+                legend_thick_val, 8000, f_scale * legend_scale_boost * _mp_font_fix, line_scale, panel_scale,
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
                 axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
                 box_w_extra_chars_override=legend_width_extra_chars,
@@ -2501,7 +2536,7 @@ class GnuplotGenerator:
             legend2_thick_val = min(float(getattr(plotdef, "legend2_thick", "1.5") or 1.5), _frame_border_lw)
             self._render_legend_box(
                 lines, group2_curves, plotdef.legend2_pos, getattr(plotdef, "legend2_box", True),
-                legend2_thick_val, 9000, f_scale * legend_scale_boost, line_scale, panel_scale,
+                legend2_thick_val, 9000, f_scale * legend_scale_boost * _mp_font_fix, line_scale, panel_scale,
                 getattr(plotdef, "is_print_mode", False), curve_index_map, getattr(plotdef, "legend_font", plotdef.xlabel_font),
                 axis_w_in, legend_size=float(getattr(plotdef, "legend_size", "9") or 9), axis_h_in=axis_h_in,
                 box_w_extra_chars_override=legend_width_extra_chars,
