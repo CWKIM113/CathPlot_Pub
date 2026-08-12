@@ -4770,6 +4770,14 @@ class GnuplotGenerator:
         # 적용하고, 2/p처럼 rows!=cols인 경우는 4/p 이상과 동일하게 용지를
         # 최대로 채우도록(비율 무시) 바꾼다 - 실측 확인(2p Land 상하 여백
         # 3.0/4.21cm -> 0.55/1.76cm로 대폭 감소, 2p Port도 문제 없음).
+        # [검토 - 되돌림] "Auto 2/p·3/p Landscape(1행 n열)에서 axis가 세로로
+        # 길쭉해짐(실측: 3/p Landscape axis_w=2.34in/axis_h=6.67in, 비율
+        # 0.35)"을 버그로 보고 rows==1/cols==1도 비율 유지 대상에 넣었었으나,
+        # 실제 렌더링을 픽셀 단위로 직접 비교한 결과 두 경우 다 "찌그러짐"이
+        # 눈에 띄게 심하지 않았고(gnuplot이 어떤 box든 데이터를 채워 그려서
+        # 육안 차이가 크지 않음), 오히려 이게 "Auto는 남는 여백을 그대로
+        # axis 확대에 쓴다"는 요청 그 자체였음 - rows==cols(1/p)만 비율
+        # 유지로 되돌린다.
         if frame_auto and total_cells <= 2 and rows == cols:
             _ref_w2, _ref_h2 = (REF_H_IN, REF_W_IN) if axis_w < axis_h else (REF_W_IN, REF_H_IN)
             _target_ratio = _ref_w2 / _ref_h2
@@ -5033,6 +5041,11 @@ class GnuplotGenerator:
                 # 배율로만 키우지만, Auto 2/p 이상(원래도 "비율 무시하고
                 # 채운다"는 기존 원칙 - 사용설명서 5절 참고)은 가로/세로를
                 # 각자 남는 만큼 독립적으로 키운다.
+                # [검토 - 되돌림] rows==1/cols==1일 때 세로(또는 가로)가
+                # 한도 없이 커지는 걸 "비정상"으로 보고 비율 유지 대상에
+                # 넣었으나, 실제 렌더링 픽셀 비교 결과 눈에 띄는 문제가
+                # 아니었고 "Auto는 남는 여백을 axis 확대에 쓴다"는 의도
+                # 그대로였음 - 원래 조건으로 되돌린다.
                 _ratio_locked_grow = (not frame_auto) or (total_cells <= 2 and rows == cols)
                 if _ratio_locked_grow:
                     if not _h_grow_safe:
