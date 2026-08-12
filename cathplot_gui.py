@@ -914,13 +914,13 @@ class CathPlotGUI:
         pal = self.PALETTE
         _accent_btn(self.button_frame, "PLOT", pal["accent"], pal["accent_dark"],
                     lambda: self.execute_plot_pipeline("Interactive"), side="left", pady=2)
-        _accent_btn(self.button_frame, "PRINT", pal["accent3"], pal["accent3_dark"],
-                    self.execute_print_dialog, side="left", padx=5, pady=2)
         _accent_btn(self.button_frame, "SAVE", pal["accent2"], pal["accent2_dark"],
                     self.execute_save_dialog, side="left", padx=5, pady=2)
+        _accent_btn(self.button_frame, "PRINT", pal["accent3"], pal["accent3_dark"],
+                    self.execute_print_dialog, side="left", padx=5, pady=2)
         _accent_btn(self.button_frame, "Close All Plots", pal["danger"], pal["danger_dark"],
                     self.close_all_plot_windows, side="right", padx=5, pady=2)
-        _accent_btn(self.button_frame, "Multi Print/Save", pal["amber"], pal["amber_dark"],
+        _accent_btn(self.button_frame, "Multi-Plot", pal["amber"], pal["amber_dark"],
                     self.open_multi_plot_dialog, side="left", padx=15, pady=2)
         self._mk_btn(self.button_frame, "Clean Past Plots", self.open_delete_dialog,
                      color="secondary", side="right", padx=5, pady=2)
@@ -1083,7 +1083,7 @@ class CathPlotGUI:
             return
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("Multi Print / Save")
+        dialog.title("Multi Save / Print")
         dialog.geometry("420x520")
         dialog.transient(self.root)
 
@@ -1257,8 +1257,8 @@ class CathPlotGUI:
         btn_frame = ttk.Frame(dialog)
         btn_frame.pack(fill="x", pady=15)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side="right", padx=15)
-        ttk.Button(btn_frame, text="Save", command=lambda: on_execute("Save")).pack(side="right", padx=5)
         ttk.Button(btn_frame, text="Print", command=lambda: on_execute("Print")).pack(side="right", padx=5)
+        ttk.Button(btn_frame, text="Save", command=lambda: on_execute("Save")).pack(side="right", padx=5)
 
     # ------------------------------------------------------------------
     # 템플릿 저장 / 불러오기
