@@ -4020,6 +4020,18 @@ class GnuplotGenerator:
 
         aw, ah = self._A4_SIZES.get(orientation, self._A4_SIZES["portrait"])
         page_w, page_h = float(aw.replace("in", "")), float(ah.replace("in", ""))
+        # [추가] "2/p Manual(기본 10x8cm)이 경고 없이 들어가야 하는데 92~94%로
+        # 줄어든다" - 아래(약 50줄 뒤) shrink-to-fit 판단이, 지금 이 실제 A4
+        # 물리 용지 크기가 아니라 몇 줄 뒤(주석 "1/p Manual 페이지 크기 재설정"
+        # 참고)에서 frame_width/height로부터 대략적으로 "추정"한 page_w/page_h
+        # (부정확해도 된다고 명시된 값)를 기준으로 판단하고 있었음 - 실측 확인:
+        # 이 추정치가 실제 A4보다 작게 나와(2/p Land: 추정 10.54in vs 실제
+        # A4 사용가능폭 ~10.5in로 비슷하지만, 아래 안쪽 여백 절반공유까지
+        # 반영하면 실제로는 들어가는데도 추정치 기준으로는 못 들어간다고
+        # 오판) 불필요하게 축소됨. shrink 판단"만" 이 실제 물리 A4 기준으로
+        # 하도록 원본값을 따로 저장해 둔다(page_w/page_h 자체는 아래 기존
+        # 추정 로직 그대로 - 다른 용도로 계속 쓰이므로 안 건드림).
+        _true_page_w, _true_page_h = page_w, page_h
         # [수정 - 버그] "1/p(단일 plot) + Manual"인데도 전체 캔버스(페이지) 크기가
         # 항상 A4로 고정돼 있어서, 지정한 frame_width/height(예: 10x8cm)는 그
         # A4 페이지 안의 축(칸) 크기로만 쓰이고 실제 출력 파일 전체 크기는
@@ -4691,14 +4703,44 @@ class GnuplotGenerator:
         # 안 들어가면 - 가로세로 비율을 바꾸는 게 아니라 - 칸 전체(폰트/여백/간격
         # 포함, "legend 포함 이미지 개념")를 하나의 배율로 균일하게 축소한다.
         # Auto는 애초에 페이지 칸 수로 나눠 계산했으므로 항상 꼭 맞아 축소가 필요 없다.
+        # [수정 - 버그] "2/p Manual(기본 10x8cm)이 Land/Port 둘 다 92~94%로
+        # 줄어든다는 경고가 뜨는데, 원래 경고 없이 들어가야 하는 것 아닌가" -
+        # 실측(좌표 기준)으로 원인 확인: 여기 grid_w/grid_h가 옆 칸과 마주보는
+        # "안쪽" 면끼리 마진을 절반만 나눠 쓰는(_interior_k=0.5, 아래 _col_gap_l/r
+        # 참고) 실제 렌더링 로직을 전혀 모른 채, 모든 칸에 바깥쪽과 똑같은
+        # 전체 margin_left/right/top/bottom을 곱해서 필요 크기를 "실제보다
+        # 크게" 추정하고 있었음 - 그래서 실제로는 용지에 들어갈 수 있는데도
+        # 불필요하게 축소됨. 아래에서 그 안쪽 절반-공유 여백을 미리 반영해
+        # 실제 렌더링과 같은 기준으로 grid_w/grid_h를 계산한다(5장 중앙정렬
+        # 특수 배치는 원래 이 절반-공유를 안 쓰므로 제외 - _is_centered5와
+        # 동일 조건이지만 그 변수 자체는 아직 이 시점에 없어 조건을 그대로
+        # 복사해 씀).
+        _is_centered5_early = (layout_option == "Auto" and nplot == 5)
         if not frame_auto:
-            grid_w = cell_w_in * cols + spacing_in * (cols - 1)
-            grid_h = cell_h_in * rows + spacing_in * (rows - 1)
+            if _is_centered5_early or (cols <= 1 and rows <= 1):
+                grid_w = cell_w_in * cols + spacing_in * (cols - 1)
+                grid_h = cell_h_in * rows + spacing_in * (rows - 1)
+            else:
+                _interior_k_early = 0.5  # 아래 _interior_k(4917행 부근)와 항상 같은 값 유지할 것
+                _interior_l = max(margin_left * _interior_k_early, min(margin_left, _need_left_in)) if cols > 1 else margin_left
+                _interior_r = max(margin_right * _interior_k_early, min(margin_right, _need_right_in)) if cols > 1 else margin_right
+                _interior_t = max(margin_top * _interior_k_early, min(margin_top, _need_top_in)) if rows > 1 else margin_top
+                _interior_b = max(margin_bottom * _interior_k_early, min(margin_bottom, _need_bottom_in)) if rows > 1 else margin_bottom
+                _lr_total = margin_left + margin_right + max(cols - 1, 0) * (_interior_l + _interior_r)
+                _tb_total = margin_top + margin_bottom + max(rows - 1, 0) * (_interior_t + _interior_b)
+                grid_w = axis_w * cols + spacing_in * (cols - 1) + _lr_total
+                grid_h = axis_h * rows + spacing_in * (rows - 1) + _tb_total
+            # [수정 - 버그] 위와 같은 이유로, 판단 기준(printable_w/h)도 부정확한
+            # "추정 page_w/h" 대신 실제 물리 A4(_true_page_w/h)에서 인쇄 안전
+            # 여백만 뺀 진짜 사용 가능 크기로 비교한다(page_w/h 자체는 그대로 -
+            # shrink 여부 "판단"에만 쓴다).
+            _true_printable_w = _true_page_w - pad_left - pad_right
+            _true_printable_h = _true_page_h - pad_top - pad_bottom
             shrink = 1.0
             if grid_w > 0:
-                shrink = min(shrink, max(printable_w / grid_w, 0.1))
+                shrink = min(shrink, max(_true_printable_w / grid_w, 0.1))
             if grid_h > 0:
-                shrink = min(shrink, max(printable_h / grid_h, 0.1))
+                shrink = min(shrink, max(_true_printable_h / grid_h, 0.1))
             if shrink < 0.999:
                 _margin_desc = "여백(사방 0.3cm)"
                 self.last_size_warning = (
@@ -4709,6 +4751,16 @@ class GnuplotGenerator:
                 cell_w_in *= shrink
                 cell_h_in *= shrink
                 axis_w *= shrink
+            else:
+                # [추가] 축소가 필요 없으면(실제 A4에 들어감), 대략치였던
+                # page_w/h를 지금 정확히 계산된 grid_w/h(칸 전체 실제 크기)로
+                # 다시 맞춰서, 최종 출력 페이지가 부정확한 추정치 크기로
+                # 잘리거나 남지 않게 한다(page_w/h는 몇 줄 뒤부터 실제 배치·
+                # 최종 출력 크기 산정에 계속 쓰임).
+                page_w = max(grid_w, 0.1)
+                page_h = max(grid_h, 0.1)
+                printable_w = page_w - pad_left - pad_right
+                printable_h = page_h - pad_top - pad_bottom
                 axis_h *= shrink
                 spacing_in *= shrink
                 size_scale *= shrink
