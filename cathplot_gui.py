@@ -286,13 +286,26 @@ class CathPlotGUI:
         # self.PALETTE의 키 이름. bg는 부모(ttk.Frame 등)와 어울리도록 앱 배경색으로
         # 맞추고, 테두리는 없앤다(Windows 기본 tk.Checkbutton의 두꺼운 포커스
         # 테두리가 이질적으로 보이는 것을 방지).
+        # [수정 - 버그] "Auto X/Y1/Y2 Range 등에서 체크 해제해도 상자가 계속 색이
+        # 채워진 채로 보여서 체크 여부를 구분할 수 없음" - selectcolor를 고정값
+        # (sel)으로 한 번만 지정하면, tk.Checkbutton은 selectcolor를 "체크됐을
+        # 때"만 쓰고 해제 시엔 원래 시스템 기본색으로 돌아가야 정상인데, 일부
+        # Windows 테마 조합에서 이 자동 전환이 제대로 안 먹혀 계속 sel 색으로
+        # 남아있는 것으로 실측 확인됨 - 자동 전환에 기대지 않고, 변수가 바뀔
+        # 때마다 selectcolor 자체를 checked면 강조색, unchecked면 빈 배경색
+        # (흰색)으로 직접 다시 지정해서 항상 정확히 반영되게 한다.
         pal = self.PALETTE
         sel = pal.get(color, pal["accent"])
         c = tk.Checkbutton(
             parent, text=text, variable=variable, command=command,
             bg=pal["bg"], activebackground=pal["bg"], fg=pal["text"],
-            selectcolor=sel, highlightthickness=0, bd=0,
+            selectcolor=(sel if variable.get() else "white"), highlightthickness=0, bd=0,
         )
+
+        def _sync_box_color(*_args):
+            c.config(selectcolor=(sel if variable.get() else "white"))
+
+        variable.trace_add("write", _sync_box_color)
         c.pack(**pack_kw)
         return c
 
