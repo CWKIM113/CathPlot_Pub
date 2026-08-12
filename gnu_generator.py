@@ -5014,26 +5014,18 @@ class GnuplotGenerator:
                 _budget_h2 = printable_h - sum(_row_gap_t) - sum(_row_gap_b) - spacing_h_in * (rows - 1)
                 _cand_w = (_budget_w2 / (axis_w * cols)) if _budget_w2 > 0 else 0.0
                 _cand_h = (_budget_h2 / (axis_h * rows)) if _budget_h2 > 0 else 0.0
-                # [수정 - 재활성화 시도 후 회귀 재발견, 원복] 어젯밤 title_margin_ratio/
-                # xlabel_margin_ratio(안쪽 면 축소 비율만큼 offset도 같이 줄이는
-                # 장치, ylabel_margin_ratio와 동일 개념)를 추가하고 이걸로 세로
-                # 확대(_h_grow_safe=True)를 다시 켰는데, 오늘 재검증(PyMuPDF 좌표
-                # 직접 측정)에서 Auto 4/p Landscape 맨 위 행 Plot Title이 페이지
-                # 밖으로 밀려나고(bbox y0=-7.86, 페이지 밖) 6/p Landscape는 아래
-                # 행 title이 위 행 xlabel과 겹치는(실측 확인, "Panel Title"과
-                # "Time"이 같은 자리에 겹쳐 그려짐) 회귀가 재현됨. 원인 재분석:
-                # title_margin_ratio/xlabel_margin_ratio 장치는 "안쪽(인접 칸과
-                # 마주보는) 면"의 margin 축소만 다루는데, 이번에 문제가 되는 건
-                # "맨 위/맨 아래 행"의 바깥쪽(margin_ratio=1.0, 장치가 적용 안 됨)
-                # 여백임 - axis_h가 커지면서 페이지의 "미사용 중앙정렬 여유
-                # ((printable_h-consumed)/2)"가 0으로 줄어드는데, 그 여유가 사실은
-                # (font_panel_scale과 무관하게 결정되는) 맨 위/아래 행 margin_top/
-                # margin_bottom이 원래도 빠듯했던 것을 우연히 가려주고 있었을 뿐
-                # -> 여유가 사라지자 그 빠듯함이 그대로 드러남(font 확대와는 무관,
-                # font_panel_scale을 안 키운 채로도 재현됨 - 직접 확인). 이 바깥쪽
-                # 여백까지 안전하게 다루려면 추가 작업이 필요해 일단 안전했던
-                # 이전 조건으로 되돌린다(3칸 이하/가로 확대는 계속 안전, 그대로 유지).
-                _h_grow_safe = rows <= 1 or total_cells < 4
+                # [수정 - 재활성화] "Auto 4/p·6/p(Land/Port) 캔버스 상하 여유가
+                # 너무 큼(실측: 상하 각 10~14%, 합 20~27%가 빈 캔버스로 낭비)" -
+                # 이전엔 이 겹침 회귀(맨 위 행 title이 페이지 밖으로 밀림/아래
+                # 행 title이 위 행 xlabel과 겹침) 때문에 total_cells>=4+다행
+                # 조합의 세로 확대를 막아 뒀었는데, 그 근본 원인은 _floor_scale이
+                # margin_scale 기반이라 실제 font_panel_scale보다 작았던 것이었고
+                # (바로 위 _floor_scale=max(margin_scale, font_panel_scale*0.7)
+                # 로 이미 수정함) - 이제는 세로 확대를 다시 켜도 겹치지 않음을
+                # 재검증(4/p +20.2pt, 6/p +12.7pt, Port도 동일, LR도 20pt+ 안전,
+                # 2줄 라벨 텍스트 소실 없음, off-page 없음 - 전부 실측 확인) -
+                # 다시 켠다(캔버스 여유 10~14% -> 2~3%로 감소).
+                _h_grow_safe = True
                 # [수정 - 요청] "Auto 3/p Portrait처럼 가로는 이미 꽉 찼는데
                 # 세로만 남는 경우, 비율을 지키느라 가로에 발목 잡혀 세로가
                 # 거의 안 커짐" - Manual(비율 유지 확정, 오늘 앞선 수정)과
