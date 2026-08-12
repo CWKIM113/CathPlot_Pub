@@ -4602,6 +4602,41 @@ class GnuplotGenerator:
             _need_right_in = (0.5 * _floor_scale * (_max_y2label_size / 11.0) + _min_right_tic_in) * _emf_margin_boost + _y2_2line_extra
             margin_right = max(margin_right, _need_right_in)
 
+        # [추가 - 요청] "3/p~6/p Manual도 절대 마진이 너무 크지 않은지" - 바로
+        # 위 margin_left/right(그리고 margin_top/bottom, 4507/4511행)는 "need
+        # 보다 작아지지만 않게"만 보장할 뿐, need보다 훨씬 커도 flat 기본값
+        # (MARGIN_LEFT_IN=0.9in 등)을 그대로 썼음(예: 2/p Manual 기본
+        # 10x8cm에서 need_left=0.73in인데 margin_left는 그대로 0.9in). Manual은
+        # "정확한 물리 크기 보장"이 목적이라 이 여유가 클수록 칸 사이가 넓어
+        # 보이고 용지에도 덜 들어가므로, 여러 칸(cols>1 또는 rows>1)일 때만
+        # need 기준 15% 여유(이 파일 다른 곳의 "_approx_label_in 15% 여유"와
+        # 같은 관례)까지만 남기고 초과분을 깎는다. margin_right는 legend가
+        # "outside right"로 축 바깥에 자리 잡는 경우 need_right_in 계산에
+        # legend 폭이 전혀 안 들어가 있어(Y2 title/tic 폭만 계산) 그대로
+        # 깎으면 legend가 잘릴 위험이 있어 그 경우만 제외한다. 1/p은 애초에
+        # 문제 제기가 없어 회귀 범위를 최소화하려고 그대로 둔다.
+        # [수정 - 버그, 직접 렌더링 재검증으로 발견] 처음엔 1줄/2줄 구분 없이
+        # 전부 적용했는데, Y1/Y2 2줄 라벨(회전 텍스트 두 줄) 조합으로 재검증한
+        # 결과 두 줄 사이 간격이 0.01pt(사실상 붙어 보임)까지 줄어듦 - need_*_in
+        # 자체는 2줄분(_y1_2line_extra 등)을 이미 포함하지만, 그 위에 15% 곱한
+        # 정도로는 2줄 텍스트의 실제 줄 간격을 안전하게 보장하기엔 부족했음
+        # (기존엔 margin_*이 need보다 더 크게 남아있어서 우연히 여유가 있었던
+        # 것). 이 파일에 이미 있는 관례(_any_multiline_margin, single-plot
+        # margin 축소 가드)와 동일하게, Y1/Y2/X 중 하나라도 2줄이면 이 축소
+        # 자체를 건너뛴다(안전 최우선 - 2줄 조합은 원래도 여백이 빠듯한
+        # 경우라 별도 여유가 필요).
+        _any_2line_for_cap = _any_y1_2line or _any_y2_2line or _any_x_2line
+        if not frame_auto and (cols > 1 or rows > 1) and not _any_2line_for_cap:
+            _manual_margin_buffer = 1.15
+            if _need_left_in > 0:
+                margin_left = min(margin_left, _need_left_in * _manual_margin_buffer)
+            if _need_right_in > 0 and not any_legend_outside:
+                margin_right = min(margin_right, _need_right_in * _manual_margin_buffer)
+            if _need_top_in > 0:
+                margin_top = min(margin_top, _need_top_in * _manual_margin_buffer)
+            if _need_bottom_in > 0:
+                margin_bottom = min(margin_bottom, _need_bottom_in * _manual_margin_buffer)
+
         # [수정 - 버그, 실제 사용자 docx 재현으로 발견] "M-P Auto/Manual 2/p
         # Landscape에서 축이 캔버스 한복판에 작게(세로형처럼) 쪼그라들어 찍힘" -
         # 실측(디버그 출력)으로 원인 확인: 2/p Landscape처럼 칸(cell)이 기준
