@@ -5481,7 +5481,7 @@ class CathPlotGUI:
         try:
             from PIL import Image
             if ext == ".pdf":
-                import fitz
+                import pymupdf as fitz  # [수정] "fitz API is deprecated" 경고 제거 - pymupdf가 정식 이름
                 doc = fitz.open(filepath)
                 pix = doc[0].get_pixmap(dpi=150)
                 return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)

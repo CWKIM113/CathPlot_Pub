@@ -21,7 +21,11 @@ binaries = []
 # Tkinter 창에 띄우는데, 이 서브모듈은 지금까지 코드 어디서도 import된 적이
 # 없어서 위 PIL 하나만으로는 PyInstaller가 확실히 같이 안 묶을 수 있음(Tk
 # 연동 C확장 _imagingtk 포함 여부가 불확실) - 위와 같은 이유로 명시 추가.
-hiddenimports = ['PIL', 'PIL.ImageTk', 'fitz']
+# [수정] 코드에서 `import fitz` -> `import pymupdf as fitz`로 바꿔서(fitz는
+# deprecated 경고를 내는 구버전 별칭) hiddenimports도 실제 import되는 모듈
+# 이름(pymupdf)으로 맞춘다 - 'fitz'로 남겨두면 PyInstaller가 더 이상
+# 코드에 없는 이름을 찾다가 정작 실제로 필요한 pymupdf를 못 찾을 수 있음.
+hiddenimports = ['PIL', 'PIL.ImageTk', 'pymupdf']
 tmp_ret = collect_all('pywin32')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 

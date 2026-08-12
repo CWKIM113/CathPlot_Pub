@@ -123,7 +123,7 @@ _PNG_NATIVE_DPI = 72.0
 # 터미널 방식으로 그대로 대체(fallback)하게 한다(하위호환).
 def _rasterize_pdf_to_image(pdf_path, out_path, fmt, dpi=_PNG_TARGET_DPI):
     try:
-        import fitz
+        import pymupdf as fitz  # [수정] "fitz API is deprecated" 경고 제거 - pymupdf가 정식 이름
     except ImportError:
         return False
     try:
@@ -162,7 +162,7 @@ def _rasterize_pdf_to_image(pdf_path, out_path, fmt, dpi=_PNG_TARGET_DPI):
 # 결과 legend 겹침/tic 겹침/제목 중심 이탈 등 오늘 발견된 문제 전부 재현 안 됨).
 def _convert_pdf_to_svg(pdf_path, out_path):
     try:
-        import fitz
+        import pymupdf as fitz  # [수정] "fitz API is deprecated" 경고 제거 - pymupdf가 정식 이름
     except ImportError:
         return False
     try:
