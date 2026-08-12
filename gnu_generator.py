@@ -893,7 +893,24 @@ class GnuplotGenerator:
         # 올리려면 legend만이 아니라 title/xlabel/tic 전부에 똑같이 1.5배를
         # 곱해야 하는데, 그러면 이미 이 "축소된" 크기 기준으로 검증돼 있는
         # margin 여유값들도 전부 다시 맞춰야 해서 별도로 논의 필요).
-        font_pt = (legend_size if legend_size else 9) * f_scale * _legend_font_extra
+        # [추가 - 요청] "칸이 좁아지면(예: Auto 3/p Landscape, axis_w=2.34in인데
+        # axis_h=2.92in - axis 자체 비율이 기준 10:8=1.25보다 훨씬 좁음) legend
+        # box가 axis 폭의 90%+까지 차지함" - box_w는 이미 axis_w_in 대비 비율로
+        # 계산되지만(_render_legend_box 아래 char_width_frac 등), font_pt(=box
+        # 안 글자 크기) 자체는 axis_w_in과 무관하게 f_scale(칸 전체 크기 기준)
+        # 로만 정해져서, axis가 유독 "가로로만" 좁아진 경우엔 font가 상대적으로
+        # 안 줄어 box가 좁은 axis에 비해 커 보였음. axis 자체의 가로:세로 비율이
+        # 기준(10:8=1.25)보다 좁을 때만(넓을 때는 손대지 않음 - 가로가 넉넉한
+        # 경우는 문제가 없었음) 그 비율만큼 font를 같이 줄인다 - sqrt로 완화(전부
+        # 다 줄이면 극단적으로 좁을 때 글자가 너무 작아짐), 0.5 밑으로는 더
+        # 줄지 않게 최소한도를 둔다(가독성 보장).
+        _REF_AXIS_RATIO = 10.0 / 8.0
+        _axis_shape_scale = 1.0
+        if axis_w_in and axis_h_in:
+            _cur_axis_ratio = axis_w_in / max(axis_h_in, 0.01)
+            if _cur_axis_ratio < _REF_AXIS_RATIO:
+                _axis_shape_scale = max((_cur_axis_ratio / _REF_AXIS_RATIO) ** 0.5, 0.5)
+        font_pt = (legend_size if legend_size else 9) * f_scale * _legend_font_extra * _axis_shape_scale
         # [주의] pngcairo가 pdfcairo보다 legend 글자를 아주 약간 더 크게 그리는
         # 경향이 실측됐지만(동일 스크립트, 터미널만 다르게 비교), 보정 계수가
         # panel_scale/legend_size에 따라 비선형으로 달라져 신뢰할 수 있는 고정
