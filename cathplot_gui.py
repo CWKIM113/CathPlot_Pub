@@ -308,43 +308,89 @@ class CathPlotGUI:
         # 작게 줘서 줄 높이를 옆 위젯들과 비슷하게 맞춘다(버튼 자체 크기/
         # 강조색은 그대로 유지 - "크게 하지 말 것"이지 "작게 하지 말 것"은
         # 아니므로 폭(padx)은 건드리지 않음).
+        # [수정 - 요청] "Browse 버튼도 X버튼(Compact.TButton, padding=(4,0))과
+        # 같은 높이로, DAT File 줄 사이 간격도 최소화" - pady=1도 여전히
+        # X버튼(ttk, 세로 padding 0)보다 살짝 높아 줄 전체 높이가 그만큼
+        # 커 보였음 - pady를 0으로 더 줄인다(bd=1은 테두리 표시를 위한
+        # 최소값이라 더 줄이지 않음). DAT File 행 자체는 이미 pady=0으로
+        # 붙어 있어서(add_file_row), 버튼 높이가 줄어드는 만큼 행 사이
+        # 간격도 그만큼 줄어듦.
         b = tk.Button(
             parent, text=text, command=command,
             font=("Malgun Gothic", 9, "bold"), bg=bg, fg=fg,
             activebackground=dark, activeforeground=fg,
-            relief="raised", bd=1, padx=8, pady=1,
+            relief="raised", bd=1, padx=8, pady=0,
         )
         b.pack(**pack_kw)
         return b
 
+    def _get_check_images(self, color="accent"):
+        # [추가 - 근본 원인 수정] "체크박스 20곳을 강조색으로 통일했더니 체크
+        # 표시(흰 체크마크)가 안 보이고 그냥 색칠된 상자만 보임" - 기존
+        # selectcolor 방식은 Windows의 네이티브 체크박스 인디케이터 테마가
+        # "상자를 채우는 색"과 "체크마크를 그리는 색"을 어떻게 조합할지 전부
+        # OS 테마에 맡기는데, 이미 한 번(주석 참고) 테마별로 selectcolor 전환
+        # 자체가 안 먹는 문제를 겪었을 만큼 신뢰할 수 없음 - 대신 PIL로 상자+
+        # 체크마크를 직접 그린 비트맵 두 장(선택/미선택)을 만들어 image/
+        # selectimage로 넘기고 indicatoron=False로 네이티브 인디케이터를 완전히
+        # 대체한다(테마 영향을 전혀 안 받음, 항상 동일하게 보장됨). color별로
+        # 한 번만 만들어 캐시(self._check_img_cache)에 재사용.
+        if not hasattr(self, "_check_img_cache"):
+            self._check_img_cache = {}
+        if color in self._check_img_cache:
+            return self._check_img_cache[color]
+
+        from PIL import Image, ImageDraw, ImageTk
+
+        pal = self.PALETTE
+        fill_color = pal.get(color, pal["accent"])
+        border_color = pal.get(color + "_dark", pal["border"])
+        size = 15
+        scale = 4  # 안티앨리어싱 흉내 - 크게 그린 뒤 축소
+        big = size * scale
+
+        def _box(fill, outline):
+            im = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+            d = ImageDraw.Draw(im)
+            m = scale  # 여백
+            d.rounded_rectangle([m, m, big - 1 - m, big - 1 - m], radius=2 * scale, fill=fill, outline=outline, width=scale)
+            return im
+
+        unchecked_im = _box("white", pal["border"])
+        checked_im = _box(fill_color, border_color)
+        # 체크마크(흰색 굵은 선, 짧은 다운스트로크 + 긴 업스트로크)
+        d = ImageDraw.Draw(checked_im)
+        pts = [(big * 0.22, big * 0.52), (big * 0.42, big * 0.72), (big * 0.78, big * 0.28)]
+        d.line(pts, fill="white", width=int(scale * 1.6), joint="curve")
+        unchecked_im = unchecked_im.resize((size, size), Image.LANCZOS)
+        checked_im = checked_im.resize((size, size), Image.LANCZOS)
+
+        imgs = (ImageTk.PhotoImage(unchecked_im), ImageTk.PhotoImage(checked_im))
+        self._check_img_cache[color] = imgs
+        return imgs
+
     def _mk_check(self, parent, text, variable, color="accent", command=None, no_pack=False, **pack_kw):
-        # [추가] "Auto X Range 등 체크박스 체크시 색상도 넣어 강조" - ttk.Checkbutton은
-        # (버튼과 마찬가지로) Windows 기본 테마에서 체크 표시 색을 커스텀할 방법이
-        # 거의 없어서, 체크됐을 때 상자 자체가 지정한 색으로 채워지는 tk.Checkbutton
-        # (selectcolor 옵션 - 테마와 무관하게 항상 동작)으로 통일한다. color는
+        # [추가] "Auto X Range 등 체크박스 체크시 색상도 넣어 강조" - color는
         # self.PALETTE의 키 이름. bg는 부모(ttk.Frame 등)와 어울리도록 앱 배경색으로
         # 맞추고, 테두리는 없앤다(Windows 기본 tk.Checkbutton의 두꺼운 포커스
         # 테두리가 이질적으로 보이는 것을 방지).
-        # [수정 - 버그] "Auto X/Y1/Y2 Range 등에서 체크 해제해도 상자가 계속 색이
-        # 채워진 채로 보여서 체크 여부를 구분할 수 없음" - selectcolor를 고정값
-        # (sel)으로 한 번만 지정하면, tk.Checkbutton은 selectcolor를 "체크됐을
-        # 때"만 쓰고 해제 시엔 원래 시스템 기본색으로 돌아가야 정상인데, 일부
-        # Windows 테마 조합에서 이 자동 전환이 제대로 안 먹혀 계속 sel 색으로
-        # 남아있는 것으로 실측 확인됨 - 자동 전환에 기대지 않고, 변수가 바뀔
-        # 때마다 selectcolor 자체를 checked면 강조색, unchecked면 빈 배경색
-        # (흰색)으로 직접 다시 지정해서 항상 정확히 반영되게 한다.
+        # [수정 - 근본 원인 수정] "체크(강조색) 상태에서 흰 체크마크가 안 보임" -
+        # selectcolor(OS 테마에 맡기는 방식) 대신 _get_check_images로 직접 그린
+        # 비트맵(상자+흰 체크마크)을 image/selectimage로 지정하고
+        # indicatoron=False로 네이티브 인디케이터를 대체한다 - 테마와 무관하게
+        # 항상 동일하게 보장됨.
         pal = self.PALETTE
-        sel = pal.get(color, pal["accent"])
+        img_unchecked, img_checked = self._get_check_images(color)
         c = tk.Checkbutton(
             parent, text=text, variable=variable, command=command,
             bg=pal["bg"], activebackground=pal["bg"], fg=pal["text"],
-            selectcolor=(sel if variable.get() else "white"), highlightthickness=0, bd=0,
+            image=img_unchecked, selectimage=img_checked, indicatoron=False,
+            compound="left", highlightthickness=0, bd=0, relief="flat",
+            selectcolor=pal["bg"],
         )
-
-        def _sync_box_color(*_args):
-            c.config(selectcolor=(sel if variable.get() else "white"))
-
-        variable.trace_add("write", _sync_box_color)
+        # PhotoImage는 참조가 없으면 GC돼서 사라지므로 위젯에 직접 붙여서 유지
+        c._img_unchecked = img_unchecked
+        c._img_checked = img_checked
         if not no_pack:
             c.pack(**pack_kw)
         return c
@@ -601,7 +647,11 @@ class CathPlotGUI:
         # 대비 %) - 비우면 기존처럼 자동" - 위치 입력칸(Pos1/Align) 바로
         # 옆에 배치. Print/Save 전용(화면엔 적용 안 됨)임을 마우스오버
         # 팝업으로 알려준다.
-        ttk.Label(legend1_row, text="Box W/H%:").pack(side="left", padx=(4, 1))
+        # [수정 - 요청] "Box W/H%에서 %가 이상함(항상 %인 것처럼 보이는데 실제로는
+        # 숫자만 넣으면 좌표값 차이, %를 붙여야 비율)" - 라벨을 실제 동작(둘 다
+        # 가능)에 맞게 "%"를 빼고 "Box W/H:"로 표기(자세한 규칙은 마우스오버
+        # 힌트에 이미 있음).
+        ttk.Label(legend1_row, text="Box W/H:").pack(side="left", padx=(4, 1))
         _l1_boxw_entry = ttk.Entry(legend1_row, textvariable=self.legend_box_width_pct_var, width=4)
         _l1_boxw_entry.pack(side="left", padx=1)
         _l1_boxh_entry = ttk.Entry(legend1_row, textvariable=self.legend_box_height_pct_var, width=4)
@@ -661,7 +711,7 @@ class CathPlotGUI:
         ttk.Label(legend2_row, text="Align:").pack(side="left", padx=(4, 1))
         ttk.Combobox(legend2_row, textvariable=self.legend2_align_var, values=["Auto", "Left", "Right"],
                      width=5, state="readonly").pack(side="left", padx=1)
-        ttk.Label(legend2_row, text="Box W/H%:").pack(side="left", padx=(4, 1))
+        ttk.Label(legend2_row, text="Box W/H:").pack(side="left", padx=(4, 1))
         _l2_boxw_entry = ttk.Entry(legend2_row, textvariable=self.legend2_box_width_pct_var, width=4)
         _l2_boxw_entry.pack(side="left", padx=1)
         _l2_boxh_entry = ttk.Entry(legend2_row, textvariable=self.legend2_box_height_pct_var, width=4)
