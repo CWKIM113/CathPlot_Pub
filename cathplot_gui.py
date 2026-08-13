@@ -391,10 +391,15 @@ class CathPlotGUI:
         )
         batch_queue_btn.pack(side="left", padx=5, pady=2)
 
+        # [수정] "Template 글자를 흰색으로, 3D Template와 색상 통일" - 기존
+        # #1f2937(짙은 남색) 텍스트를 다른 버튼들과 동일하게 흰색으로 바꾸고,
+        # 아래 3D Template Save/Load(4231행 부근)도 같은 grey 팔레트로
+        # 맞춘다(기존엔 amber를 썼는데, amber는 Multi Print/Save 전용 강조색이라
+        # 의미가 겹쳤음).
         self._mk_btn(btn_container, "Template Save", self.save_template,
-                     color="grey", fg="#1f2937", side="left", padx=5)
+                     color="grey", fg="white", side="left", padx=5)
         self._mk_btn(btn_container, "Template Load", self.load_template,
-                     color="grey", fg="#1f2937", side="left", padx=5)
+                     color="grey", fg="white", side="left", padx=5)
 
         # [수정] "좌우로 늘리지 말고 줄 중앙에 배치" - fill+expand로 버튼 자체가
         # 늘어졌던 걸, 양옆에 빈 스페이서(expand=True)를 둬서 버튼 크기는
@@ -3691,12 +3696,15 @@ class CathPlotGUI:
         # open_permanent_symbol_window가 이미 그 로직(떠 있으면 앞으로, 없으면 새로
         # 열기)이라 그대로 재사용. 메인 창 툴바에만 버튼이 있어 3D 팝업을 띄운
         # 상태에서는 손이 안 갈 수 있으니 이 팝업 안에도 같은 버튼을 둔다.
+        # [수정] "3D 창의 Ω버튼이 상대적으로 너무 큼(Plot Title 입력칸 높이의
+        # 1.5배 정도가 적당, 지금은 2배로 보임)" - font 12->10, bd 2->1,
+        # pady 명시(1)로 줄여 옆 Plot Title Entry와 비슷한 비율로 맞춘다.
         tk.Button(
             title_row, text=chr(937), width=3,
-            font=("Malgun Gothic", 12, "bold"),
+            font=("Malgun Gothic", 10, "bold"),
             bg=self.PALETTE["amber"], fg="white",
             activebackground=self.PALETTE["amber_dark"], activeforeground="white",
-            relief="raised", bd=2,
+            relief="raised", bd=1, pady=1,
             command=self.open_permanent_symbol_window
         ).pack(side="left", padx=(0, 10))
 
@@ -3750,23 +3758,29 @@ class CathPlotGUI:
         ttk.Entry(row1, textvariable=rot_x_var, width=5).pack(side="left", padx=(2, 10))
         ttk.Label(row1, text="Rotate Z:").pack(side="left")
         ttk.Entry(row1, textvariable=rot_z_var, width=5).pack(side="left", padx=(2, 10))
-        # [추가] "splot 입력 자료에서 time 구간 입력 필요(필요 구간 data만 plot)"
-        # - 둘 다 비우면 전체 구간(제한 없음).
-        time_min_var = tk.StringVar(value="")
-        time_max_var = tk.StringVar(value="")
-        ttk.Label(row1, text="Time range Min:").pack(side="left", padx=(10, 0))
-        ttk.Entry(row1, textvariable=time_min_var, width=8).pack(side="left", padx=(2, 5))
-        ttk.Label(row1, text="Max:").pack(side="left")
-        ttk.Entry(row1, textvariable=time_max_var, width=8).pack(side="left", padx=(2, 0))
 
-        # [추가] "마우스 스크롤로 Y/Z 범위가 예측 못하게 바뀜 - 명시적 입력칸으로,
-        # 2D 축범위(Auto Range/Min/Max)와 같은 개념" - 비우면 auto.
+        # [수정] "X(Time) range 입력칸들을 Z-range 입력들과 세로 정렬" - 예전엔
+        # Time range가 Rotate X/Z와 같은 줄(row1)에, Y/Z range는 다음 줄(row1b)에
+        # 있어서 앞쪽 라벨 폭이 서로 달라(Rotate X: vs Y range Min:) 입력칸
+        # 가로 위치가 줄마다 어긋나 보였음 - X/Y/Z range를 전부 한 줄로 모아
+        # 라벨 형식을 통일하면 애초에 어긋날 일이 없어짐. "Time"이라는 이름도
+        # X/Y/Z 표기와 안 맞아 헷갈렸던 것 - splot의 X축이라는 의미가 분명하도록
+        # "X range"로 통일한다(내부 변수명은 time_min_var/time_max_var 그대로 유지).
+        # [추가] "splot 입력 자료에서 time 구간 입력 필요(필요 구간 data만 plot)"
+        # - 셋 다(X/Y/Z) 비우면 전체 구간(제한 없음), 2D의 Auto Range/Min/Max와
+        # 같은 개념.
         row1b = ttk.Frame(dialog)
         row1b.pack(fill="x", padx=10, pady=(0, 5))
+        time_min_var = tk.StringVar(value="")
+        time_max_var = tk.StringVar(value="")
         y_min_var = tk.StringVar(value="")
         y_max_var = tk.StringVar(value="")
         z_min_var = tk.StringVar(value="")
         z_max_var = tk.StringVar(value="")
+        ttk.Label(row1b, text="X range Min:").pack(side="left")
+        ttk.Entry(row1b, textvariable=time_min_var, width=8).pack(side="left", padx=(2, 5))
+        ttk.Label(row1b, text="Max:").pack(side="left")
+        ttk.Entry(row1b, textvariable=time_max_var, width=8).pack(side="left", padx=(2, 10))
         ttk.Label(row1b, text="Y range Min:").pack(side="left")
         ttk.Entry(row1b, textvariable=y_min_var, width=8).pack(side="left", padx=(2, 5))
         ttk.Label(row1b, text="Max:").pack(side="left")
@@ -3923,7 +3937,7 @@ class CathPlotGUI:
 
         def add_3d_comment_row():
             row = ttk.Frame(c3d_list_frame)
-            row.pack(fill="x", pady=1)
+            row.pack(fill="x", pady=0)
             data = {'txt': tk.StringVar(), 'x': tk.StringVar(), 'y': tk.StringVar(), 'z': tk.StringVar(),
                     'color': tk.StringVar(value="Auto"), 'frame': row}
             anno3d_list.append(data)
@@ -3940,7 +3954,7 @@ class CathPlotGUI:
 
         def add_3d_arrow_row():
             row = ttk.Frame(a3d_list_frame)
-            row.pack(fill="x", pady=1)
+            row.pack(fill="x", pady=0)
             data = {'x1': tk.StringVar(), 'y1': tk.StringVar(), 'z1': tk.StringVar(),
                     'x2': tk.StringVar(), 'y2': tk.StringVar(), 'z2': tk.StringVar(),
                     'color': tk.StringVar(value="Auto"), 'size': tk.StringVar(value="M"), 'frame': row}
@@ -4228,8 +4242,8 @@ class CathPlotGUI:
         pal = self.PALETTE
         template3d_row = ttk.Frame(dialog)
         template3d_row.pack(fill="x", padx=10, pady=(0, 5))
-        _dlg_accent_btn(template3d_row, "3D Template Save", pal["amber"], pal["amber_dark"], do_save_3d_template)
-        _dlg_accent_btn(template3d_row, "3D Template Load", pal["amber"], pal["amber_dark"], do_load_3d_template)
+        _dlg_accent_btn(template3d_row, "3D Template Save", pal["grey"], pal["grey_dark"], do_save_3d_template)
+        _dlg_accent_btn(template3d_row, "3D Template Load", pal["grey"], pal["grey_dark"], do_load_3d_template)
 
         ok_row = ttk.Frame(dialog)
         ok_row.pack(fill="x", padx=10, pady=10)
