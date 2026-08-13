@@ -265,8 +265,14 @@ class CathPlotGUI:
         # 따로 둔다(가로 폭은 기존 width=2/3 그대로 유지 - "크게 하지 말
         # 것"이므로 폭은 안 건드림).
         style.configure("Compact.TButton", padding=(4, 0))
-        style.configure("TEntry", fieldbackground="white", bordercolor=pal["border"])
-        style.configure("TCombobox", fieldbackground="white", background=pal["panel"])
+        # [수정 - 요청] "각 block 내 입력 box에 color line" - 입력칸 테두리를
+        # 눈에 띄는 강조색 계열로(중립 회색 대신). ttk TEntry의 bordercolor는
+        # Windows 기본(vista/winnative) 테마에서 반영이 안 되는 조합이 있을 수
+        # 있음(이 파일에서 버튼 배경색이 같은 이유로 ttk를 포기하고 tk.Button
+        # 으로 바꾼 전례가 있음) - 우선 style만 바꿔보고, 실제 화면에서 안
+        # 보이면 tk.Entry(highlightthickness 기반)로 교체가 필요함.
+        style.configure("TEntry", fieldbackground="white", bordercolor=pal["accent"], focuscolor=pal["accent"])
+        style.configure("TCombobox", fieldbackground="white", background=pal["panel"], bordercolor=pal["accent"])
 
         # [추가] 주요 동작 버튼(PLOT/SAVE/PRINT/Multi Print/Save)용 강조 스타일 -
         # 각각 다른 강조색을 둬서 한눈에 구분되게 한다(Batch Set/Queue의
@@ -324,7 +330,7 @@ class CathPlotGUI:
         b.pack(**pack_kw)
         return b
 
-    def _get_check_images(self, color="accent"):
+    def _get_check_images(self, color="accent", size=15):
         # [추가 - 근본 원인 수정] "체크박스 20곳을 강조색으로 통일했더니 체크
         # 표시(흰 체크마크)가 안 보이고 그냥 색칠된 상자만 보임" - 기존
         # selectcolor 방식은 Windows의 네이티브 체크박스 인디케이터 테마가
@@ -335,17 +341,20 @@ class CathPlotGUI:
         # selectimage로 넘기고 indicatoron=False로 네이티브 인디케이터를 완전히
         # 대체한다(테마 영향을 전혀 안 받음, 항상 동일하게 보장됨). color별로
         # 한 번만 만들어 캐시(self._check_img_cache)에 재사용.
+        # [수정 - 요청] "Var list의 Y1/Y2 체크박스 크기를 이전처럼 키워줘요" - size를
+        # 호출부에서 지정할 수 있게 파라미터화(기본 15 유지, 캐시 키에 size도
+        # 포함해서 크기별로 따로 캐시).
+        cache_key = (color, size)
         if not hasattr(self, "_check_img_cache"):
             self._check_img_cache = {}
-        if color in self._check_img_cache:
-            return self._check_img_cache[color]
+        if cache_key in self._check_img_cache:
+            return self._check_img_cache[cache_key]
 
         from PIL import Image, ImageDraw, ImageTk
 
         pal = self.PALETTE
         fill_color = pal.get(color, pal["accent"])
         border_color = pal.get(color + "_dark", pal["border"])
-        size = 15
         scale = 4  # 안티앨리어싱 흉내 - 크게 그린 뒤 축소
         big = size * scale
 
@@ -366,10 +375,10 @@ class CathPlotGUI:
         checked_im = checked_im.resize((size, size), Image.LANCZOS)
 
         imgs = (ImageTk.PhotoImage(unchecked_im), ImageTk.PhotoImage(checked_im))
-        self._check_img_cache[color] = imgs
+        self._check_img_cache[cache_key] = imgs
         return imgs
 
-    def _mk_check(self, parent, text, variable, color="accent", command=None, no_pack=False, **pack_kw):
+    def _mk_check(self, parent, text, variable, color="accent", command=None, no_pack=False, size=15, bold=False, **pack_kw):
         # [추가] "Auto X Range 등 체크박스 체크시 색상도 넣어 강조" - color는
         # self.PALETTE의 키 이름. bg는 부모(ttk.Frame 등)와 어울리도록 앱 배경색으로
         # 맞추고, 테두리는 없앤다(Windows 기본 tk.Checkbutton의 두꺼운 포커스
@@ -380,10 +389,11 @@ class CathPlotGUI:
         # indicatoron=False로 네이티브 인디케이터를 대체한다 - 테마와 무관하게
         # 항상 동일하게 보장됨.
         pal = self.PALETTE
-        img_unchecked, img_checked = self._get_check_images(color)
+        img_unchecked, img_checked = self._get_check_images(color, size=size)
+        _font = ("Malgun Gothic", 9, "bold") if bold else ("Malgun Gothic", 9)
         c = tk.Checkbutton(
             parent, text=text, variable=variable, command=command,
-            bg=pal["bg"], activebackground=pal["bg"], fg=pal["text"],
+            bg=pal["bg"], activebackground=pal["bg"], fg=pal["text"], font=_font,
             image=img_unchecked, selectimage=img_checked, indicatoron=False,
             compound="left", highlightthickness=0, bd=0, relief="flat",
             selectcolor=pal["bg"],
@@ -810,7 +820,7 @@ class CathPlotGUI:
         frame_size_f.pack(side="left")
 
         self._mk_check(
-            frame_size_f, "Axis Frame Auto", self.frame_auto_var,
+            frame_size_f, "Axis Frame Auto", self.frame_auto_var, bold=True,
             command=self.toggle_frame_size_state, side="left", padx=5
         )
 
@@ -834,7 +844,7 @@ class CathPlotGUI:
         filename_f = ttk.Frame(row3_f)
         filename_f.pack(side="right", padx=(10, 0))
         self.filename_var = tk.StringVar(value="CathPlot")
-        ttk.Label(filename_f, text="Plot File Name").pack(side="left", padx=(0, 3))
+        ttk.Label(filename_f, text="Plot File Name", font=("Malgun Gothic", 9, "bold")).pack(side="left", padx=(0, 3))
         self.filename_entry = ttk.Entry(filename_f, textvariable=self.filename_var, width=20)
         self.filename_entry.pack(side="left")
 
@@ -1248,7 +1258,7 @@ class CathPlotGUI:
             mp_height_entry.config(state=state)
 
         self._mk_check(
-            mp_frame_size_f, "Axis Frame Auto", self.frame_auto_var,
+            mp_frame_size_f, "Axis Frame Auto", self.frame_auto_var, bold=True,
             command=_mp_toggle_frame_size_state, side="left"
         )
         ttk.Label(mp_frame_size_f, text="W:").pack(side="left", padx=(8, 2))
@@ -2808,10 +2818,17 @@ class CathPlotGUI:
             color="secondary", side="left",
         )
 
-        ttk.Button(
-            row, text="X", width=2, style="Compact.TButton",
-            command=lambda r_info=info: self.delete_dat_file_row(r_info)
-        ).pack(side="left", padx=3)
+        # [수정 - 요청] "Browse 버튼 높이는 X버튼과 같이 맞출 것" - ttk.Button
+        # (Compact.TButton)과 tk.Button(_mk_btn)은 서로 다른 위젯 종류라 padding
+        # 값만으로는 완전히 같은 높이를 보장할 수 없음(테마별 내부 chrome이
+        # 다름) - X버튼도 Browse와 똑같이 _mk_btn(tk.Button, 동일한 bd/padx/
+        # pady/font)으로 만들어 두 버튼이 항상 정확히 같은 높이가 되도록 함
+        # (danger 색으로 삭제 버튼임을 표시).
+        self._mk_btn(
+            row, "X",
+            lambda r_info=info: self.delete_dat_file_row(r_info),
+            color="danger", side="left", padx=3,
+        )
 
     def load_dat_file(self, var, r_info):
         init_dir = self.last_opened_dir if (hasattr(self, 'last_opened_dir') and self.last_opened_dir) else self.cwd
@@ -3389,13 +3406,15 @@ class CathPlotGUI:
                 y1_cell_f = tk.Frame(row_frame, width=Y1_COL_PX, height=22)
                 y1_cell_f.pack_propagate(False)
                 y1_cell_f.pack(side="left")
-                c_y1 = self._mk_check(y1_cell_f, "", self.selected_y1_vars[key_str], command=make_y_excl_cmd(key_str, "Y1", file_x_var), no_pack=True)
+                # [수정 - 요청] "Var list의 Y1/Y2 체크 크기를 이전처럼 키워줘요" -
+                # 기본(15px)보다 크게(19px, 셀 높이 22px 안에 여유 있게 들어감).
+                c_y1 = self._mk_check(y1_cell_f, "", self.selected_y1_vars[key_str], size=19, command=make_y_excl_cmd(key_str, "Y1", file_x_var), no_pack=True)
                 c_y1.place(relx=0.5, rely=0.5, anchor="center")
 
                 y2_cell_f = tk.Frame(row_frame, width=Y2_COL_PX, height=22)
                 y2_cell_f.pack_propagate(False)
                 y2_cell_f.pack(side="left")
-                c_y2 = self._mk_check(y2_cell_f, "", self.selected_y2_vars[key_str], command=make_y_excl_cmd(key_str, "Y2", file_x_var), no_pack=True)
+                c_y2 = self._mk_check(y2_cell_f, "", self.selected_y2_vars[key_str], size=19, command=make_y_excl_cmd(key_str, "Y2", file_x_var), no_pack=True)
                 c_y2.place(relx=0.5, rely=0.5, anchor="center")
 
                 color_cell_f = tk.Frame(row_frame, width=COLOR_COL_PX, height=22)
