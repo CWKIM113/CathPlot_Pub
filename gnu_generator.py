@@ -2909,7 +2909,13 @@ class GnuplotGenerator:
         if plotdef.title:
             need_top_in = 0.375 * f_scale * title_lines + 5.0 / 72.0
         else:
-            need_top_in = 0.1 * f_scale
+            # [수정] "title 없을 때 top margin이 bottom(xlabel 있을 때) 대비 너무
+            # 좁다" - 실측(PyMuPDF로 axis border 좌표 직접 비교, Manual 12x9cm)
+            # 결과 title 없음(13.4pt)이 xlabel 있음(61.4pt)의 22%에 불과해 위쪽만
+            # 유독 답답해 보였음. title/xlabel 둘 다 없는 경우(대칭)까지 건드리지
+            # 않으려고 baseline 자체(0.1)는 유지하되, 최소 여유를 그보다 조금 더
+            # 줘서(0.18) 캔버스 상단이 축 테두리에 바짝 붙어 보이는 걸 완화한다.
+            need_top_in = 0.18 * f_scale
 
         if plotdef.xlabel:
             need_bottom_in = 0.425 * f_scale + 0.175 * f_scale * (xlabel_lines - 1)
