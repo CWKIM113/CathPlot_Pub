@@ -232,6 +232,13 @@ class CathPlotGUI:
             bordercolor=pal["border"], focusthickness=1, padding=4,
         )
         style.map("TButton", background=[("active", "#e3e7ef")])
+        # [추가] "Browse/Annotation 줄의 X(삭제) 버튼이 너무 높아 보임" - 기본
+        # TButton padding(4)이 옆의 Entry/Combobox보다 위아래로 두꺼워서, 그
+        # 버튼이 포함된 줄 전체 높이가 늘어나 줄 사이 간격도 커 보이는
+        # 원인이었음. X 버튼 전용으로 위아래 padding을 최소화한 스타일을
+        # 따로 둔다(가로 폭은 기존 width=2/3 그대로 유지 - "크게 하지 말
+        # 것"이므로 폭은 안 건드림).
+        style.configure("Compact.TButton", padding=(4, 0))
         style.configure("TEntry", fieldbackground="white", bordercolor=pal["border"])
         style.configure("TCombobox", fieldbackground="white", background=pal["panel"])
 
@@ -269,16 +276,22 @@ class CathPlotGUI:
         pal = self.PALETTE
         bg = pal.get(color, pal["secondary"])
         dark = pal.get(color + "_dark", bg)
+        # [수정] "Browse/Curves/Marker 등 색 버튼이 입력줄(Entry)보다 너무 높아
+        # 보임" - bd=2(3D 입체 테두리)와 기본 내부 pady가 합쳐져 옆 Entry/
+        # Combobox보다 눈에 띄게 두꺼워 보였음. bd를 1로, pady를 명시적으로
+        # 작게 줘서 줄 높이를 옆 위젯들과 비슷하게 맞춘다(버튼 자체 크기/
+        # 강조색은 그대로 유지 - "크게 하지 말 것"이지 "작게 하지 말 것"은
+        # 아니므로 폭(padx)은 건드리지 않음).
         b = tk.Button(
             parent, text=text, command=command,
             font=("Malgun Gothic", 9, "bold"), bg=bg, fg=fg,
             activebackground=dark, activeforeground=fg,
-            relief="raised", bd=2, padx=8,
+            relief="raised", bd=1, padx=8, pady=1,
         )
         b.pack(**pack_kw)
         return b
 
-    def _mk_check(self, parent, text, variable, color="accent", command=None, **pack_kw):
+    def _mk_check(self, parent, text, variable, color="accent", command=None, no_pack=False, **pack_kw):
         # [추가] "Auto X Range 등 체크박스 체크시 색상도 넣어 강조" - ttk.Checkbutton은
         # (버튼과 마찬가지로) Windows 기본 테마에서 체크 표시 색을 커스텀할 방법이
         # 거의 없어서, 체크됐을 때 상자 자체가 지정한 색으로 채워지는 tk.Checkbutton
@@ -306,7 +319,8 @@ class CathPlotGUI:
             c.config(selectcolor=(sel if variable.get() else "white"))
 
         variable.trace_add("write", _sync_box_color)
-        c.pack(**pack_kw)
+        if not no_pack:
+            c.pack(**pack_kw)
         return c
 
     def create_widgets(self):
@@ -543,8 +557,8 @@ class CathPlotGUI:
         # --- Legend1 줄 (Plot Title 줄 우측) ---
         legend1_row = ttk.Frame(self.plot_frame)
         legend1_row.grid(row=0, column=3, columnspan=3, padx=3, pady=0, sticky="we")
-        ttk.Checkbutton(legend1_row, text="Legend1 On", variable=self.legend_on_var).pack(side="left", padx=3)
-        ttk.Checkbutton(legend1_row, text="Box", variable=self.legend_box_var).pack(side="left", padx=3)
+        self._mk_check(legend1_row, "Legend1 On", self.legend_on_var, side="left", padx=3)
+        self._mk_check(legend1_row, "Box", self.legend_box_var, side="left", padx=3)
         ttk.Label(legend1_row, text="Pos1:").pack(side="left", padx=2)
         legend_pos_combo = ttk.Combobox(legend1_row, textvariable=self.legend_pos_var, values=pos_list, width=10)
         legend_pos_combo.pack(side="left", padx=2)
@@ -585,7 +599,7 @@ class CathPlotGUI:
             legend1_row, text="Curves", width=7, font=("Malgun Gothic", 9, "bold"),
             bg=self.PALETTE["secondary"], fg="white",
             activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=2,
+            relief="raised", bd=1, pady=1,
         )
         # [수정 - 요청] "Curves와 Marker 버튼을 우측 맞춤" - legend1_row/
         # legend2_row/row2_f가 전부 같은 grid 칸(row=0~2, column=3~5)에
@@ -607,8 +621,8 @@ class CathPlotGUI:
         # 표의 Leg 열(1 또는 2)에서 변수별로 고른다
         legend2_row = ttk.Frame(self.plot_frame)
         legend2_row.grid(row=1, column=3, columnspan=3, padx=3, pady=0, sticky="we")
-        ttk.Checkbutton(legend2_row, text="Legend2 On", variable=self.legend2_on_var).pack(side="left", padx=3)
-        ttk.Checkbutton(legend2_row, text="Box", variable=self.legend2_box_var).pack(side="left", padx=3)
+        self._mk_check(legend2_row, "Legend2 On", self.legend2_on_var, side="left", padx=3)
+        self._mk_check(legend2_row, "Box", self.legend2_box_var, side="left", padx=3)
         ttk.Label(legend2_row, text="Pos2:").pack(side="left", padx=2)
         legend2_pos_combo = ttk.Combobox(legend2_row, textvariable=self.legend2_pos_var, values=pos_list, width=10)
         legend2_pos_combo.pack(side="left", padx=2)
@@ -637,7 +651,7 @@ class CathPlotGUI:
             legend2_row, text="Curves", width=7, font=("Malgun Gothic", 9, "bold"),
             bg=self.PALETTE["secondary"], fg="white",
             activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=2,
+            relief="raised", bd=1, pady=1,
         )
         legend2_curves_btn.pack(side="right", padx=(1, 3))
         legend2_curves_btn.configure(
@@ -684,7 +698,7 @@ class CathPlotGUI:
             row2_f, text="Marker", width=7, font=("Malgun Gothic", 9, "bold"),
             bg=self.PALETTE["secondary"], fg="white",
             activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=2,
+            relief="raised", bd=1, pady=1,
         )
         marker_settings_btn.pack(side="right", padx=(1, 3))
         marker_settings_btn.configure(command=self._open_marker_settings_popup)
@@ -714,10 +728,10 @@ class CathPlotGUI:
         frame_size_f = ttk.Frame(row3_f)
         frame_size_f.pack(side="left")
 
-        ttk.Checkbutton(
-            frame_size_f, text="Axis Frame Auto", variable=self.frame_auto_var,
-            command=self.toggle_frame_size_state
-        ).pack(side="left", padx=5)
+        self._mk_check(
+            frame_size_f, "Axis Frame Auto", self.frame_auto_var,
+            command=self.toggle_frame_size_state, side="left", padx=5
+        )
 
         ttk.Label(frame_size_f, text="W:").pack(side="left", padx=(8, 2))
         self.frame_width_entry = ttk.Entry(frame_size_f, textvariable=self.frame_width_var, width=6)
@@ -758,7 +772,7 @@ class CathPlotGUI:
 
         x_log_f = ttk.Frame(self.plot_frame)
         x_log_f.grid(row=4, column=1, sticky="w", padx=5, pady=2)
-        ttk.Checkbutton(x_log_f, text="Log", variable=self.xlog_var).pack(side="left")
+        self._mk_check(x_log_f, "Log", self.xlog_var, side="left")
         xfmt_combo = ttk.Combobox(x_log_f, textvariable=self.xfmt_var, values=FMT_LIST, width=7, state="readonly")
         xfmt_combo.pack(side="left", padx=(2, 0))
         self._disable_combobox_wheel(xfmt_combo)
@@ -769,7 +783,7 @@ class CathPlotGUI:
 
         y1_log_f = ttk.Frame(self.plot_frame)
         y1_log_f.grid(row=4, column=3, sticky="w", padx=2, pady=2)
-        ttk.Checkbutton(y1_log_f, text="Log", variable=self.y1log_var).pack(side="left")
+        self._mk_check(y1_log_f, "Log", self.y1log_var, side="left")
         y1fmt_combo = ttk.Combobox(y1_log_f, textvariable=self.y1fmt_var, values=FMT_LIST, width=7, state="readonly")
         y1fmt_combo.pack(side="left", padx=(2, 0))
         self._disable_combobox_wheel(y1fmt_combo)
@@ -780,7 +794,7 @@ class CathPlotGUI:
 
         y2_log_f = ttk.Frame(self.plot_frame)
         y2_log_f.grid(row=4, column=5, sticky="w", padx=2, pady=2)
-        ttk.Checkbutton(y2_log_f, text="Log", variable=self.y2log_var).pack(side="left")
+        self._mk_check(y2_log_f, "Log", self.y2log_var, side="left")
         y2fmt_combo = ttk.Combobox(y2_log_f, textvariable=self.y2fmt_var, values=FMT_LIST, width=7, state="readonly")
         y2fmt_combo.pack(side="left", padx=(2, 0))
         self._disable_combobox_wheel(y2fmt_combo)
@@ -844,17 +858,16 @@ class CathPlotGUI:
 
         major_grid_f = ttk.Frame(self.plot_frame)
         major_grid_f.grid(row=7, column=0, sticky="w", padx=5, pady=2)
-        ttk.Checkbutton(
-            major_grid_f, text="Major Grid", variable=self.major_grid_var,
-            command=self.on_major_grid_toggled
-        ).pack(side="left")
+        self._mk_check(
+            major_grid_f, "Major Grid", self.major_grid_var,
+            command=self.on_major_grid_toggled, side="left"
+        )
 
         minor_grid_f = ttk.Frame(self.plot_frame)
         minor_grid_f.grid(row=7, column=1, sticky="w", padx=5, pady=2)
-        self.minor_grid_check = ttk.Checkbutton(
-            minor_grid_f, text="Minor Grid", variable=self.minor_grid_var
+        self.minor_grid_check = self._mk_check(
+            minor_grid_f, "Minor Grid", self.minor_grid_var, side="left"
         )
-        self.minor_grid_check.pack(side="left")
 
         # Annotations Area
         self.anno_frame = ttk.LabelFrame(self.plot_frame, text="Multi Annotations")
@@ -880,18 +893,18 @@ class CathPlotGUI:
         comment_btn_col = ttk.Frame(btn_f)
         comment_btn_col.pack(side="left", padx=5)
         ttk.Button(comment_btn_col, text="+ Add Comment", command=self.add_comment_row).pack(side="top", anchor="w")
-        ttk.Checkbutton(comment_btn_col, text="Enable Comments", variable=self.comment_on_var).pack(side="top", anchor="w")
+        self._mk_check(comment_btn_col, "Enable Comments", self.comment_on_var, side="top", anchor="w")
 
         arrow_btn_col = ttk.Frame(btn_f)
         arrow_btn_col.pack(side="left", padx=15)
         ttk.Button(arrow_btn_col, text="+ Add Line/Arrow", command=self.add_arrow_row).pack(side="top", anchor="w")
-        ttk.Checkbutton(arrow_btn_col, text="Enable Arrows", variable=self.arrow_on_var).pack(side="top", anchor="w")
+        self._mk_check(arrow_btn_col, "Enable Arrows", self.arrow_on_var, side="top", anchor="w")
 
         # [추가] "Arrow 옆에 Circle(중심축 2개 타원 - 반지름 1개만 입력하면 원)"
         circle_btn_col = ttk.Frame(btn_f)
         circle_btn_col.pack(side="left", padx=15)
         ttk.Button(circle_btn_col, text="+ Add Circle", command=self.add_circle_row).pack(side="top", anchor="w")
-        ttk.Checkbutton(circle_btn_col, text="Enable Circles", variable=self.circle_on_var).pack(side="top", anchor="w")
+        self._mk_check(circle_btn_col, "Enable Circles", self.circle_on_var, side="top", anchor="w")
 
         # [수정] "Comment/Arrow 입력창이 안 보임 - 항상 빈 칸이 하나씩 나오게
         # 해야 함(어차피 안 지워지는 빈 칸이니 기본으로 둠)" - 시작할 때 매번
@@ -1153,10 +1166,10 @@ class CathPlotGUI:
             mp_width_entry.config(state=state)
             mp_height_entry.config(state=state)
 
-        ttk.Checkbutton(
-            mp_frame_size_f, text="Axis Frame Auto", variable=self.frame_auto_var,
-            command=_mp_toggle_frame_size_state
-        ).pack(side="left")
+        self._mk_check(
+            mp_frame_size_f, "Axis Frame Auto", self.frame_auto_var,
+            command=_mp_toggle_frame_size_state, side="left"
+        )
         ttk.Label(mp_frame_size_f, text="W:").pack(side="left", padx=(8, 2))
         mp_width_entry.pack(side="left")
         ttk.Label(mp_frame_size_f, text="H:").pack(side="left", padx=(6, 2))
@@ -2262,7 +2275,7 @@ class CathPlotGUI:
             self._disable_combobox_wheel(size_combo)
 
             fill_cell = _cell(row_f, FILL_PX)
-            ttk.Checkbutton(fill_cell, variable=self.marker_fill_vars[key]).pack(side="left")
+            self._mk_check(fill_cell, "", self.marker_fill_vars[key], side="left")
 
             max_cell = _cell(row_f, MAX_PX)
             ttk.Entry(max_cell, textvariable=self.marker_maxcount_vars[key],
@@ -2314,7 +2327,7 @@ class CathPlotGUI:
                 def _toggle(cv=check_var, k=key):
                     set_checked(k, cv.get())
 
-                ttk.Checkbutton(list_frame, text=label, variable=check_var, command=_toggle).pack(anchor="w", pady=1)
+                self._mk_check(list_frame, label, check_var, command=_toggle, anchor="w", pady=1)
 
         def select_all():
             for key in keys:
@@ -2715,7 +2728,7 @@ class CathPlotGUI:
         )
 
         ttk.Button(
-            row, text="X", width=2,
+            row, text="X", width=2, style="Compact.TButton",
             command=lambda r_info=info: self.delete_dat_file_row(r_info)
         ).pack(side="left", padx=3)
 
@@ -2896,7 +2909,7 @@ class CathPlotGUI:
         }
         self.comment_list.append(data)
 
-        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.comment_list, row)).pack(side="right", padx=5)
+        ttk.Button(row, text="X", width=3, style="Compact.TButton", command=lambda: self.remove_row(self.comment_list, row)).pack(side="right", padx=5)
         ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=(2, 5))
 
         ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
@@ -2946,7 +2959,7 @@ class CathPlotGUI:
                 'frame': row}
         self.arrow_list.append(data)
 
-        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.arrow_list, row)).pack(side="right", padx=5)
+        ttk.Button(row, text="X", width=3, style="Compact.TButton", command=lambda: self.remove_row(self.arrow_list, row)).pack(side="right", padx=5)
         ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=(2, 5))
         ttk.Combobox(row, textvariable=data['size'], values=list(self.ARROW_SIZE_MAP.keys()), width=4, state="readonly").pack(side="right", padx=(2, 2))
 
@@ -2999,7 +3012,7 @@ class CathPlotGUI:
         }
         self.circle_list.append(data)
 
-        ttk.Button(row, text="X", width=3, command=lambda: self.remove_row(self.circle_list, row)).pack(side="right", padx=5)
+        ttk.Button(row, text="X", width=3, style="Compact.TButton", command=lambda: self.remove_row(self.circle_list, row)).pack(side="right", padx=5)
         ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=(2, 5))
 
         ttk.Label(row, text="[Circle]", foreground="darkgreen").pack(side="left", padx=(0, 5))
@@ -3295,13 +3308,13 @@ class CathPlotGUI:
                 y1_cell_f = tk.Frame(row_frame, width=Y1_COL_PX, height=22)
                 y1_cell_f.pack_propagate(False)
                 y1_cell_f.pack(side="left")
-                c_y1 = ttk.Checkbutton(y1_cell_f, variable=self.selected_y1_vars[key_str], command=make_y_excl_cmd(key_str, "Y1", file_x_var))
+                c_y1 = self._mk_check(y1_cell_f, "", self.selected_y1_vars[key_str], command=make_y_excl_cmd(key_str, "Y1", file_x_var), no_pack=True)
                 c_y1.place(relx=0.5, rely=0.5, anchor="center")
 
                 y2_cell_f = tk.Frame(row_frame, width=Y2_COL_PX, height=22)
                 y2_cell_f.pack_propagate(False)
                 y2_cell_f.pack(side="left")
-                c_y2 = ttk.Checkbutton(y2_cell_f, variable=self.selected_y2_vars[key_str], command=make_y_excl_cmd(key_str, "Y2", file_x_var))
+                c_y2 = self._mk_check(y2_cell_f, "", self.selected_y2_vars[key_str], command=make_y_excl_cmd(key_str, "Y2", file_x_var), no_pack=True)
                 c_y2.place(relx=0.5, rely=0.5, anchor="center")
 
                 color_cell_f = tk.Frame(row_frame, width=COLOR_COL_PX, height=22)
@@ -3770,9 +3783,9 @@ class CathPlotGUI:
         ttk.Label(row2, text="Palette:").pack(side="left")
         ttk.Combobox(row2, textvariable=palette_var, values=["rainbow", "grayscale", "bluewhitered"],
                      width=12, state="readonly").pack(side="left", padx=(2, 10))
-        ttk.Checkbutton(row2, text="Colorbox", variable=colorbox_var).pack(side="left", padx=(10, 0))
+        self._mk_check(row2, "Colorbox", colorbox_var, side="left", padx=(10, 0))
         equal_xyz_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(row2, text="Equal XYZ scale", variable=equal_xyz_var).pack(side="left", padx=(10, 0))
+        self._mk_check(row2, "Equal XYZ scale", equal_xyz_var, side="left", padx=(10, 0))
 
         # [수정] "Marker Size를 세트 선택 줄로 이동(모양 앞에), Style도 세트별로
         # (curve마다 다르게 줄 수 있으므로) 이동 - Color Palette(입체채색)는
@@ -3914,7 +3927,7 @@ class CathPlotGUI:
             data = {'txt': tk.StringVar(), 'x': tk.StringVar(), 'y': tk.StringVar(), 'z': tk.StringVar(),
                     'color': tk.StringVar(value="Auto"), 'frame': row}
             anno3d_list.append(data)
-            ttk.Button(row, text="X", width=2, command=lambda: (row.destroy(), anno3d_list.remove(data))).pack(side="right", padx=3)
+            ttk.Button(row, text="X", width=2, style="Compact.TButton", command=lambda: (row.destroy(), anno3d_list.remove(data))).pack(side="right", padx=3)
             ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
             ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 3))
             txt3d_entry = ttk.Entry(row, textvariable=data['txt'], width=14)
@@ -3932,7 +3945,7 @@ class CathPlotGUI:
                     'x2': tk.StringVar(), 'y2': tk.StringVar(), 'z2': tk.StringVar(),
                     'color': tk.StringVar(value="Auto"), 'size': tk.StringVar(value="M"), 'frame': row}
             arrow3d_list.append(data)
-            ttk.Button(row, text="X", width=2, command=lambda: (row.destroy(), arrow3d_list.remove(data))).pack(side="right", padx=3)
+            ttk.Button(row, text="X", width=2, style="Compact.TButton", command=lambda: (row.destroy(), arrow3d_list.remove(data))).pack(side="right", padx=3)
             ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
             ttk.Combobox(row, textvariable=data['size'], values=list(self.ARROW_SIZE_MAP.keys()), width=4, state="readonly").pack(side="right", padx=2)
             ttk.Label(row, text="[Arrow]", foreground="darkred").pack(side="left", padx=(0, 3))
