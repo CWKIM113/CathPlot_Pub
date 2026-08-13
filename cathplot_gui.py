@@ -200,6 +200,11 @@ class CathPlotGUI:
             "secondary_dark": "#48557a",
             "grey": "#8a94a6",         # Template Save/Load(회색 바탕)
             "grey_dark": "#6d7690",
+            # [추가 - 요청] "Available Variables Selection을 붉은 계열로 - 아래
+            # *.dat 헤드 색과 구분이 잘 안 됨" - danger(#b3462c, 갈색 계열 red)와는
+            # 겹치지 않게 좀 더 선명한 빨강으로 새로 추가.
+            "red": "#c0392b",
+            "red_dark": "#a5301f",
         }
         pal = self.PALETTE
         self.root.configure(bg=pal["bg"])
@@ -243,7 +248,7 @@ class CathPlotGUI:
 
         self.SECTION_STYLE = {
             "dat_files": _section_style("DatFiles", pal["accent"]),
-            "variables": _section_style("Variables", pal["secondary"]),
+            "variables": _section_style("Variables", pal["red"]),
             "plot_setting": _section_style("PlotSetting", pal["accent3"]),
             "annotations": _section_style("Annotations", pal["amber"]),
             "advanced": _section_style("Advanced", pal["danger"]),
@@ -404,6 +409,22 @@ class CathPlotGUI:
         if not no_pack:
             c.pack(**pack_kw)
         return c
+
+    def _mk_entry(self, parent, textvariable, width=10, color="accent"):
+        # [추가 - 근본 원인 수정] "Plot Setting/Multi Annotations/Advanced의
+        # 입력 box에 커서를 눌러도 테두리 색 구분이 안 됨" - ttk.Entry의
+        # bordercolor는 Windows 기본(vista) 테마가 자체 테두리를 그리고 이
+        # 스타일 속성을 무시해서(이 파일에서 버튼/체크박스가 같은 이유로
+        # ttk를 포기한 전례와 동일한 문제) 반영이 안 됨 - tk.Entry(테마와
+        # 무관하게 항상 동작하는 highlightbackground/highlightcolor)로
+        # 교체한다. color는 self.PALETTE의 키 이름(그 입력칸이 속한 구역의
+        # 제목색과 맞추면 어느 block 소속인지도 한눈에 드러남).
+        pal = self.PALETTE
+        line = pal.get(color, pal["accent"])
+        return tk.Entry(
+            parent, textvariable=textvariable, width=width, bg="white", fg=pal["text"],
+            relief="flat", highlightthickness=1, highlightbackground=line, highlightcolor=line,
+        )
 
     def create_widgets(self):
         self.file_frame = ttk.LabelFrame(self.root, text="DAT Files", style=self.SECTION_STYLE["dat_files"])
@@ -594,7 +615,7 @@ class CathPlotGUI:
 
         # Row 0
         ttk.Label(self.plot_frame, text="Plot Title", style="RowHead.TLabel").grid(row=0, column=0, padx=5, pady=0, sticky="w")
-        self.title_entry = ttk.Entry(self.plot_frame, textvariable=self.title_var, width=30)
+        self.title_entry = self._mk_entry(self.plot_frame, self.title_var, width=30, color="accent3")
         self.title_entry.grid(row=0, column=1, padx=5, pady=0, sticky="w")
         self.title_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.title_entry))
 
@@ -662,9 +683,9 @@ class CathPlotGUI:
         # 가능)에 맞게 "%"를 빼고 "Box W/H:"로 표기(자세한 규칙은 마우스오버
         # 힌트에 이미 있음).
         ttk.Label(legend1_row, text="Box W/H:").pack(side="left", padx=(4, 1))
-        _l1_boxw_entry = ttk.Entry(legend1_row, textvariable=self.legend_box_width_pct_var, width=4)
+        _l1_boxw_entry = self._mk_entry(legend1_row, self.legend_box_width_pct_var, width=4, color="accent3")
         _l1_boxw_entry.pack(side="left", padx=1)
-        _l1_boxh_entry = ttk.Entry(legend1_row, textvariable=self.legend_box_height_pct_var, width=4)
+        _l1_boxh_entry = self._mk_entry(legend1_row, self.legend_box_height_pct_var, width=4, color="accent3")
         _l1_boxh_entry.pack(side="left", padx=1)
         _box_size_hint = ("Print/Save 전용(화면 미리보기엔 적용 안 됨)\n"
                            "비우면 폰트 기준 자동 추정(기본) - 자동 추정이\n"
@@ -722,9 +743,9 @@ class CathPlotGUI:
         ttk.Combobox(legend2_row, textvariable=self.legend2_align_var, values=["Auto", "Left", "Right"],
                      width=5, state="readonly").pack(side="left", padx=1)
         ttk.Label(legend2_row, text="Box W/H:").pack(side="left", padx=(4, 1))
-        _l2_boxw_entry = ttk.Entry(legend2_row, textvariable=self.legend2_box_width_pct_var, width=4)
+        _l2_boxw_entry = self._mk_entry(legend2_row, self.legend2_box_width_pct_var, width=4, color="accent3")
         _l2_boxw_entry.pack(side="left", padx=1)
-        _l2_boxh_entry = ttk.Entry(legend2_row, textvariable=self.legend2_box_height_pct_var, width=4)
+        _l2_boxh_entry = self._mk_entry(legend2_row, self.legend2_box_height_pct_var, width=4, color="accent3")
         _l2_boxh_entry.pack(side="left", padx=1)
         _add_hint(_l2_boxw_entry, _box_size_hint)
         _add_hint(_l2_boxh_entry, _box_size_hint)
@@ -756,7 +777,7 @@ class CathPlotGUI:
 
         # Row 1
         ttk.Label(self.plot_frame, text="X Axis Title", style="RowHead.TLabel").grid(row=1, column=0, padx=5, pady=0, sticky="w")
-        self.xlabel_entry = ttk.Entry(self.plot_frame, textvariable=self.xlabel_var, width=30)
+        self.xlabel_entry = self._mk_entry(self.plot_frame, self.xlabel_var, width=30, color="accent3")
         self.xlabel_entry.grid(row=1, column=1, padx=5, pady=0, sticky="w")
         self.xlabel_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.xlabel_entry))
 
@@ -796,13 +817,13 @@ class CathPlotGUI:
 
         # Row 2
         ttk.Label(self.plot_frame, text="Y Left Title (Y1)", style="RowHead.TLabel").grid(row=2, column=0, padx=5, pady=0, sticky="w")
-        self.ylabel_entry = ttk.Entry(self.plot_frame, textvariable=self.ylabel_var, width=30)
+        self.ylabel_entry = self._mk_entry(self.plot_frame, self.ylabel_var, width=30, color="accent3")
         self.ylabel_entry.grid(row=2, column=1, padx=5, pady=0, sticky="w")
         self.ylabel_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.ylabel_entry))
 
         # Row 3
         ttk.Label(self.plot_frame, text="Y Right Title (Y2)", style="RowHead.TLabel").grid(row=3, column=0, padx=5, pady=0, sticky="w")
-        self.y2label_entry = ttk.Entry(self.plot_frame, textvariable=self.y2label_var, width=30)
+        self.y2label_entry = self._mk_entry(self.plot_frame, self.y2label_var, width=30, color="accent3")
         self.y2label_entry.grid(row=3, column=1, padx=5, pady=0, sticky="w")
         self.y2label_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.y2label_entry))
 
@@ -825,11 +846,11 @@ class CathPlotGUI:
         )
 
         ttk.Label(frame_size_f, text="W:").pack(side="left", padx=(8, 2))
-        self.frame_width_entry = ttk.Entry(frame_size_f, textvariable=self.frame_width_var, width=6)
+        self.frame_width_entry = self._mk_entry(frame_size_f, self.frame_width_var, width=6, color="accent3")
         self.frame_width_entry.pack(side="left")
 
         ttk.Label(frame_size_f, text="H:").pack(side="left", padx=(6, 2))
-        self.frame_height_entry = ttk.Entry(frame_size_f, textvariable=self.frame_height_var, width=6)
+        self.frame_height_entry = self._mk_entry(frame_size_f, self.frame_height_var, width=6, color="accent3")
         self.frame_height_entry.pack(side="left")
 
         self.frame_unit_combo = ttk.Combobox(
@@ -845,7 +866,7 @@ class CathPlotGUI:
         filename_f.pack(side="right", padx=(10, 0))
         self.filename_var = tk.StringVar(value="CathPlot")
         ttk.Label(filename_f, text="Plot File Name", font=("Malgun Gothic", 9, "bold")).pack(side="left", padx=(0, 3))
-        self.filename_entry = ttk.Entry(filename_f, textvariable=self.filename_var, width=20)
+        self.filename_entry = self._mk_entry(filename_f, self.filename_var, width=20, color="accent3")
         self.filename_entry.pack(side="left")
 
         # Row 4
@@ -896,27 +917,27 @@ class CathPlotGUI:
         self.xmax_var = tk.StringVar()
         x_limit_f = ttk.Frame(self.plot_frame)
         x_limit_f.grid(row=5, column=1, sticky="w", padx=5)
-        ttk.Entry(x_limit_f, textvariable=self.xmin_var, width=9).pack(side="left")
+        self._mk_entry(x_limit_f, self.xmin_var, width=9, color="accent3").pack(side="left")
         ttk.Label(x_limit_f, text="~").pack(side="left", padx=2)
-        ttk.Entry(x_limit_f, textvariable=self.xmax_var, width=9).pack(side="left")
+        self._mk_entry(x_limit_f, self.xmax_var, width=9, color="accent3").pack(side="left")
 
         ttk.Label(self.plot_frame, text="Y1 Min/Max", style="RowHead.TLabel").grid(row=5, column=2, sticky="w", padx=5, pady=2)
         self.ymin_var = tk.StringVar()
         self.ymax_var = tk.StringVar()
         y1_limit_f = ttk.Frame(self.plot_frame)
         y1_limit_f.grid(row=5, column=3, sticky="w", padx=5)
-        ttk.Entry(y1_limit_f, textvariable=self.ymin_var, width=9).pack(side="left")
+        self._mk_entry(y1_limit_f, self.ymin_var, width=9, color="accent3").pack(side="left")
         ttk.Label(y1_limit_f, text="~").pack(side="left", padx=2)
-        ttk.Entry(y1_limit_f, textvariable=self.ymax_var, width=9).pack(side="left")
+        self._mk_entry(y1_limit_f, self.ymax_var, width=9, color="accent3").pack(side="left")
 
         ttk.Label(self.plot_frame, text="Y2 Min/Max", style="RowHead.TLabel").grid(row=5, column=4, sticky="w", padx=5, pady=2)
         self.y2min_var = tk.StringVar()
         self.y2max_var = tk.StringVar()
         y2_limit_f = ttk.Frame(self.plot_frame)
         y2_limit_f.grid(row=5, column=5, sticky="w", padx=5)
-        ttk.Entry(y2_limit_f, textvariable=self.y2min_var, width=9).pack(side="left")
+        self._mk_entry(y2_limit_f, self.y2min_var, width=9, color="accent3").pack(side="left")
         ttk.Label(y2_limit_f, text="~").pack(side="left", padx=2)
-        ttk.Entry(y2_limit_f, textvariable=self.y2max_var, width=9).pack(side="left")
+        self._mk_entry(y2_limit_f, self.y2max_var, width=9, color="accent3").pack(side="left")
 
         # Row 6
         ttk.Label(self.plot_frame, text="X Tics/Minor", style="RowHead.TLabel").grid(row=6, column=0, sticky="w", padx=5, pady=2)
@@ -924,24 +945,24 @@ class CathPlotGUI:
         self.mxtics_var = tk.StringVar()
         x_tick_f = ttk.Frame(self.plot_frame)
         x_tick_f.grid(row=6, column=1, sticky="w", padx=5)
-        ttk.Entry(x_tick_f, textvariable=self.xtics_var, width=9).pack(side="left")
-        ttk.Entry(x_tick_f, textvariable=self.mxtics_var, width=5).pack(side="left", padx=(5, 0))
+        self._mk_entry(x_tick_f, self.xtics_var, width=9, color="accent3").pack(side="left")
+        self._mk_entry(x_tick_f, self.mxtics_var, width=5, color="accent3").pack(side="left", padx=(5, 0))
 
         ttk.Label(self.plot_frame, text="Y Left (Y1) Tics", style="RowHead.TLabel").grid(row=6, column=2, sticky="w", padx=5, pady=2)
         self.ytics_var = tk.StringVar()
         self.mytics_var = tk.StringVar()
         y1_tick_f = ttk.Frame(self.plot_frame)
         y1_tick_f.grid(row=6, column=3, sticky="w", padx=5)
-        ttk.Entry(y1_tick_f, textvariable=self.ytics_var, width=9).pack(side="left")
-        ttk.Entry(y1_tick_f, textvariable=self.mytics_var, width=5).pack(side="left", padx=(5, 0))
+        self._mk_entry(y1_tick_f, self.ytics_var, width=9, color="accent3").pack(side="left")
+        self._mk_entry(y1_tick_f, self.mytics_var, width=5, color="accent3").pack(side="left", padx=(5, 0))
 
         ttk.Label(self.plot_frame, text="Y Right (Y2) Tics", style="RowHead.TLabel").grid(row=6, column=4, sticky="w", padx=5, pady=2)
         self.y2tics_var = tk.StringVar()
         self.my2tics_var = tk.StringVar()
         y2_tick_f = ttk.Frame(self.plot_frame)
         y2_tick_f.grid(row=6, column=5, sticky="w", padx=5)
-        ttk.Entry(y2_tick_f, textvariable=self.y2tics_var, width=9).pack(side="left")
-        ttk.Entry(y2_tick_f, textvariable=self.my2tics_var, width=5).pack(side="left", padx=(5, 0))
+        self._mk_entry(y2_tick_f, self.y2tics_var, width=9, color="accent3").pack(side="left")
+        self._mk_entry(y2_tick_f, self.my2tics_var, width=5, color="accent3").pack(side="left", padx=(5, 0))
 
         # Row 7
         self.major_grid_var = tk.BooleanVar(value=True)
@@ -1008,7 +1029,13 @@ class CathPlotGUI:
         # 고급: raw gnuplot 명령어 직접 입력 (여기 적은 내용은 생성되는 .plt 파일에 그대로 삽입됨)
         self.raw_gnuplot_frame = ttk.LabelFrame(self.plot_frame, text="Advanced: Raw gnuplot commands", style=self.SECTION_STYLE["advanced"])
         self.raw_gnuplot_frame.grid(row=9, column=0, columnspan=6, sticky="ew", padx=5, pady=2)
-        self.raw_gnuplot_text = tk.Text(self.raw_gnuplot_frame, height=3, wrap="none")
+        # [수정 - 요청] "Advanced block 입력에도 색 구분 테두리" - tk.Text는
+        # 원래도 ttk가 아니라 highlightbackground/highlightcolor가 항상
+        # 동작함(테마 영향 없음) - Advanced 섹션색(danger)으로 맞춤.
+        self.raw_gnuplot_text = tk.Text(
+            self.raw_gnuplot_frame, height=3, wrap="none",
+            highlightthickness=1, highlightbackground=self.PALETTE["danger"], highlightcolor=self.PALETTE["danger"],
+        )
         self.raw_gnuplot_text.pack(fill="x", padx=5, pady=3)
 
         self.button_frame = ttk.Frame(self.root)
@@ -2988,7 +3015,7 @@ class CathPlotGUI:
             y_var.set(parts[1].strip() if len(parts) > 1 else "")
 
         xy_var.trace_add("write", _sync_from_xy)
-        entry = ttk.Entry(parent, textvariable=xy_var, width=width)
+        entry = self._mk_entry(parent, xy_var, width=width, color="amber")
         return entry, xy_var
 
     def add_comment_row(self, initial=None):
@@ -3012,7 +3039,7 @@ class CathPlotGUI:
 
         ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
         ttk.Label(row, text="Txt:").pack(side="left")
-        txt_entry = ttk.Entry(row, textvariable=data['txt'], width=20)
+        txt_entry = self._mk_entry(row, data['txt'], width=20, color="amber")
         txt_entry.pack(side="left", padx=2)
         # [추가] "Comment창에도 Ω창에서 입력 가능하게" - Title류 입력칸과 동일하게
         # 포커스될 때 active_entry로 기록해서 Ω 심볼 창이 여기에 삽입할 수 있게 함.
@@ -3026,7 +3053,7 @@ class CathPlotGUI:
         mode_display_var.trace_add("write", _on_mode_changed)
         ttk.Combobox(row, textvariable=mode_display_var, values=["%", "좌표값"], width=5, state="readonly").pack(side="left", padx=(1, 2))
         ttk.Label(row, text="Angle(0~360°):").pack(side="left")
-        ttk.Entry(row, textvariable=data['ang'], width=6).pack(side="left", padx=2)
+        self._mk_entry(row, data['ang'], width=6, color="amber").pack(side="left", padx=2)
 
     ARROW_HEAD_DISPLAY_MAP = {
         "No Head": "nohead",
