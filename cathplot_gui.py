@@ -222,6 +222,32 @@ class CathPlotGUI:
             "TLabelframe.Label", background=pal["bg"], foreground=pal["heading"],
             font=("Malgun Gothic", 9, "bold"),
         )
+        # [추가] "각 구역(block)의 Title을 다른 색으로 구분, box line 색도"
+        # - 기존엔 모든 LabelFrame(DAT Files/Plot Setting/Multi Annotations 등)
+        # 제목이 전부 같은 색(heading)이라 화면을 훑어볼 때 구역 경계가 잘
+        # 안 드러났음. 이미 있는 팔레트(버튼에 쓰는 것과 같은 색 계열이라
+        # "슬레이트 블루+앰버 포인트" 톤이 유지됨)에서 구역마다 하나씩
+        # 배정해서, 제목 글자색과 테두리색을 함께 그 색으로 물들인다(완전히
+        # 새 색을 추가하지 않고 버튼 팔레트를 재사용해 전체 화면 톤을
+        # 통일감 있게 유지).
+        def _section_style(name, color):
+            style.configure(
+                f"{name}.TLabelframe", background=pal["panel"], bordercolor=color,
+                relief="groove", borderwidth=2,
+            )
+            style.configure(
+                f"{name}.TLabelframe.Label", background=pal["bg"], foreground=color,
+                font=("Malgun Gothic", 9, "bold"),
+            )
+            return f"{name}.TLabelframe"
+
+        self.SECTION_STYLE = {
+            "dat_files": _section_style("DatFiles", pal["accent"]),
+            "variables": _section_style("Variables", pal["secondary"]),
+            "plot_setting": _section_style("PlotSetting", pal["accent3"]),
+            "annotations": _section_style("Annotations", pal["amber"]),
+            "advanced": _section_style("Advanced", pal["danger"]),
+        }
         style.configure("TCheckbutton", background=pal["bg"], foreground=pal["text"])
         style.configure("TRadiobutton", background=pal["bg"], foreground=pal["text"])
         style.configure("TNotebook", background=pal["bg"])
@@ -324,7 +350,7 @@ class CathPlotGUI:
         return c
 
     def create_widgets(self):
-        self.file_frame = ttk.LabelFrame(self.root, text="DAT Files")
+        self.file_frame = ttk.LabelFrame(self.root, text="DAT Files", style=self.SECTION_STYLE["dat_files"])
         self.file_frame.pack(fill="x", padx=10, pady=0)
 
         self.file_canvas = tk.Canvas(self.file_frame, height=85, width=120)
@@ -415,7 +441,7 @@ class CathPlotGUI:
         plot3d_btn.pack(side="left")
         tk.Frame(btn_container).pack(side="left", fill="x", expand=True)
 
-        self.var_frame = ttk.LabelFrame(self.root, text="Available Variables Selection")
+        self.var_frame = ttk.LabelFrame(self.root, text="Available Variables Selection", style=self.SECTION_STYLE["variables"])
         self.var_frame.pack(fill="x", expand=False, padx=10, pady=0)
 
         self.canvas = tk.Canvas(self.var_frame, height=290)
@@ -437,7 +463,7 @@ class CathPlotGUI:
         self.canvas.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
 
-        self.plot_container = ttk.LabelFrame(self.root, text="Plot Setting")
+        self.plot_container = ttk.LabelFrame(self.root, text="Plot Setting", style=self.SECTION_STYLE["plot_setting"])
         self.plot_container.pack(fill="x", padx=10, pady=0)
 
         self.plot_canvas = tk.Canvas(self.plot_container, height=330, highlightthickness=0)
@@ -875,7 +901,7 @@ class CathPlotGUI:
         )
 
         # Annotations Area
-        self.anno_frame = ttk.LabelFrame(self.plot_frame, text="Multi Annotations")
+        self.anno_frame = ttk.LabelFrame(self.plot_frame, text="Multi Annotations", style=self.SECTION_STYLE["annotations"])
         self.anno_frame.grid(row=8, column=0, columnspan=6, sticky="ew", padx=5, pady=2)
 
         self.c_list_frame = ttk.Frame(self.anno_frame)
@@ -920,7 +946,7 @@ class CathPlotGUI:
         self.add_circle_row()
 
         # 고급: raw gnuplot 명령어 직접 입력 (여기 적은 내용은 생성되는 .plt 파일에 그대로 삽입됨)
-        self.raw_gnuplot_frame = ttk.LabelFrame(self.plot_frame, text="Advanced: Raw gnuplot commands")
+        self.raw_gnuplot_frame = ttk.LabelFrame(self.plot_frame, text="Advanced: Raw gnuplot commands", style=self.SECTION_STYLE["advanced"])
         self.raw_gnuplot_frame.grid(row=9, column=0, columnspan=6, sticky="ew", padx=5, pady=2)
         self.raw_gnuplot_text = tk.Text(self.raw_gnuplot_frame, height=3, wrap="none")
         self.raw_gnuplot_text.pack(fill="x", padx=5, pady=3)
