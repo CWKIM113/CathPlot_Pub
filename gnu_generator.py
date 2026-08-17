@@ -126,6 +126,12 @@ def _rasterize_pdf_to_image(pdf_path, out_path, fmt, dpi=_PNG_TARGET_DPI):
         import pymupdf as fitz  # [수정] "fitz API is deprecated" 경고 제거 - pymupdf가 정식 이름
     except ImportError:
         return False
+    # [수정 - 버그] doc.close()가 성공 경로 끝에만 있어서, get_pixmap/save 등이
+    # 예외를 던지면(디스크 꽉 참, 백신 잠금, 손상된 임시 PDF 등) 문서가 열린
+    # 채로 남아 호출부의 임시 PDF 삭제(os.remove, 실패 시 조용히 무시)가
+    # Windows에서 파일이 사용 중이라 계속 실패 - 임시 파일이 영구히 남는
+    # 문제가 있었음. try/finally로 성공/실패 무관하게 항상 닫는다.
+    doc = None
     try:
         doc = fitz.open(pdf_path)
         page = doc[0]
@@ -136,10 +142,12 @@ def _rasterize_pdf_to_image(pdf_path, out_path, fmt, dpi=_PNG_TARGET_DPI):
             pix.save(out_path, jpg_quality=90)
         else:
             pix.save(out_path)
-        doc.close()
         return True
     except Exception:
         return False
+    finally:
+        if doc is not None:
+            doc.close()
 
 # [추가 - 근본 원인 재해결] "SVG는 PDF→SVG 변환 수단이 이 환경에 없어서
 # 그대로 gnuplot이 직접 그린다"고 알고 있었는데, PyMuPDF(fitz)에 이미
@@ -165,16 +173,21 @@ def _convert_pdf_to_svg(pdf_path, out_path):
         import pymupdf as fitz  # [수정] "fitz API is deprecated" 경고 제거 - pymupdf가 정식 이름
     except ImportError:
         return False
+    # [수정 - 버그] _rasterize_pdf_to_image와 같은 이유 - doc.close()를
+    # try/finally로 옮겨 예외 발생 시에도 항상 닫히게 한다.
+    doc = None
     try:
         doc = fitz.open(pdf_path)
         page = doc[0]
         svg_text = page.get_svg_image(text_as_path=1)
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(svg_text)
-        doc.close()
         return True
     except Exception:
         return False
+    finally:
+        if doc is not None:
+            doc.close()
 
 
 def _upscale_png_dpi(png_path):
@@ -609,7 +622,14 @@ class GnuplotGenerator:
             return pts
 
         ref_min, ref_max = shared_x_range if shared_x_range else (x_min, x_max)
-        if is_log_x and ref_max > 0:
+        # [수정 - 버그] "Marker Max Count를 1로 지정하면 ZeroDivisionError" -
+        # 아래 log/선형 분기 모두 (target_count - 1)로 나누는데, target_count=1
+        # (사용자가 직접 1을 입력한 경우 - GUI 쪽에 최소값 검증이 없음)이면
+        # 0으로 나누기가 됨. 목표점이 1개뿐이면 등간격 계산 자체가 의미
+        # 없으므로(간격을 나눌 구간이 없음) 중간점 하나만 반환한다.
+        if target_count <= 1:
+            all_targets = [(ref_min + ref_max) / 2.0]
+        elif is_log_x and ref_max > 0:
             if ref_min <= 0:
                 # [수정] 로그축인데 구간이 0부터 시작하면(흔한 케이스: Time=0)
                 # 무조건 선형으로 폴백하고 있었음 - 그러면 로그축으로 볼 때

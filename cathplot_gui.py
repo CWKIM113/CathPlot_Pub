@@ -1874,7 +1874,9 @@ class CathPlotGUI:
 
             target_dat_file = abs_path
             try:
-                target_dat_file = self.resort_dat_file(abs_path, x_output_no)
+                # [수정 - 효율] 이미 위에서 parse()한 dat_info 재사용 - Batch Set이
+                # 템플릿마다 이 함수를 호출하므로 파일당 중복 파싱이 누적됨.
+                target_dat_file = self.resort_dat_file(abs_path, x_output_no, dat_info=dat_info)
             except Exception:
                 target_dat_file = abs_path
 
@@ -2263,6 +2265,15 @@ class CathPlotGUI:
                     progress_bar["value"] = done
             self.root.after(0, _update)
 
+        # [수정 - 버그] "_run_batch_set는 self.xxx_var.get()을 안 써서 백그라운드
+        # 스레드에서 안전하다"는 docstring이 있었지만, 그 안에서 부르는
+        # _check_and_fix_fonts -> _get_installed_font_names가 캐시가 비어있으면
+        # (앱 켜자마자 바로 Batch Set부터 누른 경우) tkfont.families(self.root)로
+        # 실제 Tcl 호출을 해서 메인 스레드가 아닌 곳에서 Tk와 통신하는 위반이
+        # 있었음 - 스레드 시작 "전" 메인 스레드에서 미리 한 번 불러 캐시를
+        # 채워두면 백그라운드 쪽은 항상 캐시 히트만 타서 안전해진다.
+        self._get_installed_font_names()
+
         def worker():
             self._run_batch_set(template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path)
             self.root.after(0, lambda: progress_win.destroy() if progress_win.winfo_exists() else None)
@@ -2603,7 +2614,9 @@ class CathPlotGUI:
 
             target_dat_file = abs_path
             try:
-                target_dat_file = self.resort_dat_file(abs_path, x_output_no)
+                # [수정 - 효율] 위에서 이미 parse()한 dat_info를 그대로 넘겨서
+                # resort_dat_file 내부의 중복 파싱(+세 번째 전체 읽기)을 없앤다.
+                target_dat_file = self.resort_dat_file(abs_path, x_output_no, dat_info=dat_info)
             except Exception:
                 target_dat_file = abs_path
 
@@ -2729,6 +2742,11 @@ class CathPlotGUI:
                     label_var.set(f"처리 중: {current_name}  ({done}/{total_n})")
                     progress_bar["value"] = done
             self.root.after(0, _update)
+
+        # [수정 - 버그] _run_batch_set_async와 같은 이유 - _run_batch_queue도
+        # _check_and_fix_fonts를 거치므로, 스레드 시작 전에 폰트 캐시를 미리
+        # 채워 백그라운드에서 Tcl 호출(tkfont.families)이 일어나지 않게 한다.
+        self._get_installed_font_names()
 
         def worker():
             self._run_batch_queue(relative_paths, fmt, settings, progress_callback=progress_callback)
@@ -2857,21 +2875,14 @@ class CathPlotGUI:
             color="danger", side="left", padx=3,
         )
 
-    def load_dat_file(self, var, r_info):
-        init_dir = self.last_opened_dir if (hasattr(self, 'last_opened_dir') and self.last_opened_dir) else self.cwd
-
-        filename = filedialog.askopenfilename(
-            initialdir=init_dir, title="Select DAT File",
-            filetypes=[("DAT files", "*.dat"), ("All files", "*.*")]
-        )
-        if not filename:
-            return
-        filename = os.path.abspath(filename)
-        self.last_opened_dir = os.path.dirname(filename)
-
-        datfile = r_info["filename"]
+    def _purge_file_vars(self, datfile):
+        # [추가 - 버그 수정] load_dat_file(파일 교체)과 delete_dat_file_row(행 삭제)가
+        # 각자 따로 "{datfile}||"로 시작하는 키를 지우고 있었는데, delete_dat_file_row
+        # 쪽이 legend_vars/selected_y1_vars/selected_y2_vars 3개만 지우고 나머지
+        # 9개(color/linestyle/linewidth/legend_group/in_legend1/marker_*)는 안 지워서,
+        # 삭제 후 같은 경로를 다시 불러오면 예전 Color/Linestyle 등이 유령처럼
+        # 되살아나는 문제가 있었음 - 하나의 목록으로 통일해서 재사용한다.
         prefix = f"{datfile}||"
-
         for d in (
             self.legend_vars,
             self.selected_y1_vars,
@@ -2890,6 +2901,23 @@ class CathPlotGUI:
                 if key.startswith(prefix):
                     del d[key]
         self.file_xshift_vars.pop(datfile, None)
+
+    def load_dat_file(self, var, r_info):
+        init_dir = self.last_opened_dir if (hasattr(self, 'last_opened_dir') and self.last_opened_dir) else self.cwd
+
+        filename = filedialog.askopenfilename(
+            initialdir=init_dir, title="Select DAT File",
+            filetypes=[("DAT files", "*.dat"), ("All files", "*.*")]
+        )
+        if not filename:
+            return
+        filename = os.path.abspath(filename)
+        self.last_opened_dir = os.path.dirname(filename)
+
+        datfile = r_info["filename"]
+        prefix = f"{datfile}||"
+
+        self._purge_file_vars(datfile)
 
         # 파일별 X축 변수 초기화
         if r_info["x_var"].get().startswith(prefix):
@@ -2943,15 +2971,7 @@ class CathPlotGUI:
         datfile = r_info["filename"]
         prefix = f"{datfile}||"
 
-        for d in (
-            self.legend_vars,
-            self.selected_y1_vars,
-            self.selected_y2_vars,
-        ):
-            for key in list(d.keys()):
-                if key.startswith(prefix):
-                    del d[key]
-        self.file_xshift_vars.pop(datfile, None)
+        self._purge_file_vars(datfile)
 
         if r_info["x_var"].get().startswith(prefix):
             r_info["x_var"].set("")
@@ -3554,65 +3574,11 @@ class CathPlotGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to clean past plots: {e}")
 
-    def clear_all_plots(self):
-        """전체 초기화 루틴"""
-        self.clean_past_plots()
-
-        # 전체 삭제 확인 후 완전 초기화 진행
-        if not messagebox.askyesno("Confirm", "Clear all plots from history and reset window naming?"):
-            return
-
-        try:
-            import glob
-            # 1. 실제 하드디스크의 이전 생성 플롯 파일 일괄 제거 (*.plt, *.gnu 등)
-            patterns = [
-                os.path.join(self.plot_dir, "*.plt"),
-                os.path.join(self.plot_dir, "*.gnu"),
-            #    os.path.join(self.plot_dir, "*_Temp*.*")
-            ]
-            for pattern in patterns:
-                for filepath in glob.glob(pattern):
-                    if os.path.exists(filepath):
-                        try: os.remove(filepath)
-                        except: pass
-
-            # 2. [핵심] 동일 이름 중복 현상을 방지하기 위해 네이밍 일련번호 카운터 완전 리셋
-            if hasattr(self, 'title_counters'):
-                self.title_counters.clear()
-
-            # 3. 메모리 상의 세션 캐시 및 히스토리 리스트 완전 리셋
-            if hasattr(self, 'history_plots'):
-                self.history_plots.clear()
-            if hasattr(self, 'active_plots_cache'):
-                self.active_plots_cache.clear()
-            if hasattr(self, 'plot_processes'):
-                # 혹시 백그라운드에 살아있는 프로세스가 있다면 종료 유도
-                for p in self.plot_processes:
-                    try: p.terminate()
-                    except: pass
-                self.plot_processes.clear()
-
-            # 4. GUI 화면 갱신
-            self.update_plot_file_list()
-            messagebox.showinfo("Success", "All plots cleared and naming IDs have been reset.")
-
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to clear all plots: {e}")
-
-    def reset_history(self):  # 혹은 파일 내 clear_history_list 등 매핑된 이름 유지
-        if not messagebox.askyesno("Confirm", "Clear all plots from history?"):
-            return
-
-        # [핵심 보정] 기존 창 이름 번호(일련번호)가 꼬이지 않도록 완전히 비움
-        if hasattr(self, 'title_counters'):
-            self.title_counters.clear()
-
-        # 기존 메모리 리스트 초기화 유지
-        if hasattr(self, 'history_plots'):
-            self.history_plots.clear()
-
-        self.update_plot_file_list()
-        messagebox.showinfo("Success", "History and plot naming counters have been reset.")
+    # [삭제 - 죽은 코드] clear_all_plots/reset_history - grep 결과 이 파일 안에
+    # 호출부(버튼/메뉴)가 전혀 없어(0 call sites) 화면 어디서도 실행될 수
+    # 없었음. 실제로 쓰이는 "전체 초기화"는 clean_past_plots 하나뿐이라,
+    # 이 둘은 clean_past_plots와 거의 같은 내용을 중복 구현한 채 방치돼
+    # 있었을 뿐(git 히스토리에 남아있으니 필요하면 복원 가능).
 
     def _collect_annotations(self):
         if not self.comment_on_var.get():
@@ -4519,7 +4485,7 @@ class CathPlotGUI:
         os.makedirs(temp_dir, exist_ok=True)
         return temp_dir
 
-    def resort_dat_file(self, dat_file, x_col):
+    def resort_dat_file(self, dat_file, x_col, dat_info=None):
         """
         Cathena/Generic 여부와 무관하게, 이미 통합되어 있는 CathenaDatParser의
         data_start_line을 그대로 활용해 헤더/데이터 경계를 판단한다.
@@ -4533,6 +4499,12 @@ class CathPlotGUI:
         2번째 줄부터: 정렬된 순수 숫자 데이터 (tab 구분, 원본 헤더/주석 줄은 없음)
         이렇게 저장해두면 이 파일을 나중에 다시 쓸 때 변수명을 알기 위해 원본을
         다시 훑어 파싱할 필요 없이 1번째 줄만 읽으면 되어 시간이 절약된다.
+
+        [추가 - 효율] dat_info(선택): 호출부가 이 dat_file을 이미 self.parser.parse()로
+        파싱해둔 결과가 있으면 그대로 넘겨서, 아래에서 또 파싱하는 중복을 없앤다
+        (예: Batch Queue가 recipe 매칭을 위해 미리 parse()해둔 결과를 재사용 -
+        큰 파일을 캐시 미스마다 두 번 파싱/세 번 읽던 낭비를 줄임). 안 넘기면
+        기존처럼 여기서 직접 파싱한다(하위 호환).
         """
         if not os.path.exists(dat_file):
             return dat_file
@@ -4585,11 +4557,18 @@ class CathPlotGUI:
                 sorted_filename = f"{name_root}_sortedX{x_col}{ext}"
             sorted_filepath = os.path.join(temp_dir, sorted_filename)
 
-            if os.path.exists(sorted_filepath):
+            # [수정 - 버그] 캐시 존재 여부만 보고 재사용해서, 원본 dat_file이
+            # 캐시 생성 이후에 덮어써지면(예: 같은 경로로 시뮬레이션을 다시
+            # 돌린 경우) 낡은 정렬 파일을 계속 돌려줘 plot에 옛날 데이터가
+            # 조용히 나오는 문제가 있었음 - 원본이 캐시보다 최신이면 무효화
+            # 하고 다시 만든다.
+            if os.path.exists(sorted_filepath) and os.path.getmtime(sorted_filepath) >= os.path.getmtime(dat_file):
                 return sorted_filepath
 
             # 파서로 Cathena/Generic 여부와 무관하게 데이터 시작 줄과 변수명을 동일한 방식으로 판단
-            dat_info = self.parser.parse(dat_file)
+            # (호출부가 이미 파싱해둔 결과를 넘겼으면 재사용 - 위 dat_info 파라미터 참고)
+            if dat_info is None:
+                dat_info = self.parser.parse(dat_file)
 
             with open(dat_file, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
@@ -5947,7 +5926,10 @@ class CathPlotGUI:
                     # 회전 적용 실패 - 원래(비회전) 좌표계로 되돌려서 그린다
                     fit_w, fit_h = width, height
                     if frame_w and frame_h:
+                        # [수정 - 버그] frame_aspect가 정의된 적이 없어 이 분기(회전
+                        # 실패 시 폴백)에 들어오면 NameError로 인쇄 자체가 실패했음.
                         fit_aspect = fit_w / fit_h
+                        frame_aspect = frame_w / frame_h
                         if frame_aspect > fit_aspect:
                             dest_w, dest_h = fit_w, int(fit_w / frame_aspect)
                         else:
