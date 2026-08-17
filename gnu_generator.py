@@ -1132,7 +1132,13 @@ class GnuplotGenerator:
         # 보이게 됐음 - 같은 포맷별 축소 비율을 여기도 그대로 곱한다.
         _tic_len_fmt_mult = {"png": 2 / 3, "pdf": 2 / 3, "svg": 0.8 * 0.8}.get((fmt or "").lower(), 1.0)
         TIC_LEN_IN = 1.5 * 0.00615 * font_pt * _tic_len_fmt_mult
-        FRAME_GAP_IN = 1.5 * TIC_LEN_IN
+        # [수정 - 요청] "box와 axis frame 간격이 너무 큼(major tic 길이의
+        # 1.5배로, 또는 지금의 2/3 정도로 줄여줄 것)" - TIC_LEN_IN 자체가
+        # 이미 "실측 tic 길이 * 1.5"로 정의돼 있는데(위 주석), 여기서 다시
+        # 1.5배를 곱해서 최종 간격이 실측 tic 길이의 2.25배(1.5*1.5)까지
+        # 불어나 있었음 - 요청하신 "1.5배"(=TIC_LEN_IN 자체를 그대로 씀,
+        # 2.25배의 정확히 2/3)로 되돌린다.
+        FRAME_GAP_IN = TIC_LEN_IN
         FRAME_MARGIN_X = FRAME_GAP_IN / max(axis_w_in, 0.5)  # plot 테두리(frame)와 박스 사이 가로 간격
         FRAME_MARGIN_Y = FRAME_GAP_IN / max(axis_h_in, 0.3)  # 세로 간격(동일한 물리 거리)
 
@@ -1596,39 +1602,57 @@ class GnuplotGenerator:
                 # 폭 차이 자체를 없앤다(대신 dash-dot처럼 두 종류가 섞인
                 # 패턴 표현은 포기 - solid/dash/dot 3단계 굵기·간격 구분만
                 # 유지).
-                # [수정 - 버그, 진짜 근본 원인] "style마다 길이가 다르고
-                # dash가 너무 짧다"는 계속 재현됐는데, 실제로 PIL로 폰트를
-                # 직접 렌더링해서 확인해보니 dash/dot 계열로 썼던 box-drawing
-                # 문자(U+254C~U+2509 등)를 Malgun Gothic이 아예 갖고 있지
-                # 않아서 전부 빈 사각형(폰트에 없는 글자 표시, "tofu")으로
-                # 찍히고 있었음 - 유일하게 실제 "선"으로 그려진 건 solid에
-                # 쓴 U+2500/2501뿐이었음. 실제 렌더링 이미지를 직접 그려서
-                # 눈으로 확인함(box-drawing 문자 10종 중 8종이 빈 사각형).
-                # 이 폰트에 실제로 있고 육안으로 구분되는 문자로 교체한다:
-                # dash="-"(하이픈), dot="·"(가운뎃점), dashdot/dashdotdot은
-                # "•"(불릿, 가운뎃점보다 굵고 커서 구분됨). 그리고 목표는
-                # "잉크가 같은 양"이 아니라 "샘플선이 차지하는 가로 폭이
-                # curve마다 같아야 함"이므로, 같은 폰트로 각 문자의 실제
-                # advance width(칸 폭)를 PIL로 실측해 그 비율의 역수를
-                # 글자수 배율로 쓴다(문자 폭이 solid의 40%면 글자수를 2.5배로
-                # - 그래야 총 렌더 폭이 solid와 같아짐). solid=0.6배가 이미
-                # 적정하다고 확인됐으므로 그 기준에 맞춰 비율을 재계산함
-                # (실측: 40pt 기준 advance폭 solid=40.0, "-"=16.4, "·"=8.75,
-                # "•"=16.7 - solid 대비 각각 2.44/4.57/2.40배 좁음).
-                _GLYPH_BY_STYLE = {
-                    "solid": "━", "dash": "-", "shortdash": "-",
-                    "dot": "·", "dashdot": "•", "dashdotdot": "•",
+                # [수정 - 버그, 근본 원인 재확인] "style마다 길이가 여전히
+                # 제각각이고 dash가 짧다"가 계속 재현됨(2/4/5번째 줄 등) -
+                # 이전 수정은 style마다 "다른 글자"(-,·,•)를 쓰고 그 사이의
+                # advance width 비율을 PIL로 실측해 글자수 배율로 보정했는데,
+                # 이 실측이 PIL(freetype)이지 실제 화면 터미널(windows, GDI)
+                # 렌더러 기준이 아니라서 두 렌더러의 실제 글자 폭이 서로
+                # 어긋나면 style별 길이가 다시 벌어짐 - 근본적으로 "여러
+                # 다른 글자의 폭 비율"에 기대는 방식 자체가 렌더러가 바뀌면
+                # 깨지기 쉬움. 이미 정확하다고 확인된 solid 글자("━") 하나만
+                # 모든 style에 공통으로 쓰고(비교할 다른 글자의 폭 자체가
+                # 필요 없어짐), style 구분은 이 글자와 빈칸(space)의 반복
+                # 리듬(잉크몇글자+빈칸몇글자)으로만 표현한다.
+                _INK_CHAR = "━"
+                # [수정] "dash를 더 길게" 요청 - dash 잉크 연속 길이를
+                # shortdash보다 길게 해서 뚜렷하게 길어 보이게 함. 각 style
+                # 반복 단위(ink_run+gap_run 글자)가 목표 글자수(n_total) 안에
+                # 최소 1번은 들어가야 빈칸이 실제로 보이므로, 단위를 작게
+                # (2~4글자) 유지해 작은 legend에서도 패턴이 드러나게 함.
+                # [수정 - 버그] "4/5/6번째가 서로 다른데 똑같이 보임(특히
+                # 5번째가 2번째와 거의 동일)" - dash/dashdot/dashdotdot을
+                # 전부 같은 (2,1) 리듬으로 묶어놨던 게 원인. 6개 style이
+                # 서로 겹치지 않는 고유한 (ink,gap) 조합을 쓰도록 전부
+                # 다시 정함.
+                # [수정] legend 샘플 영역 자체가 몇 글자 안 되는 작은 경우가
+                # 흔해서(실측 3~5자), ink_run이 목표 글자수를 넘으면 그
+                # style만 빈칸 없이 solid처럼 보여버림 - dash를 3->2로 낮춰
+                # 어지간히 작은 legend에서도 최소한의 빈칸(구분)이 남게 함.
+                _RHYTHM_BY_STYLE = {  # (연속 잉크 글자수, 빈칸 글자수)
+                    "solid": (1, 0), "dash": (2, 1), "shortdash": (1, 1),
+                    "dot": (1, 2), "dashdot": (2, 2), "dashdotdot": (1, 3),
                 }
-                _glyph_unit = _GLYPH_BY_STYLE.get(linestyle, "━")
-                # [수정] "dash 길이를 더 길게" - 실측 폭 기준(1.46)보다 더
-                # 길게 요청받아 1.5배 추가로 키움.
-                _LEN_MULT_BY_STYLE = {
-                    "solid": 0.6, "dash": 2.2, "shortdash": 2.2,
-                    "dot": 2.74, "dashdot": 2.0, "dashdotdot": 2.0,
-                }
+                _ink_run, _gap_run = _RHYTHM_BY_STYLE.get(linestyle, (1, 0))
+                # solid 글자("━") 실측 배율(0.6)은 그대로 유지 - 모든 style이
+                # 이제 같은 글자를 쓰므로 이 하나의 배율만 공통으로 적용하면
+                # 전부 정확히 같은 물리 폭에 맞춰짐(전엔 style별로 각기 다른
+                # -불확실한- 배율을 따로 뒀던 것 자체가 "제각각"의 원인).
                 _base_n_chars = max((SAMPLE_W * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9), 1.0)
-                _n_total_chars = max(int(round(_base_n_chars * _LEN_MULT_BY_STYLE.get(linestyle, 1.0))), 2)
-                _glyph_run = (_glyph_unit * (_n_total_chars // max(len(_glyph_unit), 1) + 2))[:_n_total_chars]
+                _n_total_chars = max(int(round(_base_n_chars * 0.6)), 2)
+                if _gap_run <= 0 or _n_total_chars <= _ink_run:
+                    _glyph_run = _INK_CHAR * _n_total_chars
+                else:
+                    # [수정 - 버그] 짧은 문자열을 끝까지 잉크로 다시 채우던
+                    # 이전 시도는 결국 매번 "빈칸 없는 완전한 잉크"로
+                    # 되돌아가 버려(레퍼토리가 solid와 구분이 안 됨) 오히려
+                    # 문제를 재현시켰음 - 대신 마지막 빈칸만 정리(rstrip)하고
+                    # 그대로 둔다. 그 결과 style별 길이 차이는 최대
+                    # gap_run(1~2글자)로 확실히 제한되고(이전처럼 예측 불가한
+                    # 큰 편차가 아님), 패턴(빈칸)도 실제로 보인다.
+                    _unit = _INK_CHAR * _ink_run + " " * _gap_run
+                    _reps = _n_total_chars // max(len(_unit), 1) + 2
+                    _glyph_run = (_unit * _reps)[:_n_total_chars].rstrip(" ") or _INK_CHAR
                 _dx_chars = ((sample_mid_x - _box_cx) * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9)
                 _dy_chars = ((row_y - _box_cy) * axis_h_in) / max(_GP_CHAR_H_IN, 1e-9)
                 lines.append(
