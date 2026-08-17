@@ -4990,6 +4990,91 @@ class CathPlotGUI:
         except OSError:
             return None
 
+    def _write_anim_ctrl(self, ctrl_path, paused, frame_pause, exit_flag=0):
+        """[추가 - space bar 재설계] 실행 중인 애니메이션(gnuplot)에 값을
+        전달하는 작은 제어 파일을 다시 쓴다. gnuplot이 파일을 읽는 도중에
+        걸려 절반만 써진 내용을 읽지 않도록, 임시 파일에 먼저 쓰고
+        os.replace로 원자적으로 교체한다(같은 드라이브 안에서는 Windows도
+        원자적 교체가 보장됨)."""
+        try:
+            tmp_path = ctrl_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(
+                    f"paused_anim = {1 if paused else 0}\n"
+                    f"exit_anim = {1 if exit_flag else 0}\n"
+                    f"frame_pause_anim = {frame_pause:.6f}\n"
+                )
+            os.replace(tmp_path, ctrl_path)
+        except OSError:
+            pass
+
+    def _open_animation_control_panel(self, ctrl_path, initial_frame_pause):
+        """[추가 - 근본 원인 재설계] "Animation 창에서 space bar가 안 먹힘" -
+        이전엔 gnuplot 자체의 키보드 bind(Space=일시정지, +/-=속도, Q=종료)에
+        의존했는데, 실측(화면에 키 입력 감지 횟수를 표시해 직접 확인)으로
+        gnuplot 창이 실제로 키보드 포커스를 못 받는 것이 확정됨 - Windows가
+        배경(콘솔 숨김) 프로세스가 다른 창에 SetForegroundWindow로 포커스를
+        강제로 넘기는 것을 보안상 막고 있어서(포커스 스틸링 방지), 키 입력이
+        항상 CathPlot(Tk) 창으로 가버리고 gnuplot의 bind는 영영 안 걸림.
+        이건 우리 코드로 못 뚫는 OS 제약이라 "gnuplot 창이 포커스를 가진다"는
+        전제 자체를 버리고, 항상 포커스/클릭이 오는 CathPlot 쪽에 이 작은
+        컨트롤 창을 띄운다 - 버튼을 누르면 gnu_generator.create_animation_
+        script가 만들어둔 제어 파일(ctrl_path)에 값을 써주고, 실행 중인
+        gnuplot이 매 프레임 그 파일을 load해서 반영한다(키보드 포커스와
+        완전히 무관 - 실측으로 pause/exit 둘 다 정상 동작 확인됨)."""
+        state = {"paused": False, "frame_pause": initial_frame_pause}
+
+        panel = tk.Toplevel(self.root)
+        panel.title("Animation Control")
+        panel.resizable(False, False)
+        try:
+            panel.geometry(f"+{self.root.winfo_x() + 40}+{self.root.winfo_y() + 40}")
+        except Exception:
+            pass
+
+        ttk.Label(panel, text="애니메이션 실행 중 - 아래 버튼으로 직접 제어",
+                  font=("Malgun Gothic", 9)).pack(padx=12, pady=(10, 6))
+
+        btn_row = ttk.Frame(panel)
+        btn_row.pack(padx=12, pady=2)
+
+        pause_btn = tk.Button(btn_row, text="Pause", width=9, font=("Malgun Gothic", 9, "bold"))
+
+        def toggle_pause():
+            state["paused"] = not state["paused"]
+            pause_btn.config(text="Resume" if state["paused"] else "Pause")
+            self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"])
+
+        pause_btn.config(command=toggle_pause)
+        pause_btn.pack(side="left", padx=3)
+
+        def speed_down():
+            state["frame_pause"] = state["frame_pause"] * 2.0
+            self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"])
+
+        def speed_up():
+            state["frame_pause"] = max(state["frame_pause"] * 0.5, 0.001)
+            self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"])
+
+        tk.Button(btn_row, text="- Slower", width=9, command=speed_down).pack(side="left", padx=3)
+        tk.Button(btn_row, text="+ Faster", width=9, command=speed_up).pack(side="left", padx=3)
+
+        def do_exit():
+            self._write_anim_ctrl(ctrl_path, False, state["frame_pause"], exit_flag=1)
+            panel.destroy()
+
+        pal = self.PALETTE
+        tk.Button(
+            panel, text="Exit Animation", width=16, font=("Malgun Gothic", 9, "bold"),
+            bg=pal.get("danger", "#c0392b"), fg="white",
+            activebackground=pal.get("danger_dark", "#962d22"), activeforeground="white",
+            command=do_exit,
+        ).pack(pady=(6, 10))
+
+        # 패널을 그냥 닫아도(X) gnuplot 애니메이션 자체는 원래 진행 시간대로
+        # 계속 돌아가게 둔다(패널=제어 편의 도구일 뿐, 닫는다고 애니메이션이
+        # 강제 종료되면 오히려 불편함) - 기본 동작 그대로 두고 별도 처리 없음.
+
     def execute_plot_pipeline(self, mode="Interactive", custom_filepath=None, custom_format=None):
         # 연타(더블클릭)로 인해 gnuplot 창이 동시에 여러 개 뜨는 것을 방지하기 위한 디바운스 가드
         import time
@@ -5296,6 +5381,12 @@ class CathPlotGUI:
                         _msg += f"\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
                     messagebox.showwarning("PLOT", _msg)
                     generator.last_process = None
+                elif getattr(generator, "last_anim_ctrl_path", None):
+                    # [추가 - space bar 재설계] 애니메이션이 정상적으로 떠 있으면
+                    # (크래시 아님) Pause/Speed/Exit 컨트롤 패널을 띄운다.
+                    self._open_animation_control_panel(
+                        generator.last_anim_ctrl_path, generator.last_anim_frame_pause
+                    )
 
             # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로
             # 고정되던 버그. 같은 Plot Title로 Interactive PLOT을 여러 번 누르면

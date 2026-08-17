@@ -550,6 +550,12 @@ class GnuplotGenerator:
         self.use_default_styles = True
         self.custom_export_path = None
         self.last_process = None
+        # [추가] Interactive 애니메이션 실행 중 CathPlot의 Pause/Speed/Exit
+        # 버튼이 실행 중인 gnuplot에 값을 전달하는 파일 경로/초기 프레임
+        # 간격(초) - create_animation_script가 채우고, GUI가 읽어서 컨트롤
+        # 패널을 만든다(gnuplot 키보드 bind에 의존하지 않는 방식).
+        self.last_anim_ctrl_path = None
+        self.last_anim_frame_pause = None
         self.last_size_warning = None  # 종이 여백 부족으로 plot 크기를 자동 축소했을 때 메시지가 여기 담김
         self.warnings = []  # create_script/create_multiplot_script 호출 중 발견된 경고 메시지 목록(legend 폰트 과대 등)
 
@@ -3639,24 +3645,44 @@ class GnuplotGenerator:
             # 애니메이션이 도는 동안엔 "Progress N%"만 보이고 조작법이 안
             # 보였음 - 매 프레임 갱신하는 라벨 문구에 조작법을 처음부터
             # 같이 넣는다.
-            # [추가 - 진단용] "space bar가 계속 안 먹힘"이 실제 재현되는데,
-            # 원격에서는 이 앱과 똑같은 방식(gnuplot -persist + bind + 숫자
-            # pause)으로 키 입력이 실제로 인식되는지 직접 검증할 방법이 없어
-            # (자동화된 키 입력 시뮬레이션이 이 환경에서 신뢰할 수 없음이
-            # 확인됨) - 화면에 "키 입력 감지 횟수"를 실시간으로 보여줘서,
-            # 다음 실사용 테스트에서 스페이스바를 눌렀을 때 이 숫자가
-            # 조금이라도 올라가는지 직접 눈으로 확인할 수 있게 한다(0에
-            # 머물면 bind 자체가 안 걸리는 문제, 숫자는 올라가는데 애니메이션
-            # 동작이 그대로면 이후 로직 문제 - 원인을 명확히 구분 가능).
+            # [수정 - 근본 원인 재설계] "space bar가 계속 안 먹힘" - 지난
+            # 세션에서 화면에 "키 입력 감지 횟수"를 실시간 표시해 실측한 결과
+            # 이 숫자가 스페이스바를 눌러도 계속 0에서 안 움직이는 것을
+            # 확인함(bind 자체가 아예 안 걸림). 원인: gnuplot 창은 CathPlot이
+            # 백그라운드(콘솔 숨김) 프로세스로 띄운 별도 창이라, Windows가
+            # 배경 프로세스의 SetForegroundWindow 호출을 조용히 무시하는
+            # 보안 정책(포커스 스틸링 방지) 때문에 _force_focus_window_by_title이
+            # 실제로는 포커스를 못 넘겨주고 있었던 것으로 추정 - 키 입력이
+            # 항상 CathPlot(Tk) 창으로 가버려 gnuplot의 bind가 영영 안 걸림.
+            # 이건 우리 코드로 뚫을 수 없는 OS 레벨 제약이라, "gnuplot 창이
+            # 키보드 포커스를 갖는다"는 전제 자체를 버린다 - 대신 CathPlot(항상
+            # 포커스/마우스 클릭이 오는 쪽) 창에 Pause/Speed/Exit 버튼을 만들고,
+            # 그 버튼이 작은 제어 파일(ctrl_path)에 원하는 값을 적어두면,
+            # 실행 중인 gnuplot이 매 프레임마다 그 파일을 load해서 반영한다
+            # (파일 기반 IPC - 키보드 포커스와 완전히 무관하게 항상 동작).
+            # bind는 혹시 포커스가 우연히 gnuplot 쪽에 있는 환경(예: 콘솔에서
+            # 직접 gnuplot.exe로 연 경우)을 위한 보너스로 그대로 남겨둔다.
             lines.append("key_hits = 0")
             lines.append('bind " " "paused_anim = !paused_anim; key_hits = key_hits + 1"')
             lines.append('bind "q" "exit_anim = 1; key_hits = key_hits + 1"')
             lines.append('bind "+" "frame_pause_anim = frame_pause_anim*0.5; key_hits = key_hits + 1"')
             lines.append('bind "-" "frame_pause_anim = frame_pause_anim*2.0; key_hits = key_hits + 1"')
-            _help_text = "Space: 일시정지/재개, +/-: 속도, Q: 종료 (키 입력 감지: %d회)"
+            # [추가] 파일 기반 제어 - CathPlot의 Pause/Speed/Exit 버튼이 이
+            # 파일에 paused_anim/frame_pause_anim/exit_anim 값을 다시 써주면,
+            # 아래 루프가 매 프레임(그리고 일시정지로 대기하는 동안도 0.1초
+            # 간격으로) 이 파일을 load해서 그 값을 그대로 받아들인다. 이
+            # 시점엔 아직 파일이 없을 수 있어(GUI가 launch 이후에야 만들 수도
+            # 있음) - load 대상이 없으면 gnuplot이 에러를 내므로, Python
+            # 쪽에서 프로세스를 띄우기 "전에" 반드시 기본값으로 미리 만들어
+            # 둔다(아래 Popen 앞부분 참고).
+            ctrl_path = outfile.rsplit(".", 1)[0] + "_ctrl.plt"
+            _ctrl_path_gp = ctrl_path.replace(chr(92), "/")
+            lines.append(f"_anim_ctrl_path = '{_ctrl_path_gp}'")
+            _help_text = "Space/버튼: 일시정지/재개, +/-: 속도, Q/Exit: 종료 (키 입력 감지: %d회)"
             lines.append("do for [_frame_i=0:n_frames_anim] {")
+            lines.append("    load _anim_ctrl_path")
             lines.append("    if (exit_anim) { break }")
-            lines.append("    while (paused_anim && !exit_anim) { pause 0.1 }")
+            lines.append("    while (paused_anim && !exit_anim) { load _anim_ctrl_path; pause 0.1 }")
             lines.append("    if (exit_anim) { break }")
             lines.append("    thresh = xmin_anim + (xmax_anim - xmin_anim) * _frame_i / n_frames_anim")
             lines.append("    set arrow 9999 from thresh, graph 0 to thresh, graph 1 nohead front lw 1.5 lc rgb \"purple\" dashtype 2")
@@ -3698,14 +3724,26 @@ class GnuplotGenerator:
         script_path = outfile.rsplit(".", 1)[0] + ".plt"
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(script_text)
+        # [추가 - space bar 재설계] gnuplot의 루프가 첫 프레임부터 이 파일을
+        # load하므로, 프로세스를 띄우기 전에 반드시 기본값으로 미리 만들어
+        # 둔다(없으면 load가 에러를 내고 애니메이션이 즉시 죽음). CathPlot의
+        # Pause/Speed/Exit 버튼은 이후 이 파일을 다시 써서 실행 중인
+        # gnuplot에 값을 전달한다 - self.last_anim_ctrl_path/last_anim_
+        # frame_pause를 호출자(GUI)가 읽어가서 버튼을 만든다.
+        with open(ctrl_path, "w", encoding="utf-8") as f:
+            f.write("paused_anim = 0\nexit_anim = 0\nframe_pause_anim = %.6f\n" % frame_pause)
+        self.last_anim_ctrl_path = ctrl_path
+        self.last_anim_frame_pause = frame_pause
         self.last_process = subprocess.Popen(
             [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
             stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
         )
-        # [추가 - 버그 수정] "space bar가 안 먹힘" - bind " "는 이미 올바른데도
-        # 재현된다는 건 키 입력이 gnuplot 창이 아니라 포커스를 그대로 쥐고
-        # 있는 CathPlot 창으로 가고 있다는 뜻 - 창 제목으로 새로 뜬 gnuplot
-        # 창을 찾아 강제로 앞에 띄우고 포커스를 준다.
+        # [수정 - 근본 원인 재설계, 위 참고] "space bar가 안 먹힘" - bind " "는
+        # 이미 올바른 문법인데도 실측(키 입력 감지 카운터가 0에서 안 움직임)
+        # 결과 gnuplot 창이 실제로 키보드 포커스를 못 받는 것으로 확인됨.
+        # 아래 포커스 강제 시도는 (환경에 따라 우연히 통하는 경우를 위해)
+        # 부작용 없으니 그대로 남겨두되, 이제 핵심 컨트롤은 위에서 만든
+        # ctrl_path 파일 기반 방식(포커스와 무관하게 항상 동작)이 담당한다.
         _force_focus_window_by_title(os.path.splitext(os.path.basename(outfile))[0])
         return outfile
 
