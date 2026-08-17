@@ -1076,6 +1076,23 @@ class CathPlotGUI:
         pal = self.PALETTE
         _accent_btn(self.button_frame, "PLOT", pal["accent"], pal["accent_dark"],
                     lambda: self.execute_plot_pipeline("Interactive"), side="left", pady=2)
+
+        # [추가 - 요청] "X변수 변화에 따른 Y변수들의 progress를 시각화" - PLOT
+        # 옆에 Animate 체크박스(기본 꺼짐 - 평소엔 지금처럼 정적으로 뜸)와
+        # 재생 시간(초) 입력칸을 둔다. 체크하고 PLOT을 누르면 화면(Interactive)
+        # 창이 이 재생 시간 안에 X 전체 범위를 끝내는 애니메이션으로 뜬다
+        # (실행 중 Space=일시정지/재개, +/-=속도, Q=종료 - 진행률/현재 X값도
+        # 화면에 표시됨). 체크한 채 SAVE를 누르면(현재 화면 설정 선택 시)
+        # SAVE 버튼 자체가 애니메이션 GIF 저장으로 동작한다(execute_save_dialog
+        # 참고) - 별도 버튼을 만드는 대신 기존 SAVE를 그대로 재사용.
+        self.animate_var = tk.BooleanVar(value=False)
+        self.animate_duration_var = tk.StringVar(value="20")
+        animate_f = ttk.Frame(self.button_frame)
+        animate_f.pack(side="left", padx=(8, 0))
+        self._mk_check(animate_f, "Animate", self.animate_var, color="accent", side="left")
+        ttk.Label(animate_f, text="Time(s):").pack(side="left", padx=(4, 1))
+        self._mk_entry(animate_f, self.animate_duration_var, width=4, color="accent").pack(side="left")
+
         _accent_btn(self.button_frame, "SAVE", pal["accent2"], pal["accent2_dark"],
                     self.execute_save_dialog, side="left", padx=5, pady=2)
         _accent_btn(self.button_frame, "PRINT", pal["accent3"], pal["accent3_dark"],
@@ -5212,11 +5229,39 @@ class CathPlotGUI:
 
             plotdef, _font_warn = self._check_and_fix_fonts(plotdef)
             generator = GnuplotGenerator(self.plot_dir)
-            generator.create_script(
-                plotdef, outfile, fmt=fmt,
-                annotations=plotdef.annotations, arrows=plotdef.arrows,
-                circles=getattr(plotdef, "circles", [])
-            )
+            # [추가 - 요청] "X변수 변화에 따른 Y변수들의 progress를 시각화" -
+            # Animate 체크박스가 켜져 있고 화면(Interactive)일 때만 애니메이션
+            # 모드로 생성 - 파일 저장(fmt != interactive)에는 의미가 없으므로
+            # 그 경우는 체크돼 있어도 무시하고 기존처럼 정적으로 그린다.
+            # [추가] "Save GIF" 버튼(execute_save_animation_gif)이 이 함수를
+            # custom_format="gif"로 불러서 재사용 - 애니메이션 GIF 파일로 저장.
+            if fmt == "gif":
+                try:
+                    duration_sec = float((self.animate_duration_var.get() or "20").strip())
+                except ValueError:
+                    duration_sec = 20.0
+                _tmp_plt = os.path.join(self.plot_dir, f".cathplot_anim_{uuid.uuid4().hex}.plt")
+                generator.create_animation_script(
+                    plotdef, _tmp_plt,
+                    annotations=plotdef.annotations, arrows=plotdef.arrows,
+                    circles=getattr(plotdef, "circles", []), duration_sec=duration_sec, gif_path=outfile,
+                )
+            elif getattr(self, "animate_var", None) is not None and self.animate_var.get() and fmt == "interactive":
+                try:
+                    duration_sec = float((self.animate_duration_var.get() or "20").strip())
+                except ValueError:
+                    duration_sec = 20.0
+                generator.create_animation_script(
+                    plotdef, outfile,
+                    annotations=plotdef.annotations, arrows=plotdef.arrows,
+                    circles=getattr(plotdef, "circles", []), duration_sec=duration_sec,
+                )
+            else:
+                generator.create_script(
+                    plotdef, outfile, fmt=fmt,
+                    annotations=plotdef.annotations, arrows=plotdef.arrows,
+                    circles=getattr(plotdef, "circles", [])
+                )
             _all_warn = _font_warn + generator.warnings
             if _all_warn:
                 messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
@@ -5517,6 +5562,16 @@ class CathPlotGUI:
           (Multi Print/Save는 자체 orientation 선택이 있어서 여기서는 중복으로
           다시 안 물어봄 - 프린터 선택창은 프린터만 고름)
         """
+        # [추가 - 요청] "Animate 체크 상태에서 Print를 누르면?" - 인쇄는
+        # 물리 종이라 애니메이션 자체가 불가능함(항상 정적 1장) - 사용자가
+        # Animate를 켜둔 걸 잊고 눌렀을 때 "왜 안 움직이지"로 헷갈리지 않게
+        # 한 번 알려준다(진행은 그대로, 취소 아님 - 정적 인쇄로 계속됨).
+        if getattr(self, "animate_var", None) is not None and self.animate_var.get():
+            messagebox.showinfo(
+                "Animate 켜짐",
+                "Print는 애니메이션을 지원하지 않아 현재 화면(정적) 기준으로 인쇄됩니다.\n"
+                "애니메이션을 파일로 남기려면 'Save GIF' 버튼을 이용하세요."
+            )
         chosen_plotdef, orientation = self._pick_plot_to_print_dialog()
         if chosen_plotdef is False:
             return  # 사용자가 취소함
@@ -6154,32 +6209,57 @@ class CathPlotGUI:
         """SAVE도 PRINT처럼, 저장된(Interactive로 그렸던) plot이 있으면 무조건
         현재 화면 설정으로만 저장하지 않고 어떤 것을 + 어떤 용지 방향으로
         저장할지 먼저 물어본다 (_pick_plot_to_save_dialog 참고 - PRINT의
-        _pick_plot_to_print_dialog와 동일한 패턴)."""
+        _pick_plot_to_print_dialog와 동일한 패턴).
+        [추가 - 요청] "Animation 모드에서 SAVE 누르면 GIF로 저장" - 별도 버튼을
+        새로 만드는 대신, Animate 체크박스가 켜져 있고 "현재 화면 설정"을
+        고른 경우엔 이 SAVE 버튼 자체가 애니메이션 GIF 저장으로 동작한다
+        (파일명은 기본값 제시, 확장자도 .gif 하나만 - PDF/PNG 등 정적
+        포맷 선택 자체가 애니메이션에는 의미 없으므로)."""
         chosen_plotdef, orientation = self._pick_plot_to_save_dialog()
         if chosen_plotdef is False:
             return  # 사용자가 취소함
         # chosen_plotdef가 None이면 "현재 화면 설정"을 고른 것 - 아래 기존 방식 그대로 진행
+
+        _animate_on = getattr(self, "animate_var", None) is not None and self.animate_var.get()
+        if _animate_on and chosen_plotdef is not None:
+            # 캐시된(이전에 Interactive로 그려둔) plot을 고른 경우는 "지금"의
+            # Animate/재생시간 설정과 그 plot이 안 맞을 수 있어 혼동을 피하려고
+            # 이 경우만 기존처럼 정적 저장으로 안내한다(현재 화면 설정을
+            # 고르면 위 애니메이션 저장이 그대로 적용됨).
+            messagebox.showinfo(
+                "Animate 켜짐",
+                "고르신 것은 예전에 그려둔 화면이라 지금의 Animate 설정과 안 맞을 수 있어\n"
+                "정적으로 저장됩니다. 애니메이션 GIF는 '현재 화면 설정'을 고른 상태에서\n"
+                "저장해 주세요."
+            )
 
         raw_title = self.filename_var.get().strip() or "CathPlot"
         next_id = self.title_counters.get(raw_title, 0) or 1
         safe_title = "".join([c for c in raw_title if c.isalnum() or c in ("_", "-")]).strip() or "CathPlot"
         default_name = f"{safe_title}_{next_id}"
 
-        # [수정] "이미지 sample 순서는 png, pdf, jpg, svg, emf, eps 순으로"
-        file_types = [
-            ("PNG Image (*.png)", "*.png"),
-            ("Portable Document Format (*.pdf)", "*.pdf"),
-            ("JPEG Image (*.jpg)", "*.jpg"),
-            ("SVG Vector Graphic (*.svg)", "*.svg"),
-            ("Enhanced Metafile (*.emf)", "*.emf"),
-            ("Encapsulated PostScript (*.eps)", "*.eps"),
-        ]
-        selected_path = filedialog.asksaveasfilename(initialdir=self.plot_dir, initialfile=default_name, title="Save Plot As...", filetypes=file_types, defaultextension=".png")
-        if not selected_path: return
+        if _animate_on and chosen_plotdef is None:
+            default_name += "_anim"
+            file_types = [("Animated GIF (*.gif)", "*.gif")]
+            selected_path = filedialog.asksaveasfilename(initialdir=self.plot_dir, initialfile=default_name, title="Save Animation As...", filetypes=file_types, defaultextension=".gif")
+            if not selected_path: return
+            fmt = "GIF"
+        else:
+            # [수정] "이미지 sample 순서는 png, pdf, jpg, svg, emf, eps 순으로"
+            file_types = [
+                ("PNG Image (*.png)", "*.png"),
+                ("Portable Document Format (*.pdf)", "*.pdf"),
+                ("JPEG Image (*.jpg)", "*.jpg"),
+                ("SVG Vector Graphic (*.svg)", "*.svg"),
+                ("Enhanced Metafile (*.emf)", "*.emf"),
+                ("Encapsulated PostScript (*.eps)", "*.eps"),
+            ]
+            selected_path = filedialog.asksaveasfilename(initialdir=self.plot_dir, initialfile=default_name, title="Save Plot As...", filetypes=file_types, defaultextension=".png")
+            if not selected_path: return
 
-        ext = os.path.splitext(selected_path)[1].lower().replace(".", "")
-        fmt_map = {"pdf": "PDF", "png": "PNG", "svg": "SVG", "jpg": "JPG", "jpeg": "JPG", "emf": "EMF", "eps": "EPS"}
-        fmt = fmt_map.get(ext, "PNG")
+            ext = os.path.splitext(selected_path)[1].lower().replace(".", "")
+            fmt_map = {"pdf": "PDF", "png": "PNG", "svg": "SVG", "jpg": "JPG", "jpeg": "JPG", "emf": "EMF", "eps": "EPS"}
+            fmt = fmt_map.get(ext, "PNG")
 
         if chosen_plotdef is None:
             # 현재 화면 설정 - PRINT와 동일하게, 선택한 방향에 맞춰 GUI의 frame

@@ -25,6 +25,35 @@ def _no_console_kwargs():
         kwargs["startupinfo"] = si
     return kwargs
 import uuid
+import time
+
+
+def _force_focus_window_by_title(title, timeout_sec=2.0):
+    """[추가 - 버그 수정] "Animation에서 space bar가 안 먹힘" - bind 자체는
+    고쳤는데도 재현됨 - Windows가 새로 뜬 gnuplot 창에 입력 포커스를 자동으로
+    주지 않아서(포커스 스틸링 방지), 사용자가 누른 space bar가 실제로는
+    포커스를 그대로 갖고 있는 CathPlot(Tk) 창으로 들어가 아무 반응이 없던
+    것으로 추정됨 - gnuplot 창을 제목으로 찾아 강제로 앞에 띄우고 포커스를
+    준다. Windows 전용(ctypes.windll) - 다른 OS에서는 조용히 아무것도
+    안 한다(이 프로그램 자체가 Windows 전용이라 실사용에 영향 없음)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+    except ImportError:
+        return
+    user32 = ctypes.windll.user32
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        hwnd = user32.FindWindowW(None, title)
+        if hwnd:
+            try:
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
+            return
+        time.sleep(0.1)
 
 # [수정] legend box 폭 계산에 쓰는 char_width_in 경험적 계수(아래 참고)는 원래
 # "맑은 고딕" 기준으로 실측(PyMuPDF)해서 얻은 값이라, 지정한 폰트가 시스템에
@@ -3288,6 +3317,178 @@ class GnuplotGenerator:
                 _want_texts.extend(_ln.strip() for _ln in (_raw or "").split("|") if _ln.strip())
             self._check_text_loss(outfile, fmt, _want_texts)
 
+        return outfile
+
+    def create_animation_script(self, plotdef, outfile, annotations=None, arrows=None, circles=None,
+                                 duration_sec=20.0, gif_path=None):
+        """[신규] X변수(보통 Time)가 늘어남에 따라 선택된 Y1/Y2 curve들이 전부
+        동시에 실시간으로 그려지는(progress) 애니메이션을 만든다. 기본은
+        Interactive 창(화면 전용)이고, gif_path를 주면 대신 그 경로에 애니메이션
+        GIF 파일로 저장한다(gnuplot의 gif animate 터미널 - 파일이라 재생 속도는
+        저장 시점에 delay로 굳어지므로 Start/Pause/+-/Q 같은 실시간 컨트롤은
+        의미가 없어 GIF 모드에서는 뺀다).
+
+        [설계] "한 프레임"을 데이터 행(row) 단위로 하면 행이 수만 개인 파일은
+        애니메이션이 끝없이 걸리고, 반대로 행이 적으면 뚝뚝 끊겨 보임 - 대신
+        X 전체 범위(xmin~xmax)를 duration_sec(초) 안에 끝내는 것을 고정하고,
+        그 사이를 N_FRAMES개로 균등 분할한 "X값 문턱값(threshold)"으로 매
+        프레임마다 "X <= threshold인 점만 그리기"를 반복한다(행 개수와 무관 -
+        데이터가 100행이든 10만행이든 항상 duration_sec 안에 끝남). 문턱값
+        필터는 gnuplot의 표준 "조건 거짓이면 1/0(정의되지 않음)으로 만들어
+        그 점을 건너뛰게" 하는 관용구를 씀.
+
+        [컨트롤 - Interactive만] gnuplot bind로 키보드 단축키를 건다 - Space:
+        일시정지/재개, Q: 종료, +/-: 속도(프레임당 대기시간)를 반씩 줄이거나
+        늘림. 기존 Interactive의 'R'(원래 범위로 리셋) 키와 안 겹치는 키만 골랐다.
+
+        [진행 표시] 현재 X 위치를 가리키는 세로선(playhead)과 진행률(%)/현재
+        X값 텍스트를 매 프레임 갱신해서(고정 ID로 set - "추가"가 아니라
+        "갱신") 얼마나 진행됐는지 한눈에 보이게 한다.
+
+        [재사용] 축/제목/legend/주석 등은 _build_plot_commands가 만드는 정적
+        plot 스크립트를 "그대로 한 번" 먼저 실행해서(그래야 auto range 등이
+        기존과 완전히 동일하게 결정됨) GPVAL_X_MIN/MAX로 실제 X 범위를 읽어온
+        뒤, 그 curve 명령들을 문턱값 필터가 걸린 버전으로 바꿔 반복문 안에서
+        다시 그린다 - 축 계산 로직을 새로 만들지 않고 기존 것을 그대로 씀."""
+        plot_dir = os.path.dirname(os.path.abspath(outfile))
+        os.makedirs(plot_dir, exist_ok=True)
+        is_gif = bool(gif_path)
+
+        _size_scale = self._compute_size_scale(plotdef)
+        # [수정 - 버그] "Animate 켜고 PLOT 누르면 일반 정적 plot이 잠깐 떴다가
+        # animation으로 바뀐다" - 실제 X 범위(GPVAL_X_MIN/MAX)를 구하려고
+        # 아래에서 정적 plot을 한 번 실행하는데, 예전엔 이걸 실제 화면
+        # 터미널("windows")을 이미 연 상태에서 실행해서 이 "범위 확정용" plot
+        # 자체가 화면에 그대로 그려져 버렸음(그 다음에야 animation 루프가
+        # 시작되어 그 위에 덮어 그림 - 이게 "깜빡"거리는 원인). gnuplot의
+        # "unknown" 터미널(화면에 아무것도 안 그리면서 GPVAL_* 등 계산은
+        # 그대로 수행하는 용도)로 먼저 이 범위 확정용 plot을 실행해 아무것도
+        # 안 보이게 하고, 범위를 다 구한 뒤에야 실제 터미널(화면 or GIF)을
+        # 연다 - set 명령(label/object/margin 등)은 터미널과 무관하게
+        # 세션에 그대로 남으므로 다시 선언할 필요 없음.
+        lines = [
+            "set encoding utf8",
+            "set term unknown",
+        ]
+        self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations,
+                                   arrows=arrows, circles=circles, panel_scale=_size_scale, fmt="interactive")
+
+        plot_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "plot \\"), None)
+        if plot_idx is None:
+            raise RuntimeError("애니메이션을 만들 커브가 없습니다(선택된 Y1/Y2 변수를 확인하세요).")
+
+        static_curve_lines = lines[plot_idx:]  # "plot \\" 줄부터 끝까지(마커 데이터블록 참조 포함) - "unknown" 터미널로 이미 실행됨(화면에 안 보임)
+
+        # curve 명령의 "using (X식):Y컬럼" 부분만 문턱값 필터로 감싼다 - 마커
+        # 명령("using 1:2", 괄호 없음)은 이 패턴에 안 걸려 그대로 통과(마커는
+        # 애니메이션 없이 항상 표시).
+        def _wrap_threshold(m):
+            expr = m.group(1)
+            return f"using (({expr})<=thresh ? ({expr}) : 1/0):{m.group(2)}"
+        animated_curve_lines = [re.sub(r"using \(([^)]+)\):(\d+)", _wrap_threshold, ln) for ln in static_curve_lines]
+
+        lines.append("xmin_anim = GPVAL_X_MIN")
+        lines.append("xmax_anim = GPVAL_X_MAX")
+
+        n_frames = 150
+        try:
+            duration_sec = max(float(duration_sec), 0.5)
+        except (TypeError, ValueError):
+            duration_sec = 20.0
+        frame_pause = duration_sec / n_frames
+
+        lines.append(f"n_frames_anim = {n_frames}")
+        lines.append(f"frame_pause_anim = {frame_pause:.6f}")
+
+        if is_gif:
+            # [GIF 저장] 실시간 재생이 아니라 파일로 프레임을 굽는 것이므로
+            # pause/bind(실시간 컨트롤)는 의미가 없음 - 재생 속도는 gif
+            # 터미널의 delay(1/100초 단위)에 그대로 반영해서 저장 시점에
+            # 고정한다. 위에서는 "unknown" 터미널로 범위만 구했으므로(화면에
+            # 아무것도 안 그려짐), 여기서 처음으로 실제 gif 터미널을 연다.
+            delay_cs = max(int(round(frame_pause * 100)), 2)  # 최소 2(=0.02초/프레임) - 0이면 일부 뷰어가 "가능한 빨리"로 해석해 재생이 너무 빨라짐
+            gif_w, gif_h = 900, 650
+            lines.append(f'set terminal gif animate delay {delay_cs} size {gif_w},{gif_h} optimize')
+            lines.append(f"set output '{gif_path.replace(chr(92), '/')}'")
+            lines.append("do for [_frame_i=0:n_frames_anim] {")
+            lines.append("    thresh = xmin_anim + (xmax_anim - xmin_anim) * _frame_i / n_frames_anim")
+            lines.append("    set arrow 9999 from thresh, graph 0 to thresh, graph 1 nohead front lw 1.5 lc rgb \"purple\" dashtype 2")
+            lines.append("    set label 9998 sprintf(\"Progress %.0f%%  (X=%.4g)\", 100.0*_frame_i/n_frames_anim, thresh) at graph 0.02, graph 0.95 front tc rgb \"purple\" font \",11\"")
+            lines.extend(animated_curve_lines)
+            lines.append("}")
+            lines.append("set output")
+        else:
+            # [수정 - 버그] 위 "unknown" 터미널 범위 계산이 끝난 뒤에야 실제
+            # 화면 터미널을 연다 - 이전엔 이 시점 이전에 이미 화면 터미널이
+            # 열려 있어서 범위 확정용 정적 plot 자체가 화면에 잠깐 보이는
+            # "깜빡임" 문제가 있었음.
+            lines.append(self._get_terminal_cmd("interactive", outfile, plotdef, panel_scale=_size_scale))
+            lines.append("paused_anim = 0")
+            lines.append("exit_anim = 0")
+            # [주의] 'R'(기존 범위 리셋)/'u'·'n'·'p'(gnuplot 기본 확대이력)와 안
+            # 겹치는 키만 사용.
+            # [수정 - 버그] "space bar가 안 먹힘" - gnuplot의 bind는 특수키
+            # 이름을 "Space"처럼 단어로 못 받고(직접 확인: "bind: cannot
+            # parse space/Space" 에러) 실제 스페이스바 문자 그 자체(따옴표
+            # 안의 빈칸 한 칸)로 지정해야 함 - 잘못된 키 이름이라 조용히
+            # 무시되고 있었음(스크립트 에러로 죽지는 않아서 못 알아챘음).
+            lines.append('bind " " "paused_anim = !paused_anim"')
+            lines.append('bind "q" "exit_anim = 1"')
+            lines.append('bind "+" "frame_pause_anim = frame_pause_anim*0.5"')
+            lines.append('bind "-" "frame_pause_anim = frame_pause_anim*2.0"')
+            lines.append("do for [_frame_i=0:n_frames_anim] {")
+            lines.append("    if (exit_anim) { break }")
+            lines.append("    while (paused_anim && !exit_anim) { pause 0.1 }")
+            lines.append("    if (exit_anim) { break }")
+            lines.append("    thresh = xmin_anim + (xmax_anim - xmin_anim) * _frame_i / n_frames_anim")
+            lines.append("    set arrow 9999 from thresh, graph 0 to thresh, graph 1 nohead front lw 1.5 lc rgb \"purple\" dashtype 2")
+            lines.append("    set label 9998 sprintf(\"Progress %.0f%%  (X=%.4g)\", 100.0*_frame_i/n_frames_anim, thresh) at graph 0.02, graph 0.95 front tc rgb \"purple\" font \",11\"")
+            lines.extend(animated_curve_lines)
+            lines.append("    pause frame_pause_anim")
+            lines.append("}")
+            lines.append("unset arrow 9999")
+            lines.append("set label 9998 \"Progress 100% - Space: 일시정지/재개, +/-: 속도, Q: 종료\" at graph 0.02, graph 0.95 front tc rgb \"purple\" font \",11\"")
+            lines.append("replot")
+            lines.append("pause mouse close")
+
+        script_text = "\n".join(lines)
+        gnuplot_exe = _resolve_gnuplot_exe()
+
+        if is_gif:
+            # 파일 산출물이라 Batch/Save와 동일하게 stdin으로 넘겨서 끝내고,
+            # 실패 시에만 디버깅용으로 스크립트를 남긴다(create_script 패턴과 동일).
+            result = subprocess.run(
+                [gnuplot_exe], input=script_text, text=True, encoding="utf-8", errors="replace",
+                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
+            )
+            if result.returncode != 0:
+                debug_path = os.path.join(plot_dir, f".cathplot_failed_anim_{uuid.uuid4().hex}.plt")
+                try:
+                    with open(debug_path, "w", encoding="utf-8") as f:
+                        f.write(script_text)
+                except OSError:
+                    debug_path = None
+                stderr_text = (result.stderr or "").strip()
+                msg = f"애니메이션 GIF 생성 실패 (반환 코드 {result.returncode})"
+                if stderr_text:
+                    msg += f":\n{stderr_text}"
+                if debug_path:
+                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
+                raise RuntimeError(msg)
+            return gif_path
+
+        script_path = outfile.rsplit(".", 1)[0] + ".plt"
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script_text)
+        self.last_process = subprocess.Popen(
+            [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
+            stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
+        )
+        # [추가 - 버그 수정] "space bar가 안 먹힘" - bind " "는 이미 올바른데도
+        # 재현된다는 건 키 입력이 gnuplot 창이 아니라 포커스를 그대로 쥐고
+        # 있는 CathPlot 창으로 가고 있다는 뜻 - 창 제목으로 새로 뜬 gnuplot
+        # 창을 찾아 강제로 앞에 띄우고 포커스를 준다.
+        _force_focus_window_by_title(os.path.splitext(os.path.basename(outfile))[0])
         return outfile
 
     _3D_PALETTE_MAP = {
