@@ -16,6 +16,7 @@ def _no_console_kwargs():
         kwargs["startupinfo"] = si
     return kwargs
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import traceback
 import time
 import glob
@@ -39,6 +40,13 @@ import pythoncom
 
 from data_parser import CathenaDatParser, save_json
 from gnu_generator import PlotDefinition, CurveDefinition, GnuplotGenerator
+
+# [추가] Batch Set/Queue - 항목마다 독립적인 gnuplot 프로세스를 순차로 하나씩
+# 기다리던 것을 병렬로 처리해 속도를 높인다. "무제한 동시 실행"은 gnuplot
+# 프로세스를 한꺼번에 너무 많이 띄워 메모리/핸들을 과하게 쓸 수 있어, CPU
+# 코어 수 기준으로 적당히 상한을 둔다(최대 4개 - 대부분의 PC에서 안전한
+# 선이면서도 순차 대비 체감 속도 개선은 확실함).
+_BATCH_MAX_WORKERS = min(4, os.cpu_count() or 2)
 
 COLOR_MAP = {
     "Auto": "",
@@ -123,6 +131,16 @@ class CathPlotGUI:
 
         # X축 변수 재정렬용 임시파일 캐시: {(dat_file, x_output_no): 임시파일경로}
         self.sorted_dat_cache = {}
+
+        # [추가] Batch Set/Queue 병렬화 대비 - resort_dat_file이 같은 정렬 캐시
+        # 파일(sorted_filepath)에 대해 "존재 확인 -> 없으면 새로 쓰기"를 하는데,
+        # 같은 dat 파일+X축을 쓰는 템플릿 여러 개가 동시에 처리되면 두 스레드가
+        # 동시에 같은 파일에 써서 깨질 수 있음 - 파일 경로별로 잠금을 나눠서
+        # (파일마다 다른 lock, 같은 파일끼리만 서로 기다림) 이 경쟁을 막는다.
+        # _resort_locks 자체(dict)에 새 lock을 추가하는 순간도 여러 스레드가
+        # 동시에 건드릴 수 있어 그 자체를 보호하는 작은 guard lock을 둔다.
+        self._resort_locks = {}
+        self._resort_locks_guard = threading.Lock()
 
         self.selected_y1_vars = {}
         self.selected_y2_vars = {}
@@ -2161,13 +2179,70 @@ class CathPlotGUI:
         )
         return outfile
 
+    def _process_one_batch_set_item(self, tpath, fmt, td3_data):
+        """_run_batch_set의 항목 하나(템플릿 1개)를 처리해서 결과를 dict로
+        반환한다(공유 리스트에 직접 쓰지 않음 - ThreadPoolExecutor로 여러
+        항목을 동시에 처리해도, 결과 취합은 항상 메인(관리) 스레드의
+        as_completed 루프 한 곳에서만 일어나 경쟁이 없다)."""
+        import json
+        tname = os.path.basename(tpath)
+        res = {"tname": tname, "saved": False, "saved_3d": False, "warnings": [], "errors": []}
+
+        try:
+            with open(tpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            res["errors"].append(f"{tname}: 템플릿 읽기 실패 ({e})")
+            return res
+
+        try:
+            plotdef = self._build_plotdef_from_template_data(data)
+        except Exception as e:
+            res["errors"].append(f"{tname}: {e}")
+            return res
+
+        raw_name = (data.get("filename") or "").strip() or os.path.splitext(tname)[0]
+        safe_name = "".join(c for c in raw_name if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
+        outfile = os.path.join(self.plot_dir, f"{safe_name}_batchset.{fmt}")
+
+        try:
+            plotdef, font_warn = self._check_and_fix_fonts(plotdef)
+            generator = GnuplotGenerator(self.plot_dir)
+            generator.create_script(plotdef, outfile, fmt=fmt,
+                                     annotations=plotdef.annotations, arrows=plotdef.arrows,
+                                     circles=getattr(plotdef, "circles", []))
+            res["saved"] = True
+            for w in font_warn + generator.warnings:
+                res["warnings"].append(f"{tname}: {w}")
+        except Exception as e:
+            res["errors"].append(f"{tname}: 저장 실패 ({e})")
+
+        if td3_data is not None:
+            outfile_3d = os.path.join(self.plot_dir, f"{safe_name}_batchset_3D.{fmt}")
+            try:
+                result = self._render_3d_from_template_data(data, td3_data, outfile_3d, fmt)
+                if result:
+                    res["saved_3d"] = True
+                else:
+                    res["warnings"].append(f"{tname}: 3D 적격 조건(Y1 1개+Y2 1개, 또는 surface)에 맞는 파일이 없어 3D는 스킵")
+            except Exception as e:
+                res["errors"].append(f"{tname}: 3D 저장 실패 ({e})")
+
+        return res
+
     def _run_batch_set(self, template_paths, fmt, progress_callback=None, td3_path=None):
-        """template_paths(각각 완전한 plot 사양이 담긴 *.json)를 순서대로 읽어서
+        """template_paths(각각 완전한 plot 사양이 담긴 *.json)를 병렬로 처리해서
         이미지로 저장한다. self.xxx_var.get() 같은 Tkinter 접근을 안 하므로
         백그라운드 스레드에서 호출해도 안전함.
         [추가] td3_path가 있으면(3D Template *.json), 각 항목의 file_assignments/
         surface_files로 derive한 3D curve/surface에 그 3D Template 설정을 적용해서
-        3D 이미지도 같이 만든다(적격 조건 안 맞는 항목은 조용히 스킵)."""
+        3D 이미지도 같이 만든다(적격 조건 안 맞는 항목은 조용히 스킵).
+        [수정 - 효율] 항목마다 완전히 독립적인 gnuplot 프로세스라 순차 실행이
+        불필요했음 - ThreadPoolExecutor(_BATCH_MAX_WORKERS)로 동시에 처리한다.
+        진행률/경고/오류 리스트는 각 작업자가 직접 건드리지 않고 결과 dict만
+        반환하며, 취합은 아래 as_completed 루프(이 함수를 부르는 스레드 하나)
+        에서만 일어나 경쟁이 없다. resort_dat_file의 정렬 캐시 파일 경쟁은
+        _get_resort_lock(파일별 lock)으로 별도 보호된다."""
         import json
 
         saved_count = 0
@@ -2186,53 +2261,28 @@ class CathPlotGUI:
                 td3_path = None
                 td3_data = None
 
-        for done_idx, tpath in enumerate(template_paths, start=1):
-            tname = os.path.basename(tpath)
-            if progress_callback:
-                progress_callback(done_idx - 1, total, tname)
-
-            try:
-                with open(tpath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception as e:
-                errors.append(f"{tname}: 템플릿 읽기 실패 ({e})")
-                continue
-
-            try:
-                plotdef = self._build_plotdef_from_template_data(data)
-            except Exception as e:
-                errors.append(f"{tname}: {e}")
-                continue
-
-            raw_name = (data.get("filename") or "").strip() or os.path.splitext(tname)[0]
-            safe_name = "".join(c for c in raw_name if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
-            outfile = os.path.join(self.plot_dir, f"{safe_name}_batchset.{fmt}")
-
-            try:
-                plotdef, font_warn = self._check_and_fix_fonts(plotdef)
-                generator = GnuplotGenerator(self.plot_dir)
-                generator.create_script(plotdef, outfile, fmt=fmt,
-                                         annotations=plotdef.annotations, arrows=plotdef.arrows,
-                                         circles=getattr(plotdef, "circles", []))
-                saved_count += 1
-                for w in font_warn + generator.warnings:
-                    warnings.append(f"{tname}: {w}")
-            except Exception as e:
-                errors.append(f"{tname}: 저장 실패 ({e})")
-
-            if td3_data is not None:
-                outfile_3d = os.path.join(self.plot_dir, f"{safe_name}_batchset_3D.{fmt}")
+        done = 0
+        with ThreadPoolExecutor(max_workers=_BATCH_MAX_WORKERS) as executor:
+            futures = {
+                executor.submit(self._process_one_batch_set_item, tpath, fmt, td3_data): tpath
+                for tpath in template_paths
+            }
+            for future in as_completed(futures):
+                done += 1
+                tpath = futures[future]
                 try:
-                    result = self._render_3d_from_template_data(data, td3_data, outfile_3d, fmt)
-                    if result:
-                        saved_3d_count += 1
-                    else:
-                        warnings.append(f"{tname}: 3D 적격 조건(Y1 1개+Y2 1개, 또는 surface)에 맞는 파일이 없어 3D는 스킵")
+                    res = future.result()
                 except Exception as e:
-                    errors.append(f"{tname}: 3D 저장 실패 ({e})")
-
-        if progress_callback:
-            progress_callback(total, total, "완료")
+                    res = {"tname": os.path.basename(tpath), "saved": False, "saved_3d": False,
+                           "warnings": [], "errors": [f"{os.path.basename(tpath)}: 처리 실패 ({e})"]}
+                if res["saved"]:
+                    saved_count += 1
+                if res["saved_3d"]:
+                    saved_3d_count += 1
+                warnings.extend(res["warnings"])
+                errors.extend(res["errors"])
+                if progress_callback:
+                    progress_callback(done, total, res["tname"])
 
         msg = f"{saved_count}개 Template 처리 완료. (plot_dir: {self.plot_dir})"
         if td3_path:
@@ -2582,7 +2632,123 @@ class CathPlotGUI:
             "extra_gnuplot": self.raw_gnuplot_text.get("1.0", "end-1c"),
         }
 
+    def _process_one_batch_queue_item(self, rel_path, fmt, recipe, x_output_no, settings):
+        """_run_batch_queue의 항목 하나(dat 파일 1개)를 처리해서 결과를 dict로
+        반환한다 - _process_one_batch_set_item과 동일한 이유(ThreadPoolExecutor로
+        병렬 처리해도 결과 취합은 as_completed 루프 한 곳에서만 하기 위함)."""
+        res = {"rel_path": rel_path, "saved": False, "warnings": [], "errors": []}
+
+        abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(self.cwd, rel_path)
+        if not os.path.exists(abs_path):
+            res["errors"].append(f"{rel_path}: 파일 없음")
+            return res
+
+        try:
+            dat_info = self.parser.parse(abs_path)
+        except Exception as e:
+            res["errors"].append(f"{rel_path}: 파싱 실패 ({e})")
+            return res
+
+        target_dat_file = abs_path
+        try:
+            # [수정 - 효율] 위에서 이미 parse()한 dat_info를 그대로 넘겨서
+            # resort_dat_file 내부의 중복 파싱(+세 번째 전체 읽기)을 없앤다.
+            target_dat_file = self.resort_dat_file(abs_path, x_output_no, dat_info=dat_info)
+        except Exception:
+            target_dat_file = abs_path
+
+        var_by_no = {v.output_no: v for v in dat_info.variables}
+
+        curves = []
+        for item in recipe:
+            var_obj = var_by_no.get(item["output_no"])
+            legend_text = var_obj.display_name if var_obj else f"var_{item['output_no']}"
+            try:
+                curves.append(CurveDefinition(
+                    dat_file=target_dat_file,
+                    output_no=item["output_no"],
+                    title=legend_text,
+                    axis=item["axis"],
+                    x_shift=float(item.get("x_shift") or 0.0),
+                    color=COLOR_MAP.get(item["color"], None),
+                    linestyle=STYLE_MAP.get(item["linestyle"], None),
+                    linewidth=float(item["linewidth"] or 1.5),
+                    x_output_no=x_output_no,
+                    legend_group=int(item.get("legend_group", 1) or 1),
+                    in_legend1=item.get("in_legend1", True),
+                    marker_shape=self._resolve_marker_shape(item.get("marker_shape_label", "None"), item.get("marker_fill", False)),
+                    marker_size=MARKER_SIZE_MAP.get(item.get("marker_size_label", "M"), 1.0),
+                    marker_max_count=(int(item["marker_max_count"]) if str(item.get("marker_max_count", "")).strip() else None),
+                ))
+            except ValueError:
+                continue  # X/Y 번호가 같은 경우 등은 건너뜀
+
+        if not curves:
+            res["errors"].append(f"{rel_path}: 매칭되는 var_no가 이 파일에 없음")
+            return res
+
+        plotdef = PlotDefinition(
+            title="",  # Batch Queue에서는 title 기본 blank
+            xlabel=settings["xlabel"],
+            ylabel=settings["ylabel"],
+            y2label=settings["y2label"],
+            output_format="Batch",
+            xauto=settings["xauto"], yauto=settings["yauto"], y2auto=settings["y2auto"],
+            xlog=settings.get("xlog", False), y1log=settings.get("y1log", False), y2log=settings.get("y2log", False),
+            xfmt=settings.get("xfmt", "Normal"), y1fmt=settings.get("y1fmt", "Normal"), y2fmt=settings.get("y2fmt", "Normal"),
+            xmin=settings["xmin"], xmax=settings["xmax"],
+            ymin=settings["ymin"], ymax=settings["ymax"],
+            y2min=settings["y2min"], y2max=settings["y2max"],
+            xtics=settings["xtics"], ytics=settings["ytics"], y2tics=settings["y2tics"],
+            mxtics=settings["mxtics"], mytics=settings["mytics"], my2tics=settings["my2tics"],
+            major_grid=settings["major_grid"], minor_grid=settings["minor_grid"],
+            legend_on=settings["legend_on"], legend_box=settings["legend_box"],
+            legend_pos=settings["legend_pos"],
+            legend_align=settings.get("legend_align", "Auto"),
+            legend_thick=settings.get("legend_thick", "1.5"),
+            legend_font=settings.get("legend_font", "Malgun Gothic"), legend_size=settings.get("legend_size", "9"),
+            legend_box_width_pct=settings.get("legend_box_width_pct", ""),
+            legend_box_height_pct=settings.get("legend_box_height_pct", ""),
+            legend2_on=settings.get("legend2_on", False), legend2_box=settings.get("legend2_box", True),
+            legend2_pos=settings.get("legend2_pos", "right bottom"),
+            legend2_align=settings.get("legend2_align", "Auto"),
+            legend2_thick=settings.get("legend2_thick", "1.5"),
+            legend2_box_width_pct=settings.get("legend2_box_width_pct", ""),
+            legend2_box_height_pct=settings.get("legend2_box_height_pct", ""),
+            title_font=settings["title_font"], title_size=settings["title_size"],
+            xlabel_font=settings["xlabel_font"], xlabel_size=settings["xlabel_size"],
+            ylabel_font=settings["ylabel_font"], ylabel_size=settings["ylabel_size"],
+            y2label_font=settings["y2label_font"], y2label_size=settings["y2label_size"],
+            frame_auto=settings["frame_auto"], frame_width=settings["frame_width"],
+            frame_height=settings["frame_height"], frame_unit=settings["frame_unit"],
+            curves=curves,
+            annotations=[],  # Batch Queue에서는 annotation/arrow/circle 리셋
+            arrows=[],
+            circles=[],
+            is_print_mode=True,
+            x_output_no=x_output_no,
+            extra_gnuplot=settings.get("extra_gnuplot", ""),
+        )
+
+        base_stem = os.path.splitext(os.path.basename(abs_path))[0]
+        outfile = os.path.join(self.plot_dir, f"{base_stem}_batch.{fmt}")
+
+        try:
+            plotdef, font_warn = self._check_and_fix_fonts(plotdef)
+            generator = GnuplotGenerator(self.plot_dir)
+            generator.create_script(plotdef, outfile, fmt=fmt)
+            res["saved"] = True
+            for w in font_warn + generator.warnings:
+                res["warnings"].append(f"{rel_path}: {w}")
+        except Exception as e:
+            res["errors"].append(f"{rel_path}: 저장 실패 ({e})")
+
+        return res
+
     def _run_batch_queue(self, relative_paths, fmt, settings, progress_callback=None):
+        """[수정 - 효율] _run_batch_set과 동일한 이유로 ThreadPoolExecutor로
+        병렬 처리 - 자세한 설명은 _run_batch_set 및 _process_one_batch_set_item
+        참고."""
         recipe = settings["recipe"]
         x_output_no = settings["x_output_no"]
         if not recipe:
@@ -2597,117 +2763,25 @@ class CathPlotGUI:
         warnings = []
         total = len(relative_paths)
 
-        for done_idx, rel_path in enumerate(relative_paths, start=1):
-            if progress_callback:
-                progress_callback(done_idx - 1, total, rel_path)
-
-            abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(self.cwd, rel_path)
-            if not os.path.exists(abs_path):
-                errors.append(f"{rel_path}: 파일 없음")
-                continue
-
-            try:
-                dat_info = self.parser.parse(abs_path)
-            except Exception as e:
-                errors.append(f"{rel_path}: 파싱 실패 ({e})")
-                continue
-
-            target_dat_file = abs_path
-            try:
-                # [수정 - 효율] 위에서 이미 parse()한 dat_info를 그대로 넘겨서
-                # resort_dat_file 내부의 중복 파싱(+세 번째 전체 읽기)을 없앤다.
-                target_dat_file = self.resort_dat_file(abs_path, x_output_no, dat_info=dat_info)
-            except Exception:
-                target_dat_file = abs_path
-
-            var_by_no = {v.output_no: v for v in dat_info.variables}
-
-            curves = []
-            for item in recipe:
-                var_obj = var_by_no.get(item["output_no"])
-                legend_text = var_obj.display_name if var_obj else f"var_{item['output_no']}"
+        done = 0
+        with ThreadPoolExecutor(max_workers=_BATCH_MAX_WORKERS) as executor:
+            futures = {
+                executor.submit(self._process_one_batch_queue_item, rel_path, fmt, recipe, x_output_no, settings): rel_path
+                for rel_path in relative_paths
+            }
+            for future in as_completed(futures):
+                done += 1
+                rel_path = futures[future]
                 try:
-                    curves.append(CurveDefinition(
-                        dat_file=target_dat_file,
-                        output_no=item["output_no"],
-                        title=legend_text,
-                        axis=item["axis"],
-                        x_shift=float(item.get("x_shift") or 0.0),
-                        color=COLOR_MAP.get(item["color"], None),
-                        linestyle=STYLE_MAP.get(item["linestyle"], None),
-                        linewidth=float(item["linewidth"] or 1.5),
-                        x_output_no=x_output_no,
-                        legend_group=int(item.get("legend_group", 1) or 1),
-                        in_legend1=item.get("in_legend1", True),
-                        marker_shape=self._resolve_marker_shape(item.get("marker_shape_label", "None"), item.get("marker_fill", False)),
-                        marker_size=MARKER_SIZE_MAP.get(item.get("marker_size_label", "M"), 1.0),
-                        marker_max_count=(int(item["marker_max_count"]) if str(item.get("marker_max_count", "")).strip() else None),
-                    ))
-                except ValueError:
-                    continue  # X/Y 번호가 같은 경우 등은 건너뜀
-
-            if not curves:
-                errors.append(f"{rel_path}: 매칭되는 var_no가 이 파일에 없음")
-                continue
-
-            plotdef = PlotDefinition(
-                title="",  # Batch Queue에서는 title 기본 blank
-                xlabel=settings["xlabel"],
-                ylabel=settings["ylabel"],
-                y2label=settings["y2label"],
-                output_format="Batch",
-                xauto=settings["xauto"], yauto=settings["yauto"], y2auto=settings["y2auto"],
-                xlog=settings.get("xlog", False), y1log=settings.get("y1log", False), y2log=settings.get("y2log", False),
-                xfmt=settings.get("xfmt", "Normal"), y1fmt=settings.get("y1fmt", "Normal"), y2fmt=settings.get("y2fmt", "Normal"),
-                xmin=settings["xmin"], xmax=settings["xmax"],
-                ymin=settings["ymin"], ymax=settings["ymax"],
-                y2min=settings["y2min"], y2max=settings["y2max"],
-                xtics=settings["xtics"], ytics=settings["ytics"], y2tics=settings["y2tics"],
-                mxtics=settings["mxtics"], mytics=settings["mytics"], my2tics=settings["my2tics"],
-                major_grid=settings["major_grid"], minor_grid=settings["minor_grid"],
-                legend_on=settings["legend_on"], legend_box=settings["legend_box"],
-                legend_pos=settings["legend_pos"],
-                legend_align=settings.get("legend_align", "Auto"),
-                legend_thick=settings.get("legend_thick", "1.5"),
-                legend_font=settings.get("legend_font", "Malgun Gothic"), legend_size=settings.get("legend_size", "9"),
-                legend_box_width_pct=settings.get("legend_box_width_pct", ""),
-                legend_box_height_pct=settings.get("legend_box_height_pct", ""),
-                legend2_on=settings.get("legend2_on", False), legend2_box=settings.get("legend2_box", True),
-                legend2_pos=settings.get("legend2_pos", "right bottom"),
-                legend2_align=settings.get("legend2_align", "Auto"),
-                legend2_thick=settings.get("legend2_thick", "1.5"),
-                legend2_box_width_pct=settings.get("legend2_box_width_pct", ""),
-                legend2_box_height_pct=settings.get("legend2_box_height_pct", ""),
-                title_font=settings["title_font"], title_size=settings["title_size"],
-                xlabel_font=settings["xlabel_font"], xlabel_size=settings["xlabel_size"],
-                ylabel_font=settings["ylabel_font"], ylabel_size=settings["ylabel_size"],
-                y2label_font=settings["y2label_font"], y2label_size=settings["y2label_size"],
-                frame_auto=settings["frame_auto"], frame_width=settings["frame_width"],
-                frame_height=settings["frame_height"], frame_unit=settings["frame_unit"],
-                curves=curves,
-                annotations=[],  # Batch Queue에서는 annotation/arrow/circle 리셋
-                arrows=[],
-                circles=[],
-                is_print_mode=True,
-                x_output_no=x_output_no,
-                extra_gnuplot=settings.get("extra_gnuplot", ""),
-            )
-
-            base_stem = os.path.splitext(os.path.basename(abs_path))[0]
-            outfile = os.path.join(self.plot_dir, f"{base_stem}_batch.{fmt}")
-
-            try:
-                plotdef, font_warn = self._check_and_fix_fonts(plotdef)
-                generator = GnuplotGenerator(self.plot_dir)
-                generator.create_script(plotdef, outfile, fmt=fmt)
-                saved_count += 1
-                for w in font_warn + generator.warnings:
-                    warnings.append(f"{rel_path}: {w}")
-            except Exception as e:
-                errors.append(f"{rel_path}: 저장 실패 ({e})")
-
-        if progress_callback:
-            progress_callback(total, total, "완료")
+                    res = future.result()
+                except Exception as e:
+                    res = {"rel_path": rel_path, "saved": False, "warnings": [], "errors": [f"{rel_path}: 처리 실패 ({e})"]}
+                if res["saved"]:
+                    saved_count += 1
+                warnings.extend(res["warnings"])
+                errors.extend(res["errors"])
+                if progress_callback:
+                    progress_callback(done, total, res["rel_path"])
 
         msg = f"{saved_count}개 파일 처리 완료. (plot_dir: {self.plot_dir})"
         if errors:
@@ -4485,6 +4559,17 @@ class CathPlotGUI:
         os.makedirs(temp_dir, exist_ok=True)
         return temp_dir
 
+    def _get_resort_lock(self, sorted_filepath):
+        """resort_dat_file의 "확인 후 없으면 생성" 구간을 파일 경로별로 잠근다
+        (Batch 병렬화 대비 - 같은 정렬 캐시 파일을 여러 스레드가 동시에 만드는
+        경쟁 방지). 다른 파일끼리는 서로 안 기다리게 lock을 파일마다 나눈다."""
+        with self._resort_locks_guard:
+            lock = self._resort_locks.get(sorted_filepath)
+            if lock is None:
+                lock = threading.Lock()
+                self._resort_locks[sorted_filepath] = lock
+            return lock
+
     def resort_dat_file(self, dat_file, x_col, dat_info=None):
         """
         Cathena/Generic 여부와 무관하게, 이미 통합되어 있는 CathenaDatParser의
@@ -4557,60 +4642,65 @@ class CathPlotGUI:
                 sorted_filename = f"{name_root}_sortedX{x_col}{ext}"
             sorted_filepath = os.path.join(temp_dir, sorted_filename)
 
-            # [수정 - 버그] 캐시 존재 여부만 보고 재사용해서, 원본 dat_file이
-            # 캐시 생성 이후에 덮어써지면(예: 같은 경로로 시뮬레이션을 다시
-            # 돌린 경우) 낡은 정렬 파일을 계속 돌려줘 plot에 옛날 데이터가
-            # 조용히 나오는 문제가 있었음 - 원본이 캐시보다 최신이면 무효화
-            # 하고 다시 만든다.
-            if os.path.exists(sorted_filepath) and os.path.getmtime(sorted_filepath) >= os.path.getmtime(dat_file):
+            # [추가 - Batch 병렬화 대비] 같은 sorted_filepath를 동시에 여러
+            # 스레드가 만들려고 하면(같은 dat 파일+X축을 쓰는 템플릿이 배치
+            # 안에 여러 개일 때) 파일이 깨질 수 있어, 파일 경로별 lock으로
+            # "확인 후 없으면 생성"을 원자적으로 만든다.
+            with self._get_resort_lock(sorted_filepath):
+                # [수정 - 버그] 캐시 존재 여부만 보고 재사용해서, 원본 dat_file이
+                # 캐시 생성 이후에 덮어써지면(예: 같은 경로로 시뮬레이션을 다시
+                # 돌린 경우) 낡은 정렬 파일을 계속 돌려줘 plot에 옛날 데이터가
+                # 조용히 나오는 문제가 있었음 - 원본이 캐시보다 최신이면 무효화
+                # 하고 다시 만든다.
+                if os.path.exists(sorted_filepath) and os.path.getmtime(sorted_filepath) >= os.path.getmtime(dat_file):
+                    return sorted_filepath
+
+                # 파서로 Cathena/Generic 여부와 무관하게 데이터 시작 줄과 변수명을 동일한 방식으로 판단
+                # (호출부가 이미 파싱해둔 결과를 넘겼으면 재사용 - 위 dat_info 파라미터 참고)
+                if dat_info is None:
+                    dat_info = self.parser.parse(dat_file)
+
+                with open(dat_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+
+                data_rows = []
+                for line in lines[dat_info.data_start_line:]:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    parts = re.split(r'[,\s]+', stripped)
+                    try:
+                        vals = [float(p.replace("D", "E").replace("d", "e").replace(",", "")) for p in parts]
+                        if len(vals) >= 2:
+                            data_rows.append(vals)
+                    except ValueError:
+                        continue
+
+                if not data_rows:
+                    return dat_file
+
+                col_idx = x_col
+                max_col_available = len(data_rows[0]) - 1
+                if not (0 <= col_idx <= max_col_available):
+                    return dat_file
+
+                data_rows.sort(key=lambda r: r[col_idx])
+
+                # 각 컬럼의 head title 목록 구성 (data_parser의 display_name 재사용,
+                # 혹시 변수 목록에 없는 컬럼이 있으면 var_# 로 대체)
+                var_by_no = {v.output_no: v for v in dat_info.variables}
+                n_cols = len(data_rows[0])
+                head_titles = [
+                    var_by_no[i].display_name if i in var_by_no else f"var_{i}"
+                    for i in range(n_cols)
+                ]
+
+                with open(sorted_filepath, 'w', encoding='utf-8') as f_out:
+                    f_out.write("\t".join(head_titles) + "\n")
+                    for r in data_rows:
+                        f_out.write("\t".join(map(str, r)) + "\n")
+
                 return sorted_filepath
-
-            # 파서로 Cathena/Generic 여부와 무관하게 데이터 시작 줄과 변수명을 동일한 방식으로 판단
-            # (호출부가 이미 파싱해둔 결과를 넘겼으면 재사용 - 위 dat_info 파라미터 참고)
-            if dat_info is None:
-                dat_info = self.parser.parse(dat_file)
-
-            with open(dat_file, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
-
-            data_rows = []
-            for line in lines[dat_info.data_start_line:]:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                parts = re.split(r'[,\s]+', stripped)
-                try:
-                    vals = [float(p.replace("D", "E").replace("d", "e").replace(",", "")) for p in parts]
-                    if len(vals) >= 2:
-                        data_rows.append(vals)
-                except ValueError:
-                    continue
-
-            if not data_rows:
-                return dat_file
-
-            col_idx = x_col
-            max_col_available = len(data_rows[0]) - 1
-            if not (0 <= col_idx <= max_col_available):
-                return dat_file
-
-            data_rows.sort(key=lambda r: r[col_idx])
-
-            # 각 컬럼의 head title 목록 구성 (data_parser의 display_name 재사용,
-            # 혹시 변수 목록에 없는 컬럼이 있으면 var_# 로 대체)
-            var_by_no = {v.output_no: v for v in dat_info.variables}
-            n_cols = len(data_rows[0])
-            head_titles = [
-                var_by_no[i].display_name if i in var_by_no else f"var_{i}"
-                for i in range(n_cols)
-            ]
-
-            with open(sorted_filepath, 'w', encoding='utf-8') as f_out:
-                f_out.write("\t".join(head_titles) + "\n")
-                for r in data_rows:
-                    f_out.write("\t".join(map(str, r)) + "\n")
-
-            return sorted_filepath
 
         except Exception as e:
             self._log_warning(f"[resort_dat_file 실패] {dat_file} (x_col={x_col}): {e}\n{traceback.format_exc()}")
@@ -6319,6 +6409,23 @@ class CathPlotGUI:
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _count_running_processes(self, image_name):
+        """tasklist로 특정 실행파일 이름의 프로세스가 몇 개 떠 있는지 센다.
+        (taskkill /IM은 "누가 띄웠는지" 구분을 못 해서, 죽이기 전에 실제로
+        몇 개나 남아있는지부터 확인하는 용도 - psutil 없이 Windows 내장
+        tasklist만으로 구현)."""
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {image_name}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                **_no_console_kwargs()
+            )
+            lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
+            # 매칭되는 프로세스가 없으면 tasklist가 "정보: ... 없습니다" 안내문 한 줄만 출력함(CSV 형식이 아님)
+            return sum(1 for ln in lines if ln.startswith('"'))
+        except Exception:
+            return 0  # 확인 자체가 안 되면 안전하게 "없음"으로 보고 기존처럼 조용히 넘어감
+
     def on_closing(self):
         """GUI 창이 닫힐 때 temp_sorted 임시 폴더와 gnuplot 프로세스를 정리하고 프로그램을 종료합니다."""
         # 1. 이번 세션에서 추적 중인 gnuplot(-persist) 프로세스 종료 시도
@@ -6334,10 +6441,26 @@ class CathPlotGUI:
             pass
 
         # 2. -persist로 뜬 gnuplot 창은 부모(CathPlot)와 분리되어 있어 위 방법으로 못 잡을 수 있으므로,
-        #    시스템에 남은 gnuplot_qt.exe(공유 드라이버)/gnuplot.exe도 함께 정리
+        #    시스템에 남은 gnuplot_qt.exe(공유 드라이버)/gnuplot.exe도 함께 정리한다.
+        # [수정 - 버그] taskkill /IM은 "누가 띄웠는지" 구분 없이 이름이 같은
+        # 프로세스를 전부 죽여서, 사용자가 직접 연 gnuplot 콘솔이나 다른
+        # 프로그램의 gnuplot.exe까지 같이 죽이던 문제가 있었음 - 죽이기 전에
+        # 먼저 몇 개나 남아있는지 세어서, 하나도 없으면(가장 흔한 경우) 조용히
+        # 넘어가고, 남아있으면(이 프로그램이 놓친 창일 수도, 완전히 남의
+        # 프로세스일 수도 있음을 명시) 사용자에게 물어서 종료 여부를 맡긴다.
         try:
-            subprocess.run(["taskkill", "/F", "/IM", "gnuplot_qt.exe"], capture_output=True, **_no_console_kwargs())
-            subprocess.run(["taskkill", "/F", "/IM", "gnuplot.exe"], capture_output=True, **_no_console_kwargs())
+            n_left = self._count_running_processes("gnuplot.exe") + self._count_running_processes("gnuplot_qt.exe")
+            if n_left > 0:
+                do_kill = messagebox.askyesno(
+                    "gnuplot 프로세스 남음",
+                    f"gnuplot 관련 프로세스가 {n_left}개 아직 실행 중입니다.\n"
+                    "이 프로그램이 미처 못 닫은 창일 수도, 다른 프로그램이나 직접 연\n"
+                    "gnuplot일 수도 있습니다(어느 쪽인지 구분이 안 됩니다).\n\n"
+                    "전부 강제 종료할까요? (아니오를 누르면 그대로 두고 CathPlot만 닫습니다)"
+                )
+                if do_kill:
+                    subprocess.run(["taskkill", "/F", "/IM", "gnuplot_qt.exe"], capture_output=True, **_no_console_kwargs())
+                    subprocess.run(["taskkill", "/F", "/IM", "gnuplot.exe"], capture_output=True, **_no_console_kwargs())
         except Exception:
             pass
 
