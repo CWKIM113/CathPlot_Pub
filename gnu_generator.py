@@ -1640,19 +1640,24 @@ class GnuplotGenerator:
                 # -불확실한- 배율을 따로 뒀던 것 자체가 "제각각"의 원인).
                 _base_n_chars = max((SAMPLE_W * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9), 1.0)
                 _n_total_chars = max(int(round(_base_n_chars * 0.6)), 2)
+                # [수정 - 버그, 근본 원인 재확인] "line 양단 마진도 다름" -
+                # rstrip으로 뒤쪽 빈칸을 잘라내면, style마다 실제 문자열
+                # 길이(=gnuplot이 "center" 정렬 시 차지한다고 보는 폭)가
+                # 달라져서, 같은 중심점(anchor)을 기준으로 짧은 문자열일수록
+                # 양쪽 여백이 똑같이 더 커 보이는 것으로 확인됨(대칭으로
+                # 줄어드는 것 자체가 "마진이 다르다"는 인상을 만듦). 해결:
+                # 뒤쪽 빈칸을 자르지 않고 항상 n_total_chars 그대로 유지한다
+                # - 모든 style이 "글자 수(빈칸 포함)" 기준으로 완전히 동일한
+                # 폭을 차지하게 되어, center 정렬 기준으로 양쪽 여백이
+                # 스타일과 무관하게 항상 정확히 같아짐(빈칸으로 끝나는 모양은
+                # 실제 점선이 자연스럽게 gap에서 끝나는 것과 같아 시각적으로
+                # 어색하지 않음 - 오히려 진짜 점선처럼 보임).
                 if _gap_run <= 0 or _n_total_chars <= _ink_run:
                     _glyph_run = _INK_CHAR * _n_total_chars
                 else:
-                    # [수정 - 버그] 짧은 문자열을 끝까지 잉크로 다시 채우던
-                    # 이전 시도는 결국 매번 "빈칸 없는 완전한 잉크"로
-                    # 되돌아가 버려(레퍼토리가 solid와 구분이 안 됨) 오히려
-                    # 문제를 재현시켰음 - 대신 마지막 빈칸만 정리(rstrip)하고
-                    # 그대로 둔다. 그 결과 style별 길이 차이는 최대
-                    # gap_run(1~2글자)로 확실히 제한되고(이전처럼 예측 불가한
-                    # 큰 편차가 아님), 패턴(빈칸)도 실제로 보인다.
                     _unit = _INK_CHAR * _ink_run + " " * _gap_run
                     _reps = _n_total_chars // max(len(_unit), 1) + 2
-                    _glyph_run = (_unit * _reps)[:_n_total_chars].rstrip(" ") or _INK_CHAR
+                    _glyph_run = (_unit * _reps)[:_n_total_chars]
                 _dx_chars = ((sample_mid_x - _box_cx) * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9)
                 _dy_chars = ((row_y - _box_cy) * axis_h_in) / max(_GP_CHAR_H_IN, 1e-9)
                 lines.append(
@@ -3686,9 +3691,14 @@ class GnuplotGenerator:
             # (파일 기반 IPC - 키보드 포커스와 완전히 무관하게 항상 동작).
             # bind는 혹시 포커스가 우연히 gnuplot 쪽에 있는 환경(예: 콘솔에서
             # 직접 gnuplot.exe로 연 경우)을 위한 보너스로 그대로 남겨둔다.
+            # [수정 - 버그 발견, 제거] "일시정지 중 q를 누르면 창이 사라지고
+            # Resume을 눌러야 다시 살아남" - gnuplot의 windows 터미널이 'q'를
+            # 우리 custom bind와 별개로 자체적으로도 처리하는(내용을
+            # 지우거나 하는) 것으로 추정되는 버그가 실측 확인됨. Exit는 이미
+            # Animation Control 창의 버튼(파일 기반, 이 문제와 무관)이
+            # 담당하므로 키보드 'q' bind 자체를 없애 이 혼란을 없앤다.
             lines.append("key_hits = 0")
             lines.append('bind " " "paused_anim = !paused_anim; key_hits = key_hits + 1"')
-            lines.append('bind "q" "exit_anim = 1; key_hits = key_hits + 1"')
             lines.append('bind "+" "frame_pause_anim = frame_pause_anim*0.5; key_hits = key_hits + 1"')
             lines.append('bind "-" "frame_pause_anim = frame_pause_anim*2.0; key_hits = key_hits + 1"')
             # [추가] 파일 기반 제어 - CathPlot의 Pause/Speed/Exit 버튼이 이
@@ -3702,7 +3712,16 @@ class GnuplotGenerator:
             ctrl_path = outfile.rsplit(".", 1)[0] + "_ctrl.plt"
             _ctrl_path_gp = ctrl_path.replace(chr(92), "/")
             lines.append(f"_anim_ctrl_path = '{_ctrl_path_gp}'")
-            _help_text = "Space/버튼: 일시정지/재개, +/-: 속도, Q/Exit: 종료 (키 입력 감지: %d회)"
+            # [수정 - 요청] "키 입력 감지 문구는 삭제" - 파일 기반 제어(버튼)로
+            # 재설계가 끝나서 진단용 카운터 표시가 더 이상 필요 없음(bind
+            # 자체는 여전히 보너스로 남아있고 화면에 굳이 안내할 필요는
+            # 없음 - 버튼 사용을 유도).
+            # [수정 - 요청] "Space/버튼 안내 문구도 삭제? 필요하면 +/-/Q 정도만" -
+            # 뒤이어 "일시정지 중 q를 누르면 창이 사라짐"이 gnuplot 자체의
+            # 기본 'q'=창 닫기 동작과 충돌하는 버그로 확인돼 q bind 자체를
+            # 없앴으므로(바로 위 참고), 화면 안내에서도 Q는 뺀다 - 실제로
+            # 안전하게 동작하는 +/- 속도 조절만 남긴다.
+            _help_text = "+/-: 속도"
             lines.append("do for [_frame_i=0:n_frames_anim] {")
             lines.append("    load _anim_ctrl_path")
             lines.append("    if (exit_anim) { break }")
@@ -3710,12 +3729,12 @@ class GnuplotGenerator:
             lines.append("    if (exit_anim) { break }")
             lines.append("    thresh = xmin_anim + (xmax_anim - xmin_anim) * _frame_i / n_frames_anim")
             lines.append("    set arrow 9999 from thresh, graph 0 to thresh, graph 1 nohead front lw 1.5 lc rgb \"purple\" dashtype 2")
-            lines.append(f"    set label 9998 sprintf(\"Progress %.0f%%  (X=%.4g) - {_help_text}\", 100.0*_frame_i/n_frames_anim, thresh, key_hits) at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
+            lines.append(f"    set label 9998 sprintf(\"Progress %.0f%%  (X=%.4g) - {_help_text}\", 100.0*_frame_i/n_frames_anim, thresh) at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
             lines.extend(animated_curve_lines)
             lines.append("    pause frame_pause_anim")
             lines.append("}")
             lines.append("unset arrow 9999")
-            lines.append(f"set label 9998 sprintf(\"Progress 100%% - {_help_text}\", key_hits) at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
+            lines.append(f"set label 9998 sprintf(\"Progress 100%% - {_help_text}\") at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
             lines.append("replot")
             lines.append("pause mouse close")
 
