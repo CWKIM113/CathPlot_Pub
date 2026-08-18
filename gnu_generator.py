@@ -555,6 +555,7 @@ class GnuplotGenerator:
         # 간격(초) - create_animation_script가 채우고, GUI가 읽어서 컨트롤
         # 패널을 만든다(gnuplot 키보드 bind에 의존하지 않는 방식).
         self.last_anim_ctrl_path = None
+        self.last_anim_status_path = None  # [추가] gnuplot->GUI 방향 "재생 끝남" 신호 파일 경로(Resume 버튼 표시용)
         self.last_anim_frame_pause = None
         self.last_size_warning = None  # 종이 여백 부족으로 plot 크기를 자동 축소했을 때 메시지가 여기 담김
         self.warnings = []  # create_script/create_multiplot_script 호출 중 발견된 경고 메시지 목록(legend 폰트 과대 등)
@@ -3513,6 +3514,17 @@ class GnuplotGenerator:
             ctrl_path = outfile.rsplit(".", 1)[0] + "_ctrl.plt"
             _ctrl_path_gp = ctrl_path.replace(chr(92), "/")
             lines.append(f"_anim_ctrl_path = '{_ctrl_path_gp}'")
+            # [추가 - 요청] "재생이 끝나면 Pause가 아니라 Resume 버튼이
+            # 나오게" - GUI는 gnuplot이 지금 재생 중인지 다 끝났는지 알
+            # 방법이 없었음(ctrl_path는 GUI->gnuplot 방향 전용이라 반대
+            # 방향 신호가 없었음) - 별도의 작은 "상태" 파일을 하나 더 둬서
+            # gnuplot이 do-for를 다 돌고 "끝난 시점의 click_seq"를 여기에
+            # 적으면(set print), GUI가 이 파일을 주기적으로 읽어 "지금
+            # 보여주고 있는 seq와 같은 값이 적혔다"를 보고 재생이 막 끝난
+            # 순간임을 알아챈다.
+            status_path = outfile.rsplit(".", 1)[0] + "_status.txt"
+            _status_path_gp = status_path.replace(chr(92), "/")
+            lines.append(f"_anim_status_path = '{_status_path_gp}'")
             # [수정 - 요청] "키 입력 감지 문구는 삭제" - 파일 기반 제어(버튼)로
             # 재설계가 끝나서 진단용 카운터 표시가 더 이상 필요 없음(bind
             # 자체는 여전히 보너스로 남아있고 화면에 굳이 안내할 필요는
@@ -3550,6 +3562,9 @@ class GnuplotGenerator:
             lines.append(f"set label 9998 sprintf(\"Progress 100%%  {_help_text} - Resume으로 처음부터 재생\") at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
             lines.append("replot")
             lines.append("_finished_seq = click_seq")
+            lines.append("set print _anim_status_path")
+            lines.append("print sprintf(\"finished=%d\", _finished_seq)")
+            lines.append("set print")
             lines.append("while (click_seq <= _finished_seq && !exit_anim) { load _anim_ctrl_path; pause 0.3 }")
             lines.append("if (exit_anim) { break }")
             lines.append("}")
@@ -3595,7 +3610,17 @@ class GnuplotGenerator:
         # frame_pause를 호출자(GUI)가 읽어가서 버튼을 만든다.
         with open(ctrl_path, "w", encoding="utf-8") as f:
             f.write("paused_anim = 0\nexit_anim = 0\nframe_pause_anim = %.6f\nclick_seq = 0\n" % frame_pause)
+        # [추가 - 요청, 위 _anim_status_path 참고] 이전에 같은 이름으로 저장했던
+        # 애니메이션의 "finished=" 상태 파일이 남아있으면, 이번 새 실행의
+        # click_seq(항상 0부터 시작)와 우연히 값이 같아서 시작하자마자
+        # 잘못 "다 끝남(Resume)"으로 오인될 수 있음 - 매번 새로 시작할 때
+        # 지워서 이전 실행의 흔적이 섞이지 않게 한다.
+        try:
+            os.remove(status_path)
+        except OSError:
+            pass
         self.last_anim_ctrl_path = ctrl_path
+        self.last_anim_status_path = status_path
         self.last_anim_frame_pause = frame_pause
         self.last_process = subprocess.Popen(
             [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),

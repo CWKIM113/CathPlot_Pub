@@ -5013,7 +5013,7 @@ class CathPlotGUI:
         except OSError:
             pass
 
-    def _open_animation_control_panel(self, ctrl_path, initial_frame_pause):
+    def _open_animation_control_panel(self, ctrl_path, initial_frame_pause, status_path=None):
         """[추가 - 근본 원인 재설계] "Animation 창에서 space bar가 안 먹힘" -
         이전엔 gnuplot 자체의 키보드 bind(Space=일시정지, +/-=속도, Q=종료)에
         의존했는데, 실측(화면에 키 입력 감지 횟수를 표시해 직접 확인)으로
@@ -5027,7 +5027,7 @@ class CathPlotGUI:
         script가 만들어둔 제어 파일(ctrl_path)에 값을 써주고, 실행 중인
         gnuplot이 매 프레임 그 파일을 load해서 반영한다(키보드 포커스와
         완전히 무관 - 실측으로 pause/exit 둘 다 정상 동작 확인됨)."""
-        state = {"paused": False, "frame_pause": initial_frame_pause, "seq": 0}
+        state = {"paused": False, "frame_pause": initial_frame_pause, "seq": 0, "finished": False}
 
         def _bump():
             # [추가 - 요청] 버튼을 누를 때마다 1씩 증가 - gnuplot이 "끝난
@@ -5053,6 +5053,18 @@ class CathPlotGUI:
         pause_btn = tk.Button(btn_row, text="Pause", width=9, font=("Malgun Gothic", 9, "bold"))
 
         def toggle_pause():
+            if state["finished"]:
+                # [추가 - 요청] "재생이 끝나면 Pause가 아니라 Resume 버튼이
+                # 나오게" - 다 끝난 뒤에는 이 버튼이 "일시정지 토글"이 아니라
+                # "처음부터 다시 재생"이어야 하므로 paused를 뒤집지 않고,
+                # 항상 재생 상태(paused=False)로 click_seq만 올려서 gnuplot
+                # 쪽 재시작 대기 루프를 깨운다(gnu_generator.py의 while(1)
+                # 재시작 로직 참고).
+                state["finished"] = False
+                state["paused"] = False
+                pause_btn.config(text="Pause")
+                self._write_anim_ctrl(ctrl_path, False, state["frame_pause"], _bump())
+                return
             state["paused"] = not state["paused"]
             pause_btn.config(text="Resume" if state["paused"] else "Pause")
             self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"], _bump())
@@ -5060,11 +5072,48 @@ class CathPlotGUI:
         pause_btn.config(command=toggle_pause)
         pause_btn.pack(side="left", padx=3)
 
+        # [추가 - 요청] gnuplot은 do-for 루프가 자연스럽게(Exit이 아니라) 다
+        # 끝나면 별도 "상태" 파일(status_path)에 "finished=<그 시점의
+        # click_seq>"를 적어둔다(gnu_generator.create_animation_script 참고) -
+        # 이 값이 지금 GUI가 마지막으로 보낸 seq와 같으면 "방금 막 다
+        # 끝났다"는 뜻이므로, 버튼 표시를 Resume으로 바꿔서 다시 누르면
+        # 재생이 아니라 재시작이라는 걸 알려준다. 주기적으로(0.3초) 파일을
+        # 다시 읽어 확인한다(패널이 닫히면 스스로 멈춤).
+        def _poll_finished():
+            if not panel.winfo_exists():
+                return
+            if status_path and not state["finished"]:
+                try:
+                    with open(status_path, "r", encoding="utf-8") as f:
+                        content = f.read().strip()
+                    if content.startswith("finished="):
+                        fin_seq = int(content.split("=", 1)[1])
+                        if fin_seq == state["seq"]:
+                            state["finished"] = True
+                            pause_btn.config(text="Resume")
+                except (OSError, ValueError):
+                    pass
+            panel.after(300, _poll_finished)
+
+        panel.after(300, _poll_finished)
+
+        def _clear_finished_if_needed():
+            # [추가 - 요청] Resume/Pause 버튼이 아니라 Slower/Faster로도
+            # click_seq가 올라가 재생이 재시작될 수 있으므로(gnuplot은 어느
+            # 버튼이든 seq만 오르면 재시작함), 그 경우에도 "Resume" 표시가
+            # 그대로 남아 실제로는 재생 중인데 버튼만 안 맞는 상태가 되는
+            # 것을 막는다.
+            if state["finished"]:
+                state["finished"] = False
+                pause_btn.config(text="Pause")
+
         def speed_down():
+            _clear_finished_if_needed()
             state["frame_pause"] = state["frame_pause"] * 2.0
             self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"], _bump())
 
         def speed_up():
+            _clear_finished_if_needed()
             state["frame_pause"] = max(state["frame_pause"] * 0.5, 0.001)
             self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"], _bump())
 
@@ -5397,7 +5446,8 @@ class CathPlotGUI:
                     # [추가 - space bar 재설계] 애니메이션이 정상적으로 떠 있으면
                     # (크래시 아님) Pause/Speed/Exit 컨트롤 패널을 띄운다.
                     self._open_animation_control_panel(
-                        generator.last_anim_ctrl_path, generator.last_anim_frame_pause
+                        generator.last_anim_ctrl_path, generator.last_anim_frame_pause,
+                        status_path=getattr(generator, "last_anim_status_path", None)
                     )
 
             # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로
