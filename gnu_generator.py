@@ -1254,7 +1254,12 @@ class GnuplotGenerator:
         # [수정] "Print/Save에서도 title이 샘플선에 붙어 보인다"는 후속 피드백으로
         # print도 소폭(0.4 -> 0.6) 늘림 - box_w가 폭 폭주 우려가 있어 screen(1.4)
         # 만큼은 아니고 절반 정도만 늘림.
-        LABEL_GAP_FRAC = (0.6 if is_print_mode else 1.4) * char_width_frac   # 샘플선 <-> curve title 간격
+        # [수정 - 요청] "Legend 내 마진을 font 글자 2자 정도 줄여줘요(마진이
+        # 글자 1자인데 해상도와 화면 크기에 따라 달라서...)" - 화면
+        # (Interactive)에서만 해상도/창 크기에 따라 체감 여백이 다르게
+        # 보인다는 지적이라 화면 계수만 줄인다(print/save는 그대로 유지 -
+        # 이미 검증된 값이라 안 건드림). 1.4 -> 0.4로 1자 축소.
+        LABEL_GAP_FRAC = (0.6 if is_print_mode else 0.4) * char_width_frac   # 샘플선 <-> curve title 간격
         # [수정] "screen에서 박스 테두리와 샘플선이 붙어 보인다"는 재확인 피드백.
         # 계산해보면 print/screen 공통 계수(0.3)는 기본 legend_size(9pt) 기준
         # 물리 간격이 0.013in 안팎(≈2px)에 불과해, 샘플선 자체의 굵기(lw)나
@@ -1265,7 +1270,10 @@ class GnuplotGenerator:
         # 두께(lw)만으로도 거의 다 채워져 시각적으로 안 보였음(우측 정렬이면
         # 샘플선이 box 오른쪽 테두리에 바로 붙는 쪽이라 특히 눈에 띔) - screen과
         # 동일한 계수(0.7+1/3)로 맞춘다.
-        BOX_EDGE_GAP_FRAC = (0.7 + 1 / 3) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
+        # [수정 - 요청] 위와 같은 이유로 화면에서만 추가로 줄임(약 0.7자,
+        # LABEL_GAP_FRAC의 1자 축소와 합쳐 총 "약 2자" 축소 요청에 맞춤) -
+        # print/save는 그대로 유지.
+        BOX_EDGE_GAP_FRAC = (0.7 + 1 / 3 if is_print_mode else (1 / 3)) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
         # [수정] "screen 창에서도 마진이 너무 넓다(5자 이상 줄여야 함)" - 예전엔
         # screen의 char_width_in 계수(0.0049)가 실측 재보정이 안 돼 실제 폭을
         # 과소평가한다는 이유로 여유분을 6.7자까지 늘려뒀었는데, 그 결과 라벨이
