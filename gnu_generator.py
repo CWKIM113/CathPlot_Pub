@@ -1221,6 +1221,20 @@ class GnuplotGenerator:
             SAMPLE_W *= _legend_tuning["sample_mult"]
         else:
             SAMPLE_W *= 2 / 3
+            # [추가 - 요청] "너무 짧아서 style 구분이 안 되면 조금 더 길게
+            # 하면 되지 않나 - intelligent하게" - 6가지 style(특히 4글자
+            # 리듬 단위를 쓰는 dash/dashdotdot)을 뭉개지 않고 구분하려면
+            # 그 단위가 최소 2번은 반복될 글자 수(대략 8자)가 필요한데,
+            # 지금까지는 SAMPLE_W가 이보다 작으면(실측: 축 폭에 따라 3자
+            # 안팎) 무조건 그 안에서 압축해 그렸음 - 무조건 늘리는 게
+            # 아니라, 이미 충분하면 그대로 두고 부족할 때만 그 최소치까지
+            # 끌어올린다(box_w가 SAMPLE_W를 그대로 반영하므로 legend box
+            # 자체도 이 늘어난 폭만큼 자동으로 커져 겹침 없음).
+            _term_font_pt_for_char_floor = max(int(round(11 * (panel_scale or 1.0))), 8)
+            _gp_char_w_in_floor = 0.006014 * 0.878 * _term_font_pt_for_char_floor * _font_width_ratio(font_name)
+            _min_sample_w_in = 8.0 * _gp_char_w_in_floor
+            _min_sample_w_frac = _min_sample_w_in / max(axis_w_in, 0.5)
+            SAMPLE_W = max(SAMPLE_W, _min_sample_w_frac)
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
         # 그냥 len()으로 세면 숫자/콜론/대시처럼 대문자보다 좁은 문자가 많은
         # 라벨(CATHENA 변수명 특성상 흔함, 예: "MFLO:R-SDRT1>L-STLF1")은 실제
@@ -1628,15 +1642,19 @@ class GnuplotGenerator:
                 # 안 되는 작은 경우가 흔해서(실측 3자) "PWRDWN/MFLO:R-FWP1
                 # 처럼 유독 짧아 보임" - dot류가 3글자 중 1글자만 잉크라
                 # 나머지 style보다 훨씬 짧은 토막처럼 보였던 것(재현·실측
-                # 확인). 이 파일에 원래도 있던 관례("solid/dash/dot 3단계
-                # 굵기·간격 구분만 유지")로 되돌려, 6종을 3단계로 묶고
-                # 각 단계가 최소 절반 이상은 잉크로 채워지게 한다 - 모든
-                # style이 "뚜렷이 짧은 토막"으로 보이는 일이 없어짐.
+                # 확인). "무작정 3단계로 뭉치지 말고, 구분 안 되면 조금 더
+                # 길게 하면 되지 않나"는 지적이 맞았음 - 근본 해결은 글자
+                # 수를 줄이는 게 아니라 SAMPLE_W 자체에 "6종 리듬이 최소
+                # 2번은 반복될" 최소 폭을 보장하는 것(바로 위 SAMPLE_W
+                # 최소치 참고) - 이제 그 여유가 확보됐으니 6종을 다시 전부
+                # 구분되는 고유 리듬으로 되돌린다.
                 _RHYTHM_BY_STYLE = {  # (연속 잉크 글자수, 빈칸 글자수)
                     "solid": (1, 0),
-                    "dash": (2, 1), "shortdash": (2, 1),
-                    "dashdot": (2, 1), "dashdotdot": (2, 1),
-                    "dot": (1, 1),
+                    "dash": (3, 1),        # 4글자 단위 - 길게 이어지는 굵은 dash
+                    "shortdash": (1, 1),   # 2글자 단위 - 촘촘한 체크무늬
+                    "dashdot": (2, 1),     # 3글자 단위 - 중간 dash
+                    "dashdotdot": (2, 2),  # 4글자 단위 - dashdot보다 빈칸 넓음
+                    "dot": (1, 2),         # 3글자 단위 - 성긴 점선
                 }
                 _ink_run, _gap_run = _RHYTHM_BY_STYLE.get(linestyle, (1, 0))
                 # solid 글자("━") 실측 배율(0.6)은 그대로 유지 - 모든 style이
