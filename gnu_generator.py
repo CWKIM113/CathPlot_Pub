@@ -1138,7 +1138,14 @@ class GnuplotGenerator:
         # 1.5배를 곱해서 최종 간격이 실측 tic 길이의 2.25배(1.5*1.5)까지
         # 불어나 있었음 - 요청하신 "1.5배"(=TIC_LEN_IN 자체를 그대로 씀,
         # 2.25배의 정확히 2/3)로 되돌린다.
-        FRAME_GAP_IN = TIC_LEN_IN
+        # [수정 - 범위 한정] "노파심에 save/print에는 영향 없지? 영향 주면
+        # 안 됨(다 조정했던 거니까)" - 이번 요청은 화면(Interactive)
+        # 스크린샷을 보고 나온 것인데, 이 계수(FRAME_GAP_IN)는 print/save
+        # 쪽 legend 위치 계산에도 그대로 쓰여서 그쪽도 같이 좁아지고
+        # 있었음. Print/Save는 이미 예전에 따로 검증·확정된 값이라 건드리면
+        # 안 되므로, 화면(is_print_mode=False)에서만 좁힌 값을 쓰고
+        # Print/Save는 기존 2.25배 그대로 유지한다.
+        FRAME_GAP_IN = TIC_LEN_IN if not is_print_mode else 1.5 * TIC_LEN_IN
         FRAME_MARGIN_X = FRAME_GAP_IN / max(axis_w_in, 0.5)  # plot 테두리(frame)와 박스 사이 가로 간격
         FRAME_MARGIN_Y = FRAME_GAP_IN / max(axis_h_in, 0.3)  # 세로 간격(동일한 물리 거리)
 
@@ -1222,17 +1229,17 @@ class GnuplotGenerator:
         else:
             SAMPLE_W *= 2 / 3
             # [추가 - 요청] "너무 짧아서 style 구분이 안 되면 조금 더 길게
-            # 하면 되지 않나 - intelligent하게" - 6가지 style(특히 4글자
-            # 리듬 단위를 쓰는 dash/dashdotdot)을 뭉개지 않고 구분하려면
-            # 그 단위가 최소 2번은 반복될 글자 수(대략 8자)가 필요한데,
-            # 지금까지는 SAMPLE_W가 이보다 작으면(실측: 축 폭에 따라 3자
-            # 안팎) 무조건 그 안에서 압축해 그렸음 - 무조건 늘리는 게
-            # 아니라, 이미 충분하면 그대로 두고 부족할 때만 그 최소치까지
-            # 끌어올린다(box_w가 SAMPLE_W를 그대로 반영하므로 legend box
-            # 자체도 이 늘어난 폭만큼 자동으로 커져 겹침 없음).
+            # 하면 되지 않나 - intelligent하게", "dash는 예로 들면 3개 정도
+            # 나오면 됨", "동일한 길이로 해라는 것임" - 6가지 style 전부
+            # 같은 길이(글자 수)를 차지하는 건 이미 보장돼 있고(아래
+            # rstrip 없이 n_total_chars 유지), 이제 그 안에서 dash 같은
+            # style이 최소 3번은 반복돼(예: "-- -- --") 뚜렷한 "선"으로
+            # 보이게 필요한 최소 글자 수(대략 9자)를 보장한다 - 이미
+            # 충분하면 그대로 두고 부족할 때만 끌어올림(box_w가 SAMPLE_W를
+            # 그대로 반영하므로 legend box 자체도 자동으로 커져 겹침 없음).
             _term_font_pt_for_char_floor = max(int(round(11 * (panel_scale or 1.0))), 8)
             _gp_char_w_in_floor = 0.006014 * 0.878 * _term_font_pt_for_char_floor * _font_width_ratio(font_name)
-            _min_sample_w_in = 8.0 * _gp_char_w_in_floor
+            _min_sample_w_in = 9.0 * _gp_char_w_in_floor
             _min_sample_w_frac = _min_sample_w_in / max(axis_w_in, 0.5)
             SAMPLE_W = max(SAMPLE_W, _min_sample_w_frac)
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
@@ -1648,13 +1655,16 @@ class GnuplotGenerator:
                 # 2번은 반복될" 최소 폭을 보장하는 것(바로 위 SAMPLE_W
                 # 최소치 참고) - 이제 그 여유가 확보됐으니 6종을 다시 전부
                 # 구분되는 고유 리듬으로 되돌린다.
+                # [수정 - 요청] "dash는 예로 들면 3개 정도 나오면 됨" - 단위를
+                # 작게(2~4글자) 유지해 위 최소 글자수(9자) 안에서 dash가
+                # 눈에 띄게 3번 반복되도록(3글자 단위 x 3번 = 9자) 조정.
                 _RHYTHM_BY_STYLE = {  # (연속 잉크 글자수, 빈칸 글자수)
                     "solid": (1, 0),
-                    "dash": (3, 1),        # 4글자 단위 - 길게 이어지는 굵은 dash
-                    "shortdash": (1, 1),   # 2글자 단위 - 촘촘한 체크무늬
-                    "dashdot": (2, 1),     # 3글자 단위 - 중간 dash
-                    "dashdotdot": (2, 2),  # 4글자 단위 - dashdot보다 빈칸 넓음
-                    "dot": (1, 2),         # 3글자 단위 - 성긴 점선
+                    "dash": (2, 1),        # 3글자 단위 - 9자 기준 정확히 3번 반복
+                    "shortdash": (1, 1),   # 2글자 단위 - 더 촘촘한 체크무늬
+                    "dot": (1, 2),         # 3글자 단위 - 성긴 점선(잉크 비중 낮음)
+                    "dashdot": (2, 2),     # 4글자 단위 - 중간 dash + 넓은 빈칸
+                    "dashdotdot": (1, 3),  # 4글자 단위 - dot보다 더 성김
                 }
                 _ink_run, _gap_run = _RHYTHM_BY_STYLE.get(linestyle, (1, 0))
                 # solid 글자("━") 실측 배율(0.6)은 그대로 유지 - 모든 style이
@@ -1681,12 +1691,23 @@ class GnuplotGenerator:
                     _unit = _INK_CHAR * _ink_run + " " * _gap_run
                     _reps = _n_total_chars // max(len(_unit), 1) + 2
                     _glyph_run = (_unit * _reps)[:_n_total_chars]
-                _dx_chars = ((sample_mid_x - _box_cx) * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9)
+                # [수정 - 요청] "길이도 다른데 다 중앙정렬인 느낌 - 좌우
+                # 정렬이 맞지?" -> "좌측 정렬이 답일세, 트릭쓰지 말고" -
+                # is_right_side에 따라 기준점을 오른쪽/왼쪽으로 바꾸는
+                # 조건분기(위 첫 시도)도 트릭으로 보일 수 있어, 더 단순하게
+                # 항상 sample_x1(왼쪽 끝) 기준으로 "left" 정렬 하나로
+                # 통일한다 - 모든 style이 항상 같은 왼쪽 시작점에서 시작해
+                # 오른쪽으로 뻗어나가고, 길이가 짧은 style만 오른쪽 끝이
+                # 살짝 못 미치는 식으로 - 위치(legend가 좌측/우측 어디든)와
+                # 무관하게 규칙이 하나뿐이라 가장 단순함.
+                _glyph_anchor_x = sample_x1
+                _glyph_just = "left"
+                _dx_chars = ((_glyph_anchor_x - _box_cx) * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9)
                 _dy_chars = ((row_y - _box_cy) * axis_h_in) / max(_GP_CHAR_H_IN, 1e-9)
                 lines.append(
                     f'set label {id_offset + 7000 + row_i + 1} "{_glyph_run}" '
                     f'at graph {_box_cx:.4f},{_box_cy:.4f} offset {_dx_chars:.3f},{_dy_chars:.3f} '
-                    f'center front font "{font_name},{max(int(_label_font_pt), 5)}" textcolor rgb "{color}"'
+                    f'{_glyph_just} front font "{font_name},{max(int(_label_font_pt), 5)}" textcolor rgb "{color}"'
                 )
             else:
                 _dash_pat = _dash_pattern_for_fmt(linestyle, fmt)
