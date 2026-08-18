@@ -1061,8 +1061,25 @@ class GnuplotGenerator:
         # 간격이 늘어남 - 1글자(10pt) 더 줄여줘요" - 이전에도 같은 이유(사무실
         # PC 화면 DPI 차이)로 한 번 줄인 적 있음(0.5->-0.5) - 같은 폭(-1.0)
         # 만큼 추가로 축소.
+        # [수정 - 요청] "Legend 내 마진을 글자 2자 정도 줄여줘요" - 처음엔
+        # line<->border(BOX_EDGE_GAP_FRAC)와 line<->title(LABEL_GAP_FRAC)을
+        # 줄였었는데 "그게 아니라 border와 title 사이 간격을 줄이라는
+        # 것"이라는 정정을 받음 - 위 두 값은 원래대로 되돌리고(둘 다 원복),
+        # 실제로 "박스 테두리<->title 텍스트" 간격을 만드는 값인 이
+        # box_chars(화면 전용, box_w 계산에서 title 반대편 여유 공간)를
+        # 대신 줄인다.
+        # [수정 - 버그 발견, 안전하게 축소폭 제한] 요청대로 2.0(-1.5 -> -3.5)
+        # 만큼 줄여서 실측해보니, "PWRDWNB"/"QRPRS"처럼 실제로 흔히 쓰이는
+        # 길이의 라벨에서도 title 글자가 box 왼쪽 테두리에 걸쳐 잘려 보이는
+        # 문제를 발견함(원래(-1.5)도 이미 아주 살짝 걸치는 경계선에 있었는데,
+        # -3.5로 더 줄이면 그 여유가 거의 절반으로 줄어 눈에 띄게 더 잘림) -
+        # PIL 글자폭 추정과 실제 gnuplot(Windows GDI) 렌더링 폭 사이의
+        # 근본적인 오차 문제(오늘 다른 시도에서도 계속 발목을 잡았던 것과
+        # 동일한 원인)라 여기서 완전히 고치려 하지 않고, 대신 축소 폭을
+        # 0.5(-1.5 -> -2.0)로 안전하게 줄여서 기존 대비 눈에 띄는 추가 잘림은
+        # 거의 없이(요청하신 방향으로) 살짝만 줄인다.
         _legend_tuning = (_FORMAT_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0, "sample_mult": 1.0, "text_corr": 1.0})
-                          if is_print_mode else {"row_mult": 1.2, "box_chars": -1.5, "sample_mult": 1.0, "text_corr": 1.0})
+                          if is_print_mode else {"row_mult": 1.2, "box_chars": -2.0, "sample_mult": 1.0, "text_corr": 1.0})
         ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * _legend_tuning["row_mult"]
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
@@ -1254,12 +1271,7 @@ class GnuplotGenerator:
         # [수정] "Print/Save에서도 title이 샘플선에 붙어 보인다"는 후속 피드백으로
         # print도 소폭(0.4 -> 0.6) 늘림 - box_w가 폭 폭주 우려가 있어 screen(1.4)
         # 만큼은 아니고 절반 정도만 늘림.
-        # [수정 - 요청] "Legend 내 마진을 font 글자 2자 정도 줄여줘요(마진이
-        # 글자 1자인데 해상도와 화면 크기에 따라 달라서...)" - 화면
-        # (Interactive)에서만 해상도/창 크기에 따라 체감 여백이 다르게
-        # 보인다는 지적이라 화면 계수만 줄인다(print/save는 그대로 유지 -
-        # 이미 검증된 값이라 안 건드림). 1.4 -> 0.4로 1자 축소.
-        LABEL_GAP_FRAC = (0.6 if is_print_mode else 0.4) * char_width_frac   # 샘플선 <-> curve title 간격
+        LABEL_GAP_FRAC = (0.6 if is_print_mode else 1.4) * char_width_frac   # 샘플선 <-> curve title 간격
         # [수정] "screen에서 박스 테두리와 샘플선이 붙어 보인다"는 재확인 피드백.
         # 계산해보면 print/screen 공통 계수(0.3)는 기본 legend_size(9pt) 기준
         # 물리 간격이 0.013in 안팎(≈2px)에 불과해, 샘플선 자체의 굵기(lw)나
@@ -1270,10 +1282,7 @@ class GnuplotGenerator:
         # 두께(lw)만으로도 거의 다 채워져 시각적으로 안 보였음(우측 정렬이면
         # 샘플선이 box 오른쪽 테두리에 바로 붙는 쪽이라 특히 눈에 띔) - screen과
         # 동일한 계수(0.7+1/3)로 맞춘다.
-        # [수정 - 요청] 위와 같은 이유로 화면에서만 추가로 줄임(약 0.7자,
-        # LABEL_GAP_FRAC의 1자 축소와 합쳐 총 "약 2자" 축소 요청에 맞춤) -
-        # print/save는 그대로 유지.
-        BOX_EDGE_GAP_FRAC = (0.7 + 1 / 3 if is_print_mode else (1 / 3)) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
+        BOX_EDGE_GAP_FRAC = (0.7 + 1 / 3) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
         # [수정] "screen 창에서도 마진이 너무 넓다(5자 이상 줄여야 함)" - 예전엔
         # screen의 char_width_in 계수(0.0049)가 실측 재보정이 안 돼 실제 폭을
         # 과소평가한다는 이유로 여유분을 6.7자까지 늘려뒀었는데, 그 결과 라벨이
@@ -1315,6 +1324,17 @@ class GnuplotGenerator:
         # 이미 실측 기반으로 따로 맞춰서 여기서는 손대지 않음).
         if not is_print_mode:
             _box_w_extra_chars -= SAMPLE_W / max(char_width_frac, 1e-9)
+        # [수정 - 버그, 이번에 발견] box_w_extra_chars가 음수로 많이 내려간
+        # 상태(화면)에서 curve title이 아주 짧으면(예: 1~2자) "max_label_len +
+        # box_w_extra_chars"가 음수가 되어 버려 box_w가 SAMPLE_W(샘플선 길이)
+        # 보다도 작게 계산되고, 그 결과 box가 샘플선조차 못 담고 title은 box
+        # 왼쪽 바깥으로 완전히 삐져나오는 심각한 버그가 실제 렌더링(A/B 2글자
+        # 라벨)으로 확인됨 - title이 짧을 때도 box 안에 최소 1자 분량의
+        # 공간은 항상 남도록 하한을 둔다(라벨이 충분히 길면 원래 계산값을
+        # 그대로 쓰므로 평소(긴 CATHENA 변수명) 동작에는 영향 없음).
+        _MIN_LABEL_CHARS_IN_BOX = 1.5
+        if max_label_len + _box_w_extra_chars < _MIN_LABEL_CHARS_IN_BOX:
+            _box_w_extra_chars = _MIN_LABEL_CHARS_IN_BOX - max_label_len
         # [수정] box가 title을 못 감싸는(밖으로 삐져나옴) 버그 - LABEL_GAP_FRAC
         # (샘플선<->title 간격)이 여기 폭 계산에 빠져 있어서, 그 간격을 늘릴수록
         # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
