@@ -5035,6 +5035,20 @@ class CathPlotGUI:
         except Exception:
             pass
 
+    def _move_window_no_activate(self, hwnd, x, y):
+        """[추가 - 요청] "Ani 창은 좌상단에 작게, plot 창은 화면 중앙에" -
+        gnuplot plot 창을 (x,y)로 옮긴다(크기는 그대로 - SWP_NOSIZE).
+        포커스는 안 뺏는다(SWP_NOACTIVATE)."""
+        if not hwnd:
+            return
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            # SWP_NOSIZE(0x0001)|SWP_NOACTIVATE(0x0010)|SWP_NOZORDER(0x0004)
+            user32.SetWindowPos(hwnd, 0, int(x), int(y), 0, 0, 0x0001 | 0x0010 | 0x0004)
+        except Exception:
+            pass
+
     def _write_anim_ctrl(self, ctrl_path, paused, frame_pause, click_seq, exit_flag=0):
         """[추가 - space bar 재설계] 실행 중인 애니메이션(gnuplot)에 값을
         전달하는 작은 제어 파일을 다시 쓴다. gnuplot이 파일을 읽는 도중에
@@ -5091,41 +5105,41 @@ class CathPlotGUI:
         panel = tk.Toplevel(self.root)
         panel.title("Animation Control")
         panel.resizable(False, False)
-        # [수정 - 버그, 코드 리뷰로 발견] 패널이 항상 메인 창 기준 같은
-        # 좌표(+40,+40)에 떠서, Animate 켠 plot을 여러 개 연달아 열면(기존
-        # plot 창을 안 닫아도 되는 앱 설계상 흔한 사용 패턴) 새 패널이 이전
-        # 패널을 그대로 덮어써 이전 것의 버튼을 가렸음 - 열려 있는 패널
-        # 개수만큼 대각선으로 조금씩 어긋나게 띄운다.
+        # [수정 - 버그, 요청] "Ani 창은 좌상단에 작게, plot 창은 화면 중앙에" -
+        # plot 창이 어디서 열릴지(OS가 정함)에 맞춰 패널 위치를 계산하던
+        # 이전 방식 대신, 더 예측 가능하게 패널은 항상 화면 좌상단 구석에
+        # 작게 고정하고, plot 창 쪽을 화면 중앙으로 옮긴다 - 둘 다 서로
+        # 절대 겹치지 않고 위치도 매번 같아서 찾기 쉬움. 열려 있는 패널이
+        # 여러 개면 좌상단에서 살짝씩 어긋나게 띄운다.
         _n_open = getattr(self, "_anim_panel_open_count", 0)
         self._anim_panel_open_count = _n_open + 1
+        try:
+            panel.geometry(f"+{20 + 24 * _n_open}+{20 + 24 * _n_open}")
+        except Exception:
+            pass
 
-        # [수정 - 버그, 요청] "Animation 창이 CathPlot 뒤로 숨어버림 - Ani
-        # 컨트롤 패널과 겹치지 않게, 가급적 맨 위로" - plot 창의 실제 화면
-        # 위치(GetWindowRect)를 찾아서, 그 오른쪽(화면에 자리가 있으면)에
-        # 패널을 붙여 배치하면 겹칠 일이 없다. 자리가 없으면(plot 창을 못
-        # 찾았거나 화면 오른쪽 끝에 붙어 있으면) 기존처럼 메인 창 기준
-        # 대각선 오프셋으로 대체한다.
+        # plot 창을 제목으로 찾아 화면 중앙으로 옮기고, Z-order도 맨 위로
+        # 올려둔다(포커스는 안 뺏음 - SWP_NOACTIVATE) - 패널 자신도 새로
+        # 만들어지며 다시 맨 위로 올라가므로, 결과적으로 "패널이 맨 위,
+        # plot 창이 그 바로 아래, 화면 중앙"이 되어 CathPlot 메인 창에
+        # 가려지지 않는다.
+        # [수정 - 지적] "Animate plot을 여러 개 열면 전부 정확히 같은
+        # 중앙 좌표라 서로 완전히 겹쳐서 몇 개가 떠 있는지 구분이 안 됨" -
+        # 패널과 같은 개수(_n_open) 기준으로 중앙 위치도 대각선으로 조금씩
+        # 어긋나게 한다(패널과 같은 간격으로 같이 움직여서, 몇 번째로 연
+        # animate든 "패널 바로 아래에 그 plot"이라는 대응 관계는 유지됨).
         _plot_hwnd, _plot_rect = (None, None)
         if plot_window_title:
             _plot_hwnd, _plot_rect = self._find_window_rect(plot_window_title, timeout_sec=1.5)
-        _placed = False
-        if _plot_rect:
+        if _plot_hwnd and _plot_rect:
             try:
-                _screen_w = panel.winfo_screenwidth()
-                _px = _plot_rect[2] + 10  # plot 창 오른쪽 바깥
-                if _px + 260 <= _screen_w:  # 패널이 화면 안에 들어갈 때만
-                    panel.geometry(f"+{_px}+{_plot_rect[1]}")
-                    _placed = True
+                _w = _plot_rect[2] - _plot_rect[0]
+                _h = _plot_rect[3] - _plot_rect[1]
+                _cx = max((panel.winfo_screenwidth() - _w) // 2, 0) + 24 * _n_open
+                _cy = max((panel.winfo_screenheight() - _h) // 2, 0) + 24 * _n_open
+                self._move_window_no_activate(_plot_hwnd, _cx, _cy)
             except Exception:
                 pass
-        if not _placed:
-            try:
-                panel.geometry(f"+{self.root.winfo_x() + 40 + 24 * _n_open}+{self.root.winfo_y() + 40 + 24 * _n_open}")
-            except Exception:
-                pass
-        # 패널을 다 배치한 뒤, plot 창을 Z-order상 맨 위로 올려둔다(포커스는
-        # 안 뺏음) - 바로 다음에 패널 자신이 화면에 나타나면서 다시 맨 위로
-        # 올라가, 결과적으로 "패널이 맨 위, plot 창이 그 바로 아래"가 된다.
         if _plot_hwnd:
             self._raise_window_no_activate(_plot_hwnd)
 
