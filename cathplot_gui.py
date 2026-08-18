@@ -5013,7 +5013,7 @@ class CathPlotGUI:
         except OSError:
             pass
 
-    def _open_animation_control_panel(self, ctrl_path, initial_frame_pause, status_path=None):
+    def _open_animation_control_panel(self, ctrl_path, initial_frame_pause, status_path=None, proc=None):
         """[추가 - 근본 원인 재설계] "Animation 창에서 space bar가 안 먹힘" -
         이전엔 gnuplot 자체의 키보드 bind(Space=일시정지, +/-=속도, Q=종료)에
         의존했는데, 실측(화면에 키 입력 감지 횟수를 표시해 직접 확인)으로
@@ -5026,8 +5026,15 @@ class CathPlotGUI:
         컨트롤 창을 띄운다 - 버튼을 누르면 gnu_generator.create_animation_
         script가 만들어둔 제어 파일(ctrl_path)에 값을 써주고, 실행 중인
         gnuplot이 매 프레임 그 파일을 load해서 반영한다(키보드 포커스와
-        완전히 무관 - 실측으로 pause/exit 둘 다 정상 동작 확인됨)."""
-        state = {"paused": False, "frame_pause": initial_frame_pause, "seq": 0, "finished": False}
+        완전히 무관 - 실측으로 pause/exit 둘 다 정상 동작 확인됨).
+        [수정 - 코드 리뷰로 발견, proc 매개변수 추가] 이전엔 이 패널이 실제
+        gnuplot 프로세스를 전혀 몰라서 (1) Exit을 눌러도 제어 파일에 신호만
+        쓰고 창은 그대로 남아있었고(gnuplot이 스스로 확인하고 끝내주길
+        기다릴 뿐 - "pause mouse close"로 넘어가 계속 떠 있음), (2) 사용자가
+        창을 직접 닫거나 gnuplot이 죽어도 패널은 그걸 알 방법이 없어 버튼을
+        눌러도 계속 조용히 실패하는 파일 쓰기만 반복했음 - 이제 Popen
+        핸들을 받아 둘 다 고친다."""
+        state = {"paused": False, "frame_pause": initial_frame_pause, "seq": 0, "finished": False, "dead": False}
 
         def _bump():
             # [추가 - 요청] 버튼을 누를 때마다 1씩 증가 - gnuplot이 "끝난
@@ -5039,13 +5046,25 @@ class CathPlotGUI:
         panel = tk.Toplevel(self.root)
         panel.title("Animation Control")
         panel.resizable(False, False)
+        # [수정 - 버그, 코드 리뷰로 발견] 패널이 항상 메인 창 기준 같은
+        # 좌표(+40,+40)에 떠서, Animate 켠 plot을 여러 개 연달아 열면(기존
+        # plot 창을 안 닫아도 되는 앱 설계상 흔한 사용 패턴) 새 패널이 이전
+        # 패널을 그대로 덮어써 이전 것의 버튼을 가렸음 - 열려 있는 패널
+        # 개수만큼 대각선으로 조금씩 어긋나게 띄운다.
+        _n_open = getattr(self, "_anim_panel_open_count", 0)
+        self._anim_panel_open_count = _n_open + 1
         try:
-            panel.geometry(f"+{self.root.winfo_x() + 40}+{self.root.winfo_y() + 40}")
+            panel.geometry(f"+{self.root.winfo_x() + 40 + 24 * _n_open}+{self.root.winfo_y() + 40 + 24 * _n_open}")
         except Exception:
             pass
 
-        ttk.Label(panel, text="애니메이션 실행 중 - 아래 버튼으로 직접 제어",
-                  font=("Malgun Gothic", 9)).pack(padx=12, pady=(10, 6))
+        def _on_panel_destroy():
+            self._anim_panel_open_count = max(getattr(self, "_anim_panel_open_count", 1) - 1, 0)
+        panel.bind("<Destroy>", lambda e: _on_panel_destroy() if e.widget is panel else None)
+
+        status_label = ttk.Label(panel, text="애니메이션 실행 중 - 아래 버튼으로 직접 제어",
+                                  font=("Malgun Gothic", 9))
+        status_label.pack(padx=12, pady=(10, 6))
 
         btn_row = ttk.Frame(panel)
         btn_row.pack(padx=12, pady=2)
@@ -5082,6 +5101,17 @@ class CathPlotGUI:
         def _poll_finished():
             if not panel.winfo_exists():
                 return
+            # [추가 - 코드 리뷰로 발견] 패널이 실행 중인 gnuplot 프로세스의
+            # 생사를 전혀 몰라서, 사용자가 plot 창을 직접 닫거나 gnuplot이
+            # 죽어도 버튼들이 계속 살아있는 것처럼 보이며 조용히 파일 쓰기만
+            # 반복했음 - 매 폴링마다 프로세스 생존 여부도 같이 확인해서,
+            # 죽었으면 버튼을 비활성화하고 안내 문구로 바꾼 뒤 폴링을 멈춘다.
+            if proc is not None and proc.poll() is not None and not state["dead"]:
+                state["dead"] = True
+                status_label.config(text="애니메이션 창이 닫혔거나 gnuplot이 종료됨 - 이 패널도 닫아주세요")
+                for _btn in (pause_btn, slower_btn, faster_btn):
+                    _btn.config(state="disabled")
+                return
             if status_path and not state["finished"]:
                 try:
                     with open(status_path, "r", encoding="utf-8") as f:
@@ -5109,7 +5139,14 @@ class CathPlotGUI:
 
         def speed_down():
             _clear_finished_if_needed()
-            state["frame_pause"] = state["frame_pause"] * 2.0
+            # [수정 - 버그, 코드 리뷰로 발견] speed_up은 0.001초로 하한이
+            # 있는데 speed_down은 상한이 없어서, 계속 누르면 프레임당
+            # 대기시간이 몇 시간 단위로 불어날 수 있었음 - gnuplot 쪽
+            # "pause frame_pause_anim"은 그 프레임 동안은 끊어서 다시 읽지
+            # 않는 한 번의 대기라서, 한 번 이렇게 커지면 그 시간이 다 지날
+            # 때까지 Faster를 눌러도 반응이 없어 사실상 멈춘 것처럼 보임 -
+            # 상한(5초/프레임 - 이 정도면 충분히 느리게 볼 수 있음)을 둔다.
+            state["frame_pause"] = min(state["frame_pause"] * 2.0, 5.0)
             self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"], _bump())
 
         def speed_up():
@@ -5117,11 +5154,25 @@ class CathPlotGUI:
             state["frame_pause"] = max(state["frame_pause"] * 0.5, 0.001)
             self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"], _bump())
 
-        tk.Button(btn_row, text="- Slower", width=9, command=speed_down).pack(side="left", padx=3)
-        tk.Button(btn_row, text="+ Faster", width=9, command=speed_up).pack(side="left", padx=3)
+        slower_btn = tk.Button(btn_row, text="- Slower", width=9, command=speed_down)
+        slower_btn.pack(side="left", padx=3)
+        faster_btn = tk.Button(btn_row, text="+ Faster", width=9, command=speed_up)
+        faster_btn.pack(side="left", padx=3)
 
         def do_exit():
+            # [수정 - 버그, 코드 리뷰로 발견] "즉시 종료함(창이 닫힘)"이라고
+            # 설명서에 적혀 있는데 실제로는 exit_flag만 파일에 써서
+            # gnuplot이 스스로 루프를 빠져나가 "pause mouse close"로
+            # 넘어갈 뿐, 창은 계속 떠 있었음 - 제어 파일 신호는 그대로
+            # 남겨두되(혹시 gnuplot이 마침 그 시점을 확인 중이면 깔끔하게
+            # 빠져나가도록), 프로세스를 직접 종료해 실제로 창이 닫히게 한다.
             self._write_anim_ctrl(ctrl_path, False, state["frame_pause"], _bump(), exit_flag=1)
+            if proc is not None:
+                try:
+                    if proc.poll() is None:
+                        proc.terminate()
+                except Exception:
+                    pass
             panel.destroy()
 
         pal = self.PALETTE
@@ -5445,9 +5496,15 @@ class CathPlotGUI:
                 elif getattr(generator, "last_anim_ctrl_path", None):
                     # [추가 - space bar 재설계] 애니메이션이 정상적으로 떠 있으면
                     # (크래시 아님) Pause/Speed/Exit 컨트롤 패널을 띄운다.
+                    # [수정 - 코드 리뷰로 발견] 패널이 실제 gnuplot 프로세스
+                    # 핸들을 전혀 몰라서 (1)Exit을 눌러도 파일에 신호만 쓰고
+                    # 창을 직접 안 닫았고 (2)사용자가 창을 직접 닫거나
+                    # gnuplot이 죽어도 패널이 그걸 알 방법이 없었음 - 핸들을
+                    # 넘겨서 두 가지 다 고친다.
                     self._open_animation_control_panel(
                         generator.last_anim_ctrl_path, generator.last_anim_frame_pause,
-                        status_path=getattr(generator, "last_anim_status_path", None)
+                        status_path=getattr(generator, "last_anim_status_path", None),
+                        proc=generator.last_process,
                     )
 
             # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로

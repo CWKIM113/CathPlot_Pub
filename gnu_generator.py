@@ -1079,8 +1079,17 @@ class GnuplotGenerator:
         # 동일한 원인)라 여기서 완전히 고치려 하지 않고, 대신 축소 폭을
         # 0.5(-1.5 -> -2.0)로 안전하게 줄여서 기존 대비 눈에 띄는 추가 잘림은
         # 거의 없이(요청하신 방향으로) 살짝만 줄인다.
-        _legend_tuning = (_FORMAT_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0, "sample_mult": 1.0, "text_corr": 1.0})
-                          if is_print_mode else {"row_mult": 1.2, "box_chars": -2.0, "sample_mult": 1.0, "text_corr": 1.0})
+        # [수정 - 버그, 회귀 재발견] 화면 legend 렌더링을 Animation 이전
+        # 방식으로 되돌리는 과정에서, "Animation GIF 저장은 fmt='interactive'로
+        # _build_plot_commands를 부르지만 is_print_mode=True라 화면용 튜닝을
+        # 안 타고 _FORMAT_TUNING(파일 포맷 전용, "interactive" 키 없음)의
+        # 기본값(box_chars=2.0, 미세조정 안 된 값)으로 조용히 빠져 GIF legend
+        # 여백이 과하게 넓어짐"이라는, 이전에 이미 발견해 고쳤던 버그가
+        # 되돌리는 과정에서 같이 사라져 재발했음 - fmt=="interactive"일
+        # 때는 is_print_mode와 무관하게 화면용 튜닝을 쓰도록 되돌린다.
+        _legend_tuning = ({"row_mult": 1.2, "box_chars": -2.0, "sample_mult": 1.0, "text_corr": 1.0}
+                          if (not is_print_mode or _fmt_l == "interactive")
+                          else _FORMAT_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0, "sample_mult": 1.0, "text_corr": 1.0}))
         ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * _legend_tuning["row_mult"]
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
@@ -1331,9 +1340,20 @@ class GnuplotGenerator:
         # 보다도 작게 계산되고, 그 결과 box가 샘플선조차 못 담고 title은 box
         # 왼쪽 바깥으로 완전히 삐져나오는 심각한 버그가 실제 렌더링(A/B 2글자
         # 라벨)으로 확인됨 - title이 짧을 때도 box 안에 최소 1자 분량의
-        # 공간은 항상 남도록 하한을 둔다(라벨이 충분히 길면 원래 계산값을
-        # 그대로 쓰므로 평소(긴 CATHENA 변수명) 동작에는 영향 없음).
-        _MIN_LABEL_CHARS_IN_BOX = 1.5
+        # 공간은 항상 남도록 하한을 둔다.
+        # [수정 - 버그, 코드 리뷰로 발견] 위 하한을 "고정값 1.5"로 두면,
+        # (SAMPLE_W/char_width_frac ≈ 6.46이 이미 box_chars(-2.0)에서 빠져
+        # box_w_extra_chars ≈ -8.46인 상태라) 실측해보면 대략 10자 미만인
+        # "모든" 라벨이 이 하한에 걸려 "max_label_len + box_w_extra_chars"가
+        # 라벨 길이와 무관하게 항상 똑같이 1.5로 고정돼 버림 - 즉 1자짜리
+        # 라벨과 "PWRDWNB"(7자) 같은 흔한 중간 길이 라벨이 완전히 같은 box
+        # 폭을 받아서, 후자는 실제 텍스트 폭보다 box가 작아 다시 밖으로
+        # 삐져나올 수 있음(원래 이 하한이 막으려던 것과 같은 증상이 더 넓은
+        # 길이 범위에서 재발). 하한 자체를 라벨 길이에 비례해서 완만하게
+        # 커지도록 바꿔(1자당 0.15씩 증가) 중간 길이 라벨도 어느 정도
+        # 차등화되게 한다(긴 라벨(10자 이상)은 원래 계산값이 이 하한보다
+        # 커서 여전히 영향 없음 - 정확한 기울기는 실측 재확인 필요).
+        _MIN_LABEL_CHARS_IN_BOX = 1.5 + max(max_label_len - 1, 0) * 0.15
         if max_label_len + _box_w_extra_chars < _MIN_LABEL_CHARS_IN_BOX:
             _box_w_extra_chars = _MIN_LABEL_CHARS_IN_BOX - max_label_len
         # [수정] box가 title을 못 감싸는(밖으로 삐져나옴) 버그 - LABEL_GAP_FRAC
@@ -3360,7 +3380,7 @@ class GnuplotGenerator:
         동시에 실시간으로 그려지는(progress) 애니메이션을 만든다. 기본은
         Interactive 창(화면 전용)이고, gif_path를 주면 대신 그 경로에 애니메이션
         GIF 파일로 저장한다(gnuplot의 gif animate 터미널 - 파일이라 재생 속도는
-        저장 시점에 delay로 굳어지므로 Start/Pause/+-/Q 같은 실시간 컨트롤은
+        저장 시점에 delay로 굳어지므로 Pause/Speed/Exit 같은 실시간 컨트롤은
         의미가 없어 GIF 모드에서는 뺀다).
 
         [설계] "한 프레임"을 데이터 행(row) 단위로 하면 행이 수만 개인 파일은
@@ -3372,9 +3392,14 @@ class GnuplotGenerator:
         필터는 gnuplot의 표준 "조건 거짓이면 1/0(정의되지 않음)으로 만들어
         그 점을 건너뛰게" 하는 관용구를 씀.
 
-        [컨트롤 - Interactive만] gnuplot bind로 키보드 단축키를 건다 - Space:
-        일시정지/재개, Q: 종료, +/-: 속도(프레임당 대기시간)를 반씩 줄이거나
-        늘림. 기존 Interactive의 'R'(원래 범위로 리셋) 키와 안 겹치는 키만 골랐다.
+        [컨트롤 - Interactive만, 코드 리뷰로 문서 갱신] 실제 제어는 gnuplot
+        키보드 bind가 아니라 CathPlot의 Animation Control 패널(Pause/Resume,
+        -Slower/+Faster, Exit Animation 버튼)이 파일 기반 IPC로 담당한다 -
+        gnuplot 창에 키보드 포커스가 안 가는 환경(Windows 포커스 스틸링
+        방지)에서도 항상 동작하기 위함(cathplot_gui._open_animation_control_
+        panel 참고). gnuplot bind(Space/+/-)는 우연히 포커스가 gnuplot 쪽에
+        있는 경우를 위한 보너스로만 남겨뒀고, 'Q'는 gnuplot 자체의 창닫기와
+        충돌해 제거했다 - Exit은 컨트롤 패널의 버튼으로만 한다.
 
         [진행 표시] 현재 X 위치를 가리키는 세로선(playhead)과 진행률(%)/현재
         X값 텍스트를 매 프레임 갱신해서(고정 ID로 set - "추가"가 아니라
@@ -3499,10 +3524,12 @@ class GnuplotGenerator:
             # 지우거나 하는) 것으로 추정되는 버그가 실측 확인됨. Exit는 이미
             # Animation Control 창의 버튼(파일 기반, 이 문제와 무관)이
             # 담당하므로 키보드 'q' bind 자체를 없애 이 혼란을 없앤다.
-            lines.append("key_hits = 0")
-            lines.append('bind " " "paused_anim = !paused_anim; key_hits = key_hits + 1"')
-            lines.append('bind "+" "frame_pause_anim = frame_pause_anim*0.5; key_hits = key_hits + 1"')
-            lines.append('bind "-" "frame_pause_anim = frame_pause_anim*2.0; key_hits = key_hits + 1"')
+            # [수정 - 코드 리뷰로 발견, 정리] key_hits(스페이스바 진단용
+            # 카운터)는 파일 기반 제어로 재설계되면서 화면에 더 이상 표시하지
+            # 않는데도 증가 코드만 남아 있던 죽은 상태였음 - 제거.
+            lines.append('bind " " "paused_anim = !paused_anim"')
+            lines.append('bind "+" "frame_pause_anim = frame_pause_anim*0.5"')
+            lines.append('bind "-" "frame_pause_anim = frame_pause_anim*2.0"')
             # [추가] 파일 기반 제어 - CathPlot의 Pause/Speed/Exit 버튼이 이
             # 파일에 paused_anim/frame_pause_anim/exit_anim 값을 다시 써주면,
             # 아래 루프가 매 프레임(그리고 일시정지로 대기하는 동안도 0.1초
@@ -3511,7 +3538,15 @@ class GnuplotGenerator:
             # 있음) - load 대상이 없으면 gnuplot이 에러를 내므로, Python
             # 쪽에서 프로세스를 띄우기 "전에" 반드시 기본값으로 미리 만들어
             # 둔다(아래 Popen 앞부분 참고).
-            ctrl_path = outfile.rsplit(".", 1)[0] + "_ctrl.plt"
+            # [수정 - 버그, 코드 리뷰로 발견] 파일명이 outfile 이름만으로
+            # 정해져서, CathPlot을 재시작하면(제목별 순번이 메모리에만 있어
+            # 초기화됨) 같은 Plot Title로 새 애니메이션을 실행할 때 이전에
+            # -persist로 여전히 떠 있는(같은 파이썬 세션이 아니어도 gnuplot
+            # 프로세스 자체는 독립적으로 계속 실행됨) 애니메이션과 같은
+            # 제어/상태 파일을 가리킬 수 있었음 - 매 호출마다 겹칠 수 없는
+            # uuid를 파일명에 더해 항상 고유하게 만든다.
+            _anim_uid = uuid.uuid4().hex[:8]
+            ctrl_path = outfile.rsplit(".", 1)[0] + f"_ctrl_{_anim_uid}.plt"
             _ctrl_path_gp = ctrl_path.replace(chr(92), "/")
             lines.append(f"_anim_ctrl_path = '{_ctrl_path_gp}'")
             # [추가 - 요청] "재생이 끝나면 Pause가 아니라 Resume 버튼이
@@ -3522,7 +3557,7 @@ class GnuplotGenerator:
             # 적으면(set print), GUI가 이 파일을 주기적으로 읽어 "지금
             # 보여주고 있는 seq와 같은 값이 적혔다"를 보고 재생이 막 끝난
             # 순간임을 알아챈다.
-            status_path = outfile.rsplit(".", 1)[0] + "_status.txt"
+            status_path = outfile.rsplit(".", 1)[0] + f"_status_{_anim_uid}.txt"
             _status_path_gp = status_path.replace(chr(92), "/")
             lines.append(f"_anim_status_path = '{_status_path_gp}'")
             # [수정 - 요청] "키 입력 감지 문구는 삭제" - 파일 기반 제어(버튼)로
