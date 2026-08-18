@@ -1061,30 +1061,8 @@ class GnuplotGenerator:
         # 간격이 늘어남 - 1글자(10pt) 더 줄여줘요" - 이전에도 같은 이유(사무실
         # PC 화면 DPI 차이)로 한 번 줄인 적 있음(0.5->-0.5) - 같은 폭(-1.0)
         # 만큼 추가로 축소.
-        # [수정 - 버그] Animation의 GIF 저장(gif_path 지정)은 is_print_mode=True
-        # (파일로 남기니 "인쇄/저장" 취급)이면서도 _build_plot_commands는 실제
-        # interactive 창과 똑같은 레이아웃을 쓰도록 fmt="interactive"로 호출됨 -
-        # 그런데 위 _FORMAT_TUNING 표에는 "interactive" 키가 아예 없어서(pdf/png/
-        # emf/svg/jpg만 있음) is_print_mode=True 분기를 타면 .get()의 기본값
-        # ({"box_chars": 2.0} - 실측/튜닝된 적 없는 값)으로 조용히 빠져, 실제
-        # legend box 여백이 화면(screen, box_chars=-1.5로 이미 여러 차례 실측
-        # 튜닝됨)보다 훨씬 커 보이는 문제가 있었음("Animation legend 마진이
-        # 너무 넓다" 피드백으로 발견). GIF는 fmt="interactive"인 이상 실제
-        # 렌더링 자체가 화면과 동일한 경로이므로, is_print_mode 값과 무관하게
-        # fmt=="interactive"면 화면과 같은 튜닝값을 쓴다.
-        # [수정] "legend box 안 테두리<->title 사이 내부 마진이 대문자 5자
-        # 정도로 과함" - PDF/pdfcairo는 이미 실측(PyMuPDF)으로 "PIL 추정폭이
-        # 실제보다 1.5배 크다"는 게 확인돼 text_corr=2/3을 적용 중인데, 화면
-        # (windows/GDI 터미널)은 이 실측을 한 적이 없어 안전하게 1.0(보정
-        # 없음)으로 뒀었음 - 실제로 라벨(title) 텍스트가 box_w 계산에 쓰인
-        # 추정 폭보다 좁게 렌더링돼(PDF와 같은 방향의 과대평가) 안쪽에 여분
-        # 공간이 남는 것으로 보여, 화면도 자체 보정치를 둔다. 정확한 비율은
-        # 아직 1개 데이터 포인트(5자 초과)로만 추정한 값이라 재확인 필요.
-        # [수정] 재확인 - "내부 마진을 2자 정도 더 줄여야 함" - 0.85에서 한
-        # 단계 더 축소.
-        _legend_tuning = ({"row_mult": 1.2, "box_chars": -1.5, "sample_mult": 1.0, "text_corr": 0.78}
-                          if (not is_print_mode or _fmt_l == "interactive")
-                          else _FORMAT_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0, "sample_mult": 1.0, "text_corr": 1.0}))
+        _legend_tuning = (_FORMAT_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0, "sample_mult": 1.0, "text_corr": 1.0})
+                          if is_print_mode else {"row_mult": 1.2, "box_chars": -1.5, "sample_mult": 1.0, "text_corr": 1.0})
         ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * _legend_tuning["row_mult"]
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
@@ -1132,20 +1110,7 @@ class GnuplotGenerator:
         # 보이게 됐음 - 같은 포맷별 축소 비율을 여기도 그대로 곱한다.
         _tic_len_fmt_mult = {"png": 2 / 3, "pdf": 2 / 3, "svg": 0.8 * 0.8}.get((fmt or "").lower(), 1.0)
         TIC_LEN_IN = 1.5 * 0.00615 * font_pt * _tic_len_fmt_mult
-        # [수정 - 요청] "box와 axis frame 간격이 너무 큼(major tic 길이의
-        # 1.5배로, 또는 지금의 2/3 정도로 줄여줄 것)" - TIC_LEN_IN 자체가
-        # 이미 "실측 tic 길이 * 1.5"로 정의돼 있는데(위 주석), 여기서 다시
-        # 1.5배를 곱해서 최종 간격이 실측 tic 길이의 2.25배(1.5*1.5)까지
-        # 불어나 있었음 - 요청하신 "1.5배"(=TIC_LEN_IN 자체를 그대로 씀,
-        # 2.25배의 정확히 2/3)로 되돌린다.
-        # [수정 - 범위 한정] "노파심에 save/print에는 영향 없지? 영향 주면
-        # 안 됨(다 조정했던 거니까)" - 이번 요청은 화면(Interactive)
-        # 스크린샷을 보고 나온 것인데, 이 계수(FRAME_GAP_IN)는 print/save
-        # 쪽 legend 위치 계산에도 그대로 쓰여서 그쪽도 같이 좁아지고
-        # 있었음. Print/Save는 이미 예전에 따로 검증·확정된 값이라 건드리면
-        # 안 되므로, 화면(is_print_mode=False)에서만 좁힌 값을 쓰고
-        # Print/Save는 기존 2.25배 그대로 유지한다.
-        FRAME_GAP_IN = TIC_LEN_IN if not is_print_mode else 1.5 * TIC_LEN_IN
+        FRAME_GAP_IN = 1.5 * TIC_LEN_IN
         FRAME_MARGIN_X = FRAME_GAP_IN / max(axis_w_in, 0.5)  # plot 테두리(frame)와 박스 사이 가로 간격
         FRAME_MARGIN_Y = FRAME_GAP_IN / max(axis_h_in, 0.3)  # 세로 간격(동일한 물리 거리)
 
@@ -1228,34 +1193,6 @@ class GnuplotGenerator:
             SAMPLE_W *= _legend_tuning["sample_mult"]
         else:
             SAMPLE_W *= 2 / 3
-            # [추가 - 요청] "너무 짧아서 style 구분이 안 되면 조금 더 길게
-            # 하면 되지 않나 - intelligent하게", "dash는 예로 들면 3개 정도
-            # 나오면 됨", "동일한 길이로 해라는 것임" - 6가지 style 전부
-            # 같은 길이(글자 수)를 차지하는 건 이미 보장돼 있고(아래
-            # rstrip 없이 n_total_chars 유지), 이제 그 안에서 dash 같은
-            # style이 최소 3번은 반복돼(예: "-- -- --") 뚜렷한 "선"으로
-            # 보이게 필요한 최소 글자 수(대략 9자)를 보장한다 - 이미
-            # 충분하면 그대로 두고 부족할 때만 끌어올림(box_w가 SAMPLE_W를
-            # 그대로 반영하므로 legend box 자체도 자동으로 커져 겹침 없음).
-            _term_font_pt_for_char_floor = max(int(round(11 * (panel_scale or 1.0))), 8)
-            _gp_char_w_in_floor = 0.006014 * 0.878 * _term_font_pt_for_char_floor * _font_width_ratio(font_name)
-            # [수정 - 요청] "dash가 너무 길다, 조금 더 줄여도 됨" - 9자는
-            # dash가 정확히 3번 반복되긴 하지만 전체 샘플선이 과하게 길어
-            # 보임 - 7자로 낮춤(dash 3글자 단위 기준 약 2.3번 반복 - 여전히
-            # "짧은 토막" 없이 여러 번 보이면서 전체 길이는 더 짧아짐).
-            # [수정 - 버그, 근본 원인] 아래 실제 glyph 글자수(_n_total_chars)는
-            # 여기서 구한 SAMPLE_W를 "다시 0.6배" 해서 정해지는데(글자
-            # "━" 자체가 기준보다 넓어서 필요한 보정), 이 floor를 "N글자
-            # 만큼의 물리 폭"으로만 잡아서 실제로는 N*0.6개 글자만 확보되고
-            # 있었음(예: 7자 목표였는데 실제 4자만 나옴) - dashdot/
-            # dashdotdot의 반복 단위(5~7자)가 그 안에 아예 못 들어가
-            # "너무 짧으면 그냥 solid"로 처리되는 안전장치가 계속 걸려
-            # dash-dot이 실선처럼 보이던 진짜 원인이었음. 목표 글자수를
-            # 0.6배로 미리 나눠서 이 축소를 상쇄한다.
-            _TARGET_GLYPH_CHARS = 8.0
-            _min_sample_w_in = (_TARGET_GLYPH_CHARS / 0.6) * _gp_char_w_in_floor
-            _min_sample_w_frac = _min_sample_w_in / max(axis_w_in, 0.5)
-            SAMPLE_W = max(SAMPLE_W, _min_sample_w_frac)
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
         # 그냥 len()으로 세면 숫자/콜론/대시처럼 대문자보다 좁은 문자가 많은
         # 라벨(CATHENA 변수명 특성상 흔함, 예: "MFLO:R-SDRT1>L-STLF1")은 실제
@@ -1374,22 +1311,6 @@ class GnuplotGenerator:
         # (샘플선<->title 간격)이 여기 폭 계산에 빠져 있어서, 그 간격을 늘릴수록
         # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
         box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + BOX_EDGE_GAP_FRAC + LABEL_GAP_FRAC
-        # [추가 - 버그 수정, 오늘 화면 리사이즈/DPI 작업 중 실측으로 발견] 화면
-        # 전용 위 보정("box_chars가 만드는 여백에서 style 길이만큼 뺀다":
-        # _box_w_extra_chars -= SAMPLE_W/char_width_frac)을 수식으로 풀면
-        # box_w 맨 앞의 "SAMPLE_W +" 항과 정확히 상쇄되어(대수적으로 증명됨),
-        # box_w가 sample line 자체가 차지하는 물리 공간을 전혀 반영하지 못하는
-        # 문제가 있었음 - 라벨이 길면(예: "MFLO:R-SDRT1>L-STLF1") 남는 폭에
-        # 묻혀 약간의 잘림 정도로만 보였지만, 라벨이 짧으면(예: "PRESS",
-        # "MFLO") box가 sample line 폭보다도 작아져서 title 전체가 box 밖으로
-        # 완전히 밀려나감(pngcairo로 직접 렌더링해 실측 확인 - 리사이즈/
-        # character 단위 변환과 무관하게 기존 graph-fraction 코드에서도
-        # 그대로 재현됨, 즉 오늘 이전부터 있던 별개의 버그). box_w가 "sample
-        # line + 최소한의 글자 여유 + 양쪽 여백"보다 작아지지 않도록 최소값을
-        # 보장한다.
-        if not is_print_mode:
-            _box_w_floor = SAMPLE_W + char_width_frac * max(max_label_len - 1.5, max_label_len * 0.5) + BOX_EDGE_GAP_FRAC + LABEL_GAP_FRAC
-            box_w = max(box_w, _box_w_floor)
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
 
         # [추가] "자동 추정이 안 맞는 경우만 사용자 입력으로 직접 지정" -
@@ -1519,79 +1440,7 @@ class GnuplotGenerator:
         else:
             box_bottom, box_top = ay - box_h / 2, ay + box_h / 2
 
-        # [추가 - 버그] "화면 plot을 좌우로 키우면 legend box도 같이 커지는데
-        # font는 그대로라 비율이 안 맞음", "사무실 27in/노트북 화면에서
-        # legend box↔title 마진이 다르게 보임" - 근본 원인: 위 box_w/box_h는
-        # 전부 "font_pt(절대 pt) 기준 필요 물리(in) 크기 / axis_w_in(스크립트
-        # 생성 시점에 가정한 축 크기)"로 계산한 graph-fraction(0~1)이라, 실제
-        # gnuplot 창을 나중에 수동으로 리사이즈하거나(그러면 graph 0~1의 실제
-        # 물리 크기가 바뀜) 모니터 DPI가 달라지면(같은 그래프 fraction이라도
-        # 실제 렌더링 물리 크기가 달라짐) box는 새 창 크기에 맞춰 다시
-        # 늘어나거나 줄어드는데 font(pt, 절대 크기)는 전혀 안 바뀌어서 서로
-        # 어긋남 - Print/Save(정적 파일, 생성 이후 캔버스가 절대 안 바뀜)는
-        # 원래도 문제없었고, 화면(Interactive)만 해당.
-        # 해결: gnuplot이 자체 제공하는 "character" 좌표 단위(현재 폰트의
-        # 실제 렌더링 크기 기준 - 창 크기나 DPI가 바뀌어도 항상 "지금 폰트의
-        # 문자 크기"를 그대로 따라감)로 legend box 테두리와 그 안 curve
-        # title 위치를 다시 표현한다(화면 전용, Print/Save는 기존 그대로).
-        # gnuplot의 "character" 단위 자체는 우리 char_width_in(대문자 실측
-        # 기준 추정치)/ROW_LINE_HEIGHT_IN(줄간격 배수 포함)과 서로 다른
-        # 기준이라 그대로 갖다 쓸 수 없어서, 직접 렌더링 후 실측(PIL로 픽셀
-        # 폭 측정)해 환산 계수를 구했다: 6x4in 캔버스, Malgun Gothic 20pt에서
-        # "size character 10,1"이 실제로 145x33px(=2.014in x 0.4583in)로
-        # 그려짐 - 즉 gnuplot 1 character(가로) ≈ 0.01007in/pt, 1 character
-        # (세로) ≈ 0.022915in/pt (둘 다 font_pt에 비례, 폰트 대체 시 가로만
-        # _font_width_ratio로 추가 보정). box_w/box_h(graph-fraction, 이미
-        # 위에서 다 계산됨)를 각각 axis_w_in/axis_h_in을 곱해 "실제 필요한
-        # 물리(in) 크기"로 되돌린 뒤, 이 환산 계수로 나눠 gnuplot의 character
-        # 개수로 바꾼다. [주의] 이 환산 계수는 화면(windows 터미널)이 아니라
-        # pngcairo로 실측한 값이라 완전히 같지 않을 수 있음 - "박스 크기(폰트
-        # 대비)"는 이걸로 해결되지만, 그 안 sample line(화살표, gnuplot이
-        # offset/character 단위를 지원 안 함)까지는 손대지 못해 리사이즈 폭이
-        # 아주 클 때는 sample line만 미세하게 어긋날 수 있음 - 실제 창
-        # 리사이즈/여러 모니터에서 최종 확인 필요.
-        # [수정 - 버그, 실제 노트북 재현으로 근본 원인 발견] 1차 시도(pngcairo
-        # 실측)는 실제 화면 터미널(windows, GDI)과 안 맞아 box가 너무 작게
-        # 나왔고("legend box 여백 과다, 긴 변수명 잘림"), 2차 시도(이 파일의
-        # 기존 화면용 상수 char_width_in/ROW_LINE_HEIGHT_IN 재사용)는 반대로
-        # 너무 크게 나옴("box 1.5배, 줄간격 2배, top frame/우측 tic 숫자까지
-        # 침범") - 두 시도 모두 "legend font 크기(font_pt, 예: 9pt)에 비례"
-        # 한다고 가정한 게 근본적으로 잘못됐음. 직접 검증(터미널 기본 font
-        # 크기만 다르게 하고 label 자체의 font는 동일하게 고정한 뒤 같은
-        # offset 값이 얼마나 다르게 그려지는지 실측)한 결과, gnuplot의
-        # character 좌표 단위(offset/size 공통)는 그 라벨/오브젝트 자신의
-        # font가 아니라 "터미널의 기본 font 크기"(_get_terminal_cmd에서
-        # 정하는 _term_font_pt = 11*panel_scale, legend_size와 무관하게 항상
-        # 이 값)에 비례함 - legend_size가 9든 15든 character 1개의 실제
-        # 크기는 안 바뀌고, 이 화면 터미널의 기본 폰트(보통 11pt)로 고정됨.
-        # 이 사실 + 2차 시도의 오차 배율(가로 1.5배, 세로 2배 과대)을 함께
-        # 반영해 역산한 계수.
-        # [수정] 실제 노트북 재확인 - "박스 자체 크기는 적절해졌지만 top/우측
-        # frame과의 간격이 아직 의도(1.5배)보다 큼(세로 2배, 가로 4배)" -
-        # 박스 크기(면적)는 크게 개선됐지만 아직 완전히 정확하진 않다는 뜻이라
-        # (작은 잔여 오차가 절대량이 작은 "여백" 항목에서 상대적으로 더 크게
-        # 드러남), 보고된 잔여 배율(세로 0.5배·가로 2.5배만큼 초과)로 한 번
-        # 더 미세 보정한다.
-        # [수정] 실제 노트북 재확인 - "top은 보정됐지만 우측은 오히려 y2축
-        # tic 숫자 위로 넘어옴(과교정)" - 세로(height, 0.901)는 그대로 두고,
-        # 가로(width) 보정폭(0.756)이 과했던 것이므로 절반만 되돌린다(1.0과
-        # 0.756의 중간, 0.878) - 이후 재확인 결과 top/우측 frame 간격은 이
-        # 값(0.878)에서 적절하다고 확인됨(더 줄이지 않음).
-        _term_font_pt_for_char = max(int(round(11 * (panel_scale or 1.0))), 8)
-        _GP_CHAR_W_IN = 0.006014 * 0.878 * _term_font_pt_for_char * _font_width_ratio(font_name)
-        _GP_CHAR_H_IN = 0.013636 * 0.901 * _term_font_pt_for_char
-        _box_cx = (box_left + box_right) / 2
-        _box_cy = (box_top + box_bottom) / 2
-        _box_w_chars = (box_w * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9)
-        _box_h_chars = (box_h * axis_h_in) / max(_GP_CHAR_H_IN, 1e-9)
-
-        if box_on and not is_print_mode:
-            lines.append(
-                f"set object {id_offset} rect at graph {_box_cx:.4f},{_box_cy:.4f} "
-                f"size character {_box_w_chars:.3f}, character {_box_h_chars:.3f} "
-                f"fc rgb 'white' fs solid 1.0 border lc rgb 'black' lw {thick_val} front"
-            )
-        elif box_on:
+        if box_on:
             lines.append(
                 f"set object {id_offset} rect from graph {box_left:.4f},{box_bottom:.4f} "
                 f"to graph {box_right:.4f},{box_top:.4f} "
@@ -1615,109 +1464,18 @@ class GnuplotGenerator:
             color = curve.color or DEFAULT_COLORS[idx % len(DEFAULT_COLORS)]
             linestyle = curve.linestyle or DEFAULT_LINESTYLES[idx % len(DEFAULT_LINESTYLES)]
             lw2 = curve.linewidth * line_scale
-            sample_mid_x = (sample_x1 + sample_x2) / 2
-            # [추가 - 버그] 위 legend box와 같은 이유로, 화면(screen)에서는
-            # 샘플선(curve 색/선모양을 보여주는 짧은 선)도 character 기준으로
-            # 그려야 리사이즈해도 box 밖으로 삐져나가지 않는다. 그런데
-            # set arrow는 set label과 달리 offset 절도, character 좌표계도
-            # 조합해서 쓸 방법이 없어(box 중심 기준 상대 위치를 표현 못함)
-            # 그대로는 이 방식을 못 씀 - 대신 set label(offset 지원)로
-            # 유니코드 선 문자를 색칠해서 찍어 "샘플선처럼 보이게" 그린다.
-            # 실제 dashtype 패턴(점선 간격 등)까지 완전히 똑같이 재현하진
-            # 못하지만(문자 굵기/간격은 폰트가 정함), solid/dash/dot 정도의
-            # 큰 카테고리는 문자 선택으로 구분해서 보여준다. Print/Save는
-            # 캔버스가 고정이라 기존처럼 실제 arrow+dashtype을 그대로 쓴다.
-            if not is_print_mode:
-                # [수정 - 버그] "글자수를 맞춰도 curve마다 line 길이가 여전히
-                # 다름" - dashdot/dashdotdot이 box-drawing 문자("─")와 일반
-                # 문장부호("·", 가운뎃점)를 섞어 썼는데, 폰트에서 이 둘의
-                # 실제 advance width(칸 폭)가 서로 달라서, 같은 "글자 수"라도
-                # 실제 렌더 폭이 달라졌던 것 - 전부 같은 Unicode 블록(box
-                # drawing, U+25xx)의 가로선 계열 문자 하나씩만 반복해서 이
-                # 폭 차이 자체를 없앤다(대신 dash-dot처럼 두 종류가 섞인
-                # 패턴 표현은 포기 - solid/dash/dot 3단계 굵기·간격 구분만
-                # 유지).
-                # [수정 - 버그, 근본 원인 재확인] "style마다 길이가 여전히
-                # 제각각이고 dash가 짧다"가 계속 재현됨(2/4/5번째 줄 등) -
-                # 이전 수정은 style마다 "다른 글자"(-,·,•)를 쓰고 그 사이의
-                # advance width 비율을 PIL로 실측해 글자수 배율로 보정했는데,
-                # 이 실측이 PIL(freetype)이지 실제 화면 터미널(windows, GDI)
-                # 렌더러 기준이 아니라서 두 렌더러의 실제 글자 폭이 서로
-                # 어긋나면 style별 길이가 다시 벌어짐 - 근본적으로 "여러
-                # 다른 글자의 폭 비율"에 기대는 방식 자체가 렌더러가 바뀌면
-                # 깨지기 쉬움. 이미 정확하다고 확인된 solid 글자("━") 하나만
-                # 모든 style에 공통으로 쓰고(비교할 다른 글자의 폭 자체가
-                # 필요 없어짐), style 구분은 이 글자와 빈칸(space)의 반복
-                # 리듬(잉크몇글자+빈칸몇글자)으로만 표현한다.
-                # [수정 - 요청] "화면에서 dash/dot/shortdash/dashdot/
-                # dashdotdot 등이 서로 구별되어야 한다(가장 중요)" - 지금까지는
-                # 전부 같은 글자("━")를 간격만 다르게 반복했는데, 1~2글자
-                # 차이의 "간격"만으로는 구별이 약함 - dashdot/dashdotdot은
-                # 이름 그대로 "dash 다음 dot(들)"이 반복되는 실제 모양으로
-                # 직접 구성한다(문자를 섞어 쓰지만, 위치는 여전히 "글자 수"
-                # 기준이라 렌더러가 바뀌어도 전체 폭 일관성엔 영향 없음 -
-                # 섞인 글자 자체의 미세한 폭 차이만 남는 정도).
-                # [수정 - 버그] dashdot/dashdotdot 단위 문자열이(6~8자) 최소
-                # 폭(7자)보다 길어서 "너무 짧으면 그냥 solid로" 처리하는
-                # 안전장치가 계속 걸려 dash-dot이 그냥 실선처럼 보였음
-                # (재현·실측 확인) - 단위를 꼭 필요한 만큼만(불필요한 뒤쪽
-                # 여백 제거)으로 줄이고, 최소 폭도 이 단위가 한 번은 들어갈
-                # 만큼(8자) 살짝 올린다.
-                _DASH_CHAR, _DOT_CHAR = "━", "•"
-                _UNIT_BY_STYLE = {  # 반복 단위 문자열(그대로 이어붙여 반복)
-                    "dash": _DASH_CHAR * 2 + "  ",              # ── (넓은 간격)
-                    "shortdash": _DASH_CHAR + "  ",             # -  (짧은 dash, 넓은 간격)
-                    "dot": _DOT_CHAR + "  ",                    # •  (점)
-                    "dashdot": _DASH_CHAR * 2 + " " + _DOT_CHAR + " ",        # ── • (dash-dot)
-                    "dashdotdot": _DASH_CHAR * 2 + " " + _DOT_CHAR + " " + _DOT_CHAR + " ",  # ── • • (dash-dot-dot)
-                }
-                _unit = _UNIT_BY_STYLE.get(linestyle)
-                # solid 글자("━") 실측 배율(0.6)은 그대로 유지 - 모든 style이
-                # 이제 같은 기준 글자를 쓰므로 이 하나의 배율만 공통으로
-                # 적용하면 전부 정확히 같은 물리 폭에 맞춰짐.
-                _base_n_chars = max((SAMPLE_W * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9), 1.0)
-                _n_total_chars = max(int(round(_base_n_chars * 0.6)), 2)
-                # [수정 - 버그, 근본 원인 재확인] "line 양단 마진도 다름" -
-                # rstrip으로 뒤쪽 빈칸을 잘라내면, style마다 실제 문자열
-                # 길이(=gnuplot이 정렬 시 차지한다고 보는 폭)가 달라져서
-                # 여백이 style마다 달라 보였음 - 뒤쪽 빈칸을 자르지 않고
-                # 항상 n_total_chars 그대로 유지한다 - 모든 style이 "글자
-                # 수(빈칸 포함)" 기준으로 완전히 동일한 폭을 차지하게 됨.
-                if _unit is None or _n_total_chars <= len(_unit):
-                    _glyph_run = _DASH_CHAR * _n_total_chars
-                else:
-                    _reps = _n_total_chars // max(len(_unit), 1) + 2
-                    _glyph_run = (_unit * _reps)[:_n_total_chars]
-                # [수정 - 요청] "길이도 다른데 다 중앙정렬인 느낌 - 좌우
-                # 정렬이 맞지?" -> "좌측 정렬이 답일세, 트릭쓰지 말고" -
-                # is_right_side에 따라 기준점을 오른쪽/왼쪽으로 바꾸는
-                # 조건분기(위 첫 시도)도 트릭으로 보일 수 있어, 더 단순하게
-                # 항상 sample_x1(왼쪽 끝) 기준으로 "left" 정렬 하나로
-                # 통일한다 - 모든 style이 항상 같은 왼쪽 시작점에서 시작해
-                # 오른쪽으로 뻗어나가고, 길이가 짧은 style만 오른쪽 끝이
-                # 살짝 못 미치는 식으로 - 위치(legend가 좌측/우측 어디든)와
-                # 무관하게 규칙이 하나뿐이라 가장 단순함.
-                _glyph_anchor_x = sample_x1
-                _glyph_just = "left"
-                _dx_chars = ((_glyph_anchor_x - _box_cx) * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9)
-                _dy_chars = ((row_y - _box_cy) * axis_h_in) / max(_GP_CHAR_H_IN, 1e-9)
-                lines.append(
-                    f'set label {id_offset + 7000 + row_i + 1} "{_glyph_run}" '
-                    f'at graph {_box_cx:.4f},{_box_cy:.4f} offset {_dx_chars:.3f},{_dy_chars:.3f} '
-                    f'{_glyph_just} front font "{font_name},{max(int(_label_font_pt), 5)}" textcolor rgb "{color}"'
-                )
-            else:
-                _dash_pat = _dash_pattern_for_fmt(linestyle, fmt)
-                dt_clause = f" dashtype ({_dash_pat})" if _dash_pat else ""
-                lines.append(
-                    f"set arrow {id_offset + row_i + 1} from graph {sample_x1:.4f},{row_y:.4f} "
-                    f"to graph {sample_x2:.4f},{row_y:.4f} nohead front "
-                    f"lc rgb \"{color}\" lw {lw2}{dt_clause}"
-                )
+            _dash_pat = _dash_pattern_for_fmt(linestyle, fmt)
+            dt_clause = f" dashtype ({_dash_pat})" if _dash_pat else ""
+            lines.append(
+                f"set arrow {id_offset + row_i + 1} from graph {sample_x1:.4f},{row_y:.4f} "
+                f"to graph {sample_x2:.4f},{row_y:.4f} nohead front "
+                f"lc rgb \"{color}\" lw {lw2}{dt_clause}"
+            )
             # [추가] 마커가 설정된 curve는 샘플선 중앙에 마커 모양(유니코드 기호)을
             # 같이 찍어서, legend만 보고도 이 curve에 마커가 있는지 알 수 있게 함
             marker_shape = getattr(curve, "marker_shape", None)
             if marker_shape in MARKER_SYMBOL_MAP:
+                sample_mid_x = (sample_x1 + sample_x2) / 2
                 # [수정] "center" 정렬은 폰트의 cap-height 기준 중심에 맞추는데,
                 # 세모(△▲▽▼) 같은 기호는 실제 잉크(도형)의 무게중심이 위/아래로
                 # 치우쳐 있어서 그 기준으로는 샘플선 대비 위 또는 아래로 치우쳐
@@ -1739,42 +1497,16 @@ class GnuplotGenerator:
                 # 같은 font_pt로 찍어도 시각적 크기가 들쭥날쭥해 보이는 문제 -
                 # 기호별 배율을 둬서 시각적 크기를 서로 맞춘다.
                 symbol_pt = _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0)
-                if not is_print_mode:
-                    _mdx_chars = ((sample_mid_x - _box_cx) * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9)
-                    _mdy_chars = ((symbol_y - _box_cy) * axis_h_in) / max(_GP_CHAR_H_IN, 1e-9)
-                    lines.append(
-                        f'set label {id_offset + 5000 + row_i + 1} "{MARKER_SYMBOL_MAP[marker_shape]}" '
-                        f'at graph {_box_cx:.4f},{_box_cy:.4f} offset {_mdx_chars:.3f},{_mdy_chars:.3f} center front '
-                        f'font "{font_name},{int(round(symbol_pt))}" textcolor rgb "{color}"'
-                    )
-                else:
-                    lines.append(
-                        f'set label {id_offset + 5000 + row_i + 1} "{MARKER_SYMBOL_MAP[marker_shape]}" '
-                        f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front '
-                        f'font "{font_name},{int(round(symbol_pt))}" textcolor rgb "{color}"'
-                    )
+                lines.append(
+                    f'set label {id_offset + 5000 + row_i + 1} "{MARKER_SYMBOL_MAP[marker_shape]}" '
+                    f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front '
+                    f'font "{font_name},{int(round(symbol_pt))}" textcolor rgb "{color}"'
+                )
             lbl_text, lbl_enh = self._render_text(curve.title)
-            # [추가] 위 legend box 테두리와 같은 이유로, 화면에서는 title
-            # 텍스트도 "graph fraction 절대 좌표"가 아니라 (이미 character
-            # 단위로 그린) box 중심에서 "gnuplot character 개수만큼" 떨어진
-            # offset으로 표현해야 창 리사이즈/모니터 DPI가 달라져도 box
-            # 테두리와 title 텍스트 사이 여백이 항상 같은 비율로 유지된다
-            # (set label은 offset을 기본적으로 character 단위로 해석함 -
-            # set arrow/object는 offset 절을 지원하지 않아 샘플선/마커 기호는
-            # 기존 graph fraction 방식을 그대로 둔다 - 위 주석 참고).
-            if not is_print_mode:
-                _dx_chars = ((label_x - _box_cx) * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9)
-                _dy_chars = ((row_y - _box_cy) * axis_h_in) / max(_GP_CHAR_H_IN, 1e-9)
-                lines.append(
-                    f'set label {id_offset + row_i + 1} "{lbl_text}" at graph {_box_cx:.4f},{_box_cy:.4f} '
-                    f'offset {_dx_chars:.3f},{_dy_chars:.3f} '
-                    f'{label_just} front font "{font_name},{max(int(_label_font_pt), 5)}" {lbl_enh}'
-                )
-            else:
-                lines.append(
-                    f'set label {id_offset + row_i + 1} "{lbl_text}" at graph {label_x:.4f},{row_y:.4f} '
-                    f'{label_just} front font "{font_name},{max(int(_label_font_pt), 5)}" {lbl_enh}'
-                )
+            lines.append(
+                f'set label {id_offset + row_i + 1} "{lbl_text}" at graph {label_x:.4f},{row_y:.4f} '
+                f'{label_just} front font "{font_name},{max(int(_label_font_pt), 5)}" {lbl_enh}'
+            )
 
     @staticmethod
     def _compute_f_scale(plotdef, panel_scale, fmt):
