@@ -4990,6 +4990,51 @@ class CathPlotGUI:
         except OSError:
             return None
 
+    def _find_window_rect(self, title, timeout_sec=2.0):
+        """title로 창을 찾아 (hwnd, (left,top,right,bottom))을 반환. 못 찾으면
+        (None, None). Windows 전용(ctypes) - 다른 OS/실패 시 조용히 None."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+        except ImportError:
+            return None, None
+        try:
+            user32 = ctypes.windll.user32
+        except AttributeError:
+            return None, None
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            hwnd = user32.FindWindowW(None, title)
+            if hwnd:
+                rect = wintypes.RECT()
+                if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    return hwnd, (rect.left, rect.top, rect.right, rect.bottom)
+                return hwnd, None
+            time.sleep(0.1)
+        return None, None
+
+    def _raise_window_no_activate(self, hwnd):
+        """[추가 - 요청] "Animation 창이 CathPlot 뒤로 숨어버림, Ani 컨트롤
+        패널과 겹치지 않게 맨 위로" - gnuplot plot 창을 새로 띄운 뒤
+        CathPlot 쪽에서 Animation Control 패널(Toplevel)을 새로 만들면,
+        Windows가 "새로 만들어진 창"인 Toplevel(그리고 그 소유 프로세스인
+        CathPlot 메인 창까지)을 앞으로 올려버려서, 정작 진행 상황을
+        보여주는 gnuplot plot 창이 CathPlot 메인 창 뒤에 가려지는 문제가
+        있었음 - Control 패널을 띄우기 "직전"에 plot 창을 Z-order상 맨
+        위로 올려두면(SWP_NOACTIVATE로 키보드 포커스는 건드리지 않음 -
+        마우스 포커스가 계속 CathPlot 쪽에 남도록), 그 직후 만들어지는
+        Control 패널이 다시 맨 위로 올라가면서 자연스럽게 "Control 패널이
+        맨 위, plot 창이 바로 그 아래"가 된다."""
+        if not hwnd:
+            return
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            # HWND_TOP(0), SWP_NOMOVE(0x0002)|SWP_NOSIZE(0x0001)|SWP_NOACTIVATE(0x0010)
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010)
+        except Exception:
+            pass
+
     def _write_anim_ctrl(self, ctrl_path, paused, frame_pause, click_seq, exit_flag=0):
         """[추가 - space bar 재설계] 실행 중인 애니메이션(gnuplot)에 값을
         전달하는 작은 제어 파일을 다시 쓴다. gnuplot이 파일을 읽는 도중에
@@ -5013,7 +5058,7 @@ class CathPlotGUI:
         except OSError:
             pass
 
-    def _open_animation_control_panel(self, ctrl_path, initial_frame_pause, status_path=None, proc=None):
+    def _open_animation_control_panel(self, ctrl_path, initial_frame_pause, status_path=None, proc=None, plot_window_title=None):
         """[추가 - 근본 원인 재설계] "Animation 창에서 space bar가 안 먹힘" -
         이전엔 gnuplot 자체의 키보드 bind(Space=일시정지, +/-=속도, Q=종료)에
         의존했는데, 실측(화면에 키 입력 감지 횟수를 표시해 직접 확인)으로
@@ -5053,10 +5098,36 @@ class CathPlotGUI:
         # 개수만큼 대각선으로 조금씩 어긋나게 띄운다.
         _n_open = getattr(self, "_anim_panel_open_count", 0)
         self._anim_panel_open_count = _n_open + 1
-        try:
-            panel.geometry(f"+{self.root.winfo_x() + 40 + 24 * _n_open}+{self.root.winfo_y() + 40 + 24 * _n_open}")
-        except Exception:
-            pass
+
+        # [수정 - 버그, 요청] "Animation 창이 CathPlot 뒤로 숨어버림 - Ani
+        # 컨트롤 패널과 겹치지 않게, 가급적 맨 위로" - plot 창의 실제 화면
+        # 위치(GetWindowRect)를 찾아서, 그 오른쪽(화면에 자리가 있으면)에
+        # 패널을 붙여 배치하면 겹칠 일이 없다. 자리가 없으면(plot 창을 못
+        # 찾았거나 화면 오른쪽 끝에 붙어 있으면) 기존처럼 메인 창 기준
+        # 대각선 오프셋으로 대체한다.
+        _plot_hwnd, _plot_rect = (None, None)
+        if plot_window_title:
+            _plot_hwnd, _plot_rect = self._find_window_rect(plot_window_title, timeout_sec=1.5)
+        _placed = False
+        if _plot_rect:
+            try:
+                _screen_w = panel.winfo_screenwidth()
+                _px = _plot_rect[2] + 10  # plot 창 오른쪽 바깥
+                if _px + 260 <= _screen_w:  # 패널이 화면 안에 들어갈 때만
+                    panel.geometry(f"+{_px}+{_plot_rect[1]}")
+                    _placed = True
+            except Exception:
+                pass
+        if not _placed:
+            try:
+                panel.geometry(f"+{self.root.winfo_x() + 40 + 24 * _n_open}+{self.root.winfo_y() + 40 + 24 * _n_open}")
+            except Exception:
+                pass
+        # 패널을 다 배치한 뒤, plot 창을 Z-order상 맨 위로 올려둔다(포커스는
+        # 안 뺏음) - 바로 다음에 패널 자신이 화면에 나타나면서 다시 맨 위로
+        # 올라가, 결과적으로 "패널이 맨 위, plot 창이 그 바로 아래"가 된다.
+        if _plot_hwnd:
+            self._raise_window_no_activate(_plot_hwnd)
 
         def _on_panel_destroy():
             self._anim_panel_open_count = max(getattr(self, "_anim_panel_open_count", 1) - 1, 0)
@@ -5505,6 +5576,11 @@ class CathPlotGUI:
                         generator.last_anim_ctrl_path, generator.last_anim_frame_pause,
                         status_path=getattr(generator, "last_anim_status_path", None),
                         proc=generator.last_process,
+                        # [추가 - 요청] plot 창을 제목으로 찾아 겹치지 않게
+                        # 배치하고 Z-order를 맞추기 위해 창 제목을 같이 넘김
+                        # (gnu_generator._get_terminal_cmd와 동일한 규칙으로
+                        # 제목을 만듦 - 파일명에서 확장자만 뗀 것).
+                        plot_window_title=os.path.splitext(os.path.basename(outfile))[0],
                     )
 
             # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로
