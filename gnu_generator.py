@@ -2811,7 +2811,7 @@ class GnuplotGenerator:
             lines.append("unset label")
             lines.append("unset arrow")
 
-    def _get_terminal_cmd(self, fmt, outfile, plotdef=None, size_override=None, panel_scale=1.0):
+    def _get_terminal_cmd(self, fmt, outfile, plotdef=None, size_override=None, panel_scale=1.0, position=None):
         fmt = fmt.lower()
         # [추가] gnuplot은 ylabel/xlabel을 tic 숫자로부터 얼마나 띄울지 등의
         # 자동 배치 계산에 (우리가 각 요소마다 개별 font로 덮어써도) 터미널
@@ -2876,7 +2876,17 @@ class GnuplotGenerator:
             # 직접 지정(예: 10x8cm, 1.25 비율)하면 그 비율 그대로 화면 창에도
             # 적용되어 "정사각으로 보인다"는 문제가 있었음. 화면 보기 편의와
             # 인쇄/저장 물리 크기는 서로 다른 목적이라 분리한다.
-            return f"set terminal windows title '{title}' font 'Malgun Gothic,11' size 1000,700"
+            # [추가 - 요청] "Anim plot 창이 우측에 떴다가 Ani 제어창이 뜰 때
+            # 중앙으로 가는데, 한 번만 뜨게(처음부터 중앙에)" - 기존엔 창이
+            # OS 기본 위치(주로 화면 오른쪽)에 먼저 뜬 뒤, cathplot_gui의
+            # Animation Control 패널이 뜨면서 그제서야 화면 중앙으로 옮겨서
+            # 눈에 띄게 "점프"해 보였음. gnuplot windows 터미널이 자체적으로
+            # position 옵션을 지원하는 것을 확인해서(실측: `position x,y`
+            # 지정 시 정확히 그 좌표에 뜸), 애초에 스크립트 생성 시점에
+            # 목표 위치를 넣어 처음부터 그 자리에 뜨게 한다(position이 없으면
+            # 기존처럼 OS 기본 위치 - 다른 호출부는 영향 없음).
+            _pos_clause = f" position {position}" if position else ""
+            return f"set terminal windows title '{title}' font 'Malgun Gothic,11' size 1000,700{_pos_clause}"
         elif fmt == "png":
             # [수정] "PDF랑 완전히 다르다, title/legend 폰트가 너무 작다" - 예전엔
             # size를 단위 없는 순수 픽셀 수(예: 3508,2481 = 인쇄 품질 300dpi 의도)로
@@ -3486,7 +3496,20 @@ class GnuplotGenerator:
             # 화면 터미널을 연다 - 이전엔 이 시점 이전에 이미 화면 터미널이
             # 열려 있어서 범위 확정용 정적 plot 자체가 화면에 잠깐 보이는
             # "깜빡임" 문제가 있었음.
-            lines.append(self._get_terminal_cmd("interactive", outfile, plotdef, panel_scale=_size_scale))
+            # [추가 - 요청] "plot 창이 우측에 떴다가 중앙으로 점프" - 창
+            # 크기(1000x700)를 화면 해상도 기준으로 미리 중앙 좌표로 계산해
+            # 처음부터 그 자리에 뜨게 한다(cathplot_gui의 Animation Control
+            # 패널이 나중에 다시 옮기지 않아도 됨 - 애초에 한 번만 뜸).
+            _anim_win_pos = None
+            try:
+                import ctypes as _ctypes
+                _user32 = _ctypes.windll.user32
+                _scr_w = _user32.GetSystemMetrics(0)
+                _scr_h = _user32.GetSystemMetrics(1)
+                _anim_win_pos = f"{max((_scr_w - 1000) // 2, 0)},{max((_scr_h - 700) // 2, 0)}"
+            except Exception:
+                _anim_win_pos = None
+            lines.append(self._get_terminal_cmd("interactive", outfile, plotdef, panel_scale=_size_scale, position=_anim_win_pos))
             lines.append("paused_anim = 0")
             lines.append("exit_anim = 0")
             # [주의] 'R'(기존 범위 리셋)/'u'·'n'·'p'(gnuplot 기본 확대이력)와 안
