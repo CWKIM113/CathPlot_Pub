@@ -1239,7 +1239,11 @@ class GnuplotGenerator:
             # 그대로 반영하므로 legend box 자체도 자동으로 커져 겹침 없음).
             _term_font_pt_for_char_floor = max(int(round(11 * (panel_scale or 1.0))), 8)
             _gp_char_w_in_floor = 0.006014 * 0.878 * _term_font_pt_for_char_floor * _font_width_ratio(font_name)
-            _min_sample_w_in = 9.0 * _gp_char_w_in_floor
+            # [수정 - 요청] "dash가 너무 길다, 조금 더 줄여도 됨" - 9자는
+            # dash가 정확히 3번 반복되긴 하지만 전체 샘플선이 과하게 길어
+            # 보임 - 7자로 낮춤(dash 3글자 단위 기준 약 2.3번 반복 - 여전히
+            # "짧은 토막" 없이 여러 번 보이면서 전체 길이는 더 짧아짐).
+            _min_sample_w_in = 7.0 * _gp_char_w_in_floor
             _min_sample_w_frac = _min_sample_w_in / max(axis_w_in, 0.5)
             SAMPLE_W = max(SAMPLE_W, _min_sample_w_frac)
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
