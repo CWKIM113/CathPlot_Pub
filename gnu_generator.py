@@ -3503,6 +3503,17 @@ class GnuplotGenerator:
             # 없앴으므로(바로 위 참고), 화면 안내에서도 Q는 뺀다 - 실제로
             # 안전하게 동작하는 +/- 속도 조절만 남긴다.
             _help_text = "+/-: 속도"
+            # [추가 - 요청] "progress 100% 이후 Resume 누르면 처음부터 다시
+            # 시작하게" - do-for 루프가 정상적으로 다 돌아서(exit_anim이
+            # 아니라) 끝나면 그동안은 "pause mouse close"로 그냥 멈춰
+            # 있었음(그 시점부터는 ctrl 파일을 더 이상 안 읽으니 Resume을
+            # 눌러도 반응이 없었음) - click_seq(버튼을 누를 때마다 GUI가
+            # 1씩 늘려서 저장하는 값)를 도입해서, "끝난 시점의 click_seq"
+            # 보다 큰 값이 감지되면(=그 뒤로 버튼이 한 번 더 눌렸다는 뜻,
+            # Exit이 아니라면 Resume) 처음(_frame_i=0)부터 다시 재생하도록
+            # 전체를 while(1) 바깥 루프로 한 번 더 감싼다.
+            lines.append("click_seq = 0")
+            lines.append("while (1) {")
             lines.append("do for [_frame_i=0:n_frames_anim] {")
             lines.append("    load _anim_ctrl_path")
             lines.append("    if (exit_anim) { break }")
@@ -3513,6 +3524,14 @@ class GnuplotGenerator:
             lines.append(f"    set label 9998 sprintf(\"Progress %.0f%%  (X=%.4g)  {_help_text}\", 100.0*_frame_i/n_frames_anim, thresh) at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
             lines.extend(animated_curve_lines)
             lines.append("    pause frame_pause_anim")
+            lines.append("}")
+            lines.append("if (exit_anim) { break }")
+            lines.append("unset arrow 9999")
+            lines.append(f"set label 9998 sprintf(\"Progress 100%%  {_help_text} - Resume으로 처음부터 재생\") at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
+            lines.append("replot")
+            lines.append("_finished_seq = click_seq")
+            lines.append("while (click_seq <= _finished_seq && !exit_anim) { load _anim_ctrl_path; pause 0.3 }")
+            lines.append("if (exit_anim) { break }")
             lines.append("}")
             lines.append("unset arrow 9999")
             lines.append(f"set label 9998 sprintf(\"Progress 100%%  {_help_text}\") at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
@@ -3555,7 +3574,7 @@ class GnuplotGenerator:
         # gnuplot에 값을 전달한다 - self.last_anim_ctrl_path/last_anim_
         # frame_pause를 호출자(GUI)가 읽어가서 버튼을 만든다.
         with open(ctrl_path, "w", encoding="utf-8") as f:
-            f.write("paused_anim = 0\nexit_anim = 0\nframe_pause_anim = %.6f\n" % frame_pause)
+            f.write("paused_anim = 0\nexit_anim = 0\nframe_pause_anim = %.6f\nclick_seq = 0\n" % frame_pause)
         self.last_anim_ctrl_path = ctrl_path
         self.last_anim_frame_pause = frame_pause
         self.last_process = subprocess.Popen(

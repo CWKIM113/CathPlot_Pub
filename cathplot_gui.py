@@ -4990,12 +4990,16 @@ class CathPlotGUI:
         except OSError:
             return None
 
-    def _write_anim_ctrl(self, ctrl_path, paused, frame_pause, exit_flag=0):
+    def _write_anim_ctrl(self, ctrl_path, paused, frame_pause, click_seq, exit_flag=0):
         """[추가 - space bar 재설계] 실행 중인 애니메이션(gnuplot)에 값을
         전달하는 작은 제어 파일을 다시 쓴다. gnuplot이 파일을 읽는 도중에
         걸려 절반만 써진 내용을 읽지 않도록, 임시 파일에 먼저 쓰고
         os.replace로 원자적으로 교체한다(같은 드라이브 안에서는 Windows도
-        원자적 교체가 보장됨)."""
+        원자적 교체가 보장됨).
+        [추가 - 요청] "progress 100% 이후 Resume 누르면 처음부터 다시
+        시작하게" - click_seq는 버튼을 누를 때마다 1씩 증가하는 값으로,
+        gnuplot 쪽은 "애니메이션이 다 끝난 시점의 click_seq"보다 큰 값을
+        보면(=그 뒤로 버튼이 한 번 더 눌렸다는 뜻) 처음부터 다시 재생한다."""
         try:
             tmp_path = ctrl_path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -5003,6 +5007,7 @@ class CathPlotGUI:
                     f"paused_anim = {1 if paused else 0}\n"
                     f"exit_anim = {1 if exit_flag else 0}\n"
                     f"frame_pause_anim = {frame_pause:.6f}\n"
+                    f"click_seq = {int(click_seq)}\n"
                 )
             os.replace(tmp_path, ctrl_path)
         except OSError:
@@ -5022,7 +5027,14 @@ class CathPlotGUI:
         script가 만들어둔 제어 파일(ctrl_path)에 값을 써주고, 실행 중인
         gnuplot이 매 프레임 그 파일을 load해서 반영한다(키보드 포커스와
         완전히 무관 - 실측으로 pause/exit 둘 다 정상 동작 확인됨)."""
-        state = {"paused": False, "frame_pause": initial_frame_pause}
+        state = {"paused": False, "frame_pause": initial_frame_pause, "seq": 0}
+
+        def _bump():
+            # [추가 - 요청] 버튼을 누를 때마다 1씩 증가 - gnuplot이 "끝난
+            # 시점 이후로 버튼이 한 번 더 눌렸는지"를 이 값으로 감지해서
+            # Progress 100% 뒤에 Resume을 누르면 처음부터 재생하게 한다.
+            state["seq"] += 1
+            return state["seq"]
 
         panel = tk.Toplevel(self.root)
         panel.title("Animation Control")
@@ -5043,24 +5055,24 @@ class CathPlotGUI:
         def toggle_pause():
             state["paused"] = not state["paused"]
             pause_btn.config(text="Resume" if state["paused"] else "Pause")
-            self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"])
+            self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"], _bump())
 
         pause_btn.config(command=toggle_pause)
         pause_btn.pack(side="left", padx=3)
 
         def speed_down():
             state["frame_pause"] = state["frame_pause"] * 2.0
-            self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"])
+            self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"], _bump())
 
         def speed_up():
             state["frame_pause"] = max(state["frame_pause"] * 0.5, 0.001)
-            self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"])
+            self._write_anim_ctrl(ctrl_path, state["paused"], state["frame_pause"], _bump())
 
         tk.Button(btn_row, text="- Slower", width=9, command=speed_down).pack(side="left", padx=3)
         tk.Button(btn_row, text="+ Faster", width=9, command=speed_up).pack(side="left", padx=3)
 
         def do_exit():
-            self._write_anim_ctrl(ctrl_path, False, state["frame_pause"], exit_flag=1)
+            self._write_anim_ctrl(ctrl_path, False, state["frame_pause"], _bump(), exit_flag=1)
             panel.destroy()
 
         pal = self.PALETTE
