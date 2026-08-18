@@ -1243,7 +1243,17 @@ class GnuplotGenerator:
             # dash가 정확히 3번 반복되긴 하지만 전체 샘플선이 과하게 길어
             # 보임 - 7자로 낮춤(dash 3글자 단위 기준 약 2.3번 반복 - 여전히
             # "짧은 토막" 없이 여러 번 보이면서 전체 길이는 더 짧아짐).
-            _min_sample_w_in = 7.0 * _gp_char_w_in_floor
+            # [수정 - 버그, 근본 원인] 아래 실제 glyph 글자수(_n_total_chars)는
+            # 여기서 구한 SAMPLE_W를 "다시 0.6배" 해서 정해지는데(글자
+            # "━" 자체가 기준보다 넓어서 필요한 보정), 이 floor를 "N글자
+            # 만큼의 물리 폭"으로만 잡아서 실제로는 N*0.6개 글자만 확보되고
+            # 있었음(예: 7자 목표였는데 실제 4자만 나옴) - dashdot/
+            # dashdotdot의 반복 단위(5~7자)가 그 안에 아예 못 들어가
+            # "너무 짧으면 그냥 solid"로 처리되는 안전장치가 계속 걸려
+            # dash-dot이 실선처럼 보이던 진짜 원인이었음. 목표 글자수를
+            # 0.6배로 미리 나눠서 이 축소를 상쇄한다.
+            _TARGET_GLYPH_CHARS = 8.0
+            _min_sample_w_in = (_TARGET_GLYPH_CHARS / 0.6) * _gp_char_w_in_floor
             _min_sample_w_frac = _min_sample_w_in / max(axis_w_in, 0.5)
             SAMPLE_W = max(SAMPLE_W, _min_sample_w_frac)
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
@@ -1639,71 +1649,43 @@ class GnuplotGenerator:
                 # 모든 style에 공통으로 쓰고(비교할 다른 글자의 폭 자체가
                 # 필요 없어짐), style 구분은 이 글자와 빈칸(space)의 반복
                 # 리듬(잉크몇글자+빈칸몇글자)으로만 표현한다.
-                # [수정 - 요청] "dot는 dot처럼 나오게" - "━"(가로선) 문자를
-                # 성기게 찍으면 그냥 짧은 대시로 보이지 그림에서 기대하는
-                # 동그란 "점"처럼은 안 보임 - dot style만 실제로 점처럼
-                # 보이는 문자("•", 불릿)를 쓴다(다른 5종은 이미 정확하다고
-                # 확인된 "━" 그대로 유지 - dot 한 종류만 예외 처리라
-                # 렌더러 간 폭 차이 위험도 최소화됨).
-                _INK_CHAR = "•" if linestyle == "dot" else "━"
-                # [수정] "dash를 더 길게" 요청 - dash 잉크 연속 길이를
-                # shortdash보다 길게 해서 뚜렷하게 길어 보이게 함. 각 style
-                # 반복 단위(ink_run+gap_run 글자)가 목표 글자수(n_total) 안에
-                # 최소 1번은 들어가야 빈칸이 실제로 보이므로, 단위를 작게
-                # (2~4글자) 유지해 작은 legend에서도 패턴이 드러나게 함.
-                # [수정 - 버그] "4/5/6번째가 서로 다른데 똑같이 보임(특히
-                # 5번째가 2번째와 거의 동일)" - dash/dashdot/dashdotdot을
-                # 전부 같은 (2,1) 리듬으로 묶어놨던 게 원인이라 한 번 6개
-                # 전부 고유 조합으로 나눴었는데("dot"=1,2 / "dashdotdot"=1,3
-                # 처럼 빈칸이 많은 조합), legend 샘플 영역 자체가 몇 글자
-                # 안 되는 작은 경우가 흔해서(실측 3자) "PWRDWN/MFLO:R-FWP1
-                # 처럼 유독 짧아 보임" - dot류가 3글자 중 1글자만 잉크라
-                # 나머지 style보다 훨씬 짧은 토막처럼 보였던 것(재현·실측
-                # 확인). "무작정 3단계로 뭉치지 말고, 구분 안 되면 조금 더
-                # 길게 하면 되지 않나"는 지적이 맞았음 - 근본 해결은 글자
-                # 수를 줄이는 게 아니라 SAMPLE_W 자체에 "6종 리듬이 최소
-                # 2번은 반복될" 최소 폭을 보장하는 것(바로 위 SAMPLE_W
-                # 최소치 참고) - 이제 그 여유가 확보됐으니 6종을 다시 전부
-                # 구분되는 고유 리듬으로 되돌린다.
-                # [수정 - 요청] "dash는 예로 들면 3개 정도 나오면 됨" - 단위를
-                # 작게(2~4글자) 유지해 위 최소 글자수(9자) 안에서 dash가
-                # 눈에 띄게 3번 반복되도록(3글자 단위 x 3번 = 9자) 조정.
-                # [수정 - 요청] "dash 등에서 틈새 길이도 잘 조정하면 붙지
-                # 않을 것" - gap이 1글자면 세그먼트끼리 거의 붙어 보일 수
-                # 있어, 빈칸이 1이었던 dash/shortdash를 2로 늘려 확실히
-                # 떨어져 보이게 함(대신 반복 횟수는 조금 줄어듦 - 방금
-                # "너무 길다"는 요청으로 전체 폭을 줄인 것과 균형).
-                _RHYTHM_BY_STYLE = {  # (연속 잉크 글자수, 빈칸 글자수)
-                    "solid": (1, 0),
-                    "dash": (2, 2),        # 4글자 단위 - 뚜렷이 떨어진 dash
-                    "shortdash": (1, 2),   # 3글자 단위 - 촘촘하지만 안 붙는 점선
-                    "dot": (1, 2),         # 3글자 단위 - "•" 문자로 진짜 점처럼
-                    "dashdot": (2, 3),     # 5글자 단위 - dash보다 더 넓은 빈칸
-                    "dashdotdot": (1, 3),  # 4글자 단위 - 가장 성김
+                # [수정 - 요청] "화면에서 dash/dot/shortdash/dashdot/
+                # dashdotdot 등이 서로 구별되어야 한다(가장 중요)" - 지금까지는
+                # 전부 같은 글자("━")를 간격만 다르게 반복했는데, 1~2글자
+                # 차이의 "간격"만으로는 구별이 약함 - dashdot/dashdotdot은
+                # 이름 그대로 "dash 다음 dot(들)"이 반복되는 실제 모양으로
+                # 직접 구성한다(문자를 섞어 쓰지만, 위치는 여전히 "글자 수"
+                # 기준이라 렌더러가 바뀌어도 전체 폭 일관성엔 영향 없음 -
+                # 섞인 글자 자체의 미세한 폭 차이만 남는 정도).
+                # [수정 - 버그] dashdot/dashdotdot 단위 문자열이(6~8자) 최소
+                # 폭(7자)보다 길어서 "너무 짧으면 그냥 solid로" 처리하는
+                # 안전장치가 계속 걸려 dash-dot이 그냥 실선처럼 보였음
+                # (재현·실측 확인) - 단위를 꼭 필요한 만큼만(불필요한 뒤쪽
+                # 여백 제거)으로 줄이고, 최소 폭도 이 단위가 한 번은 들어갈
+                # 만큼(8자) 살짝 올린다.
+                _DASH_CHAR, _DOT_CHAR = "━", "•"
+                _UNIT_BY_STYLE = {  # 반복 단위 문자열(그대로 이어붙여 반복)
+                    "dash": _DASH_CHAR * 2 + "  ",              # ── (넓은 간격)
+                    "shortdash": _DASH_CHAR + "  ",             # -  (짧은 dash, 넓은 간격)
+                    "dot": _DOT_CHAR + "  ",                    # •  (점)
+                    "dashdot": _DASH_CHAR * 2 + " " + _DOT_CHAR + " ",        # ── • (dash-dot)
+                    "dashdotdot": _DASH_CHAR * 2 + " " + _DOT_CHAR + " " + _DOT_CHAR + " ",  # ── • • (dash-dot-dot)
                 }
-                _ink_run, _gap_run = _RHYTHM_BY_STYLE.get(linestyle, (1, 0))
+                _unit = _UNIT_BY_STYLE.get(linestyle)
                 # solid 글자("━") 실측 배율(0.6)은 그대로 유지 - 모든 style이
-                # 이제 같은 글자를 쓰므로 이 하나의 배율만 공통으로 적용하면
-                # 전부 정확히 같은 물리 폭에 맞춰짐(전엔 style별로 각기 다른
-                # -불확실한- 배율을 따로 뒀던 것 자체가 "제각각"의 원인).
+                # 이제 같은 기준 글자를 쓰므로 이 하나의 배율만 공통으로
+                # 적용하면 전부 정확히 같은 물리 폭에 맞춰짐.
                 _base_n_chars = max((SAMPLE_W * axis_w_in) / max(_GP_CHAR_W_IN, 1e-9), 1.0)
                 _n_total_chars = max(int(round(_base_n_chars * 0.6)), 2)
                 # [수정 - 버그, 근본 원인 재확인] "line 양단 마진도 다름" -
                 # rstrip으로 뒤쪽 빈칸을 잘라내면, style마다 실제 문자열
-                # 길이(=gnuplot이 "center" 정렬 시 차지한다고 보는 폭)가
-                # 달라져서, 같은 중심점(anchor)을 기준으로 짧은 문자열일수록
-                # 양쪽 여백이 똑같이 더 커 보이는 것으로 확인됨(대칭으로
-                # 줄어드는 것 자체가 "마진이 다르다"는 인상을 만듦). 해결:
-                # 뒤쪽 빈칸을 자르지 않고 항상 n_total_chars 그대로 유지한다
-                # - 모든 style이 "글자 수(빈칸 포함)" 기준으로 완전히 동일한
-                # 폭을 차지하게 되어, center 정렬 기준으로 양쪽 여백이
-                # 스타일과 무관하게 항상 정확히 같아짐(빈칸으로 끝나는 모양은
-                # 실제 점선이 자연스럽게 gap에서 끝나는 것과 같아 시각적으로
-                # 어색하지 않음 - 오히려 진짜 점선처럼 보임).
-                if _gap_run <= 0 or _n_total_chars <= _ink_run:
-                    _glyph_run = _INK_CHAR * _n_total_chars
+                # 길이(=gnuplot이 정렬 시 차지한다고 보는 폭)가 달라져서
+                # 여백이 style마다 달라 보였음 - 뒤쪽 빈칸을 자르지 않고
+                # 항상 n_total_chars 그대로 유지한다 - 모든 style이 "글자
+                # 수(빈칸 포함)" 기준으로 완전히 동일한 폭을 차지하게 됨.
+                if _unit is None or _n_total_chars <= len(_unit):
+                    _glyph_run = _DASH_CHAR * _n_total_chars
                 else:
-                    _unit = _INK_CHAR * _ink_run + " " * _gap_run
                     _reps = _n_total_chars // max(len(_unit), 1) + 2
                     _glyph_run = (_unit * _reps)[:_n_total_chars]
                 # [수정 - 요청] "길이도 다른데 다 중앙정렬인 느낌 - 좌우
