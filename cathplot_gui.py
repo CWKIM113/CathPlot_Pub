@@ -30,13 +30,16 @@ from tkinter import messagebox
 from tkinter import font as tkfont
 from pathlib import Path
 
-import win32con
-import win32gui
-import win32ui
-import win32api
-import win32print
-import pywintypes
-import pythoncom
+# [수정 - 요청] "창은 tkinter만 있으면 바로 뜰 수 있는데 무거운 게 다 로딩된
+# 후에야 뜬다" - win32con/win32ui/win32api/win32print/pywintypes/pythoncom은
+# 전부 PRINT 관련 함수(_pick_printer_dialog/_print_emf_and_cleanup/
+# _print_and_cleanup)에서만 쓰이고 창을 띄우는 데는 전혀 필요 없는데, 예전엔
+# 모듈 맨 위에서 즉시 import해서 메인 창이 뜨기 전에 매번 그 로딩 비용을
+# 치렀음(실측: python -X importtime 기준 win32ui만 143ms, pywintypes
+# 47ms, pythoncom 35ms, win32api 12ms - 합쳐서 cathplot_gui 전체 import
+# 시간의 약 1/3). 실제 쓰는 함수 쪽으로 각각 지연 import를 옮겨서, 인쇄
+# 기능을 한 번도 안 쓰면 이 비용 자체가 안 든다(기능은 완전히 동일 -
+# win32gui는 실제로는 주석 처리된 죽은 코드에서만 참조돼 아예 삭제).
 
 from data_parser import CathenaDatParser, save_json
 from gnu_generator import PlotDefinition, CurveDefinition, GnuplotGenerator
@@ -6143,6 +6146,7 @@ class CathPlotGUI:
         용지 방향은 여기서 다시 묻지 않음 - 단일 PRINT는 _pick_plot_to_print_dialog에서,
         Multi Print/Save는 자체 orientation_var에서 이미 정해져서 넘어옴 (중복 방지).
         반환값: printer_name, 취소 시 None"""
+        import win32print  # [수정 - 지연 import] 파일 위 설명 참고
         try:
             printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
             names = [p[2] for p in printers]
@@ -6194,6 +6198,7 @@ class CathPlotGUI:
         깨져 글자가 늘어나거나 눌려 보이는 문제가 있어, EMF 헤더에 저장된
         원본 비율(rclFrame)을 읽어 비율을 유지한 채 페이지 중앙에 배치한다."""
         import ctypes
+        import pythoncom, win32ui, win32print, win32con, pywintypes  # [수정 - 지연 import] 파일 위 설명 참고
 
         class _RECT(ctypes.Structure):
             _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
@@ -6465,6 +6470,7 @@ class CathPlotGUI:
         # 바로 호출하면 COM이 초기화되어 있지 않아 멈추거나(hang) 심하면
         # 프로세스 자체가 죽는 네이티브 크래시가 날 수 있다. 이 스레드
         # 전용으로 COM을 초기화/정리해준다.
+        import pythoncom, win32api  # [수정 - 지연 import] 파일 위 설명 참고
         pythoncom.CoInitialize()
         try:
             result = win32api.ShellExecute(0, "print", os.path.abspath(filepath), None, ".", 0)
