@@ -39,7 +39,19 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # [추가 - 요청] "file size/실행속도 개선 방안?" - 실제 dist 폴더를 열어보니
+    # pandas(11M)/numpy(numpy+numpy.libs 합쳐 17M)/lxml(4.2M)/pytz(1.8M)/
+    # dateutil(156K) 등 CathPlot 코드 어디서도(import numpy/pandas/lxml 등)
+    # 직접 쓰지 않는 패키지가 통째로 묶여 있었음(약 34M, dist 전체의 약 1/4) -
+    # PyMuPDF(pymupdf)의 부수 기능(옵션 의존성)까지 PyInstaller 정적 분석이
+    # 딸려서 끌고 온 것으로 보임. CathPlot이 실제로 쓰는 PyMuPDF 기능(PDF->
+    # PNG/JPG 래스터화, PDF->SVG 변환, 텍스트 추출로 잘림 여부 확인)은 이
+    # 패키지들이 전혀 필요 없는 순수 경로임을 직접 검증함(numpy/pandas/lxml/
+    # pytz/dateutil을 강제로 import 불가능하게 만든 상태에서 single/multi-plot
+    # PDF/PNG/EMF 생성 + PyMuPDF 텍스트 추출까지 전부 정상 동작, 이 5개 패키지
+    # import 시도 자체가 한 번도 안 일어남을 확인). onedir 폴더 크기와 스캔할
+    # 파일 수가 줄어드는 만큼 시작 속도에도 도움이 됨.
+    excludes=['numpy', 'pandas', 'lxml', 'pytz', 'dateutil'],
     noarchive=False,
     optimize=0,
 )
