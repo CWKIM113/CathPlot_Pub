@@ -186,6 +186,7 @@ class CathPlotGUI:
 
         self._setup_theme()
         self.create_widgets()
+        self._warmup_proc = None  # [추가 - 버그 수정] 아래 _warmup_gnuplot 참고
         self.root.after(10, self.update_plot_file_list)
         self.root.after(50, self._warmup_gnuplot)
 
@@ -6783,15 +6784,33 @@ class CathPlotGUI:
                     "plot sin(x)\n"
                     "set output\n"
                 )
-                subprocess.run(
-                    [gnuplot_exe], input=script, text=True, capture_output=True,
-                    encoding="utf-8", errors="replace",
-                    timeout=20, **_no_console_kwargs()
+                # [수정 - 버그] "Dat file도 안 열고 바로 X로 닫으면 '다른 gnuplot
+                # 프로세스가 남아있다'는 메시지가 뜬다(체크도 없이) - Plot을 하나라도
+                # 그리고 닫으면 안 뜸" - 원인 확인: subprocess.run은 예열용
+                # gnuplot.exe가 완전히 끝날 때까지 이 스레드 안에서 기다리는데,
+                # 그 사이(수백ms~1초 남짓)엔 tasklist에 gnuplot.exe가 실제로 잡힘.
+                # 앱을 켜자마자(50ms 후) 바로 닫으면 이 예열 프로세스가 아직 안
+                # 끝났을 시점과 겹쳐서, on_closing의 "남은 gnuplot 프로세스" 검사가
+                # 이 예열 프로세스를(우리가 만든 걸 뻔히 알면서도) "다른 프로그램이
+                # 열었을 수도 있는 알 수 없는 프로세스"로 오인해 확인창을 띄웠음
+                # - Popen으로 바꿔 핸들을 self._warmup_proc에 저장해두면, on_closing이
+                # 닫히기 직전에 이 핸들로 직접 종료시켜서(확인창 없이) 애초에
+                # tasklist 검사 시점엔 이미 안 잡히게 한다.
+                proc = subprocess.Popen(
+                    [gnuplot_exe], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                    **_no_console_kwargs()
                 )
+                self._warmup_proc = proc
+                try:
+                    proc.communicate(input=script, timeout=20)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                self._warmup_proc = None
                 if os.path.exists(warmup_out):
                     os.remove(warmup_out)
             except Exception:
-                pass
+                self._warmup_proc = None
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -6814,6 +6833,22 @@ class CathPlotGUI:
 
     def on_closing(self):
         """GUI 창이 닫힐 때 temp_sorted 임시 폴더와 gnuplot 프로세스를 정리하고 프로그램을 종료합니다."""
+        # 0. [추가 - 버그 수정] 앱을 켜자마자(예열이 끝나기 전에) 바로 닫으면,
+        # 아직 실행 중인 예열용 gnuplot.exe가 곧바로 아래 "남은 gnuplot 프로세스"
+        # 검사에 걸려서 "다른 프로그램일 수도 있다"는 확인창이 떴었음 - 우리가
+        # 띄운 걸 정확히 아는 프로세스이므로, 검사하기 전에 먼저 조용히
+        # 종료시켜서(확인 불필요) 애초에 걸리지 않게 한다.
+        try:
+            _wp = getattr(self, "_warmup_proc", None)
+            if _wp is not None and _wp.poll() is None:
+                _wp.kill()
+                try:
+                    _wp.wait(timeout=1.0)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # 1. 이번 세션에서 추적 중인 gnuplot(-persist) 프로세스 종료 시도
         try:
             for proc in getattr(self, "plot_processes", []):
