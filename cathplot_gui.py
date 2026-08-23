@@ -117,7 +117,7 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0      by C.W.Kim @2026.08.18")
+        self.root.title("CathPlot V1.0      by C.W.Kim @2026.08.24")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움
         self.root.geometry("1200x1030")
@@ -326,7 +326,7 @@ class CathPlotGUI:
             font=("Malgun Gothic", 9, "bold"),
         )
 
-    def _mk_btn(self, parent, text, command, color="secondary", fg="white", **pack_kw):
+    def _mk_btn(self, parent, text, command, color="secondary", fg="white", btn_pady=0, btn_width=None, **pack_kw):
         # [추가] "Curves/Marker/Browse/Template/Clean Past Plots 버튼도
         # 구별·강조" - ttk.Button은 배경색이 잘 안 먹는 환경이 확인돼서, 색을
         # 주는 모든 버튼을 이 헬퍼(tk.Button 기반)로 통일한다. color는
@@ -348,12 +348,21 @@ class CathPlotGUI:
         # 최소값이라 더 줄이지 않음). DAT File 행 자체는 이미 pady=0으로
         # 붙어 있어서(add_file_row), 버튼 높이가 줄어드는 만큼 행 사이
         # 간격도 그만큼 줄어듦.
-        b = tk.Button(
-            parent, text=text, command=command,
+        # [추가 - 요청] "Batch Queue 버튼을 Batch Set 버튼 정도 높이로" - 위
+        # pady=0 기본값은 옆에 Entry/Combobox가 있는 촘촘한 줄(Browse 등)에나
+        # 맞는 값이라, Batch Queue/Batch Set처럼 버튼만 단독으로 한 줄에 있는
+        # 다이얼로그는 좀 더 여유 있는 높이가 자연스러움 - 필요할 때만
+        # btn_pady로 내부 상하 여백을(기본은 0, 기존 호출부 영향 없음),
+        # ▲/▼처럼 좁은 고정폭이 필요하면 btn_width로 지정할 수 있게 한다.
+        kwargs = dict(
+            text=text, command=command,
             font=("Malgun Gothic", 9, "bold"), bg=bg, fg=fg,
             activebackground=dark, activeforeground=fg,
-            relief="raised", bd=1, padx=8, pady=0,
+            relief="raised", bd=1, padx=8, pady=btn_pady,
         )
+        if btn_width is not None:
+            kwargs["width"] = btn_width
+        b = tk.Button(parent, **kwargs)
         b.pack(**pack_kw)
         return b
 
@@ -2291,10 +2300,13 @@ class CathPlotGUI:
 
         btn_row = ttk.Frame(dlg)
         btn_row.pack(fill="x", padx=10, pady=5)
-        ttk.Button(btn_row, text="+ Add Templates...", command=add_files).pack(side="left", padx=5)
-        ttk.Button(btn_row, text="Remove Selected", command=remove_selected).pack(side="left", padx=5)
-        ttk.Button(btn_row, text="▲", width=3, command=lambda: move(-1)).pack(side="left", padx=2)
-        ttk.Button(btn_row, text="▼", width=3, command=lambda: move(1)).pack(side="left", padx=2)
+        # [수정 - 요청] "Batch Set 버튼들도 색상을 넣는 게 어떨지" - Batch
+        # Queue와 같은 방식(_mk_btn, tk.Button 기반 - ttk.Button 렌더링 버그
+        # 우회책이기도 함)으로 통일, 높이도 Batch Queue와 맞춤(btn_pady=4).
+        self._mk_btn(btn_row, "+ Add Templates...", add_files, color="grey", btn_pady=4, side="left", padx=5)
+        self._mk_btn(btn_row, "Remove Selected", remove_selected, color="grey", btn_pady=4, side="left", padx=5)
+        self._mk_btn(btn_row, "▲", lambda: move(-1), color="grey", btn_pady=4, btn_width=3, side="left", padx=2)
+        self._mk_btn(btn_row, "▼", lambda: move(1), color="grey", btn_pady=4, btn_width=3, side="left", padx=2)
 
         # [수정 - 요청] "메모장으로 열어 고친 뒤 List Load를 또 눌러야 하는
         # 게 아니라, 저장하고 닫으면 그대로 불러오기(load)까지 되도록" -
@@ -2321,9 +2333,9 @@ class CathPlotGUI:
 
         btn_row2 = ttk.Frame(dlg)
         btn_row2.pack(fill="x", padx=10, pady=(0, 5))
-        ttk.Button(btn_row2, text="List Save...", command=save_list).pack(side="left", padx=5)
-        ttk.Button(btn_row2, text="List Load...", command=load_list).pack(side="left", padx=5)
-        ttk.Button(btn_row2, text="Edit in Notepad...", command=edit_list_notepad).pack(side="left", padx=5)
+        self._mk_btn(btn_row2, "List Save...", save_list, color="grey", btn_pady=4, side="left", padx=5)
+        self._mk_btn(btn_row2, "List Load...", load_list, color="grey", btn_pady=4, side="left", padx=5)
+        self._mk_btn(btn_row2, "Edit in Notepad...", edit_list_notepad, color="grey", btn_pady=4, side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
@@ -2423,8 +2435,8 @@ class CathPlotGUI:
 
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
-        ttk.Button(run_row, text="취소", command=dlg.destroy).pack(side="right", padx=5)
-        ttk.Button(run_row, text="Run Batch Set", command=run_batch_set).pack(side="right", padx=5)
+        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", btn_pady=4, side="right", padx=5)
+        self._mk_btn(run_row, "Run Batch Set", run_batch_set, color="accent", btn_pady=4, side="right", padx=5)
 
     def _render_3d_from_template_data(self, data, td3_data, outfile, fmt):
         """[추가] "3D도 Batch에 연동" - 2D Template의 data(file_assignments/
@@ -2901,9 +2913,9 @@ class CathPlotGUI:
         # 코드베이스에 있는 검증된 우회책(_mk_btn, tk.Button 기반 - "ttk.Button은
         # 배경색이 잘 안 먹는 환경이 확인돼서"와 같은 계열의 문제)으로 교체 -
         # 실제 화면 캡처로 글자가 정상적으로 보이는 것까지 확인함.
-        self._mk_btn(btn_row, "+ Add Files...", add_files, color="grey", side="left", padx=5)
-        self._mk_btn(btn_row, "Remove Selected", remove_selected, color="grey", side="left", padx=5)
-        self._mk_btn(btn_row, "Template Load", self.load_template, color="grey", side="left", padx=5)
+        self._mk_btn(btn_row, "+ Add Files...", add_files, color="grey", btn_pady=4, side="left", padx=5)
+        self._mk_btn(btn_row, "Remove Selected", remove_selected, color="grey", btn_pady=4, side="left", padx=5)
+        self._mk_btn(btn_row, "Template Load", self.load_template, color="grey", btn_pady=4, side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
@@ -2924,8 +2936,8 @@ class CathPlotGUI:
 
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
-        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", side="right", padx=5)
-        self._mk_btn(run_row, "Run Batch", run_batch, color="accent", side="right", padx=5)
+        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", btn_pady=4, side="right", padx=5)
+        self._mk_btn(run_row, "Run Batch", run_batch, color="accent", btn_pady=4, side="right", padx=5)
 
     def _capture_batch_queue_settings(self):
         """Batch Queue 실행에 필요한 화면 설정을 전부 미리 읽어서 일반 dict로
