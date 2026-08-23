@@ -1112,7 +1112,9 @@ class CathPlotGUI:
                     self.execute_print_dialog, side="left", padx=5, pady=2)
         _accent_btn(self.button_frame, "Close All Plots", pal["danger"], pal["danger_dark"],
                     self.close_all_plot_windows, side="right", padx=5, pady=2)
-        _accent_btn(self.button_frame, "Multi-Plot", pal["amber"], pal["amber_dark"],
+        # [수정 - 요청] "PLOT/SAVE/PRINT는 전부 대문자인데 Multi-Plot만 혼합
+        # 표기라 어색하다" - 나머지와 통일해 전부 대문자로.
+        _accent_btn(self.button_frame, "MULTI-PLOT", pal["amber"], pal["amber_dark"],
                     self.open_multi_plot_dialog, side="left", padx=15, pady=2)
         self._mk_btn(self.button_frame, "Clean Past Plots", self.open_delete_dialog,
                      color="secondary", side="right", padx=5, pady=2)
@@ -1529,9 +1531,15 @@ class CathPlotGUI:
 
         btn_frame = ttk.Frame(dialog)
         btn_frame.pack(fill="x", pady=15)
-        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side="right", padx=15)
-        ttk.Button(btn_frame, text="Print", command=lambda: on_execute("Print")).pack(side="right", padx=5)
-        ttk.Button(btn_frame, text="Save", command=lambda: on_execute("Save")).pack(side="right", padx=5)
+        # [수정 - 요청] "Batch Queue 선택창(이 Multi Save/Print 창)의 버튼 높이가
+        # 너무 낮음 - Batch Set 버튼들과 비슷하게" - 기존 ttk.Button은 옆의
+        # Batch Set/Batch Queue 대화상자 버튼(_mk_btn, btn_pady=10)보다 눈에
+        # 띄게 낮아 보였음. 같은 헬퍼·같은 btn_pady로 통일하고, color는 이미
+        # PALETTE에 정의된 용도별 강조색(accent2=SAVE, accent3=PRINT)을 그대로
+        # 따른다.
+        self._mk_btn(btn_frame, "Cancel", dialog.destroy, color="danger", btn_pady=0, side="right", padx=15)
+        self._mk_btn(btn_frame, "Print", lambda: on_execute("Print"), color="accent3", btn_pady=0, side="right", padx=5)
+        self._mk_btn(btn_frame, "Save", lambda: on_execute("Save"), color="accent2", btn_pady=0, side="right", padx=5)
 
     # ------------------------------------------------------------------
     # 템플릿 저장 / 불러오기
@@ -2105,6 +2113,13 @@ class CathPlotGUI:
         지정된 완전한 plot 하나씩을 의미한다."""
         dlg = tk.Toplevel(self.root)
         dlg.title("Batch Set - 여러 Template을 순서대로 이미지로")
+        # [수정 - 버그] "3D Template 선택... 버튼을 누르면 이 Batch Set 창이
+        # CathPlot 메인 창 뒤로 숨음" - 이 다이얼로그가 지금까지 transient로
+        # 등록돼 있지 않았음(다른 대부분의 다이얼로그는 dialog.transient(self.
+        # root)를 호출함). transient가 없으면 안에서 뜨는 파일 선택창이 닫힐 때
+        # 창 관리자가 소유 관계를 몰라 root를 이 창 위로 올려버릴 수 있음 -
+        # root의 임시 자식으로 등록해 항상 그 위에 유지되게 한다.
+        dlg.transient(self.root)
         # [수정 - 요청] 버튼 높이를 1.4배로 키우면서(btn_pady=10) 창에 필요한
         # 최소 높이가 480px보다 커져 listbox가 그만큼 눌리던 것을 보정.
         dlg.geometry("640x500")
@@ -2142,7 +2157,7 @@ class CathPlotGUI:
 
         def add_files():
             paths = filedialog.askopenfilenames(
-                initialdir=template_dir,
+                parent=dlg, initialdir=template_dir,
                 filetypes=[("CathPlot Template", "*.json"), ("All files", "*.*")],
                 title="Batch Set에 추가할 Template 파일 선택 (여러 개 선택 가능)"
             )
@@ -2304,18 +2319,30 @@ class CathPlotGUI:
         btn_row.pack(fill="x", padx=10, pady=5)
         # [수정 - 요청] "Batch Set 버튼들도 색상을 넣는 게 어떨지" - Batch
         # Queue와 같은 방식(_mk_btn, tk.Button 기반 - ttk.Button 렌더링 버그
-        # 우회책이기도 함)으로 통일, 높이도 Batch Queue와 맞춤(btn_pady=10).
-        self._mk_btn(btn_row, "+ Add Templates...", add_files, color="grey", btn_pady=10, side="left", padx=5)
-        self._mk_btn(btn_row, "Remove Selected", remove_selected, color="grey", btn_pady=10, side="left", padx=5)
-        self._mk_btn(btn_row, "▲", lambda: move(-1), color="grey", btn_pady=10, btn_width=3, side="left", padx=2)
-        self._mk_btn(btn_row, "▼", lambda: move(1), color="grey", btn_pady=10, btn_width=3, side="left", padx=2)
+        # 우회책이기도 함)으로 통일, 높이도 Batch Queue와 맞춤.
+        # [수정 - 요청] "Batch Set/Batch Queue/M-P 선택창 버튼들이 메인 창의
+        # PLOT~Multi-Plot 버튼보다 크고 높다" - 여러 차례 조정 끝에(42px ->
+        # 36px) 결국 메인 창 버튼들과 맞추기로 하고, _mk_btn의 기본값(btn_pady=0,
+        # 다른 대부분의 색상 버튼-Curves/Marker/Browse/Template 등-이 이미
+        # 쓰는 값)으로 되돌림. Batch Set/Batch Queue/M-P(Multi Save-Print)
+        # 세 창 모두 동일 적용해 서로 높이가 계속 일치하도록 함.
+        self._mk_btn(btn_row, "+ Add Templates...", add_files, color="grey", btn_pady=0, side="left", padx=5)
+        self._mk_btn(btn_row, "Remove Selected", remove_selected, color="grey", btn_pady=0, side="left", padx=5)
+        self._mk_btn(btn_row, "▲", lambda: move(-1), color="grey", btn_pady=0, btn_width=3, side="left", padx=2)
+        self._mk_btn(btn_row, "▼", lambda: move(1), color="grey", btn_pady=0, btn_width=3, side="left", padx=2)
 
         # [수정 - 요청] "메모장으로 열어 고친 뒤 List Load를 또 눌러야 하는
         # 게 아니라, 저장하고 닫으면 그대로 불러오기(load)까지 되도록" -
-        # subprocess.run으로 메모장이 닫힐 때까지 기다린 뒤(그 사이 다이얼로그는
-        # 그대로 대기), 같은 파일을 _apply_list_file로 바로 불러온다. 메모장을
-        # 그냥 닫기만 하고 저장을 안 했으면 파일 내용이 그대로라 다시 읽어도
-        # 문제 없음.
+        # 메모장이 닫힐 때까지 기다린 뒤, 같은 파일을 _apply_list_file로 바로
+        # 불러온다. 메모장을 그냥 닫기만 하고 저장을 안 했으면 파일 내용이
+        # 그대로라 다시 읽어도 문제 없음.
+        # [수정 - 성능] subprocess.run을 메인 스레드에서 그대로 부르면 Tkinter는
+        # 싱글스레드라 메모장을 닫을 때까지 이벤트 루프 전체가 멈춰(Batch Set
+        # 창뿐 아니라 CathPlot 메인 창까지 응답 없음 상태로 보임) - 메모장
+        # 실행은 백그라운드 스레드로 넘기고, 끝난 뒤 결과 반영(_apply_list_file)
+        # 과 위젯 조작만 self.root.after로 메인 스레드에 되돌린다(_run_batch_
+        # queue_async 등 기존 코드와 같은 패턴). 메모장이 열려 있는 동안 같은
+        # 버튼을 또 눌러 두 번째 메모장이 뜨는 것도 막아둔다.
         def edit_list_notepad():
             path = filedialog.askopenfilename(
                 parent=dlg, initialdir=template_dir,
@@ -2324,20 +2351,39 @@ class CathPlotGUI:
             )
             if not path:
                 return
-            try:
-                subprocess.run(["notepad.exe", path])
-            except OSError as e:
-                messagebox.showerror("Batch Set", f"메모장 실행 실패:\n{e}", parent=dlg)
-                return
-            # replace=True: 편집한 파일 내용을 그대로 반영(기존 목록에 이어붙이지
-            # 않음) - 아래 _apply_list_file 주석 참고.
-            _apply_list_file(path, replace=True)
+
+            edit_btn.config(state="disabled")
+
+            def worker():
+                error = None
+                try:
+                    subprocess.run(["notepad.exe", path])
+                except OSError as e:
+                    error = e
+
+                def _finish():
+                    # [수정 - 버그] 메모장이 열려 있는 동안 Batch Set 창 자체가
+                    # 닫혔을 수 있음(취소 등) - 이미 파괴된 위젯(listbox 등)을
+                    # 건드리면 TclError가 나므로, 창이 남아있을 때만 반영한다.
+                    if not dlg.winfo_exists():
+                        return
+                    edit_btn.config(state="normal")
+                    if error is not None:
+                        messagebox.showerror("Batch Set", f"메모장 실행 실패:\n{error}", parent=dlg)
+                        return
+                    # replace=True: 편집한 파일 내용을 그대로 반영(기존 목록에
+                    # 이어붙이지 않음) - 아래 _apply_list_file 주석 참고.
+                    _apply_list_file(path, replace=True)
+
+                self.root.after(0, _finish)
+
+            threading.Thread(target=worker, daemon=True).start()
 
         btn_row2 = ttk.Frame(dlg)
         btn_row2.pack(fill="x", padx=10, pady=(0, 5))
-        self._mk_btn(btn_row2, "List Save...", save_list, color="grey", btn_pady=10, side="left", padx=5)
-        self._mk_btn(btn_row2, "List Load...", load_list, color="grey", btn_pady=10, side="left", padx=5)
-        self._mk_btn(btn_row2, "Edit in Notepad...", edit_list_notepad, color="grey", btn_pady=10, side="left", padx=5)
+        self._mk_btn(btn_row2, "List Save...", save_list, color="grey", btn_pady=0, side="left", padx=5)
+        self._mk_btn(btn_row2, "List Load...", load_list, color="grey", btn_pady=0, side="left", padx=5)
+        edit_btn = self._mk_btn(btn_row2, "Edit in Notepad...", edit_list_notepad, color="grey", btn_pady=0, side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
@@ -2359,12 +2405,15 @@ class CathPlotGUI:
         td3_row.pack(fill="x", padx=10, pady=(0, 5))
         td3_path_var = tk.StringVar(value="")
         ttk.Label(td3_row, text="3D Template(선택하면 3D도 같이 렌더링):").pack(side="left")
-        td3_label = ttk.Label(td3_row, text="(3D Template 없음)", foreground="#555555")
+        # [수정 - 요청] "(3D Template 없음)"이 앞 라벨과 "3D Template"이 겹쳐
+        # 장황하고 헷갈린다는 피드백 - 앞에서 이미 문맥이 주어지므로 상태
+        # 표시는 "(없음)"으로 짧게.
+        td3_label = ttk.Label(td3_row, text="(없음)", foreground="#555555")
         td3_label.pack(side="left", padx=5)
 
         def pick_3d_template():
             p = filedialog.askopenfilename(
-                initialdir=template_dir,
+                parent=dlg, initialdir=template_dir,
                 filetypes=[("CathPlot 3D Template", "*.json"), ("All files", "*.*")],
                 title="3D Template 선택 (Batch Set 전체 항목에 공통 적용)"
             )
@@ -2373,7 +2422,10 @@ class CathPlotGUI:
                 td3_label.config(text=os.path.basename(p), foreground="black")
 
         ttk.Button(td3_row, text="선택...", command=pick_3d_template).pack(side="left", padx=5)
-        ttk.Button(td3_row, text="해제", command=lambda: (td3_path_var.set(""), td3_label.config(text="(3D Template 없음)", foreground="#555555"))).pack(side="left")
+        # [수정 - 요청] "해제" 버튼이 마치 뭔가를 고정/잠금 해제하는 것처럼
+        # 읽혀 헷갈린다는 피드백 - 실제 동작(고른 3D Template을 다시 없음
+        # 상태로 되돌림)에 맞게 "미선택"으로 라벨만 변경.
+        ttk.Button(td3_row, text="미선택", command=lambda: (td3_path_var.set(""), td3_label.config(text="(없음)", foreground="#555555"))).pack(side="left")
 
         def _confirm_save_before_run(target_path):
             """[수정 - 요청] "제안된 이름을 거절(아니오)하면 그냥 저장 없이
@@ -2437,8 +2489,8 @@ class CathPlotGUI:
 
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
-        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", btn_pady=10, side="right", padx=5)
-        self._mk_btn(run_row, "Run Batch Set", run_batch_set, color="accent", btn_pady=10, side="right", padx=5)
+        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", btn_pady=0, side="right", padx=5)
+        self._mk_btn(run_row, "Run Batch Set", run_batch_set, color="accent", btn_pady=0, side="right", padx=5)
 
     def _render_3d_from_template_data(self, data, td3_data, outfile, fmt):
         """[추가] "3D도 Batch에 연동" - 2D Template의 data(file_assignments/
@@ -2872,6 +2924,10 @@ class CathPlotGUI:
     def open_batch_queue_dialog(self):
         dlg = tk.Toplevel(self.root)
         dlg.title("Batch Queue - 여러 파일 자동 처리")
+        # [수정 - 버그] Batch Set과 같은 원인(transient 누락 + 내부 파일
+        # 선택창에 parent 누락)으로 "Add Files... 누르면 이 창이 메인 창
+        # 뒤로 숨음"이 여기서도 재현될 수 있어 미리 같이 고침.
+        dlg.transient(self.root)
         dlg.geometry("640x420")
 
         ttk.Label(
@@ -2888,7 +2944,7 @@ class CathPlotGUI:
 
         def add_files():
             paths = filedialog.askopenfilenames(
-                initialdir=self.cwd,
+                parent=dlg, initialdir=self.cwd,
                 filetypes=[("DAT files", "*.dat"), ("All files", "*.*")],
                 title="Batch 처리할 dat 파일 선택 (여러 개 선택 가능)"
             )
@@ -2915,9 +2971,9 @@ class CathPlotGUI:
         # 코드베이스에 있는 검증된 우회책(_mk_btn, tk.Button 기반 - "ttk.Button은
         # 배경색이 잘 안 먹는 환경이 확인돼서"와 같은 계열의 문제)으로 교체 -
         # 실제 화면 캡처로 글자가 정상적으로 보이는 것까지 확인함.
-        self._mk_btn(btn_row, "+ Add Files...", add_files, color="grey", btn_pady=10, side="left", padx=5)
-        self._mk_btn(btn_row, "Remove Selected", remove_selected, color="grey", btn_pady=10, side="left", padx=5)
-        self._mk_btn(btn_row, "Template Load", self.load_template, color="grey", btn_pady=10, side="left", padx=5)
+        self._mk_btn(btn_row, "+ Add Files...", add_files, color="grey", btn_pady=0, side="left", padx=5)
+        self._mk_btn(btn_row, "Remove Selected", remove_selected, color="grey", btn_pady=0, side="left", padx=5)
+        self._mk_btn(btn_row, "Template Load", self.load_template, color="grey", btn_pady=0, side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
@@ -2938,8 +2994,8 @@ class CathPlotGUI:
 
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
-        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", btn_pady=10, side="right", padx=5)
-        self._mk_btn(run_row, "Run Batch", run_batch, color="accent", btn_pady=10, side="right", padx=5)
+        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", btn_pady=0, side="right", padx=5)
+        self._mk_btn(run_row, "Run Batch", run_batch, color="accent", btn_pady=0, side="right", padx=5)
 
     def _capture_batch_queue_settings(self):
         """Batch Queue 실행에 필요한 화면 설정을 전부 미리 읽어서 일반 dict로
