@@ -2092,6 +2092,22 @@ class CathPlotGUI:
         listbox = tk.Listbox(dlg, width=90, height=14)
         listbox.pack(fill="both", expand=True, padx=10, pady=5)
 
+        # [추가 - 요청] "Run Batch Set 실행 시 지금 구성한 순서를 저장할지
+        # 물어보면 어떨지" - queue_list를 바꾸는 동작(추가/삭제/순서변경/
+        # List Load) 이후엔 dirty를 True로 두고, List Save가 실제로
+        # 성공하면 False로 되돌린다. Run Batch Set을 누른 시점에 dirty면
+        # (=지금 화면 순서가 어떤 파일에도 그대로 저장돼 있지 않으면) 저장
+        # 여부를 한 번 물어봄 - 방금 불러온 목록을 그대로 실행할 때처럼
+        # 안 바뀐 경우는 매번 묻지 않는다.
+        list_dirty = [False]
+        # [추가 - 요청] "저장 시 기본 확장자는 txt로 두되, 이미 열어서 쓰던
+        # 파일이 있으면(Load/Edit로 연 파일) 그 파일명·확장자를 그대로
+        # 이어서 쓰도록" - Load/Edit/Save로 마지막에 손댄 파일 경로를
+        # 기억해뒀다가, 다음 List Save 때 그 파일명(및 확장자)을 기본값으로
+        # 띄운다. 아직 아무 파일도 안 거쳤으면(None) 기존처럼 빈 파일명 +
+        # .txt 기본값을 그대로 씀.
+        last_list_path = [None]
+
         def add_files():
             paths = filedialog.askopenfilenames(
                 initialdir=template_dir,
@@ -2101,11 +2117,16 @@ class CathPlotGUI:
             for p in paths:
                 queue_list.append(p)
                 listbox.insert("end", os.path.basename(p))
+            if paths:
+                list_dirty[0] = True
 
         def remove_selected():
-            for idx in reversed(listbox.curselection()):
+            sel = listbox.curselection()
+            for idx in reversed(sel):
                 listbox.delete(idx)
                 del queue_list[idx]
+            if sel:
+                list_dirty[0] = True
 
         def move(delta):
             sel = listbox.curselection()
@@ -2122,6 +2143,7 @@ class CathPlotGUI:
             listbox.insert(min(i, j), first)
             listbox.insert(max(i, j), second)
             listbox.selection_set(j)
+            list_dirty[0] = True
 
         # [추가 - 요청] "Batch Set 순서를 txt 파일로 저장/불러오기, 필요하면
         # 직접 수정해서 재사용" - 지금까지는 Batch Set을 열 때마다 매번
@@ -2133,8 +2155,14 @@ class CathPlotGUI:
             if not queue_list:
                 messagebox.showwarning("Batch Set", "저장할 Template이 없습니다.", parent=dlg)
                 return
+            if last_list_path[0]:
+                init_dir = os.path.dirname(last_list_path[0]) or template_dir
+                init_file = os.path.basename(last_list_path[0])
+                ext = os.path.splitext(init_file)[1] or ".txt"
+            else:
+                init_dir, init_file, ext = template_dir, "", ".txt"
             path = filedialog.asksaveasfilename(
-                parent=dlg, initialdir=template_dir, defaultextension=".txt",
+                parent=dlg, initialdir=init_dir, initialfile=init_file, defaultextension=ext,
                 filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
                 title="Batch Set 순서를 파일로 저장"
             )
@@ -2153,6 +2181,45 @@ class CathPlotGUI:
                         f.write(line + "\n")
             except OSError as e:
                 messagebox.showerror("Batch Set", f"저장 실패:\n{e}", parent=dlg)
+            else:
+                list_dirty[0] = False
+                last_list_path[0] = path
+
+        def _apply_list_file(path):
+            """[추가] load_list()와 edit_list_notepad() 둘 다 "txt 한 줄당
+            Template 하나"를 큐에 이어붙이는 동일한 로직을 쓰므로 공통 헬퍼로
+            뺌 - Edit in Notepad...에서 메모장을 닫자마자 같은 파일을 바로
+            불러오는 데도 그대로 재사용."""
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    lines = [ln.strip() for ln in f if ln.strip()]
+            except OSError as e:
+                messagebox.showerror("Batch Set", f"불러오기 실패:\n{e}", parent=dlg)
+                return
+            last_list_path[0] = path
+            missing = []
+            added = False
+            for line in lines:
+                p = line if os.path.isabs(line) else os.path.join(template_dir, line)
+                p = os.path.normpath(p)
+                if os.path.exists(p):
+                    queue_list.append(p)
+                    listbox.insert("end", os.path.basename(p))
+                    added = True
+                else:
+                    missing.append(line)
+            if added:
+                # [추가] Load는 기존 목록 뒤에 이어붙이는 방식이라, 지금
+                # 화면 상태가 방금 불러온 그 파일과 완전히 같다는 보장이
+                # 없음(이미 다른 항목이 있었을 수도 있음) - 안전하게 dirty로
+                # 표시해 Run Batch Set 때 저장 여부를 물어보게 함.
+                list_dirty[0] = True
+            if missing:
+                messagebox.showwarning(
+                    "Batch Set",
+                    "다음 항목은 파일을 찾을 수 없어 건너뛰었습니다:\n" + "\n".join(missing),
+                    parent=dlg
+                )
 
         def load_list():
             path = filedialog.askopenfilename(
@@ -2162,27 +2229,7 @@ class CathPlotGUI:
             )
             if not path:
                 return
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    lines = [ln.strip() for ln in f if ln.strip()]
-            except OSError as e:
-                messagebox.showerror("Batch Set", f"불러오기 실패:\n{e}", parent=dlg)
-                return
-            missing = []
-            for line in lines:
-                p = line if os.path.isabs(line) else os.path.join(template_dir, line)
-                p = os.path.normpath(p)
-                if os.path.exists(p):
-                    queue_list.append(p)
-                    listbox.insert("end", os.path.basename(p))
-                else:
-                    missing.append(line)
-            if missing:
-                messagebox.showwarning(
-                    "Batch Set",
-                    "다음 항목은 파일을 찾을 수 없어 건너뛰었습니다:\n" + "\n".join(missing),
-                    parent=dlg
-                )
+            _apply_list_file(path)
 
         btn_row = ttk.Frame(dlg)
         btn_row.pack(fill="x", padx=10, pady=5)
@@ -2191,28 +2238,31 @@ class CathPlotGUI:
         ttk.Button(btn_row, text="▲", width=3, command=lambda: move(-1)).pack(side="left", padx=2)
         ttk.Button(btn_row, text="▼", width=3, command=lambda: move(1)).pack(side="left", padx=2)
 
-        # [추가 - 요청] "저장해둔 순서 목록 파일을 메모장으로 열어 직접
-        # 고칠 수 있게" - 평범한 txt라 메모장으로 바로 열어 손으로 순서를
-        # 바꾸거나 항목을 지울 수 있음(고친 뒤엔 Load List로 다시 불러오면
-        # 됨 - 자동 반영은 아님, 새로 여닫는 흐름을 그대로 따르는 게
-        # 단순함).
+        # [수정 - 요청] "메모장으로 열어 고친 뒤 List Load를 또 눌러야 하는
+        # 게 아니라, 저장하고 닫으면 그대로 불러오기(load)까지 되도록" -
+        # subprocess.run으로 메모장이 닫힐 때까지 기다린 뒤(그 사이 다이얼로그는
+        # 그대로 대기), 같은 파일을 _apply_list_file로 바로 불러온다. 메모장을
+        # 그냥 닫기만 하고 저장을 안 했으면 파일 내용이 그대로라 다시 읽어도
+        # 문제 없음.
         def edit_list_notepad():
             path = filedialog.askopenfilename(
                 parent=dlg, initialdir=template_dir,
                 filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
-                title="Batch Set 순서 파일을 메모장으로 열기"
+                title="Batch Set 순서 파일을 메모장으로 열어 편집 (닫으면 자동으로 다시 불러옴)"
             )
             if not path:
                 return
             try:
-                subprocess.Popen(["notepad.exe", path])
+                subprocess.run(["notepad.exe", path])
             except OSError as e:
                 messagebox.showerror("Batch Set", f"메모장 실행 실패:\n{e}", parent=dlg)
+                return
+            _apply_list_file(path)
 
         btn_row2 = ttk.Frame(dlg)
         btn_row2.pack(fill="x", padx=10, pady=(0, 5))
-        ttk.Button(btn_row2, text="Save List...", command=save_list).pack(side="left", padx=5)
-        ttk.Button(btn_row2, text="Load List...", command=load_list).pack(side="left", padx=5)
+        ttk.Button(btn_row2, text="List Save...", command=save_list).pack(side="left", padx=5)
+        ttk.Button(btn_row2, text="List Load...", command=load_list).pack(side="left", padx=5)
         ttk.Button(btn_row2, text="Edit in Notepad...", command=edit_list_notepad).pack(side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
@@ -2255,6 +2305,17 @@ class CathPlotGUI:
             if not queue_list:
                 messagebox.showwarning("Batch Set", "먼저 Template 파일을 추가하세요.")
                 return
+            # [추가 - 요청] "Run Batch Set 실행 시 지금 순서를 저장할지
+            # 물어보면 어떨지" - 저장 안 된 변경사항(dirty)이 있을 때만
+            # 물어봄. "예"를 골라도 저장 창을 취소하면 그냥 저장 없이
+            # 진행함(저장을 강제하지는 않음).
+            if list_dirty[0] and messagebox.askyesno(
+                "Batch Set",
+                "지금 구성한 Batch Set 순서가 저장되어 있지 않습니다.\n"
+                "실행 전에 파일로 저장하시겠습니까?",
+                parent=dlg
+            ):
+                save_list()
             dlg.destroy()
             self._run_batch_set_async(list(queue_list), fmt_var.get(), td3_path_var.get() or None)
 
