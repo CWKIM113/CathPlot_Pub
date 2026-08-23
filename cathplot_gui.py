@@ -292,12 +292,6 @@ class CathPlotGUI:
         # 따로 둔다(가로 폭은 기존 width=2/3 그대로 유지 - "크게 하지 말
         # 것"이므로 폭은 안 건드림).
         style.configure("Compact.TButton", padding=(4, 0))
-        # [추가 - 요청] "Batch Queue 맨 아래 버튼들이 상하로 너무 얇아서 글자가
-        # 잘 안 보임" - 기본 TButton padding(4, 상하 4px)이 짧은 라벨(+ Add
-        # Files.../Run Batch 등)에서는 버튼이 눌리듯 얇게 보임. 상하 padding만
-        # 넉넉히 키운 전용 스타일을 따로 둠(가로는 텍스트에 맞춰 자동, Compact와
-        # 반대 방향).
-        style.configure("Tall.TButton", padding=(8, 8))
         # [수정 - 요청] "각 block 내 입력 box에 color line" - 입력칸 테두리를
         # 눈에 띄는 강조색 계열로(중립 회색 대신). ttk TEntry의 bordercolor는
         # Windows 기본(vista/winnative) 테마에서 반영이 안 되는 조합이 있을 수
@@ -2389,12 +2383,13 @@ class CathPlotGUI:
 
             btns = ttk.Frame(confirm)
             btns.pack(pady=(0, 15), padx=15)
-            ttk.Button(btns, text="예 (이 이름으로 저장)", style="Tall.TButton",
-                       command=lambda: pick("quick")).pack(side="left", padx=5)
-            ttk.Button(btns, text="다른 이름으로 저장...", style="Tall.TButton",
-                       command=lambda: pick("saveas")).pack(side="left", padx=5)
-            ttk.Button(btns, text="아니오 (저장 안 함)", style="Tall.TButton",
-                       command=lambda: pick("skip")).pack(side="left", padx=5)
+            # [수정 - 버그] 이 작은 확인창처럼 새로 뜨는 Toplevel 안 ttk.Button은
+            # 이 PC의 Windows 테마에서 글자가 안 보이거나 깨지는 렌더링 버그가
+            # 있었음(Batch Queue 쪽에서 실제 화면 캡처+픽셀 분석으로 확인,
+            # 아래 참고) - 검증된 tk.Button 기반 _mk_btn으로 통일.
+            self._mk_btn(btns, "예 (이 이름으로 저장)", lambda: pick("quick"), color="accent2", side="left", padx=5)
+            self._mk_btn(btns, "다른 이름으로 저장...", lambda: pick("saveas"), color="grey", side="left", padx=5)
+            self._mk_btn(btns, "아니오 (저장 안 함)", lambda: pick("skip"), color="danger", side="left", padx=5)
             confirm.protocol("WM_DELETE_WINDOW", lambda: pick("skip"))
             confirm.grab_set()
             dlg.wait_window(confirm)
@@ -2891,9 +2886,17 @@ class CathPlotGUI:
 
         btn_row = ttk.Frame(dlg)
         btn_row.pack(fill="x", padx=10, pady=5)
-        ttk.Button(btn_row, text="+ Add Files...", command=add_files, style="Tall.TButton").pack(side="left", padx=5)
-        ttk.Button(btn_row, text="Remove Selected", command=remove_selected, style="Tall.TButton").pack(side="left", padx=5)
-        ttk.Button(btn_row, text="Template Load", command=self.load_template, style="Tall.TButton").pack(side="left", padx=5)
+        # [수정 - 버그] 이 창의 ttk.Button 3개는 이 PC의 Windows 테마에서
+        # 안의 글자가 아예 안 보이거나 깨지는 렌더링 버그가 있었음(실제 화면
+        # 캡처+픽셀 분석으로 확인 - style padding, pack ipady 둘 다 시도했지만
+        # 원인이 아니었고, ttk.Button 자체가 문제였음. 같은 텍스트/같은 앱
+        # 안에서도 Batch Set 창은 멀쩡해서 재현 조건은 못 찾음). 이미 이
+        # 코드베이스에 있는 검증된 우회책(_mk_btn, tk.Button 기반 - "ttk.Button은
+        # 배경색이 잘 안 먹는 환경이 확인돼서"와 같은 계열의 문제)으로 교체 -
+        # 실제 화면 캡처로 글자가 정상적으로 보이는 것까지 확인함.
+        self._mk_btn(btn_row, "+ Add Files...", add_files, color="grey", side="left", padx=5)
+        self._mk_btn(btn_row, "Remove Selected", remove_selected, color="grey", side="left", padx=5)
+        self._mk_btn(btn_row, "Template Load", self.load_template, color="grey", side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
@@ -2914,8 +2917,8 @@ class CathPlotGUI:
 
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
-        ttk.Button(run_row, text="취소", command=dlg.destroy, style="Tall.TButton").pack(side="right", padx=5)
-        ttk.Button(run_row, text="Run Batch", command=run_batch, style="Tall.TButton").pack(side="right", padx=5)
+        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", side="right", padx=5)
+        self._mk_btn(run_row, "Run Batch", run_batch, color="accent", side="right", padx=5)
 
     def _capture_batch_queue_settings(self):
         """Batch Queue 실행에 필요한 화면 설정을 전부 미리 읽어서 일반 dict로
