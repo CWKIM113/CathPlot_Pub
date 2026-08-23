@@ -292,6 +292,12 @@ class CathPlotGUI:
         # 따로 둔다(가로 폭은 기존 width=2/3 그대로 유지 - "크게 하지 말
         # 것"이므로 폭은 안 건드림).
         style.configure("Compact.TButton", padding=(4, 0))
+        # [추가 - 요청] "Batch Queue 맨 아래 버튼들이 상하로 너무 얇아서 글자가
+        # 잘 안 보임" - 기본 TButton padding(4, 상하 4px)이 짧은 라벨(+ Add
+        # Files.../Run Batch 등)에서는 버튼이 눌리듯 얇게 보임. 상하 padding만
+        # 넉넉히 키운 전용 스타일을 따로 둠(가로는 텍스트에 맞춰 자동, Compact와
+        # 반대 방향).
+        style.configure("Tall.TButton", padding=(8, 8))
         # [수정 - 요청] "각 block 내 입력 box에 color line" - 입력칸 테두리를
         # 눈에 띄는 강조색 계열로(중립 회색 대신). ttk TEntry의 bordercolor는
         # Windows 기본(vista/winnative) 테마에서 반영이 안 되는 조합이 있을 수
@@ -2851,9 +2857,9 @@ class CathPlotGUI:
 
         btn_row = ttk.Frame(dlg)
         btn_row.pack(fill="x", padx=10, pady=5)
-        ttk.Button(btn_row, text="+ Add Files...", command=add_files).pack(side="left", padx=5)
-        ttk.Button(btn_row, text="Remove Selected", command=remove_selected).pack(side="left", padx=5)
-        ttk.Button(btn_row, text="Template Load", command=self.load_template).pack(side="left", padx=5)
+        ttk.Button(btn_row, text="+ Add Files...", command=add_files, style="Tall.TButton").pack(side="left", padx=5)
+        ttk.Button(btn_row, text="Remove Selected", command=remove_selected, style="Tall.TButton").pack(side="left", padx=5)
+        ttk.Button(btn_row, text="Template Load", command=self.load_template, style="Tall.TButton").pack(side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
@@ -2874,8 +2880,8 @@ class CathPlotGUI:
 
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
-        ttk.Button(run_row, text="취소", command=dlg.destroy).pack(side="right", padx=5)
-        ttk.Button(run_row, text="Run Batch", command=run_batch).pack(side="right", padx=5)
+        ttk.Button(run_row, text="취소", command=dlg.destroy, style="Tall.TButton").pack(side="right", padx=5)
+        ttk.Button(run_row, text="Run Batch", command=run_batch, style="Tall.TButton").pack(side="right", padx=5)
 
     def _capture_batch_queue_settings(self):
         """Batch Queue 실행에 필요한 화면 설정을 전부 미리 읽어서 일반 dict로
