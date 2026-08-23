@@ -1270,7 +1270,7 @@ class CathPlotGUI:
         dialog.geometry("420x520")
         dialog.transient(self.root)
 
-        ttk.Label(dialog, text="Select plots (plot 창 이름순):").pack(anchor="w", padx=10, pady=(10, 0))
+        ttk.Label(dialog, text="Select plots:").pack(anchor="w", padx=10, pady=(10, 0))
 
         list_frame = ttk.Frame(dialog)
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -1288,6 +1288,55 @@ class CathPlotGUI:
         available_plots = [self.active_plots_cache[name] for name in available_names]
         for name in available_names:
             plot_listbox.insert("end", name)
+
+        # [추가 - 요청] "여러 개를 한꺼번에 선택하는 게 아니라 하나씩 골랐을
+        # 때, 고른 순서대로 배치할 수 있는지" - 기본은 기존처럼 이름순
+        # (알파벳순)이고, 이 체크박스를 켜면 Ctrl+클릭으로 하나씩 고른
+        # "선택한 순서"대로 배치한다. 리스트박스 자체에는 "몇 번째로
+        # 골랐는지"를 알려주는 방법이 없어서(curselection은 항상 인덱스
+        # 오름차순), 선택이 바뀔 때마다 직접 순서를 추적하고 선택된 항목
+        # 앞에 [1],[2].. 번호를 붙여 눈으로 바로 확인할 수 있게 한다(범위
+        # 선택/드래그로 여러 개가 한 번에 늘어나면 그 안에서는 인덱스
+        # 순서로 번호를 매김 - "한 번의 클릭 = 한 순번"이라는 취지에는
+        # 영향 없음, 한 번에 여러 개를 고르는 제스처는 원래도 순서를 알
+        # 수 없음).
+        order_mode_var = tk.BooleanVar(value=False)
+        _selection_order = []  # plot_listbox 인덱스, 선택된 순서대로
+        _updating = [False]  # selection_set()이 다시 <<ListboxSelect>>를 유발해 재귀 호출되는 것을 막는 가드
+
+        def _refresh_listbox_display():
+            _updating[0] = True
+            try:
+                cur_sel = set(plot_listbox.curselection())
+                for idx, name in enumerate(available_names):
+                    if order_mode_var.get() and idx in _selection_order:
+                        text = f"[{_selection_order.index(idx) + 1}] {name}"
+                    else:
+                        text = name
+                    if plot_listbox.get(idx) != text:
+                        plot_listbox.delete(idx)
+                        plot_listbox.insert(idx, text)
+                for idx in cur_sel:
+                    plot_listbox.selection_set(idx)
+            finally:
+                _updating[0] = False
+
+        def _on_listbox_select(event=None):
+            if _updating[0]:
+                return
+            cur = set(plot_listbox.curselection())
+            prev = set(_selection_order)
+            for idx in prev - cur:
+                _selection_order.remove(idx)
+            for idx in sorted(cur - prev):
+                _selection_order.append(idx)
+            _refresh_listbox_display()
+
+        plot_listbox.bind("<<ListboxSelect>>", _on_listbox_select)
+        self._mk_check(
+            dialog, "선택 순서대로 배치 (Ctrl+클릭으로 하나씩 선택)", order_mode_var,
+            command=_refresh_listbox_display, side="left"
+        )
 
         ttk.Label(dialog, text="Layout:").pack(anchor="w", padx=10, pady=(10, 0))
         layout_combo = ttk.Combobox(
@@ -1349,8 +1398,19 @@ class CathPlotGUI:
                 messagebox.showwarning("Warning", "Please select at least one plot from the list.", parent=dialog)
                 return
 
-            selected_names = [available_names[i] for i in selected_indices]
-            selected_defs = [available_plots[i] for i in selected_indices]
+            # [수정 - 요청] "선택 순서대로 배치" 체크박스가 켜져 있으면
+            # curselection()의 인덱스 오름차순(=항상 이름순) 대신, 위에서
+            # 추적해둔 실제 클릭 순서(_selection_order)를 그대로 쓴다.
+            # cell_rc(gnu_generator.create_multiplot_script)가 이 리스트
+            # 순서 그대로 왼쪽→오른쪽, 위→아래로 채우므로, 여기서 순서만
+            # 바꿔주면 배치 순서도 그대로 따라간다.
+            if order_mode_var.get() and _selection_order:
+                ordered_indices = [i for i in _selection_order if i in selected_indices]
+            else:
+                ordered_indices = selected_indices
+
+            selected_names = [available_names[i] for i in ordered_indices]
+            selected_defs = [available_plots[i] for i in ordered_indices]
 
             layout = self.layout_var.get()
             rows, cols = self.LAYOUT_GRID.get(layout, (1, 1))
@@ -2015,7 +2075,7 @@ class CathPlotGUI:
         지정된 완전한 plot 하나씩을 의미한다."""
         dlg = tk.Toplevel(self.root)
         dlg.title("Batch Set - 여러 Template을 순서대로 이미지로")
-        dlg.geometry("640x440")
+        dlg.geometry("640x480")
 
         ttk.Label(
             dlg,
@@ -2063,12 +2123,78 @@ class CathPlotGUI:
             listbox.insert(max(i, j), second)
             listbox.selection_set(j)
 
+        # [추가 - 요청] "Batch Set 순서를 txt 파일로 저장/불러오기, 필요하면
+        # 직접 수정해서 재사용" - 지금까지는 Batch Set을 열 때마다 매번
+        # Template을 수동으로 다시 추가/재정렬해야 했음. 한 줄에 Template
+        # 파일 하나씩(template 폴더 기준 상대경로 - 메모장 등으로 직접 열어
+        # 고치기 쉽도록) 적은 평범한 txt로 저장해서, 다음에 그 파일을
+        # 불러오면 같은 순서로 순식간에 복원된다.
+        def save_list():
+            if not queue_list:
+                messagebox.showwarning("Batch Set", "저장할 Template이 없습니다.", parent=dlg)
+                return
+            path = filedialog.asksaveasfilename(
+                parent=dlg, initialdir=template_dir, defaultextension=".txt",
+                filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
+                title="Batch Set 순서를 파일로 저장"
+            )
+            if not path:
+                return
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    for p in queue_list:
+                        try:
+                            rel = os.path.relpath(p, template_dir)
+                            # template 폴더 밖으로 나가는 상대경로(..으로 시작)면
+                            # 나중에 다른 PC/폴더에서 깨지기 쉬우니 절대경로로 남김
+                            line = rel if not rel.startswith("..") else p
+                        except ValueError:
+                            line = p  # 드라이브가 달라 relpath 자체가 안 되는 경우
+                        f.write(line + "\n")
+            except OSError as e:
+                messagebox.showerror("Batch Set", f"저장 실패:\n{e}", parent=dlg)
+
+        def load_list():
+            path = filedialog.askopenfilename(
+                parent=dlg, initialdir=template_dir,
+                filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
+                title="Batch Set 순서 파일 불러오기 (기존 목록 뒤에 추가됨)"
+            )
+            if not path:
+                return
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    lines = [ln.strip() for ln in f if ln.strip()]
+            except OSError as e:
+                messagebox.showerror("Batch Set", f"불러오기 실패:\n{e}", parent=dlg)
+                return
+            missing = []
+            for line in lines:
+                p = line if os.path.isabs(line) else os.path.join(template_dir, line)
+                p = os.path.normpath(p)
+                if os.path.exists(p):
+                    queue_list.append(p)
+                    listbox.insert("end", os.path.basename(p))
+                else:
+                    missing.append(line)
+            if missing:
+                messagebox.showwarning(
+                    "Batch Set",
+                    "다음 항목은 파일을 찾을 수 없어 건너뛰었습니다:\n" + "\n".join(missing),
+                    parent=dlg
+                )
+
         btn_row = ttk.Frame(dlg)
         btn_row.pack(fill="x", padx=10, pady=5)
         ttk.Button(btn_row, text="+ Add Templates...", command=add_files).pack(side="left", padx=5)
         ttk.Button(btn_row, text="Remove Selected", command=remove_selected).pack(side="left", padx=5)
         ttk.Button(btn_row, text="▲", width=3, command=lambda: move(-1)).pack(side="left", padx=2)
         ttk.Button(btn_row, text="▼", width=3, command=lambda: move(1)).pack(side="left", padx=2)
+
+        btn_row2 = ttk.Frame(dlg)
+        btn_row2.pack(fill="x", padx=10, pady=(0, 5))
+        ttk.Button(btn_row2, text="Save List...", command=save_list).pack(side="left", padx=5)
+        ttk.Button(btn_row2, text="Load List...", command=load_list).pack(side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
