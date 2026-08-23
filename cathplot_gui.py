@@ -2191,10 +2191,29 @@ class CathPlotGUI:
         ttk.Button(btn_row, text="▲", width=3, command=lambda: move(-1)).pack(side="left", padx=2)
         ttk.Button(btn_row, text="▼", width=3, command=lambda: move(1)).pack(side="left", padx=2)
 
+        # [추가 - 요청] "저장해둔 순서 목록 파일을 메모장으로 열어 직접
+        # 고칠 수 있게" - 평범한 txt라 메모장으로 바로 열어 손으로 순서를
+        # 바꾸거나 항목을 지울 수 있음(고친 뒤엔 Load List로 다시 불러오면
+        # 됨 - 자동 반영은 아님, 새로 여닫는 흐름을 그대로 따르는 게
+        # 단순함).
+        def edit_list_notepad():
+            path = filedialog.askopenfilename(
+                parent=dlg, initialdir=template_dir,
+                filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
+                title="Batch Set 순서 파일을 메모장으로 열기"
+            )
+            if not path:
+                return
+            try:
+                subprocess.Popen(["notepad.exe", path])
+            except OSError as e:
+                messagebox.showerror("Batch Set", f"메모장 실행 실패:\n{e}", parent=dlg)
+
         btn_row2 = ttk.Frame(dlg)
         btn_row2.pack(fill="x", padx=10, pady=(0, 5))
         ttk.Button(btn_row2, text="Save List...", command=save_list).pack(side="left", padx=5)
         ttk.Button(btn_row2, text="Load List...", command=load_list).pack(side="left", padx=5)
+        ttk.Button(btn_row2, text="Edit in Notepad...", command=edit_list_notepad).pack(side="left", padx=5)
 
         ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
