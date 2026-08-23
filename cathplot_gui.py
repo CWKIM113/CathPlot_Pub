@@ -2360,28 +2360,62 @@ class CathPlotGUI:
         ttk.Button(td3_row, text="선택...", command=pick_3d_template).pack(side="left", padx=5)
         ttk.Button(td3_row, text="해제", command=lambda: (td3_path_var.set(""), td3_label.config(text="(3D Template 없음)", foreground="#555555"))).pack(side="left")
 
+        def _confirm_save_before_run(target_path):
+            """[수정 - 요청] "제안된 이름을 거절(아니오)하면 그냥 저장 없이
+            넘어가는 게 아니라, 다른 파일명을 직접 넣을 수 있어야" - 기존엔
+            askyesno(예/아니오) 2개뿐이라 "아니오"가 곧 "저장 안 함"이었음.
+            버튼 3개짜리 작은 확인창으로 바꿔서 "다른 이름으로 저장..."을
+            고르면 List Save...와 같은 파일 대화상자가 뜨도록 분리함.
+            반환값: "quick"(제안된 이름 그대로) / "saveas"(다른 이름 직접
+            입력) / "skip"(저장 안 하고 바로 실행)."""
+            choice = {"v": "skip"}
+            fname = os.path.basename(target_path)
+            verb = "덮어쓸까요" if last_list_path[0] else "저장할까요"
+
+            confirm = tk.Toplevel(dlg)
+            confirm.title("Batch Set")
+            confirm.transient(dlg)
+            confirm.resizable(False, False)
+            ttk.Label(
+                confirm,
+                text="지금 구성한 Batch Set 순서가 저장되어 있지 않습니다.\n"
+                     f"'{fname}' 파일로 {verb}?",
+                justify="left"
+            ).pack(padx=15, pady=(15, 10))
+
+            def pick(v):
+                choice["v"] = v
+                confirm.destroy()
+
+            btns = ttk.Frame(confirm)
+            btns.pack(pady=(0, 15), padx=15)
+            ttk.Button(btns, text="예 (이 이름으로 저장)", style="Tall.TButton",
+                       command=lambda: pick("quick")).pack(side="left", padx=5)
+            ttk.Button(btns, text="다른 이름으로 저장...", style="Tall.TButton",
+                       command=lambda: pick("saveas")).pack(side="left", padx=5)
+            ttk.Button(btns, text="아니오 (저장 안 함)", style="Tall.TButton",
+                       command=lambda: pick("skip")).pack(side="left", padx=5)
+            confirm.protocol("WM_DELETE_WINDOW", lambda: pick("skip"))
+            confirm.grab_set()
+            dlg.wait_window(confirm)
+            return choice["v"]
+
         def run_batch_set():
             if not queue_list:
                 messagebox.showwarning("Batch Set", "먼저 Template 파일을 추가하세요.")
                 return
             # [수정 - 요청] "저장 여부를 묻되, 기존 파일 있으면 그 이름으로
             # 덮어쓸지 물어보고, 없으면 default 파일명을 제시(중복이면 _#
-            # 추가)해라" - 예전엔 "예"를 고르면 별도 저장 대화상자(파일명 직접
-            # 입력)가 또 떴는데, 이제 이 확인 팝업 자체에 저장될 파일명을
-            # 미리 보여주고 "예"만 누르면 바로 그 이름으로 저장한다(파일
-            # 대화상자 한 번 더 안 뜸 - 다른 이름으로 저장하고 싶으면 List
-            # Save... 버튼을 따로 쓰면 됨).
+            # 추가)해라" - 이 확인 팝업 자체에 저장될 파일명을 미리 보여주고
+            # "예"만 누르면 바로 그 이름으로 저장한다. "다른 이름으로
+            # 저장..."을 고르면 List Save...와 같은 파일 대화상자가 뜬다.
             if list_dirty[0]:
                 _target_path = last_list_path[0] or _default_list_path()
-                _fname = os.path.basename(_target_path)
-                _verb = "덮어쓸까요" if last_list_path[0] else "저장할까요"
-                if messagebox.askyesno(
-                    "Batch Set",
-                    f"지금 구성한 Batch Set 순서가 저장되어 있지 않습니다.\n"
-                    f"'{_fname}' 파일로 {_verb}?",
-                    parent=dlg
-                ):
+                _choice = _confirm_save_before_run(_target_path)
+                if _choice == "quick":
                     _write_list_to(_target_path)
+                elif _choice == "saveas":
+                    save_list()
             dlg.destroy()
             self._run_batch_set_async(list(queue_list), fmt_var.get(), td3_path_var.get() or None)
 
