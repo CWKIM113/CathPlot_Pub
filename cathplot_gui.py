@@ -1332,10 +1332,24 @@ class CathPlotGUI:
                 _selection_order.append(idx)
             _refresh_listbox_display()
 
+        def _on_order_mode_toggled():
+            # [수정 - 버그] "선택 순서대로 배치" 체크박스를 켜기 *전에* 이미
+            # 마우스로 골라둔 항목이 있으면, 그 항목들은 _on_listbox_select가
+            # 한 번도 안 불려서 _selection_order에 없음 - 그 상태로 켜면
+            # 번호가 하나도 안 붙어 보이고(체크박스는 켜졌는데 순서 표시가
+            # 없어 헷갈림), OK를 눌러도 _selection_order가 비어 있어 조용히
+            # 알파벳순으로 폴백해버림. 켤 때 이미 선택된 항목을 인덱스
+            # 순서로 시드(seed)해서 최소한 뭔가 반영되게 한다.
+            if order_mode_var.get():
+                for idx in sorted(plot_listbox.curselection()):
+                    if idx not in _selection_order:
+                        _selection_order.append(idx)
+            _refresh_listbox_display()
+
         plot_listbox.bind("<<ListboxSelect>>", _on_listbox_select)
         self._mk_check(
             dialog, "선택 순서대로 배치 (Ctrl+클릭으로 하나씩 선택)", order_mode_var,
-            command=_refresh_listbox_display, side="left"
+            command=_on_order_mode_toggled, side="left"
         )
 
         ttk.Label(dialog, text="Layout:").pack(anchor="w", padx=10, pady=(10, 0))
@@ -2185,17 +2199,28 @@ class CathPlotGUI:
                 list_dirty[0] = False
                 last_list_path[0] = path
 
-        def _apply_list_file(path):
+        def _apply_list_file(path, replace=False):
             """[추가] load_list()와 edit_list_notepad() 둘 다 "txt 한 줄당
-            Template 하나"를 큐에 이어붙이는 동일한 로직을 쓰므로 공통 헬퍼로
+            Template 하나"를 큐에 반영하는 동일한 로직을 쓰므로 공통 헬퍼로
             뺌 - Edit in Notepad...에서 메모장을 닫자마자 같은 파일을 바로
-            불러오는 데도 그대로 재사용."""
+            불러오는 데도 그대로 재사용.
+            [수정 - 버그] replace=False(기존 동작, List Load용)는 항상
+            append라서, "이미 이 파일을 불러와 둔 상태에서 Edit in
+            Notepad...로 그 파일을 고치고 닫으면" 기존 항목 위에 고친
+            내용이 또 append되어 전부 중복되는 문제가 있었음(예: A,B,C가
+            이미 목록에 있는데 그 파일을 열어 순서만 B,A,C로 바꾸고 닫으면
+            A,B,C,B,A,C가 됨). Edit in Notepad...는 "그 파일 내용 그대로
+            반영"이 목적이므로, replace=True를 받으면 적용 전에 기존 목록을
+            비운다."""
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     lines = [ln.strip() for ln in f if ln.strip()]
             except OSError as e:
                 messagebox.showerror("Batch Set", f"불러오기 실패:\n{e}", parent=dlg)
                 return
+            if replace:
+                queue_list.clear()
+                listbox.delete(0, "end")
             last_list_path[0] = path
             missing = []
             added = False
@@ -2208,7 +2233,11 @@ class CathPlotGUI:
                     added = True
                 else:
                     missing.append(line)
-            if added:
+            if replace and not missing:
+                # replace 모드는 이 파일 내용을 그대로 화면에 반영한 것이라(빠진
+                # 항목 없이) 지금 화면 상태 == 파일 내용이므로 dirty가 아님.
+                list_dirty[0] = False
+            elif added:
                 # [추가] Load는 기존 목록 뒤에 이어붙이는 방식이라, 지금
                 # 화면 상태가 방금 불러온 그 파일과 완전히 같다는 보장이
                 # 없음(이미 다른 항목이 있었을 수도 있음) - 안전하게 dirty로
@@ -2257,7 +2286,9 @@ class CathPlotGUI:
             except OSError as e:
                 messagebox.showerror("Batch Set", f"메모장 실행 실패:\n{e}", parent=dlg)
                 return
-            _apply_list_file(path)
+            # replace=True: 편집한 파일 내용을 그대로 반영(기존 목록에 이어붙이지
+            # 않음) - 아래 _apply_list_file 주석 참고.
+            _apply_list_file(path, replace=True)
 
         btn_row2 = ttk.Frame(dlg)
         btn_row2.pack(fill="x", padx=10, pady=(0, 5))
