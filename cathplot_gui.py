@@ -2165,6 +2165,29 @@ class CathPlotGUI:
         # 파일 하나씩(template 폴더 기준 상대경로 - 메모장 등으로 직접 열어
         # 고치기 쉽도록) 적은 평범한 txt로 저장해서, 다음에 그 파일을
         # 불러오면 같은 순서로 순식간에 복원된다.
+        def _write_list_to(path):
+            """[추가] queue_list를 path에 한 줄씩(template_dir 기준 상대경로,
+            벗어나면 절대경로) 저장한다 - save_list()(직접 이름 골라 저장)와
+            Run Batch Set 실행 시 자동 저장 확인(아래) 둘 다 이 헬퍼로
+            통일해서 파일 형식이 어긋나지 않게 한다."""
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    for p in queue_list:
+                        try:
+                            rel = os.path.relpath(p, template_dir)
+                            # template 폴더 밖으로 나가는 상대경로(..으로 시작)면
+                            # 나중에 다른 PC/폴더에서 깨지기 쉬우니 절대경로로 남김
+                            line = rel if not rel.startswith("..") else p
+                        except ValueError:
+                            line = p  # 드라이브가 달라 relpath 자체가 안 되는 경우
+                        f.write(line + "\n")
+            except OSError as e:
+                messagebox.showerror("Batch Set", f"저장 실패:\n{e}", parent=dlg)
+                return False
+            list_dirty[0] = False
+            last_list_path[0] = path
+            return True
+
         def save_list():
             if not queue_list:
                 messagebox.showwarning("Batch Set", "저장할 Template이 없습니다.", parent=dlg)
@@ -2182,22 +2205,21 @@ class CathPlotGUI:
             )
             if not path:
                 return
-            try:
-                with open(path, "w", encoding="utf-8") as f:
-                    for p in queue_list:
-                        try:
-                            rel = os.path.relpath(p, template_dir)
-                            # template 폴더 밖으로 나가는 상대경로(..으로 시작)면
-                            # 나중에 다른 PC/폴더에서 깨지기 쉬우니 절대경로로 남김
-                            line = rel if not rel.startswith("..") else p
-                        except ValueError:
-                            line = p  # 드라이브가 달라 relpath 자체가 안 되는 경우
-                        f.write(line + "\n")
-            except OSError as e:
-                messagebox.showerror("Batch Set", f"저장 실패:\n{e}", parent=dlg)
-            else:
-                list_dirty[0] = False
-                last_list_path[0] = path
+            _write_list_to(path)
+
+        def _default_list_path():
+            """[추가 - 요청] "Run Batch Set 실행 시, 저장된 적 없는 목록이면
+            빈 파일명 대신 default 파일명을 제시하고, 같은 이름이 이미
+            있으면 _#를 붙여라" - template_dir에 BatchSetList.txt가 없으면
+            그대로, 있으면 BatchSetList_1.txt, _2.txt.. 순으로 비어있는
+            이름을 찾는다."""
+            base, ext = "BatchSetList", ".txt"
+            candidate = os.path.join(template_dir, base + ext)
+            n = 1
+            while os.path.exists(candidate):
+                candidate = os.path.join(template_dir, f"{base}_{n}{ext}")
+                n += 1
+            return candidate
 
         def _apply_list_file(path, replace=False):
             """[추가] load_list()와 edit_list_notepad() 둘 다 "txt 한 줄당
@@ -2336,17 +2358,24 @@ class CathPlotGUI:
             if not queue_list:
                 messagebox.showwarning("Batch Set", "먼저 Template 파일을 추가하세요.")
                 return
-            # [추가 - 요청] "Run Batch Set 실행 시 지금 순서를 저장할지
-            # 물어보면 어떨지" - 저장 안 된 변경사항(dirty)이 있을 때만
-            # 물어봄. "예"를 골라도 저장 창을 취소하면 그냥 저장 없이
-            # 진행함(저장을 강제하지는 않음).
-            if list_dirty[0] and messagebox.askyesno(
-                "Batch Set",
-                "지금 구성한 Batch Set 순서가 저장되어 있지 않습니다.\n"
-                "실행 전에 파일로 저장하시겠습니까?",
-                parent=dlg
-            ):
-                save_list()
+            # [수정 - 요청] "저장 여부를 묻되, 기존 파일 있으면 그 이름으로
+            # 덮어쓸지 물어보고, 없으면 default 파일명을 제시(중복이면 _#
+            # 추가)해라" - 예전엔 "예"를 고르면 별도 저장 대화상자(파일명 직접
+            # 입력)가 또 떴는데, 이제 이 확인 팝업 자체에 저장될 파일명을
+            # 미리 보여주고 "예"만 누르면 바로 그 이름으로 저장한다(파일
+            # 대화상자 한 번 더 안 뜸 - 다른 이름으로 저장하고 싶으면 List
+            # Save... 버튼을 따로 쓰면 됨).
+            if list_dirty[0]:
+                _target_path = last_list_path[0] or _default_list_path()
+                _fname = os.path.basename(_target_path)
+                _verb = "덮어쓸까요" if last_list_path[0] else "저장할까요"
+                if messagebox.askyesno(
+                    "Batch Set",
+                    f"지금 구성한 Batch Set 순서가 저장되어 있지 않습니다.\n"
+                    f"'{_fname}' 파일로 {_verb}?",
+                    parent=dlg
+                ):
+                    _write_list_to(_target_path)
             dlg.destroy()
             self._run_batch_set_async(list(queue_list), fmt_var.get(), td3_path_var.get() or None)
 
