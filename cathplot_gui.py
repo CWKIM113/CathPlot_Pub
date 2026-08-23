@@ -1347,9 +1347,16 @@ class CathPlotGUI:
             _refresh_listbox_display()
 
         plot_listbox.bind("<<ListboxSelect>>", _on_listbox_select)
+        # [수정 - 버그] side="left"로 dialog에 바로 넣었더니, 이 체크박스가
+        # 왼쪽 세로 칸을 차지해버려서 그 뒤에 side="top"(기본값)으로 packing된
+        # Layout/Orientation/Axis Frame/Cancel-Print-Save 버튼들이 전부 그
+        # 나머지 좁은 오른쪽 칸에 눌려 들어가 글자가 잘려 보이던 버그였음
+        # (Batch Queue와는 별개의, 이번에 새로 발견한 순수 레이아웃 버그 -
+        # 위젯 geometry 직접 조회로 확인). 다른 위젯들과 같은 side="top" +
+        # anchor="w"로 통일.
         self._mk_check(
             dialog, "선택 순서대로 배치 (Ctrl+클릭으로 하나씩 선택)", order_mode_var,
-            command=_on_order_mode_toggled, side="left"
+            command=_on_order_mode_toggled, anchor="w", padx=10, pady=(5, 0)
         )
 
         ttk.Label(dialog, text="Layout:").pack(anchor="w", padx=10, pady=(10, 0))
