@@ -2405,10 +2405,10 @@ class CathPlotGUI:
         td3_row.pack(fill="x", padx=10, pady=(0, 5))
         td3_path_var = tk.StringVar(value="")
         ttk.Label(td3_row, text="3D Template(선택하면 3D도 같이 렌더링):").pack(side="left")
-        # [수정 - 요청] "(3D Template 없음)"이 앞 라벨과 "3D Template"이 겹쳐
-        # 장황하고 헷갈린다는 피드백 - 앞에서 이미 문맥이 주어지므로 상태
-        # 표시는 "(없음)"으로 짧게.
-        td3_label = ttk.Label(td3_row, text="(없음)", foreground="#555555")
+        # [수정 - 요청] "(3D Template 없음)" -> "(없음)"으로 줄였다가, 그마저도
+        # 없는 상태를 굳이 문구로 표시할 필요 없다는 피드백 - 선택 전엔 아예
+        # 빈 칸으로 두고, 실제 선택됐을 때만 파일명이 나타나게 한다.
+        td3_label = ttk.Label(td3_row, text="", foreground="#555555")
         td3_label.pack(side="left", padx=5)
 
         def pick_3d_template():
@@ -2425,7 +2425,7 @@ class CathPlotGUI:
         # [수정 - 요청] "해제" 버튼이 마치 뭔가를 고정/잠금 해제하는 것처럼
         # 읽혀 헷갈린다는 피드백 - 실제 동작(고른 3D Template을 다시 없음
         # 상태로 되돌림)에 맞게 "미선택"으로 라벨만 변경.
-        ttk.Button(td3_row, text="미선택", command=lambda: (td3_path_var.set(""), td3_label.config(text="(없음)", foreground="#555555"))).pack(side="left")
+        ttk.Button(td3_row, text="미선택", command=lambda: (td3_path_var.set(""), td3_label.config(text="", foreground="#555555"))).pack(side="left")
 
         def _confirm_save_before_run(target_path):
             """[수정 - 요청] "제안된 이름을 거절(아니오)하면 그냥 저장 없이
