@@ -534,10 +534,6 @@ class CathPlotGUI:
                      color="grey", fg="white", side="left", padx=5)
         self._mk_btn(btn_container, "Template Load", self.load_template,
                      color="grey", fg="white", side="left", padx=5)
-        # [추가 - 요청] PIP(부분 확대 inset) - 3D Plot과 같은 방식(메인 창엔
-        # 버튼 하나만, 나머지 설정은 팝업)으로 배치.
-        self._mk_btn(btn_container, "PIP...", self.open_pip_dialog,
-                     color="grey", fg="white", side="left", padx=5)
 
         # [수정] "좌우로 늘리지 말고 줄 중앙에 배치" - fill+expand로 버튼 자체가
         # 늘어졌던 걸, 양옆에 빈 스페이서(expand=True)를 둬서 버튼 크기는
@@ -651,6 +647,13 @@ class CathPlotGUI:
         self.pip_ymin_var = tk.StringVar(value="")
         self.pip_ymax_var = tk.StringVar(value="")
         self.pip_title_on_var = tk.BooleanVar(value=True)
+        # [추가 - 요청] "PIP PopUp에서 Plot Title과 Axis Title check box 분리"
+        # - 기존엔 Plot Title(plotdef.title)만 껐다 켤 수 있었고, X/Y1/Y2축
+        # 제목(axis label)은 항상 강제로 안 보이게 고정돼 있었음(_render_pip_
+        # inset이 무조건 unset xlabel/ylabel/y2label). 별도 체크박스를 둬서
+        # 원하면 축 제목도 켤 수 있게 함 - 기존 Template(이 키가 없는 json)은
+        # get() 기본값으로 꺼짐(기존 동작과 동일)이라 안전함.
+        self.pip_axis_title_on_var = tk.BooleanVar(value=False)
         self.pip_legend_on_var = tk.BooleanVar(value=False)
         self.pip_font_scale_var = tk.StringVar(value="0.6")
         self.pip_opaque_var = tk.BooleanVar(value=True)
@@ -1121,6 +1124,12 @@ class CathPlotGUI:
         pal = self.PALETTE
         _accent_btn(self.button_frame, "PLOT", pal["accent"], pal["accent_dark"],
                     lambda: self.execute_plot_pipeline("Interactive"), side="left", pady=2)
+
+        # [수정 - 요청] "PIP 버튼은 PLOT 근방에 배치" - 기존엔 Batch Set/Queue/
+        # Template Save-Load 줄(btn_container)에 있었는데, PIP는 PLOT/SAVE/
+        # PRINT 실행 시 항상 같이 반영되는 설정이라 PLOT 바로 옆이 더 자연스러움.
+        self._mk_btn(self.button_frame, "PIP", self.open_pip_dialog,
+                     color="grey", fg="white", side="left", padx=5, pady=2)
 
         # [추가 - 요청] "X변수 변화에 따른 Y변수들의 progress를 시각화" - PLOT
         # 옆에 Animate 체크박스(기본 꺼짐 - 평소엔 지금처럼 정적으로 뜸)와
@@ -1696,7 +1705,8 @@ class CathPlotGUI:
                 "size_unit": self.pip_size_unit_var.get(),
                 "xmin": self.pip_xmin_var.get(), "xmax": self.pip_xmax_var.get(),
                 "ymin": self.pip_ymin_var.get(), "ymax": self.pip_ymax_var.get(),
-                "title_on": self.pip_title_on_var.get(), "legend_on": self.pip_legend_on_var.get(),
+                "title_on": self.pip_title_on_var.get(), "axis_title_on": self.pip_axis_title_on_var.get(),
+                "legend_on": self.pip_legend_on_var.get(),
                 "font_scale": self.pip_font_scale_var.get(), "opaque": self.pip_opaque_var.get(),
                 "source": self.pip_source_var.get(),
                 "cached_name": self.pip_cached_name_var.get(),
@@ -1924,6 +1934,7 @@ class CathPlotGUI:
             self.pip_ymin_var.set(_pip_data.get("ymin", self.pip_ymin_var.get()))
             self.pip_ymax_var.set(_pip_data.get("ymax", self.pip_ymax_var.get()))
             self.pip_title_on_var.set(_pip_data.get("title_on", self.pip_title_on_var.get()))
+            self.pip_axis_title_on_var.set(_pip_data.get("axis_title_on", self.pip_axis_title_on_var.get()))
             self.pip_legend_on_var.set(_pip_data.get("legend_on", self.pip_legend_on_var.get()))
             self.pip_font_scale_var.set(_pip_data.get("font_scale", self.pip_font_scale_var.get()))
             self.pip_opaque_var.set(_pip_data.get("opaque", self.pip_opaque_var.get()))
@@ -2361,7 +2372,11 @@ class CathPlotGUI:
         # --- 표시 옵션 ---
         opt_frame = ttk.LabelFrame(dlg, text="표시 옵션")
         opt_frame.pack(fill="x", padx=10, pady=5)
-        self._mk_check(opt_frame, "Title 표시", self.pip_title_on_var, anchor="w", padx=5, pady=2)
+        # [수정 - 요청] "Plot Title과 Axis Title check box 분리" - 기존엔
+        # Plot Title(plotdef.title)만 켜고 끌 수 있었고 X/Y1/Y2 축 제목은
+        # 항상 강제로 안 보였음(_render_pip_inset 참고) - 별도 체크박스로 분리.
+        self._mk_check(opt_frame, "Plot Title 표시", self.pip_title_on_var, anchor="w", padx=5, pady=2)
+        self._mk_check(opt_frame, "Axis Title 표시", self.pip_axis_title_on_var, anchor="w", padx=5, pady=2)
         self._mk_check(opt_frame, "Legend 표시", self.pip_legend_on_var, anchor="w", padx=5, pady=2)
         self._mk_check(opt_frame, "불투명 배경 (끄면 메인 plot이 뒤로 비쳐 보임)", self.pip_opaque_var, anchor="w", padx=5, pady=2)
         font_row = ttk.Frame(opt_frame)
@@ -2392,6 +2407,7 @@ class CathPlotGUI:
             "ymin": self.pip_ymin_var.get(),
             "ymax": self.pip_ymax_var.get(),
             "title_on": self.pip_title_on_var.get(),
+            "axis_title_on": self.pip_axis_title_on_var.get(),
             "legend_on": self.pip_legend_on_var.get(),
             "font_scale": self.pip_font_scale_var.get(),
             "opaque": self.pip_opaque_var.get(),

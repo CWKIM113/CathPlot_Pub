@@ -561,6 +561,8 @@ class PlotDefinition:
     #     비워두면 메인 plot에 실제로 적용된 범위를 그대로 씀(Y2는 1차 구현
     #     범위 밖 - 메인과 항상 동일)
     #   title_on, legend_on: bool - 작은 plot에 Plot Title/Legend를 그릴지
+    #   axis_title_on: bool - 작은 plot에 X/Y1/Y2 축 제목(axis label)을 그릴지
+    #     (title_on과 별개 - 기본 꺼짐, 꺼져 있으면 기존처럼 항상 안 그림)
     #   font_scale: str - 메인 plot 폰트 크기 대비 배율(예: "0.6")
     #   opaque: bool - 켜면 작은 plot 뒤에 흰 배경을 깔아 메인 plot을 가림,
     #     끄면 투명(메인 plot의 곡선이 작은 plot 배경으로 비쳐 보임)
@@ -3025,9 +3027,39 @@ class GnuplotGenerator:
         lines.append("unset label")
         lines.append("unset arrow")
         lines.append("unset object")
-        lines.append("unset xlabel")
-        lines.append("unset ylabel")
-        lines.append("unset y2label")
+        # [수정 - 요청] "Plot Title과 Axis Title check box 분리" - 기존엔
+        # X/Y1/Y2 축 제목을 항상 강제로 지웠는데, axis_title_on이 켜져 있으면
+        # plotdef의 실제 축 제목(메인 plot과 같은 폰트/이스케이프 규칙 -
+        # _render_text 재사용)을 축소된 크기로 그대로 그린다. y2label은 이
+        # inset이 실제로 y2 curve를 쓸 때만(_uses_y2) 의미가 있음.
+        _inset_curves = _override_curves or plotdef.curves
+        _uses_y2 = any(getattr(c, "axis", "y1") == "y2" for c in _inset_curves)
+        if pip.get("axis_title_on"):
+            _xlabel_txt = (plotdef.xlabel or "").strip()
+            if _xlabel_txt:
+                _xl_text, _xl_enh = self._render_text(_xlabel_txt)
+                _xl_size = float(plotdef.xlabel_size or 11) * font_scale
+                lines.append(f'set xlabel "{_xl_text}" font "{plotdef.xlabel_font},{_xl_size:.1f}" {_xl_enh}')
+            else:
+                lines.append("unset xlabel")
+            _ylabel_txt = (plotdef.ylabel or "").strip()
+            if _ylabel_txt:
+                _yl_text, _yl_enh = self._render_text(_ylabel_txt)
+                _yl_size = float(plotdef.ylabel_size or 11) * font_scale
+                lines.append(f'set ylabel "{_yl_text}" font "{plotdef.ylabel_font},{_yl_size:.1f}" {_yl_enh}')
+            else:
+                lines.append("unset ylabel")
+            _y2label_txt = (plotdef.y2label or "").strip() if _uses_y2 else ""
+            if _y2label_txt:
+                _y2l_text, _y2l_enh = self._render_text(_y2label_txt)
+                _y2l_size = float(plotdef.y2label_size or 11) * font_scale
+                lines.append(f'set y2label "{_y2l_text}" font "{plotdef.y2label_font},{_y2l_size:.1f}" {_y2l_enh}')
+            else:
+                lines.append("unset y2label")
+        else:
+            lines.append("unset xlabel")
+            lines.append("unset ylabel")
+            lines.append("unset y2label")
         # [수정 - 버그] 메인 plot은 마진을 'at screen 0.xx'(캔버스 전체 기준
         # 절대좌표)로 직접 지정해두는데, 이 상태를 그대로 두면 inset이 아래에서
         # set origin/size로 작은 영역을 지정해도 gnuplot이 그 절대 마진을 그대로
@@ -3055,11 +3087,9 @@ class GnuplotGenerator:
         else:
             lines.append("unset title")
 
-        _tic_size = max(9 * font_scale, 5.0)  # 축 라벨은 지웠으니(위) tic 숫자 크기만 배율 적용, 너무 작아지지 않게 하한
+        _tic_size = max(9 * font_scale, 5.0)  # tic 숫자 크기(축 제목과는 별개로 항상 배율 적용, 너무 작아지지 않게 하한)
         lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}"')
         lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}"')
-        _inset_curves = _override_curves or plotdef.curves
-        _uses_y2 = any(getattr(c, "axis", "y1") == "y2" for c in _inset_curves)
         if _uses_y2:
             lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}"')
 
