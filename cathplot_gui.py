@@ -671,7 +671,11 @@ class CathPlotGUI:
         self.pip_axis_title_on_var = tk.BooleanVar(value=False)
         self.pip_legend_on_var = tk.BooleanVar(value=False)
         self.pip_font_scale_var = tk.StringVar(value="0.6")
-        self.pip_opaque_var = tk.BooleanVar(value=True)
+        # [수정 - 요청] "불투명 켬/끔" 체크박스 -> "배경 불투명도(%) 슬라이더"
+        # (0~100, 기본 100=완전 불투명 - 기존 opaque=True 체크와 동일한 기본
+        # 모습). Template Save/Load는 구 "opaque"(bool) 키도 그대로 읽어
+        # opacity로 변환한다(_load_batch_item/Template Load 참고).
+        self.pip_opacity_var = tk.IntVar(value=100)
         # 데이터 소스: "current"(기본, 이 plot 자신의 곡선) / "cached"(이미
         # 그려진 다른 plot) / "pltfile"(.plt 파일에서 곡선 추출)
         self.pip_source_var = tk.StringVar(value="current")
@@ -1724,7 +1728,7 @@ class CathPlotGUI:
                 "ymin": self.pip_ymin_var.get(), "ymax": self.pip_ymax_var.get(),
                 "title_on": self.pip_title_on_var.get(), "axis_title_on": self.pip_axis_title_on_var.get(),
                 "legend_on": self.pip_legend_on_var.get(),
-                "font_scale": self.pip_font_scale_var.get(), "opaque": self.pip_opaque_var.get(),
+                "font_scale": self.pip_font_scale_var.get(), "opacity": self.pip_opacity_var.get(),
                 "source": self.pip_source_var.get(),
                 "cached_name": self.pip_cached_name_var.get(),
                 "pltfile_path": self.pip_pltfile_path_var.get(),
@@ -1957,7 +1961,16 @@ class CathPlotGUI:
             self.pip_axis_title_on_var.set(_pip_data.get("axis_title_on", self.pip_axis_title_on_var.get()))
             self.pip_legend_on_var.set(_pip_data.get("legend_on", self.pip_legend_on_var.get()))
             self.pip_font_scale_var.set(_pip_data.get("font_scale", self.pip_font_scale_var.get()))
-            self.pip_opaque_var.set(_pip_data.get("opaque", self.pip_opaque_var.get()))
+            # [수정 - 요청] "불투명 켬/끔" 체크박스 -> 0~100% 슬라이더로 교체 -
+            # 예전 Template(구 "opaque" bool 키만 있음)도 그대로 불러와지도록
+            # opacity가 없으면 opaque(True->100/False->0)로 변환해서 채운다.
+            if "opacity" in _pip_data:
+                try:
+                    self.pip_opacity_var.set(int(round(float(_pip_data.get("opacity")))))
+                except (TypeError, ValueError):
+                    pass
+            elif "opaque" in _pip_data:
+                self.pip_opacity_var.set(100 if _pip_data.get("opaque") else 0)
             self.pip_source_var.set(_pip_data.get("source", self.pip_source_var.get()))
             self.pip_cached_name_var.set(_pip_data.get("cached_name", self.pip_cached_name_var.get()))
             self.pip_pltfile_path_var.set(_pip_data.get("pltfile_path", self.pip_pltfile_path_var.get()))
@@ -2399,7 +2412,7 @@ class CathPlotGUI:
             _shape = self.pip_clip_shape_var.get()
             clip_rx_entry.config(state="normal" if _shape in ("circle", "ellipse") else "disabled")
             clip_ry_entry.config(state=("normal" if _shape == "ellipse" else "disabled"))
-        self.pip_clip_shape_var.trace_add("write", _toggle_clip_entries)
+        _clip_trace_id = self.pip_clip_shape_var.trace_add("write", _toggle_clip_entries)
         _toggle_clip_entries()
 
         # --- 확대 구간 ---
@@ -2427,7 +2440,47 @@ class CathPlotGUI:
         self._mk_check(opt_frame, "Plot Title 표시", self.pip_title_on_var, anchor="w", padx=5, pady=2)
         self._mk_check(opt_frame, "Axis Title 표시", self.pip_axis_title_on_var, anchor="w", padx=5, pady=2)
         self._mk_check(opt_frame, "Legend 표시", self.pip_legend_on_var, anchor="w", padx=5, pady=2)
-        self._mk_check(opt_frame, "불투명 배경 (끄면 메인 plot이 뒤로 비쳐 보임)", self.pip_opaque_var, anchor="w", padx=5, pady=2)
+
+        # [수정 - 요청] "불투명 켬/끔" 체크박스를 0~100% 슬라이더로 교체 -
+        # 100=완전 불투명(기존 체크 ON과 동일한 기본 모습, 흰 배경이 메인
+        # plot을 완전히 가림), 0=완전 투명(기존 체크 OFF와 동일, 배경이
+        # 사라져 메인 plot이 그대로 비쳐 보임), 그 사이는 배경만 그 비율로
+        # 메인 plot과 섞임(작은 plot 자신의 곡선/눈금/라벨은 슬라이더와
+        # 무관하게 항상 또렷하게 보임 - 클리핑 경계는 100 미만이면 항상
+        # 점선, gnu_generator._apply_pip_clip 참고).
+        opac_row = ttk.Frame(opt_frame)
+        opac_row.pack(fill="x", padx=5, pady=2)
+        ttk.Label(opac_row, text="배경 불투명도:").pack(side="left")
+        opac_value_lbl = ttk.Label(opac_row, text="100%", width=5)
+        opac_value_lbl.pack(side="right")
+        opac_scale = tk.Scale(
+            opac_row, from_=0, to=100, orient="horizontal", resolution=1,
+            showvalue=False, variable=self.pip_opacity_var, length=200,
+        )
+        opac_scale.pack(side="left", fill="x", expand=True, padx=(6, 6))
+
+        def _on_opacity_change(*_):
+            opac_value_lbl.config(text=f"{self.pip_opacity_var.get()}%")
+        _opac_trace_id = self.pip_opacity_var.trace_add("write", _on_opacity_change)
+        _on_opacity_change()
+
+        # [수정 - 버그] "PIP 팝업을 열었다 닫았다 반복하면 trace 콜백이 계속
+        # 쌓임" - 위 두 trace_add(clip_shape/opacity)는 dlg가 닫혀도 tk 변수
+        # 쪽에 그대로 남아있어서, 팝업을 닫은 뒤 이 tk 변수가 다시 바뀌면
+        # (Template Load, 팝업 재실행 등) 이미 파괴된 위젯(clip_rx_entry/
+        # opac_value_lbl)을 건드리려다 TclError가 나고, 팝업을 열 때마다
+        # 죽은 콜백이 계속 누적됨(실측으로 재현·확인) - 팝업이 닫힐 때 이
+        # 세션의 trace만 제거한다.
+        def _cleanup_pip_dialog_traces(event):
+            if event.widget is not dlg:
+                return
+            for _var, _tid in ((self.pip_clip_shape_var, _clip_trace_id), (self.pip_opacity_var, _opac_trace_id)):
+                try:
+                    _var.trace_remove("write", _tid)
+                except tk.TclError:
+                    pass
+        dlg.bind("<Destroy>", _cleanup_pip_dialog_traces, add="+")
+
         font_row = ttk.Frame(opt_frame)
         font_row.pack(fill="x", padx=5, pady=(2, 5))
         ttk.Label(font_row, text="폰트 축소 배율:").pack(side="left")
@@ -2462,7 +2515,7 @@ class CathPlotGUI:
             "axis_title_on": self.pip_axis_title_on_var.get(),
             "legend_on": self.pip_legend_on_var.get(),
             "font_scale": self.pip_font_scale_var.get(),
-            "opaque": self.pip_opaque_var.get(),
+            "opacity": self.pip_opacity_var.get(),
             "source": self.pip_source_var.get(),
             "cached_name": self.pip_cached_name_var.get(),
             "pltfile_path": self.pip_pltfile_path_var.get(),
