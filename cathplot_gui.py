@@ -648,6 +648,15 @@ class CathPlotGUI:
         # "in"/"cm"(실제 물리적 길이 - gnu_generator._render_pip_inset이
         # 터미널 명령의 실제 캔버스 크기로 환산함)
         self.pip_size_unit_var = tk.StringVar(value="%")
+        # [추가 - 요청] "원/타원으로 클리핑" - "rect"(기본, 기존과 동일)면
+        # 지금까지처럼 사각 박스, "circle"/"ellipse"면 create_script가 PDF를
+        # 다 그린 뒤 실제로 그 모양대로 잘라낸다(gnu_generator._apply_pip_clip
+        # 참고 - PDF/PNG/JPG/SVG는 자동 반영, EMF/Multi-Plot은 1차 구현
+        # 범위 밖이라 항상 사각형). clip_rx/ry는 annotation의 Circle과 같은
+        # 관례(%, 이 작은 plot 자신의 박스 기준 반지름, Ry 비우면 원).
+        self.pip_clip_shape_var = tk.StringVar(value="rect")
+        self.pip_clip_rx_var = tk.StringVar(value="50")
+        self.pip_clip_ry_var = tk.StringVar(value="")
         self.pip_xmin_var = tk.StringVar(value="")
         self.pip_xmax_var = tk.StringVar(value="")
         self.pip_ymin_var = tk.StringVar(value="")
@@ -1709,6 +1718,8 @@ class CathPlotGUI:
                 "pos_x": self.pip_pos_x_var.get(), "pos_y": self.pip_pos_y_var.get(),
                 "size_w": self.pip_size_w_var.get(), "size_h": self.pip_size_h_var.get(),
                 "size_unit": self.pip_size_unit_var.get(),
+                "clip_shape": self.pip_clip_shape_var.get(),
+                "clip_rx": self.pip_clip_rx_var.get(), "clip_ry": self.pip_clip_ry_var.get(),
                 "xmin": self.pip_xmin_var.get(), "xmax": self.pip_xmax_var.get(),
                 "ymin": self.pip_ymin_var.get(), "ymax": self.pip_ymax_var.get(),
                 "title_on": self.pip_title_on_var.get(), "axis_title_on": self.pip_axis_title_on_var.get(),
@@ -1935,6 +1946,9 @@ class CathPlotGUI:
             self.pip_size_w_var.set(_pip_data.get("size_w", self.pip_size_w_var.get()))
             self.pip_size_h_var.set(_pip_data.get("size_h", self.pip_size_h_var.get()))
             self.pip_size_unit_var.set(_pip_data.get("size_unit", self.pip_size_unit_var.get()))
+            self.pip_clip_shape_var.set(_pip_data.get("clip_shape", self.pip_clip_shape_var.get()))
+            self.pip_clip_rx_var.set(_pip_data.get("clip_rx", self.pip_clip_rx_var.get()))
+            self.pip_clip_ry_var.set(_pip_data.get("clip_ry", self.pip_clip_ry_var.get()))
             self.pip_xmin_var.set(_pip_data.get("xmin", self.pip_xmin_var.get()))
             self.pip_xmax_var.set(_pip_data.get("xmax", self.pip_xmax_var.get()))
             self.pip_ymin_var.set(_pip_data.get("ymin", self.pip_ymin_var.get()))
@@ -2362,6 +2376,32 @@ class CathPlotGUI:
             width=4, state="readonly"
         ).pack(side="left", padx=(4, 0))
 
+        # [추가 - 요청] "원/타원으로 클리핑" - 위 위치/크기(박스) 자체와는
+        # 별개로, 그 박스 안에서 실제로 보이는 모양을 사각형 대신 원/타원으로
+        # 잘라낼 수 있게 함(annotation의 Circle과 같은 관례: Radius(Rx,Ry),
+        # Ry 비우면 원). "원/타원"을 고르면 Rx/Ry 입력이 활성화된다.
+        clip_row = ttk.Frame(geo_frame)
+        clip_row.pack(fill="x", padx=5, pady=(0, 5))
+        ttk.Label(clip_row, text="프레임 모양:").pack(side="left")
+        clip_shape_combo = ttk.Combobox(
+            clip_row, textvariable=self.pip_clip_shape_var,
+            values=["rect", "circle", "ellipse"], width=8, state="readonly"
+        )
+        clip_shape_combo.pack(side="left", padx=(4, 12))
+        ttk.Label(clip_row, text="Radius(Rx,Ry) %:").pack(side="left")
+        clip_rx_entry = ttk.Entry(clip_row, textvariable=self.pip_clip_rx_var, width=6)
+        clip_rx_entry.pack(side="left", padx=(4, 2))
+        clip_ry_entry = ttk.Entry(clip_row, textvariable=self.pip_clip_ry_var, width=6)
+        clip_ry_entry.pack(side="left", padx=(2, 4))
+        ttk.Label(clip_row, text="(Ry 비우면 원)", foreground="gray").pack(side="left")
+
+        def _toggle_clip_entries(*_):
+            _shape = self.pip_clip_shape_var.get()
+            clip_rx_entry.config(state="normal" if _shape in ("circle", "ellipse") else "disabled")
+            clip_ry_entry.config(state=("normal" if _shape == "ellipse" else "disabled"))
+        self.pip_clip_shape_var.trace_add("write", _toggle_clip_entries)
+        _toggle_clip_entries()
+
         # --- 확대 구간 ---
         zoom_frame = ttk.LabelFrame(dlg, text="확대 구간 (비우면: X는 메인과 동일, Y는 자동)")
         zoom_frame.pack(fill="x", padx=10, pady=5)
@@ -2411,6 +2451,9 @@ class CathPlotGUI:
             "size_w": self.pip_size_w_var.get(),
             "size_h": self.pip_size_h_var.get(),
             "size_unit": self.pip_size_unit_var.get(),
+            "clip_shape": self.pip_clip_shape_var.get(),
+            "clip_rx": self.pip_clip_rx_var.get(),
+            "clip_ry": self.pip_clip_ry_var.get(),
             "xmin": self.pip_xmin_var.get(),
             "xmax": self.pip_xmax_var.get(),
             "ymin": self.pip_ymin_var.get(),

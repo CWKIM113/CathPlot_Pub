@@ -26,6 +26,7 @@ def _no_console_kwargs():
     return kwargs
 import uuid
 import time
+import copy
 
 
 def _force_focus_window_by_title(title, timeout_sec=2.0):
@@ -566,6 +567,16 @@ class PlotDefinition:
     #   font_scale: str - 메인 plot 폰트 크기 대비 배율(예: "0.6")
     #   opaque: bool - 켜면 작은 plot 뒤에 흰 배경을 깔아 메인 plot을 가림,
     #     끄면 투명(메인 plot의 곡선이 작은 plot 배경으로 비쳐 보임)
+    #   clip_shape: str - "rect"(기본, 지금까지의 사각 박스) / "circle" / "ellipse".
+    #     사각형이 아니면 create_script가 PDF를 다 그린 뒤 PyMuPDF로 실제
+    #     클리핑한다(gnuplot 자체엔 비사각형 클리핑이 없음 - _apply_pip_clip
+    #     참고). PDF/PNG/JPG/SVG는 전부 같은 PDF에서 파생되므로 자동으로
+    #     같이 반영되지만, EMF는 별도 드라이버라 항상 사각형으로 남는다.
+    #     Multi-Plot 안에서는 아직 지원 안 함(경고 후 사각형으로 대체).
+    #   clip_rx, clip_ry: str(%, 이 작은 plot 자신의 size_w/size_h 박스 기준
+    #     반지름 - annotation의 Circle과 같은 관례) - clip_shape가 rect가
+    #     아닐 때만 의미 있음. clip_ry를 비워두면(또는 clip_shape=="circle")
+    #     clip_rx를 그대로 써서 원이 됨. 50%면 박스에 꽉 차게 내접.
     pip: dict = field(default_factory=dict)
 
 class GnuplotGenerator:
@@ -3157,7 +3168,14 @@ class GnuplotGenerator:
         lines.append(f"set origin {origin_x:.4f},{origin_y:.4f}")
         lines.append(f"set size {size_w:.4f},{size_h:.4f}")
 
-        if pip.get("opaque", True):
+        # [추가 - 요청] "원/타원으로 클리핑" - clip_shape가 rect가 아니면 이
+        # 사각 배경/테두리를 gnuplot이 그대로 그리게 두지 않는다(클리핑 후
+        # 사각 테두리 조각이 타원 모서리 밖으로 삐져나와 보임). 배경 채우기와
+        # 테두리는 create_script가 렌더링이 끝난 뒤 PDF를 후처리(_apply_pip_
+        # clip)하면서 타원 모양 그대로 다시 그린다 - 여기서는 사각형 버전만
+        # (clip_shape=="rect", 기본값) 그린다.
+        _clip_shape = str(pip.get("clip_shape", "rect") or "rect").strip().lower()
+        if _clip_shape == "rect" and pip.get("opaque", True):
             # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - 투명이면
             # 이 오브젝트 자체를 안 그려서 메인 plot 곡선이 그대로 비쳐 보임.
             # id 7100은 annotation(1번대)/Legend1(8000대)/Legend2(9000대)와
@@ -3166,6 +3184,15 @@ class GnuplotGenerator:
                 f"set object 7100 rectangle from screen {origin_x:.4f},{origin_y:.4f} "
                 f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
                 f'behind fc rgb "white" fillstyle solid 1.0 border lc rgb "black" lw 1'
+            )
+        elif pip.get("opaque", True):
+            # 클리핑 모드는 배경만 채우고(마스킹 후 타원 모양대로 살아남음)
+            # 테두리는 생략(사각 테두리가 그대로 남으면 타원 모서리 밖으로
+            # 삐져나와 보임 - 후처리 단계에서 타원 테두리를 새로 그림).
+            lines.append(
+                f"set object 7100 rectangle from screen {origin_x:.4f},{origin_y:.4f} "
+                f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
+                f'behind fc rgb "white" fillstyle solid 1.0 noborder'
             )
 
         lines.append(xrange_cmd)
@@ -3205,6 +3232,187 @@ class GnuplotGenerator:
         lines.append("set size 1,1")
         lines.append("unset label")
         lines.append("unset object")
+
+        # [추가 - 요청] "원/타원으로 클리핑" - clip_shape가 rect가 아니면,
+        # 지금까지 그린 건 아직 "사각 박스 안의 확대 plot"일 뿐이고 실제
+        # 타원 모양으로 잘라내는 건 gnuplot이 아니라 create_script가 PDF를
+        # 다 그린 뒤 PyMuPDF로 후처리(_apply_pip_clip)해서 한다(gnuplot
+        # 자체에는 비사각형 클리핑 기능이 없음) - 그 후처리에 필요한 정보
+        # (박스 위치/크기, 클리핑 모양·반지름, 불투명 여부)를 돌려준다.
+        if _clip_shape in ("circle", "ellipse"):
+            # [추가] annotation의 Circle과 같은 관례 - Ry를 안 주면(빈 값)
+            # Rx를 그대로 써서 원이 된다. clip_shape=="circle"이면 항상
+            # Rx==Ry(원)로 강제한다.
+            _clip_rx = _num("clip_rx", 50.0)
+            _clip_ry_raw = str(pip.get("clip_ry", "")).strip()
+            _clip_ry = _clip_rx if (_clip_shape == "circle" or not _clip_ry_raw) else _num("clip_ry", 50.0)
+            return {
+                "origin_x": origin_x, "origin_y": origin_y,
+                "size_w": size_w, "size_h": size_h,
+                "clip_shape": _clip_shape,
+                "clip_rx": _clip_rx, "clip_ry": _clip_ry,
+                "opaque": bool(pip.get("opaque", True)),
+            }
+        return None
+
+    def _apply_pip_clip(self, plotdef, pdf_path, fmt, clip_info):
+        """[수정 구현] "원/타원 PIP를 흰색으로 덮는 게 아니라 실제로
+        클리핑" - gnuplot 자신은 사각형이 아닌 모양으로 잘라내는 기능이
+        없어서, 이미 다 그린(사각 박스 안에 확대 plot이 그려진) PDF를
+        PyMuPDF/PIL로 후처리해서 진짜로 잘라낸다.
+
+        [시행착오 기록] 처음엔 "작은 조각만 잘라(get_pixmap clip=) 알파
+        마스크 씌운 뒤 insert_image로 얹기"를 시도했는데, gnuplot(pdfcairo)이
+        만든 PDF 페이지에 insert_image로 알파 있는 이미지를 얹으면 알파가
+        무시되고 원래 사각형이 그대로 보이는 문제가 실측(고해상도 크롭 확인)
+        으로 재현됨(stream=/filename=/pixmap= 세 가지 방식 모두 동일) - 반면
+        PyMuPDF가 새로 만든 빈 페이지에는 문제없이 잘 얹히는 것을 별도 확인해,
+        전체 페이지를 래스터로 만들어 PIL로 직접 합성(paste+mask)하는 방식은
+        픽셀 단위로 재현·확인해서 정상 동작함이 확인됨 - 이 방식으로 확정.
+
+        방식:
+        1) 같은 plotdef를 PIP 없이(pip.enabled=False) 다시 한 번 렌더링해서
+           "메인 plot만 있는" PDF를 하나 더 만든다(gnuplot 1회 추가 실행).
+        2) 두 PDF(메인만 / 메인+사각 PIP) 페이지 전체를 고해상도 래스터로
+           바꾼다(각각 PIL 이미지).
+        3) "메인+PIP" 이미지에서 작은 plot 사각 영역만 잘라내고, 타원/원
+           모양 알파 마스크(PIL)를 씌운다(clip_rx/ry(%)는 이 박스(size_w/
+           size_h) 자신을 기준으로 한 반지름 - 50%면 박스에 꽉 차게 내접).
+        4) "메인만" 이미지 위에 그 마스킹된 조각을 그대로 붙여넣는다
+           (Image.paste(patch, pos, mask=mask)) - 마스크 밖(귀퉁이)은 그
+           자리의 "메인만" 픽셀이 그대로 남아 자연스럽게 비쳐 보임(불투명/
+           투명 옵션과 무관하게 항상 올바름 - 불투명이면 조각 자체 안에
+           흰 배경이 이미 있고, 투명이면 조각 안에도 흰 배경이 없어서
+           메인 plot이 비쳐 보이는데 귀퉁이도 똑같이 비쳐 보이므로 자연스러움).
+        5) 클리핑 경계를 그 위에 그림(불투명은 실선, 투명은 점선 - 배경이
+           없어 경계가 안 보일 수 있어서).
+        6) 이 합성된 래스터 이미지 한 장을 새 PDF 페이지에 통째로 얹어
+           pdf_path를 덮어쓴다 - PNG/JPG(래스터화)와 SVG(변환)는 이 PDF에서
+           파생되므로(create_script 구조 참고) 자동으로 같이 반영됨. EMF는
+           이 PDF 파이프라인을 안 타는 별도 드라이버라 적용 안 됨(1차 구현
+           범위 밖 - 항상 사각형으로 남음).
+
+        [트레이드오프] 페이지 전체가 벡터에서 고해상도(300dpi) 래스터
+        이미지로 바뀐다(원/타원 클리핑을 안 쓰는 plot이나 PIP를 안 쓰는
+        plot은 전혀 영향 없음 - 이 함수 자체가 클리핑을 요청했을 때만
+        호출됨). 300dpi라 일반적인 화면/인쇄 품질에서는 벡터와 육안으로
+        구분이 거의 안 되지만, 아주 크게 확대하면 계단 현상이 보일 수 있음.
+
+        실패해도(PyMuPDF 없음, 렌더링 실패 등) 조용히 원본(사각형) PDF를
+        그대로 둔다 - 이 후처리는 "있으면 좋은" 장식이지 핵심 기능이 아님."""
+        try:
+            import pymupdf as fitz
+            from PIL import Image, ImageDraw
+        except ImportError:
+            return
+
+        _main_only_pdf = os.path.join(
+            os.path.dirname(os.path.abspath(pdf_path)), f".cathplot_pip_main_{uuid.uuid4().hex}.pdf"
+        )
+        _composite_png = os.path.join(
+            os.path.dirname(os.path.abspath(pdf_path)), f".cathplot_pip_composite_{uuid.uuid4().hex}.png"
+        )
+        doc_full, doc_main, new_doc = None, None, None
+        try:
+            _main_only_plotdef = copy.copy(plotdef)
+            _main_only_plotdef.pip = {}
+            self.create_script(_main_only_plotdef, _main_only_pdf, fmt="pdf")
+            if not os.path.exists(_main_only_pdf):
+                return
+
+            doc_full = fitz.open(pdf_path)
+            doc_main = fitz.open(_main_only_pdf)
+            page_full, page_main = doc_full[0], doc_main[0]
+            pw, ph = page_main.rect.width, page_main.rect.height
+
+            # gnuplot의 origin/size는 캔버스 전체 기준 screen fraction(0~1),
+            # x는 왼쪽=0/오른쪽=100%, y는 아래=0/위=100%(gnuplot 관례) -
+            # PyMuPDF의 page.rect는 왼쪽 위가 (0,0)이고 아래로 갈수록 y가
+            # 커지는 좌표계라(PDF 자체 좌표계와 다름, PyMuPDF가 미리 변환해
+            # 줌) y를 뒤집어야 한다.
+            ox, oy = clip_info["origin_x"], clip_info["origin_y"]
+            sw, sh = clip_info["size_w"], clip_info["size_h"]
+            x0 = ox * pw
+            x1 = (ox + sw) * pw
+            y0 = (1.0 - (oy + sh)) * ph  # 박스 "위쪽" 모서리
+            y1 = (1.0 - oy) * ph          # 박스 "아래쪽" 모서리
+            if x1 - x0 <= 0 or y1 - y0 <= 0:
+                return
+
+            # 1) 페이지 전체를 고해상도 래스터로(작은 조각만 clip=으로
+            # 잘라내면 위 시행착오 기록의 버그가 재현되므로 전체를 그린 뒤
+            # PIL로 자른다).
+            _dpi = 300.0
+            _zoom = _dpi / 72.0
+            pix_full = page_full.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
+            pix_main = page_main.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
+            img_full = Image.frombytes("RGB", (pix_full.width, pix_full.height), pix_full.samples)
+            img_main = Image.frombytes("RGB", (pix_main.width, pix_main.height), pix_main.samples)
+
+            px0, py0 = int(round(x0 * _zoom)), int(round(y0 * _zoom))
+            px1, py1 = px0 + int(round((x1 - x0) * _zoom)), py0 + int(round((y1 - y0) * _zoom))
+            patch = img_full.crop((px0, py0, px1, py1))
+
+            # 2) PIL로 타원/원 모양 알파 마스크를 씌움 - clip_rx/ry(%)는 이
+            # 박스(size_w/size_h) 자신을 기준으로 한 반지름(50%면 박스에 꽉
+            # 차게 내접하는 타원).
+            _rx_frac = max(min(clip_info["clip_rx"], 100.0), 1.0) / 100.0
+            _ry_frac = max(min(clip_info["clip_ry"], 100.0), 1.0) / 100.0
+            _pw_px, _ph_px = patch.size
+            _cx, _cy = _pw_px / 2.0, _ph_px / 2.0
+            _ex, _ey = _pw_px * _rx_frac, _ph_px * _ry_frac
+            mask = Image.new("L", patch.size, 0)
+            ImageDraw.Draw(mask).ellipse([_cx - _ex, _cy - _ey, _cx + _ex, _cy + _ey], fill=255)
+
+            # 3) "메인만" 이미지 위에 마스킹된 조각을 그대로 붙여넣음 - 마스크
+            # 밖(귀퉁이)은 자동으로 "메인만" 픽셀이 그대로 남음.
+            img_main.paste(patch, (px0, py0), mask=mask)
+
+            # 4) 클리핑 경계선을 그림 - 불투명은 실선, 투명은 점선(배경이
+            # 없어 경계가 안 보일 수 있어서 - 요청에 따라 점선으로 표시).
+            draw = ImageDraw.Draw(img_main)
+            if clip_info["opaque"]:
+                draw.ellipse([px0, py0, px1, py1], outline=(0, 0, 0), width=2)
+            else:
+                _n_dots = 72
+                _dot_r = 2
+                for i in range(_n_dots):
+                    _theta = 2 * math.pi * i / _n_dots
+                    _dx = _cx + _ex * math.cos(_theta)
+                    _dy = _cy + _ey * math.sin(_theta)
+                    draw.ellipse(
+                        [px0 + _dx - _dot_r, py0 + _dy - _dot_r, px0 + _dx + _dot_r, py0 + _dy + _dot_r],
+                        fill=(0, 0, 0),
+                    )
+
+            # 5) 이 합성 래스터를 새 PDF 페이지 한 장에 통째로 얹어 pdf_path를
+            # 덮어씀 - PyMuPDF가 직접 만든 빈 페이지에는 insert_image가
+            # 문제없이 동작함(위 시행착오 기록 참고 - gnuplot이 만든 페이지
+            # 에서만 재현되던 문제라 새 페이지를 쓰면 우회됨).
+            img_main.save(_composite_png, format="PNG")
+            doc_full.close()
+            doc_full = None
+            doc_main.close()
+            doc_main = None
+            new_doc = fitz.open()
+            new_page = new_doc.new_page(width=pw, height=ph)
+            new_page.insert_image(fitz.Rect(0, 0, pw, ph), filename=_composite_png)
+            new_doc.save(pdf_path)
+        except Exception:
+            # 장식 기능 실패는 조용히 무시하고 원본(사각형) PDF를 그대로 둔다.
+            pass
+        finally:
+            if doc_full is not None:
+                doc_full.close()
+            if doc_main is not None:
+                doc_main.close()
+            if new_doc is not None:
+                new_doc.close()
+            for _tmp in (_main_only_pdf, _composite_png):
+                try:
+                    os.remove(_tmp)
+                except OSError:
+                    pass
 
     def _get_terminal_cmd(self, fmt, outfile, plotdef=None, size_override=None, panel_scale=1.0, position=None):
         fmt = fmt.lower()
@@ -3713,8 +3921,9 @@ class GnuplotGenerator:
 
         _main_cmd_list = self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, circles=circles, panel_scale=_size_scale, fmt=fmt)
 
+        _pip_clip_info = None
         if _pip_on:
-            self._render_pip_inset(plotdef, lines, _main_cmd_list, fmt)
+            _pip_clip_info = self._render_pip_inset(plotdef, lines, _main_cmd_list, fmt)
             lines.append("unset multiplot")
 
         # [추가] "원래(처음) plot으로 되돌리는 기능 - 2D/3D 모두" - 2D도 마우스
@@ -3787,6 +3996,15 @@ class GnuplotGenerator:
 
             if fmt.lower() == "png":
                 _upscale_png_dpi(outfile)
+
+            # [추가 - 요청] "원/타원으로 클리핑" - fmt="pdf"로 방금 완성된
+            # outfile이 실제 PDF일 때만 후처리한다(직접 pdf 요청이든, png/
+            # jpg/svg가 내부적으로 만드는 임시 pdf든 전부 여기로 들어옴 -
+            # create_script 맨 앞의 재귀 호출 구조 참고. eps/emf처럼 이
+            # 분기를 그대로 타는 다른 포맷은 fmt가 "pdf"가 아니라 조용히
+            # 건너뜀).
+            if fmt.lower() == "pdf" and _pip_clip_info:
+                self._apply_pip_clip(plotdef, outfile, fmt, _pip_clip_info)
 
             _want_texts = []
             for _raw in (plotdef.title, plotdef.xlabel, plotdef.ylabel, plotdef.y2label):
@@ -6236,7 +6454,20 @@ class GnuplotGenerator:
                     (cell_right_in - cell_left_in) / page_w,
                     (cell_top_in - cell_bottom_in) / page_h,
                 )
-                self._render_pip_inset(plotdef, lines, _cell_cmd_list, fmt, parent_box=_pb)
+                _mp_plotdef = plotdef
+                # [추가 - 요청] "원/타원 클리핑" - PDF 후처리(_apply_pip_clip)
+                # 기반이라 이 칸만 따로 잘라내기가 M-P 페이지 전체 재구성과
+                # 얽혀 복잡함(1차 구현 범위 밖) - 요청돼 있으면 경고를 남기고
+                # 이 칸만 사각형(기존 방식)으로 안전하게 대체한다.
+                if plotdef.pip.get("clip_shape", "rect") not in (None, "rect"):
+                    _mp_plotdef = copy.copy(plotdef)
+                    _mp_plotdef.pip = dict(plotdef.pip, clip_shape="rect")
+                    _pip_name = (plotdef.title or "plot").strip() or "plot"
+                    self.warnings.append(
+                        f"'{_pip_name}'의 PIP 원/타원 클리핑은 Multi-Plot에서는 아직 지원하지 "
+                        f"않아 사각형으로 표시했습니다."
+                    )
+                self._render_pip_inset(_mp_plotdef, lines, _cell_cmd_list, fmt, parent_box=_pb)
 
         if "왼쪽" in _warned_sides or "오른쪽" in _warned_sides:
             _side_txt = "/".join(s for s in ("왼쪽", "오른쪽") if s in _warned_sides)
