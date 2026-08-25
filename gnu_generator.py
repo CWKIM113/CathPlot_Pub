@@ -3210,6 +3210,51 @@ class GnuplotGenerator:
         # 완전 불투명/완전 투명" 두 값은 항상 저비용으로 지원 가능해진다
         # (정지 화면에서도 부가 이득 - 벡터 그대로 유지되고 렌더링도 빨라짐).
         _rect_no_bg = (_clip_shape == "rect") and (_opacity <= 0.0 + 1e-6)
+
+        # [추가 - 발견] "원/타원도 완전불투명/완전투명이면 후처리 없이 네이티브로" -
+        # gnuplot에 실제로 있는 걸 다시 확인해보니: (1) set object N ellipse
+        # ... behind로 타원 배경을 채우면 뒤이은 plot이 그 위에 정상적으로
+        # 겹쳐 그려지고(사각형 object 7100과 완전히 같은 방식), (2) set object
+        # N ellipse ... front border로 타원 테두리(점선 dashtype 포함)도
+        # 네이티브로 그려짐 - 전부 pngcairo로 실측(픽셀 확인)했음. 남은 문제는
+        # "커브 자체를 타원 모양으로 자르는 것"뿐인데, 이것도 이미 코드 곳곳에
+        # 쓰는 "조건이 거짓이면 NaN(0/0)으로 건너뛰기" 관용구를 그대로 응용해서
+        # (데이터 포인트의 화면상 위치가 타원 안에 있는지를 계산하는 gnuplot
+        # 함수 ellip_ok를 만들어 using절에 끼워 넣음) 후처리 없이 실측으로
+        # 성공 확인함(조밀한 데이터로 렌더링 시 타원 경계에서 정확히 끊김).
+        # 그래서 이제 원/타원도 opacity가 0 또는 100이면(중간값은 여전히
+        # "배경을 반투명하게 섞기"가 필요해 네이티브로 안 됨 - PDF 후처리 유지)
+        # rect와 완전히 같은 지위로 저비용 처리한다. 유일한 전제조건은 X/Y
+        # 범위가 이 시점에 이미 구체적인 숫자로 확정돼 있어야 한다는 것(아래
+        # _parse_range 참고) - "set autoscale x"처럼 숫자가 아직 없으면(드문
+        # 경우) 안전하게 예전 후처리 경로로 폴백한다.
+        def _parse_range(range_cmd):
+            _m = re.match(r"set (?:x|y|y2)range\s*\[\s*([^:\]]+)\s*:\s*([^:\]]+)\s*\]", range_cmd)
+            if not _m:
+                return None
+            try:
+                return float(_m.group(1)), float(_m.group(2))
+            except ValueError:
+                return None
+
+        _clip_rx = _clip_ry = None
+        if _clip_shape in ("circle", "ellipse"):
+            # [추가] annotation의 Circle과 같은 관례 - Ry를 안 주면(빈 값)
+            # Rx를 그대로 써서 원이 된다. clip_shape=="circle"이면 항상
+            # Rx==Ry(원)로 강제한다.
+            _clip_rx = _num("clip_rx", 50.0)
+            _clip_ry_raw = str(pip.get("clip_ry", "")).strip()
+            _clip_ry = _clip_rx if (_clip_shape == "circle" or not _clip_ry_raw) else _num("clip_ry", 50.0)
+
+        _ellipse_native_ok = False
+        if _clip_shape in ("circle", "ellipse") and (_opacity <= 0.0 + 1e-6 or _opacity >= 100.0 - 1e-6):
+            _xr = _parse_range(xrange_cmd)
+            _yr = _parse_range(yrange_cmd)
+            if _xr is not None and _yr is not None and _xr[1] != _xr[0] and _yr[1] != _yr[0]:
+                _ellipse_native_ok = True
+        _ellipse_fully_opaque = _ellipse_native_ok and _opacity >= 100.0 - 1e-6
+        _ellipse_no_bg = _ellipse_native_ok and _opacity <= 0.0 + 1e-6
+
         if _rect_fully_opaque:
             # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - id 7100은
             # annotation(1번대)/Legend1(8000대)/Legend2(9000대)와 안 겹치도록
@@ -3224,6 +3269,26 @@ class GnuplotGenerator:
             # 라벨(잉크)이 메인 plot 위에 그대로 겹쳐 보임(기존 opaque=False
             # 네이티브 동작과 동일).
             pass
+        elif _ellipse_fully_opaque or _ellipse_no_bg:
+            _ecx = origin_x + size_w / 2.0
+            _ecy = origin_y + size_h / 2.0
+            _erx = size_w * (_clip_rx / 100.0)
+            _ery = size_h * (_clip_ry / 100.0)
+            if _ellipse_fully_opaque:
+                lines.append(
+                    f"set object 7100 ellipse at screen {_ecx:.4f},{_ecy:.4f} "
+                    f"size screen {_erx*2:.4f},{_ery*2:.4f} behind fc rgb \"white\" fillstyle solid 1.0 noborder"
+                )
+            # 경계선(테두리)은 배경과 별개 오브젝트로 "front"에 그려서 곡선
+            # 위에도 항상 보이게 한다 - 완전불투명은 실선, 완전투명은 점선
+            # (배경이 없어 경계가 안 보일 수 있어서 - 기존 rect/사각형 클리핑과
+            # 동일한 규칙).
+            _boundary_dash = "" if _ellipse_fully_opaque else 'dashtype "." '
+            lines.append(
+                f"set object 7101 ellipse at screen {_ecx:.4f},{_ecy:.4f} "
+                f"size screen {_erx*2:.4f},{_ery*2:.4f} front fc rgb \"black\" fillstyle empty "
+                f"border lc rgb \"black\" lw 2 {_boundary_dash}"
+            )
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
             # 있도록 항상 흰 배경만(테두리 없이) 깐다 - 최종 배경 불투명도/
@@ -3259,6 +3324,38 @@ class GnuplotGenerator:
         # inset은 이 더미가 애초에 필요 없으므로(y2 축 예약 목적일 뿐 실제
         # 데이터가 없음) 빼고 그린다.
         _inset_cmd_list = [c for c in main_cmd_list if not c.startswith("NaN axes")]
+
+        if _ellipse_native_ok:
+            # [추가 - 발견] "원/타원으로 커브 자체를 자르기" - 데이터 포인트의
+            # 화면상 위치(이 박스 자신을 기준으로 한 0~1 위치)가 타원 안에
+            # 있는지를 계산해서, 밖이면 NaN(0/0)으로 만들어 그 점을 건너뛰게
+            # 한다(기존 time_min/time_max 구간 필터, 애니메이션 threshold
+            # 필터와 완전히 같은 관용구 - 실측으로 정확히 타원 모양대로
+            # 잘리는 것 확인). x/y를 먼저 "축 데이터 범위 내 0~1 비율"로
+            # 바꾼 뒤, 이 박스 안에서 축(margin)이 차지하는 비율만큼 다시
+            # "박스 내 0~1 위치"로 변환하고, 타원 중심(0.5,0.5) 기준 표준
+            # 타원 방정식으로 판정한다.
+            _exmin, _exmax = _parse_range(xrange_cmd)
+            _eymin, _eymax = _parse_range(yrange_cmd)
+            _erx_box = _clip_rx / 100.0
+            _ery_box = _clip_ry / 100.0
+            lines.append(
+                f"_pip_ellip_ok(x,y) = "
+                f"((((x-({_exmin}))/(({_exmax})-({_exmin})))*(1-{_inset_left_frac}-{_inset_right_frac})"
+                f"+{_inset_left_frac}-0.5)**2)/(({_erx_box})**2) + "
+                f"((((y-({_eymin}))/(({_eymax})-({_eymin})))*(1-{_inset_bottom_frac}-{_inset_top_frac})"
+                f"+{_inset_bottom_frac}-0.5)**2)/(({_ery_box})**2) <= 1"
+            )
+
+            def _wrap_ellipse(m):
+                expr = m.group(1)
+                col = m.group(2)
+                return (
+                    f"using (_pip_ellip_ok(({expr}),(${col})) ? ({expr}) : (0/0))"
+                    f":(_pip_ellip_ok(({expr}),(${col})) ? (${col}) : (0/0))"
+                )
+            _inset_cmd_list = [re.sub(r"using \(([^)]+)\):(\d+)", _wrap_ellipse, c) for c in _inset_cmd_list]
+
         lines.append("plot \\")
         for i, cmd in enumerate(_inset_cmd_list):
             if i != len(_inset_cmd_list) - 1:
@@ -3273,24 +3370,17 @@ class GnuplotGenerator:
         lines.append("unset object")
 
         # [추가 - 요청] "원/타원으로 클리핑" + "배경 불투명도 슬라이더" -
-        # _rect_fully_opaque/_rect_no_bg 둘 다 아니면(=중간 반투명 또는 원/
-        # 타원 모양), 지금까지 그린 건 아직 "흰 배경 위에 확대 plot이 그려진
-        # 사각 박스"일 뿐이고 실제 최종 모습(클리핑 모양, 배경 불투명도)은
-        # gnuplot이 아니라 create_script가 PDF를 다 그린 뒤 PyMuPDF/PIL로
-        # 후처리(_apply_pip_clip)해서 만든다(gnuplot 자체에는 비사각형
-        # 클리핑도 배경 반투명 합성도 없음) - 그 후처리에 필요한 정보(박스
-        # 위치/크기, 클리핑 모양·반지름, 배경 불투명도)를 돌려준다.
-        if not (_rect_fully_opaque or _rect_no_bg):
-            # [추가] annotation의 Circle과 같은 관례 - Ry를 안 주면(빈 값)
-            # Rx를 그대로 써서 원이 된다. clip_shape=="circle"이면 항상
-            # Rx==Ry(원)로 강제한다. rect 모양(반투명만 필요한 경우)은
-            # 반지름 개념이 없으므로 None으로 둔다.
-            if _clip_shape in ("circle", "ellipse"):
-                _clip_rx = _num("clip_rx", 50.0)
-                _clip_ry_raw = str(pip.get("clip_ry", "")).strip()
-                _clip_ry = _clip_rx if (_clip_shape == "circle" or not _clip_ry_raw) else _num("clip_ry", 50.0)
-            else:
-                _clip_rx = _clip_ry = None
+        # _rect_fully_opaque/_rect_no_bg/_ellipse_native_ok(원·타원의 완전
+        # 불투명/완전 투명 - 위에서 이미 네이티브로 다 그림) 셋 다 아니면
+        # (=중간 반투명이거나, 원/타원인데 X/Y 범위가 구체적 숫자로 확정되지
+        # 않은 드문 경우) 지금까지 그린 건 아직 "흰 배경 위에 확대 plot이
+        # 그려진 사각 박스"일 뿐이고 실제 최종 모습(클리핑 모양, 배경
+        # 불투명도)은 gnuplot이 아니라 create_script가 PDF를 다 그린 뒤
+        # PyMuPDF/PIL로 후처리(_apply_pip_clip)해서 만든다 - 그 후처리에
+        # 필요한 정보(박스 위치/크기, 클리핑 모양·반지름, 배경 불투명도)를
+        # 돌려준다. _clip_rx/_clip_ry는 이미 위에서 한 번 계산해뒀으므로
+        # (원/타원이면 항상 채워짐) 다시 계산하지 않고 그대로 재사용한다.
+        if not (_rect_fully_opaque or _rect_no_bg or _ellipse_native_ok):
             return {
                 "origin_x": origin_x, "origin_y": origin_y,
                 "size_w": size_w, "size_h": size_h,
