@@ -3427,6 +3427,28 @@ class GnuplotGenerator:
                 )
             _inset_cmd_list = [re.sub(r"using \(([^)]+)\):(\d+)", _wrap_ellipse, c) for c in _inset_cmd_list]
 
+            # [추가 - 발견(완결성 검토)] Function Curve(using절이 없는 순수
+            # gnuplot 수식)는 위 정규식이 "using ..."을 못 찾아 그대로 통과돼
+            # 타원 경계 밖으로 그대로 삐져나가는 버그가 있었음(실제 렌더로
+            # 확인: 데이터 curve는 타원대로 잘리는데 함수 curve만 박스
+            # 네모 모서리까지 그대로 그려짐). 함수 curve는 이미 x의 함수라
+            # gnuplot이 plot 문맥에서 기본 제공하는 더미변수 x를 그대로 써서
+            # 같은 _pip_ellip_ok(x,y) 판정 함수로 감싼다(0/0 대신 1/0을 써도
+            # 결과는 같은 NaN - 위 데이터 curve와 스타일만 다름, 기존 관용구
+            # 유지 목적으로 그대로 0/0 사용).
+            _FC_NOTITLE_RE = re.compile(r"^(.*) notitle axes (x1y1|x1y2) with lines(.*)$")
+
+            def _wrap_ellipse_func(cmd):
+                if "using" in cmd:
+                    return cmd
+                m = _FC_NOTITLE_RE.match(cmd)
+                if not m:
+                    return cmd
+                expr, axis, rest = m.group(1), m.group(2), m.group(3)
+                wrapped = f"(_pip_ellip_ok((x),({expr})) ? ({expr}) : (0/0))"
+                return f"{wrapped} notitle axes {axis} with lines{rest}"
+            _inset_cmd_list = [_wrap_ellipse_func(c) for c in _inset_cmd_list]
+
         lines.append("plot \\")
         for i, cmd in enumerate(_inset_cmd_list):
             if i != len(_inset_cmd_list) - 1:
@@ -4349,7 +4371,28 @@ class GnuplotGenerator:
         def _wrap_threshold(m):
             expr = m.group(1)
             return f"using (({expr})<=thresh ? ({expr}) : 1/0):{m.group(2)}"
-        animated_curve_lines = [re.sub(r"using \(([^)]+)\):(\d+)", _wrap_threshold, ln) for ln in static_curve_lines]
+
+        # [추가 - 발견(완결성 검토)] Function Curve(using절이 없는 순수 gnuplot
+        # 수식)는 위 정규식이 매칭 안 돼 그대로 통과했었음 - 데이터 curve는
+        # 진행에 따라 점점 그려지는데 함수 curve만 처음부터 끝까지 항상
+        # 완성된 채로 보이는 비대칭이 있었음(실제 렌더로 확인). 함수 curve도
+        # x의 함수이므로 gnuplot의 plot 문맥 더미변수 x를 그대로 써서 같은
+        # thresh 조건으로 가둔다.
+        _FC_NOTITLE_RE = re.compile(r"^(.*) notitle axes (x1y1|x1y2) with lines(.*)$")
+
+        def _wrap_threshold_func(cmd):
+            if "using" in cmd:
+                return cmd
+            m = _FC_NOTITLE_RE.match(cmd)
+            if not m:
+                return cmd
+            expr, axis, rest = m.group(1), m.group(2), m.group(3)
+            return f"((x)<=thresh ? ({expr}) : 1/0) notitle axes {axis} with lines{rest}"
+
+        animated_curve_lines = [
+            _wrap_threshold_func(re.sub(r"using \(([^)]+)\):(\d+)", _wrap_threshold, ln))
+            for ln in static_curve_lines
+        ]
 
         # [추가 - 요청] "PIP+Animation" - PIP가 켜져 있으면(cathplot_gui의
         # _normalize_pip_for_animation이 미리 사각형+완전불투명/완전투명으로
