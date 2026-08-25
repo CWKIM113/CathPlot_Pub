@@ -2917,8 +2917,34 @@ class GnuplotGenerator:
 
         pos_x = _num("pos_x", 60.0) / 100.0
         pos_y = _num("pos_y", 95.0) / 100.0  # 좌측 "위" 모서리의 세로 위치(위=100/아래=0 기준)
-        size_w = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0
-        size_h = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0
+
+        # [추가 - 요청] 크기(size_w/h)를 캔버스 대비 %뿐 아니라 실제 물리적
+        # 길이(cm/in)로도 지정할 수 있게 - pip["size_unit"]이 "%"(기본)면 기존
+        # 그대로, "in"/"cm"이면 입력값을 그 단위의 실제 길이로 보고, 터미널
+        # 명령(항상 "size W in,H in" 형태 - _get_terminal_cmd 참고)에서 캔버스
+        # 전체의 실제 물리 크기를 역으로 찾아 그 길이가 캔버스 대비 몇 %인지
+        # 환산한다. 터미널 줄을 못 찾으면(이론상 항상 있음) %로 안전하게 폴백.
+        _size_unit = str(pip.get("size_unit", "%") or "%").strip()
+        if _size_unit in ("in", "cm"):
+            _canvas_w_in, _canvas_h_in = None, None
+            for _l in lines:
+                _m = re.search(r"size\s+([\d.]+)in\s*,\s*([\d.]+)in", _l)
+                if _m:
+                    _canvas_w_in, _canvas_h_in = float(_m.group(1)), float(_m.group(2))
+                    break
+            if _canvas_w_in and _canvas_h_in:
+                _raw_w = _num("size_w", 35.0)
+                _raw_h = _num("size_h", 35.0)
+                if _size_unit == "cm":
+                    _raw_w, _raw_h = _raw_w / 2.54, _raw_h / 2.54
+                size_w = min(max(_raw_w / _canvas_w_in * 100.0, 5.0), 100.0) / 100.0
+                size_h = min(max(_raw_h / _canvas_h_in * 100.0, 5.0), 100.0) / 100.0
+            else:
+                size_w = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0
+                size_h = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0
+        else:
+            size_w = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0
+            size_h = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0
 
         origin_x = pos_x
         origin_y = pos_y - size_h  # gnuplot의 origin은 항상 패널의 "아래" 모서리 기준
@@ -5887,6 +5913,24 @@ class GnuplotGenerator:
                 _cy = _row_axis_bottom[r] - _row_gap_b[r] - spacing_h_in
 
         for i, plotdef in enumerate(plots):
+            # [추가 - 요청] "PIP를 Multi-Plot과도 조합" - 이 함수는 gnuplot의
+            # 'set multiplot layout R,C' 자동 배치 모드를 쓰는데, 이 모드는
+            # plot 명령 하나마다 자동으로 다음 칸으로 넘어가므로, PIP inset을
+            # 그리려고 이 칸 안에서 plot을 한 번 더 호출하면(_render_pip_inset과
+            # 동일한 방식) 그 추가 plot이 다음 칸 자리를 하나 먹어버려 전체
+            # 배치가 한 칸씩 밀림 - single-plot(create_script)처럼 origin/size를
+            # 직접 지정하는 방식으로 바꾸지 않는 한 안전하게 합칠 수 없음(이
+            # 함수의 마진 계산이 이미 layout 모드의 자동 배치를 전제로 극도로
+            # 정교하게 맞춰져 있어, 그 전제를 깨는 변경은 회귀 위험이 큼). 1차
+            # 구현에서는 PIP가 켜진 plot이 M-P에 섞여 있으면 조용히 무시(=그
+            # 칸엔 inset 없이 원래 plot만) 하는 대신, 왜 안 보이는지 알 수
+            # 있게 경고만 남긴다.
+            if getattr(plotdef, "pip", None) and plotdef.pip.get("enabled"):
+                _pip_warn_name = (plotdef.title or f"plot {i+1}").strip() or f"plot {i+1}"
+                self.warnings.append(
+                    f"'{_pip_warn_name}'의 PIP(부분 확대) 설정은 Multi-Plot에서는 아직 "
+                    "표시되지 않습니다(해당 칸은 PIP 없이 원래 plot만 그려짐)."
+                )
             cell_left_in, cell_right_in, cell_top_in, cell_bottom_in = cell_positions_in[i]
             _row_idx, _col_idx = cell_rc[i]
             if cols > 1 and not _is_centered5:

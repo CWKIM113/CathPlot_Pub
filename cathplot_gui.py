@@ -642,6 +642,10 @@ class CathPlotGUI:
         self.pip_pos_y_var = tk.StringVar(value="95")     # 좌측 상단 모서리 Y(%, 아래=0/위=100)
         self.pip_size_w_var = tk.StringVar(value="35")
         self.pip_size_h_var = tk.StringVar(value="35")
+        # [추가 - 요청] 크기 단위: "%"(기본, 캔버스 전체 대비 비율) 또는
+        # "in"/"cm"(실제 물리적 길이 - gnu_generator._render_pip_inset이
+        # 터미널 명령의 실제 캔버스 크기로 환산함)
+        self.pip_size_unit_var = tk.StringVar(value="%")
         self.pip_xmin_var = tk.StringVar(value="")
         self.pip_xmax_var = tk.StringVar(value="")
         self.pip_ymin_var = tk.StringVar(value="")
@@ -1689,6 +1693,7 @@ class CathPlotGUI:
                 "enabled": self.pip_enabled_var.get(),
                 "pos_x": self.pip_pos_x_var.get(), "pos_y": self.pip_pos_y_var.get(),
                 "size_w": self.pip_size_w_var.get(), "size_h": self.pip_size_h_var.get(),
+                "size_unit": self.pip_size_unit_var.get(),
                 "xmin": self.pip_xmin_var.get(), "xmax": self.pip_xmax_var.get(),
                 "ymin": self.pip_ymin_var.get(), "ymax": self.pip_ymax_var.get(),
                 "title_on": self.pip_title_on_var.get(), "legend_on": self.pip_legend_on_var.get(),
@@ -1913,6 +1918,7 @@ class CathPlotGUI:
             self.pip_pos_y_var.set(_pip_data.get("pos_y", self.pip_pos_y_var.get()))
             self.pip_size_w_var.set(_pip_data.get("size_w", self.pip_size_w_var.get()))
             self.pip_size_h_var.set(_pip_data.get("size_h", self.pip_size_h_var.get()))
+            self.pip_size_unit_var.set(_pip_data.get("size_unit", self.pip_size_unit_var.get()))
             self.pip_xmin_var.set(_pip_data.get("xmin", self.pip_xmin_var.get()))
             self.pip_xmax_var.set(_pip_data.get("xmax", self.pip_xmax_var.get()))
             self.pip_ymin_var.set(_pip_data.get("ymin", self.pip_ymin_var.get()))
@@ -2315,20 +2321,26 @@ class CathPlotGUI:
             pltfile_label.config(text=os.path.basename(self.pip_pltfile_path_var.get()), foreground="black")
 
         # --- 위치/크기 ---
-        geo_frame = ttk.LabelFrame(dlg, text="위치/크기 (캔버스 전체 대비 %)")
+        geo_frame = ttk.LabelFrame(dlg, text="위치(캔버스 대비 %) / 크기")
         geo_frame.pack(fill="x", padx=10, pady=5)
         pos_row = ttk.Frame(geo_frame)
         pos_row.pack(fill="x", padx=5, pady=3)
-        ttk.Label(pos_row, text="좌측 상단 X:").pack(side="left")
+        ttk.Label(pos_row, text="좌측 상단 X(%):").pack(side="left")
         ttk.Entry(pos_row, textvariable=self.pip_pos_x_var, width=6).pack(side="left", padx=(4, 12))
-        ttk.Label(pos_row, text="Y:").pack(side="left")
+        ttk.Label(pos_row, text="Y(%):").pack(side="left")
         ttk.Entry(pos_row, textvariable=self.pip_pos_y_var, width=6).pack(side="left", padx=(4, 0))
         size_row = ttk.Frame(geo_frame)
         size_row.pack(fill="x", padx=5, pady=(0, 5))
         ttk.Label(size_row, text="가로 크기(W):").pack(side="left")
-        ttk.Entry(size_row, textvariable=self.pip_size_w_var, width=6).pack(side="left", padx=(4, 12))
+        ttk.Entry(size_row, textvariable=self.pip_size_w_var, width=6).pack(side="left", padx=(4, 8))
         ttk.Label(size_row, text="세로 크기(H):").pack(side="left")
-        ttk.Entry(size_row, textvariable=self.pip_size_h_var, width=6).pack(side="left", padx=(4, 0))
+        ttk.Entry(size_row, textvariable=self.pip_size_h_var, width=6).pack(side="left", padx=(4, 8))
+        # [추가 - 요청] "작은 plot 크기를 실제 길이 or %로" - %(캔버스 대비
+        # 비율, 기본)이거나 in/cm(실제 물리적 길이)를 고를 수 있게.
+        ttk.Combobox(
+            size_row, textvariable=self.pip_size_unit_var, values=["%", "in", "cm"],
+            width=4, state="readonly"
+        ).pack(side="left", padx=(4, 0))
 
         # --- 확대 구간 ---
         zoom_frame = ttk.LabelFrame(dlg, text="확대 구간 (비우면: X는 메인과 동일, Y는 자동)")
@@ -2374,6 +2386,7 @@ class CathPlotGUI:
             "pos_y": self.pip_pos_y_var.get(),
             "size_w": self.pip_size_w_var.get(),
             "size_h": self.pip_size_h_var.get(),
+            "size_unit": self.pip_size_unit_var.get(),
             "xmin": self.pip_xmin_var.get(),
             "xmax": self.pip_xmax_var.get(),
             "ymin": self.pip_ymin_var.get(),
