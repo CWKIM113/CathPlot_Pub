@@ -534,6 +534,10 @@ class CathPlotGUI:
                      color="grey", fg="white", side="left", padx=5)
         self._mk_btn(btn_container, "Template Load", self.load_template,
                      color="grey", fg="white", side="left", padx=5)
+        # [추가 - 요청] PIP(부분 확대 inset) - 3D Plot과 같은 방식(메인 창엔
+        # 버튼 하나만, 나머지 설정은 팝업)으로 배치.
+        self._mk_btn(btn_container, "PIP...", self.open_pip_dialog,
+                     color="grey", fg="white", side="left", padx=5)
 
         # [수정] "좌우로 늘리지 말고 줄 중앙에 배치" - fill+expand로 버튼 자체가
         # 늘어졌던 걸, 양옆에 빈 스페이서(expand=True)를 둬서 버튼 크기는
@@ -627,6 +631,30 @@ class CathPlotGUI:
         self.legend2_align_var = tk.StringVar(value="Auto")  # Legend1과 동일한 개념(Align 참고)
         self.legend2_box_width_pct_var = tk.StringVar(value="")   # Legend1과 동일한 개념(Box W/H% 참고)
         self.legend2_box_height_pct_var = tk.StringVar(value="")
+
+        # [추가 - 요청] PIP(부분 확대 inset) - 이 plot 안에 작은 확대 plot을
+        # 하나 더 겹쳐 그리는 기능. 메인 창엔 버튼 하나만 두고(3D Plot과 같은
+        # 방식) 나머지는 open_pip_dialog 팝업에서 설정한다. gnu_generator의
+        # PlotDefinition.pip(dict)와 1:1로 대응 - _resolve_pip_config()가
+        # 이 tk 변수들을 그 dict로 변환한다.
+        self.pip_enabled_var = tk.BooleanVar(value=False)
+        self.pip_pos_x_var = tk.StringVar(value="60")     # 좌측 상단 모서리 X(%, 왼쪽=0)
+        self.pip_pos_y_var = tk.StringVar(value="95")     # 좌측 상단 모서리 Y(%, 아래=0/위=100)
+        self.pip_size_w_var = tk.StringVar(value="35")
+        self.pip_size_h_var = tk.StringVar(value="35")
+        self.pip_xmin_var = tk.StringVar(value="")
+        self.pip_xmax_var = tk.StringVar(value="")
+        self.pip_ymin_var = tk.StringVar(value="")
+        self.pip_ymax_var = tk.StringVar(value="")
+        self.pip_title_on_var = tk.BooleanVar(value=True)
+        self.pip_legend_on_var = tk.BooleanVar(value=False)
+        self.pip_font_scale_var = tk.StringVar(value="0.6")
+        self.pip_opaque_var = tk.BooleanVar(value=True)
+        # 데이터 소스: "current"(기본, 이 plot 자신의 곡선) / "cached"(이미
+        # 그려진 다른 plot) / "pltfile"(.plt 파일에서 곡선 추출)
+        self.pip_source_var = tk.StringVar(value="current")
+        self.pip_cached_name_var = tk.StringVar(value="")
+        self.pip_pltfile_path_var = tk.StringVar(value="")
 
         self.title_font_var = tk.StringVar(value="Malgun Gothic")
         self.title_size_var = tk.StringVar(value="14")
@@ -1651,6 +1679,24 @@ class CathPlotGUI:
 
             # --- Advanced: Raw gnuplot 입력창 내용 ---
             "extra_gnuplot": self.raw_gnuplot_text.get("1.0", "end-1c"),
+
+            # --- PIP(부분 확대 inset) ---
+            # [주의] curves(실제 CurveDefinition 객체)는 JSON으로 저장하지
+            # 않음 - source가 "cached"/"pltfile"이면 불러올 때(_resolve_pip_
+            # dict_for_batch/_resolve_pip_config) cached_name/pltfile_path로
+            # 다시 찾아서 채운다.
+            "pip": {
+                "enabled": self.pip_enabled_var.get(),
+                "pos_x": self.pip_pos_x_var.get(), "pos_y": self.pip_pos_y_var.get(),
+                "size_w": self.pip_size_w_var.get(), "size_h": self.pip_size_h_var.get(),
+                "xmin": self.pip_xmin_var.get(), "xmax": self.pip_xmax_var.get(),
+                "ymin": self.pip_ymin_var.get(), "ymax": self.pip_ymax_var.get(),
+                "title_on": self.pip_title_on_var.get(), "legend_on": self.pip_legend_on_var.get(),
+                "font_scale": self.pip_font_scale_var.get(), "opaque": self.pip_opaque_var.get(),
+                "source": self.pip_source_var.get(),
+                "cached_name": self.pip_cached_name_var.get(),
+                "pltfile_path": self.pip_pltfile_path_var.get(),
+            },
         }
 
     def _capture_file_assignments(self):
@@ -1858,6 +1904,26 @@ class CathPlotGUI:
             self.frame_width_var.set(data.get("frame_width", self.frame_width_var.get()))
             self.frame_height_var.set(data.get("frame_height", self.frame_height_var.get()))
             self.frame_unit_var.set(data.get("frame_unit", self.frame_unit_var.get()))
+
+            # [추가 - 요청] PIP(부분 확대 inset) - 구버전 템플릿(pip 키 없음)과도
+            # 호환되도록 data.get("pip", {})가 비어있으면 전부 기존 값 유지.
+            _pip_data = data.get("pip", {})
+            self.pip_enabled_var.set(_pip_data.get("enabled", self.pip_enabled_var.get()))
+            self.pip_pos_x_var.set(_pip_data.get("pos_x", self.pip_pos_x_var.get()))
+            self.pip_pos_y_var.set(_pip_data.get("pos_y", self.pip_pos_y_var.get()))
+            self.pip_size_w_var.set(_pip_data.get("size_w", self.pip_size_w_var.get()))
+            self.pip_size_h_var.set(_pip_data.get("size_h", self.pip_size_h_var.get()))
+            self.pip_xmin_var.set(_pip_data.get("xmin", self.pip_xmin_var.get()))
+            self.pip_xmax_var.set(_pip_data.get("xmax", self.pip_xmax_var.get()))
+            self.pip_ymin_var.set(_pip_data.get("ymin", self.pip_ymin_var.get()))
+            self.pip_ymax_var.set(_pip_data.get("ymax", self.pip_ymax_var.get()))
+            self.pip_title_on_var.set(_pip_data.get("title_on", self.pip_title_on_var.get()))
+            self.pip_legend_on_var.set(_pip_data.get("legend_on", self.pip_legend_on_var.get()))
+            self.pip_font_scale_var.set(_pip_data.get("font_scale", self.pip_font_scale_var.get()))
+            self.pip_opaque_var.set(_pip_data.get("opaque", self.pip_opaque_var.get()))
+            self.pip_source_var.set(_pip_data.get("source", self.pip_source_var.get()))
+            self.pip_cached_name_var.set(_pip_data.get("cached_name", self.pip_cached_name_var.get()))
+            self.pip_pltfile_path_var.set(_pip_data.get("pltfile_path", self.pip_pltfile_path_var.get()))
 
             if "extra_gnuplot" in data:
                 self.raw_gnuplot_text.delete("1.0", "end")
@@ -2104,7 +2170,233 @@ class CathPlotGUI:
             is_print_mode=True,
             x_output_no=default_x_output_no,
             extra_gnuplot=data.get("extra_gnuplot", ""),
+            # [추가 - 요청] PIP(부분 확대 inset) - Template에 저장된 pip 설정을
+            # 그대로 복원. source가 "cached"/"pltfile"였던 템플릿은 이 시점에
+            # curves를 다시 채워 넣어야 하므로 _resolve_pip_curves_for_data로
+            # 한 번 더 해석한다(캐시에 없는 이름이면 조용히 "현재 plot 없음"
+            # 취급 - 아래 참고).
+            pip=self._resolve_pip_dict_for_batch(data.get("pip", {})),
         )
+
+    def _resolve_pip_dict_for_batch(self, pip_data):
+        """[추가 - 요청] Batch Set처럼 화면(screen) tk 변수를 건드리지 않고
+        Template 데이터만으로 PlotDefinition을 만드는 경로에서, pip.source가
+        "cached"(이미 그려진 plot)나 "pltfile"(.plt 파일)이면 저장된 이름/경로로
+        curves를 다시 채워 넣는다. "current"(기본, 이 Template 자신의 곡선을
+        그대로 축소해서 보여줌)는 curves를 안 채워도 _render_pip_inset이
+        main_cmd_list를 그대로 쓰므로 손댈 게 없음."""
+        if not pip_data or not pip_data.get("enabled"):
+            return pip_data or {}
+        pip_data = dict(pip_data)  # 원본(Template dict) 변형 방지
+        source = pip_data.get("source", "current")
+        if source == "cached":
+            name = pip_data.get("cached_name", "")
+            cached_plotdef = self.active_plots_cache.get(name)
+            if cached_plotdef is not None:
+                pip_data["curves"] = cached_plotdef.curves
+            # 캐시에 없으면(다른 세션에서 저장된 Template 등) 조용히
+            # "현재 plot"으로 폴백 - curves를 안 채우면 _render_pip_inset이
+            # main_cmd_list(이 Template 자신의 곡선)를 그대로 씀.
+        elif source == "pltfile":
+            path = pip_data.get("pltfile_path", "")
+            if path and os.path.exists(path):
+                curves = self._parse_plt_curves(path)
+                if curves:
+                    pip_data["curves"] = curves
+        return pip_data
+
+    def _parse_plt_curves(self, plt_path):
+        """[추가 - 요청] PIP inset의 데이터 소스로 ".plt 파일 불러오기"를 지원
+        하기 위해, CathPlot 자신이 생성한 .plt 스크립트에서 curve의 plot 표현식
+        ("파일" using (...):col notitle axes x1y1 with lines lw N [lc rgb "..."]
+        [dashtype (...)])을 정규식으로 되짚어 대략적인 CurveDefinition 목록을
+        복원한다. 어디까지나 "이미 그려진 plot을 그대로 다시 쓰는" 캐시 방식의
+        보조 수단이라, 이 함수는 우리 자신의 생성 포맷에만 맞춰져 있고(범용
+        gnuplot 스크립트 파서가 아님) marker/legend_group 등 부가 정보는
+        복원하지 않는다(inset은 어차피 선(line)만 그리므로 문제 없음)."""
+        try:
+            with open(plt_path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            return []
+
+        pattern = re.compile(
+            r'"([^"]+)"\s+using\s+\(\$(\d+)\+([^)]*)\):(\d+)\s+notitle\s+axes\s+(x1y1|x1y2)'
+            r'\s+with\s+lines\s+lw\s+([\d.]+)(?:\s+lc\s+rgb\s+"([^"]+)")?'
+        )
+        base_dir = os.path.dirname(os.path.abspath(plt_path))
+        curves = []
+        for m in pattern.finditer(text):
+            path, x_col, x_shift, y_col, axis, lw, color = m.groups()
+            dat_file = path if os.path.isabs(path) else os.path.normpath(os.path.join(base_dir, path))
+            try:
+                curves.append(CurveDefinition(
+                    dat_file=dat_file,
+                    output_no=int(y_col) - 1,
+                    title=os.path.splitext(os.path.basename(dat_file))[0],
+                    axis="y2" if axis == "x1y2" else "y1",
+                    x_shift=float(x_shift or 0.0),
+                    color=color or None,
+                    linewidth=float(lw or 1.5),
+                    x_output_no=int(x_col) - 1,
+                ))
+            except ValueError:
+                continue  # X/Y 컬럼이 같은 경우 등은 건너뜀(CurveDefinition.__post_init__ 참고)
+        return curves
+
+    def open_pip_dialog(self):
+        """[추가 - 요청] PIP(Picture-in-Picture, 부분 확대) 설정 팝업 - 3D
+        Plot과 같은 방식으로 메인 창엔 버튼 하나만 두고 나머지 설정은 여기서.
+        확인(OK)을 누르면 tk 변수에 반영되고, PLOT/SAVE/PRINT 때 그 값을 읽어
+        pip 활성화 여부와 무관하게 항상 반영한다(꺼져 있으면 _render_pip_inset이
+        아무것도 안 그림)."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("PIP - 작은 plot을 부분 확대해서 겹쳐 그리기")
+        dlg.transient(self.root)
+        dlg.geometry("480x560")
+
+        self._mk_check(dlg, "PIP 사용", self.pip_enabled_var, bold=True, anchor="w", padx=10, pady=(10, 5))
+
+        # --- 데이터 소스 ---
+        src_frame = ttk.LabelFrame(dlg, text="작은 plot에 표시할 데이터")
+        src_frame.pack(fill="x", padx=10, pady=5)
+
+        cached_combo_ref = {}
+
+        def _refresh_cached_names():
+            self._cleanup_stale_plot_cache()
+            names = sorted(self.active_plots_cache.keys())
+            combo = cached_combo_ref.get("combo")
+            if combo is not None:
+                combo["values"] = names
+                if self.pip_cached_name_var.get() not in names and names:
+                    self.pip_cached_name_var.set(names[0])
+
+        ttk.Radiobutton(
+            src_frame, text="현재 plot (이 화면 설정 그대로, 확대만)",
+            variable=self.pip_source_var, value="current"
+        ).pack(anchor="w", padx=5, pady=(5, 2))
+
+        cached_row = ttk.Frame(src_frame)
+        cached_row.pack(fill="x", padx=5, pady=2)
+        ttk.Radiobutton(
+            cached_row, text="이미 그려진 plot:", variable=self.pip_source_var, value="cached"
+        ).pack(side="left")
+        cached_combo = ttk.Combobox(
+            cached_row, textvariable=self.pip_cached_name_var, state="readonly", width=22
+        )
+        cached_combo.pack(side="left", padx=(5, 0))
+        cached_combo_ref["combo"] = cached_combo
+        self._mk_btn(cached_row, "새로고침", _refresh_cached_names, color="grey", side="left", padx=(5, 0))
+        _refresh_cached_names()
+
+        pltfile_row = ttk.Frame(src_frame)
+        pltfile_row.pack(fill="x", padx=5, pady=(2, 5))
+        ttk.Radiobutton(
+            pltfile_row, text="plt 파일:", variable=self.pip_source_var, value="pltfile"
+        ).pack(side="left")
+        pltfile_label = ttk.Label(pltfile_row, text="(선택 안 됨)", foreground="#555555", width=22, anchor="w")
+        pltfile_label.pack(side="left", padx=(5, 0))
+
+        def _pick_pltfile():
+            path = filedialog.askopenfilename(
+                parent=dlg, initialdir=self.plot_dir,
+                filetypes=[("gnuplot script", "*.plt"), ("All files", "*.*")],
+                title="PIP에 쓸 .plt 파일 선택"
+            )
+            if not path:
+                return
+            self.pip_pltfile_path_var.set(path)
+            pltfile_label.config(text=os.path.basename(path), foreground="black")
+            self.pip_source_var.set("pltfile")
+
+        self._mk_btn(pltfile_row, "찾아보기...", _pick_pltfile, color="grey", side="left", padx=(5, 0))
+        if self.pip_pltfile_path_var.get():
+            pltfile_label.config(text=os.path.basename(self.pip_pltfile_path_var.get()), foreground="black")
+
+        # --- 위치/크기 ---
+        geo_frame = ttk.LabelFrame(dlg, text="위치/크기 (캔버스 전체 대비 %)")
+        geo_frame.pack(fill="x", padx=10, pady=5)
+        pos_row = ttk.Frame(geo_frame)
+        pos_row.pack(fill="x", padx=5, pady=3)
+        ttk.Label(pos_row, text="좌측 상단 X:").pack(side="left")
+        ttk.Entry(pos_row, textvariable=self.pip_pos_x_var, width=6).pack(side="left", padx=(4, 12))
+        ttk.Label(pos_row, text="Y:").pack(side="left")
+        ttk.Entry(pos_row, textvariable=self.pip_pos_y_var, width=6).pack(side="left", padx=(4, 0))
+        size_row = ttk.Frame(geo_frame)
+        size_row.pack(fill="x", padx=5, pady=(0, 5))
+        ttk.Label(size_row, text="가로 크기(W):").pack(side="left")
+        ttk.Entry(size_row, textvariable=self.pip_size_w_var, width=6).pack(side="left", padx=(4, 12))
+        ttk.Label(size_row, text="세로 크기(H):").pack(side="left")
+        ttk.Entry(size_row, textvariable=self.pip_size_h_var, width=6).pack(side="left", padx=(4, 0))
+
+        # --- 확대 구간 ---
+        zoom_frame = ttk.LabelFrame(dlg, text="확대 구간 (비우면: X는 메인과 동일, Y는 자동)")
+        zoom_frame.pack(fill="x", padx=10, pady=5)
+        xz_row = ttk.Frame(zoom_frame)
+        xz_row.pack(fill="x", padx=5, pady=3)
+        ttk.Label(xz_row, text="X min:").pack(side="left")
+        ttk.Entry(xz_row, textvariable=self.pip_xmin_var, width=8).pack(side="left", padx=(4, 12))
+        ttk.Label(xz_row, text="X max:").pack(side="left")
+        ttk.Entry(xz_row, textvariable=self.pip_xmax_var, width=8).pack(side="left", padx=(4, 0))
+        yz_row = ttk.Frame(zoom_frame)
+        yz_row.pack(fill="x", padx=5, pady=(0, 5))
+        ttk.Label(yz_row, text="Y min:").pack(side="left")
+        ttk.Entry(yz_row, textvariable=self.pip_ymin_var, width=8).pack(side="left", padx=(4, 12))
+        ttk.Label(yz_row, text="Y max:").pack(side="left")
+        ttk.Entry(yz_row, textvariable=self.pip_ymax_var, width=8).pack(side="left", padx=(4, 0))
+
+        # --- 표시 옵션 ---
+        opt_frame = ttk.LabelFrame(dlg, text="표시 옵션")
+        opt_frame.pack(fill="x", padx=10, pady=5)
+        self._mk_check(opt_frame, "Title 표시", self.pip_title_on_var, anchor="w", padx=5, pady=2)
+        self._mk_check(opt_frame, "Legend 표시", self.pip_legend_on_var, anchor="w", padx=5, pady=2)
+        self._mk_check(opt_frame, "불투명 배경 (끄면 메인 plot이 뒤로 비쳐 보임)", self.pip_opaque_var, anchor="w", padx=5, pady=2)
+        font_row = ttk.Frame(opt_frame)
+        font_row.pack(fill="x", padx=5, pady=(2, 5))
+        ttk.Label(font_row, text="폰트 축소 배율:").pack(side="left")
+        ttk.Entry(font_row, textvariable=self.pip_font_scale_var, width=6).pack(side="left", padx=(4, 0))
+
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(fill="x", padx=10, pady=15, side="bottom")
+        self._mk_btn(btn_row, "닫기", dlg.destroy, color="accent", side="right", padx=5)
+
+    def _resolve_pip_config(self):
+        """[추가 - 요청] PIP 팝업(open_pip_dialog)에서 고른 tk 변수들을,
+        gnu_generator.PlotDefinition.pip이 기대하는 dict로 변환한다. source가
+        "cached"/"pltfile"이면 여기서 실제 curves 리스트까지 채워 넣는다
+        (execute_plot_pipeline은 화면 tk 변수에 바로 접근할 수 있는 메인
+        스레드에서만 호출되므로, Batch Set 경로(_resolve_pip_dict_for_batch -
+        Template에 저장된 이름/경로로 다시 찾음)와 로직이 갈라져 있다)."""
+        pip = {
+            "enabled": self.pip_enabled_var.get(),
+            "pos_x": self.pip_pos_x_var.get(),
+            "pos_y": self.pip_pos_y_var.get(),
+            "size_w": self.pip_size_w_var.get(),
+            "size_h": self.pip_size_h_var.get(),
+            "xmin": self.pip_xmin_var.get(),
+            "xmax": self.pip_xmax_var.get(),
+            "ymin": self.pip_ymin_var.get(),
+            "ymax": self.pip_ymax_var.get(),
+            "title_on": self.pip_title_on_var.get(),
+            "legend_on": self.pip_legend_on_var.get(),
+            "font_scale": self.pip_font_scale_var.get(),
+            "opaque": self.pip_opaque_var.get(),
+            "source": self.pip_source_var.get(),
+            "cached_name": self.pip_cached_name_var.get(),
+            "pltfile_path": self.pip_pltfile_path_var.get(),
+        }
+        if not pip["enabled"]:
+            return pip
+        if pip["source"] == "cached":
+            cached_plotdef = self.active_plots_cache.get(pip["cached_name"])
+            if cached_plotdef is not None:
+                pip["curves"] = cached_plotdef.curves
+        elif pip["source"] == "pltfile" and pip["pltfile_path"]:
+            curves = self._parse_plt_curves(pip["pltfile_path"])
+            if curves:
+                pip["curves"] = curves
+        return pip
 
     def open_batch_set_dialog(self):
         """여러 개의 '완전한' Template(*.json - dat 파일명+변수 지정까지 포함)을
@@ -5874,6 +6166,7 @@ class CathPlotGUI:
                 circles=self._collect_circles(),
                 is_print_mode=(mode == "Batch"),
                 extra_gnuplot=self.raw_gnuplot_text.get("1.0", "end-1c"),
+                pip=self._resolve_pip_config(),
             )
 
             # 5. Gnuplot 스크립트 생성 및 실행 (GnuplotGenerator의 실제 API인 create_script 사용)

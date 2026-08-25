@@ -2841,12 +2841,53 @@ class GnuplotGenerator:
         # 버려짐) 아무 영향 없음.
         return cmd_list
 
+    def _curve_cmd_list_for(self, curves, fmt):
+        """[추가 - 요청] "PIP inset이 메인 plot이 아니라 다른(이미 그려진) plot의
+        곡선을 보여줄 수 있게" - _build_plot_commands의 curve 루프(경로 계산,
+        using 표현식, 색상/dashtype)를 마커 없이 단순화해서 재사용. main_cmd_list
+        (메인과 같은 곡선을 그대로 재사용하는 기본 경로)와 별개로, 이 함수는
+        임의의 curves 리스트(다른 plot에서 가져온 것)로부터 새로 cmd_list를
+        만든다."""
+        cmd_list = []
+        for i, curve in enumerate(curves):
+            color = curve.color or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
+            linestyle = curve.linestyle or DEFAULT_LINESTYLES[i % len(DEFAULT_LINESTYLES)]
+            abs_path = curve.dat_file if os.path.isabs(curve.dat_file) else os.path.abspath(curve.dat_file)
+            try:
+                path = os.path.relpath(abs_path, start=self.plot_dir) if self.plot_dir else abs_path
+            except ValueError:
+                path = abs_path
+            path = path.replace("\\", "/")
+
+            is_y2 = getattr(curve, "axis", "y1") == "y2"
+            axis = "x1y2" if is_y2 else "x1y1"
+            x_col_idx = curve.x_output_no if getattr(curve, "x_output_no", None) is not None else 0
+            x_col_expr = f"${x_col_idx + 1}"
+            col_y = curve.output_no + 1
+            using_expr = f"({x_col_expr}+{curve.x_shift}):{col_y}"
+            lw = curve.linewidth
+
+            cmd = f'"{path}" using {using_expr} notitle axes {axis} with lines lw {lw}'
+            if color:
+                cmd += f' lc rgb "{color}"'
+            _dash_pat = _dash_pattern_for_fmt(linestyle, fmt)
+            if _dash_pat:
+                cmd += f" dashtype ({_dash_pat})"
+            cmd_list.append(cmd)
+        return cmd_list
+
     def _render_pip_inset(self, plotdef, lines, main_cmd_list, fmt):
         """[추가 - 요청] "작은 plot을 큰 plot 안에(PIP)" - 메인 plot을 이미 다
         그린 뒤(lines에 'plot ...'까지 채워진 상태) 같은 캔버스 위에 작은
         확대 plot을 하나 더 겹쳐 그린다. 호출하는 쪽(create_script)이 이미
         'set multiplot'으로 감싸둔 상태여야 한다(멀티플롯이 아니면 gnuplot이
         set origin/size를 무시함).
+
+        [추가 - 요청] "작은 plot이 메인 plot의 곡선이 아니라, 이미 그려진
+        다른 plot이나 .plt 파일에서 가져온 곡선을 보여줄 수 있게" - pip
+        dict에 'curves'(CurveDefinition 리스트)가 들어있으면 그걸 우선 쓰고
+        (source가 "current"가 아닐 때 GUI가 미리 채워둠), 없으면(기본,
+        "현재 plot") main_cmd_list를 그대로 재사용한다.
 
         1차 구현 범위(간단하지만 실제로 동작하는 것 우선):
         - 크기(size_w/h)는 캔버스 전체 대비 %만 지원. "실제 길이(cm/in)" 직접
@@ -2857,7 +2898,14 @@ class GnuplotGenerator:
           가독성이 떨어지고, main_cmd_list 자체가 이미 마커 없이 넘어옴).
         """
         pip = getattr(plotdef, "pip", None) or {}
-        if not pip.get("enabled") or not main_cmd_list:
+        if not pip.get("enabled"):
+            return
+
+        _override_curves = pip.get("curves")
+        if _override_curves:
+            main_cmd_list = self._curve_cmd_list_for(_override_curves, fmt)
+
+        if not main_cmd_list:
             return
 
         def _num(key, default):
@@ -2886,9 +2934,19 @@ class GnuplotGenerator:
 
         _pip_xmin, _pip_xmax = str(pip.get("xmin", "")).strip(), str(pip.get("xmax", "")).strip()
         _pip_ymin, _pip_ymax = str(pip.get("ymin", "")).strip(), str(pip.get("ymax", "")).strip()
+        # [수정 - 버그] "다른(이미 그려진) plot의 곡선을 보여줄 때" Y 범위를
+        # 안 채우면 메인 plot의 Y범위(전혀 다른 변수 스케일)를 그대로 물려받아
+        # 곡선이 축 밖으로 나가 안 보이던 문제 - X(보통 Time)는 "같은 구간을
+        # 보여준다"는 의미가 있어 그대로 메인을 물려받지만, Y는 다른 소스일
+        # 때 autoscale로 그 곡선 자신의 범위를 새로 계산하게 한다.
         xrange_cmd = f"set xrange [{_pip_xmin}:{_pip_xmax}]" if _pip_xmin and _pip_xmax else (_find_range_line("set xrange") or "set autoscale x")
-        yrange_cmd = f"set yrange [{_pip_ymin}:{_pip_ymax}]" if _pip_ymin and _pip_ymax else (_find_range_line("set yrange") or "set autoscale y")
-        y2range_cmd = _find_range_line("set y2range") or "set autoscale y2"
+        if _pip_ymin and _pip_ymax:
+            yrange_cmd = f"set yrange [{_pip_ymin}:{_pip_ymax}]"
+        elif _override_curves:
+            yrange_cmd = "set autoscale y"
+        else:
+            yrange_cmd = _find_range_line("set yrange") or "set autoscale y"
+        y2range_cmd = "set autoscale y2" if _override_curves else (_find_range_line("set y2range") or "set autoscale y2")
 
         font_scale = _num("font_scale", 0.6)
         if font_scale <= 0:
@@ -2917,6 +2975,14 @@ class GnuplotGenerator:
         lines.append("unset rmargin")
         lines.append("unset tmargin")
         lines.append("unset bmargin")
+        if _override_curves:
+            # [수정 - 버그] "다른(이미 그려진) plot의 곡선을 보여줄 때" 메인
+            # plot이 set xtics/ytics <고정간격>으로 지정해둔 눈금 간격을 그대로
+            # 물려받으면, 스케일이 전혀 다른 변수라 눈금이 과도하게 촘촘하거나
+            # (예: 온도 범위에 압력 기준 2단위 간격) 성기게 나옴 - 이 경우만
+            # gnuplot이 새 데이터 범위에 맞게 스스로 정하도록 auto로 되돌린다.
+            lines.append("set xtics auto")
+            lines.append("set ytics auto")
 
         if pip.get("title_on") and (plotdef.title or "").strip():
             _title_txt = plotdef.title.replace('"', '\\"')
@@ -2928,7 +2994,8 @@ class GnuplotGenerator:
         _tic_size = max(9 * font_scale, 5.0)  # 축 라벨은 지웠으니(위) tic 숫자 크기만 배율 적용, 너무 작아지지 않게 하한
         lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}"')
         lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}"')
-        _uses_y2 = any(getattr(c, "axis", "y1") == "y2" for c in plotdef.curves)
+        _inset_curves = _override_curves or plotdef.curves
+        _uses_y2 = any(getattr(c, "axis", "y1") == "y2" for c in _inset_curves)
         if _uses_y2:
             lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}"')
 
@@ -2953,9 +3020,10 @@ class GnuplotGenerator:
         if pip.get("legend_on"):
             # id 7500대(Legend1 8000대/Legend2 9000대와 안 겹치는 번호)로 inset
             # 전용 legend를 그림 - 위치는 1차 구현에선 "right top" 고정.
-            curve_index_map = {id(c): i for i, c in enumerate(plotdef.curves)}
+            # (다른 plot의 곡선을 보여주는 경우 _inset_curves를 씀)
+            curve_index_map = {id(c): i for i, c in enumerate(_inset_curves)}
             self._render_legend_box(
-                lines, plotdef.curves, "right top", True, 1.0, 7500,
+                lines, _inset_curves, "right top", True, 1.0, 7500,
                 font_scale, 1.0, 1.0, getattr(plotdef, "is_print_mode", False),
                 curve_index_map, plotdef.legend_font,
                 axis_w_in=10.0 * size_w, legend_size=float(plotdef.legend_size or 9),
