@@ -23,6 +23,7 @@ import glob
 import re
 import uuid
 import hashlib
+import copy
 
 from tkinter import ttk
 from tkinter import filedialog
@@ -2531,6 +2532,63 @@ class CathPlotGUI:
             if curves:
                 pip["curves"] = curves
         return pip
+
+    def _normalize_pip_for_animation(self, plotdef):
+        """[추가 - 요청] "PIP+Animation" - PIP는 원/타원 클리핑도 배경 반투명도
+        gnuplot 자체 기능이 아니라 PDF를 다 그린 뒤 PyMuPDF/PIL로 후처리해서
+        만드는데(gnu_generator._apply_pip_clip 참고), Animation은 gnuplot이
+        자기 혼자(do-for 루프) 프레임을 계속 다시 그리는 구조라 프레임마다
+        이 무거운 후처리를 다시 돌릴 방법이 없다(실측: 그러려면 지금처럼
+        "gnuplot 하나가 계속 도는" 구조를 버리고 프레임마다 별도 렌더링을
+        150번 반복해야 함 - 비현실적).
+
+        그래서 Animation에서는:
+        - 원/타원 클리핑은 항상 사각형으로 강제한다(Multi-Plot과 동일한
+          이유·동일한 처리 - 조용히, 경고 없이 강제. 클리핑은 애초에
+          "켜져 있으면 항상 후처리 필요"라 중간값이 없어 물어볼 것도 없음).
+        - 배경 불투명도는 0(완전 투명)이나 100(완전 불투명)이면 후처리가
+          필요 없는 gnuplot 네이티브 경로라 그대로 지원되지만(_render_pip_
+          inset의 _rect_fully_opaque/_rect_no_bg 참고), 그 사이(반투명)면
+          역시 후처리가 필요해 Animation에서는 못 쓴다 - 이 경우에만 사용자
+          에게 메시지로 물어봐서(요청: "반투명인 경우, 메시지를 주고") 완전
+          불투명/완전 투명 중 하나로 결정한다.
+
+        pip이 꺼져 있거나 이미 사각형+0/100이면 plotdef를 그대로 반환한다
+        (불필요한 복제/질문 없음). 사용자가 메시지에서 취소를 고르면 None을
+        반환해 호출부가 애니메이션 시작 자체를 중단하게 한다."""
+        pip = getattr(plotdef, "pip", None)
+        if not pip or not pip.get("enabled"):
+            return plotdef
+
+        _clip_shape = str(pip.get("clip_shape", "rect") or "rect").strip().lower()
+        _opacity_raw = str(pip.get("opacity", "")).strip()
+        try:
+            _opacity = float(_opacity_raw) if _opacity_raw else (100.0 if pip.get("opaque", True) else 0.0)
+        except (TypeError, ValueError):
+            _opacity = 100.0
+        _opacity = max(0.0, min(100.0, _opacity))
+
+        _overrides = {}
+        if _clip_shape != "rect":
+            _overrides["clip_shape"] = "rect"
+        if 0.0 + 1e-6 < _opacity < 100.0 - 1e-6:
+            _choice = messagebox.askyesnocancel(
+                "PIP + Animation",
+                f"PIP 배경이 반투명({_opacity:.0f}%)으로 설정되어 있습니다.\n"
+                "Animation은 매 프레임을 gnuplot이 직접 반복해서 그리는 구조라 "
+                "반투명(부분 합성)은 지원하지 않습니다(완전 불투명/완전 투명 "
+                "둘 중 하나만 저비용으로 가능).\n\n"
+                "완전 불투명으로 표시할까요?\n"
+                "(예: 완전 불투명 / 아니오: 완전 투명 / 취소: 애니메이션 시작 안 함)"
+            )
+            if _choice is None:
+                return None
+            _overrides["opacity"] = 100.0 if _choice else 0.0
+        if not _overrides:
+            return plotdef
+        _new_plotdef = copy.copy(plotdef)
+        _new_plotdef.pip = dict(pip, **_overrides)
+        return _new_plotdef
 
     def open_batch_set_dialog(self):
         """여러 개의 '완전한' Template(*.json - dat 파일명+변수 지정까지 포함)을
@@ -6439,6 +6497,18 @@ class CathPlotGUI:
             # 그 경우는 체크돼 있어도 무시하고 기존처럼 정적으로 그린다.
             # [추가] "Save GIF" 버튼(execute_save_animation_gif)이 이 함수를
             # custom_format="gif"로 불러서 재사용 - 애니메이션 GIF 파일로 저장.
+            _will_animate = (fmt == "gif") or (
+                getattr(self, "animate_var", None) is not None and self.animate_var.get() and fmt == "interactive"
+            )
+            if _will_animate:
+                # [추가 - 요청] "PIP+Animation" - PIP가 켜져 있으면 원/타원
+                # 클리핑/배경 반투명을 Animation이 지원 가능한 형태(사각형+
+                # 완전불투명 또는 완전투명)로 정리한다 - _normalize_pip_for_
+                # animation 참고. 사용자가 반투명 선택 메시지에서 취소를
+                # 고르면 애니메이션 자체를 시작하지 않는다.
+                plotdef = self._normalize_pip_for_animation(plotdef)
+                if plotdef is None:
+                    return
             if fmt == "gif":
                 try:
                     duration_sec = float((self.animate_duration_var.get() or "20").strip())

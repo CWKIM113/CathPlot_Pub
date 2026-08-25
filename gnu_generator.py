@@ -3198,6 +3198,18 @@ class GnuplotGenerator:
             _opacity = 100.0
         _opacity = max(0.0, min(100.0, _opacity))
         _rect_fully_opaque = (_clip_shape == "rect") and (_opacity >= 100.0 - 1e-6)
+        # [추가 - 발견] "opacity=0(완전 투명) + rect도 후처리 없이 빠른 경로로" -
+        # 원래는 opacity<100이면 전부(0 포함) _apply_pip_clip 후처리(gnuplot
+        # 서브프로세스 재실행 + 300dpi 전체 페이지 래스터 2장 + PIL 합성)를
+        # 타게 만들어뒀는데, opacity=0에서는 그 후처리 결과가 수학적으로
+        # "배경 오브젝트를 아예 안 그리고 잉크만 메인 plot 위에 직접 겹쳐
+        # 그리는" 이 네이티브 경로와 항상 정확히 같은 픽셀 결과가 됨
+        # (Image.blend(beneath, white, 0.0) == beneath 그 자체이므로) - 굳이
+        # 무거운 후처리를 거칠 이유가 없어 여기서 걸러낸다. 이러면 Animation
+        # 처럼 프레임마다 무거운 후처리를 도저히 감당 못 하는 경우에도 "rect +
+        # 완전 불투명/완전 투명" 두 값은 항상 저비용으로 지원 가능해진다
+        # (정지 화면에서도 부가 이득 - 벡터 그대로 유지되고 렌더링도 빨라짐).
+        _rect_no_bg = (_clip_shape == "rect") and (_opacity <= 0.0 + 1e-6)
         if _rect_fully_opaque:
             # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - id 7100은
             # annotation(1번대)/Legend1(8000대)/Legend2(9000대)와 안 겹치도록
@@ -3207,6 +3219,11 @@ class GnuplotGenerator:
                 f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
                 f'behind fc rgb "white" fillstyle solid 1.0 border lc rgb "black" lw 1'
             )
+        elif _rect_no_bg:
+            # 배경 오브젝트 자체를 안 그림 - 뒤이어 그려질 inset의 곡선/눈금/
+            # 라벨(잉크)이 메인 plot 위에 그대로 겹쳐 보임(기존 opaque=False
+            # 네이티브 동작과 동일).
+            pass
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
             # 있도록 항상 흰 배경만(테두리 없이) 깐다 - 최종 배경 불투명도/
@@ -3256,14 +3273,14 @@ class GnuplotGenerator:
         lines.append("unset object")
 
         # [추가 - 요청] "원/타원으로 클리핑" + "배경 불투명도 슬라이더" -
-        # _rect_fully_opaque가 아니면, 지금까지 그린 건 아직 "흰 배경 위에
-        # 확대 plot이 그려진 사각 박스"일 뿐이고 실제 최종 모습(클리핑 모양,
-        # 배경 불투명도)은 gnuplot이 아니라 create_script가 PDF를 다 그린
-        # 뒤 PyMuPDF/PIL로 후처리(_apply_pip_clip)해서 만든다(gnuplot
-        # 자체에는 비사각형 클리핑도 배경 반투명 합성도 없음) - 그 후처리에
-        # 필요한 정보(박스 위치/크기, 클리핑 모양·반지름, 배경 불투명도)를
-        # 돌려준다.
-        if not _rect_fully_opaque:
+        # _rect_fully_opaque/_rect_no_bg 둘 다 아니면(=중간 반투명 또는 원/
+        # 타원 모양), 지금까지 그린 건 아직 "흰 배경 위에 확대 plot이 그려진
+        # 사각 박스"일 뿐이고 실제 최종 모습(클리핑 모양, 배경 불투명도)은
+        # gnuplot이 아니라 create_script가 PDF를 다 그린 뒤 PyMuPDF/PIL로
+        # 후처리(_apply_pip_clip)해서 만든다(gnuplot 자체에는 비사각형
+        # 클리핑도 배경 반투명 합성도 없음) - 그 후처리에 필요한 정보(박스
+        # 위치/크기, 클리핑 모양·반지름, 배경 불투명도)를 돌려준다.
+        if not (_rect_fully_opaque or _rect_no_bg):
             # [추가] annotation의 Circle과 같은 관례 - Ry를 안 주면(빈 값)
             # Rx를 그대로 써서 원이 된다. clip_shape=="circle"이면 항상
             # Rx==Ry(원)로 강제한다. rect 모양(반투명만 필요한 경우)은
@@ -4156,8 +4173,8 @@ class GnuplotGenerator:
             "set encoding utf8",
             "set term unknown",
         ]
-        self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations,
-                                   arrows=arrows, circles=circles, panel_scale=_size_scale, fmt="interactive")
+        main_cmd_list = self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations,
+                                                    arrows=arrows, circles=circles, panel_scale=_size_scale, fmt="interactive")
 
         plot_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "plot \\"), None)
         if plot_idx is None:
@@ -4172,6 +4189,60 @@ class GnuplotGenerator:
             expr = m.group(1)
             return f"using (({expr})<=thresh ? ({expr}) : 1/0):{m.group(2)}"
         animated_curve_lines = [re.sub(r"using \(([^)]+)\):(\d+)", _wrap_threshold, ln) for ln in static_curve_lines]
+
+        # [추가 - 요청] "PIP+Animation" - PIP가 켜져 있으면(cathplot_gui의
+        # _normalize_pip_for_animation이 미리 사각형+완전불투명/완전투명으로
+        # 정리해서 넘겨줌 - 반투명/원·타원은 PDF 후처리가 필요해 프레임마다
+        # 돌릴 수 없으므로 애초에 여기 도달하지 않음) inset도 메인과 "같은
+        # X(시간)값"(thresh, 실제 데이터 값 그대로 - 정규화된 0~1 비율이
+        # 아님)으로 threshold를 걸어 같이 진행되게 한다 - 같은 thresh를 그대로
+        # 재사용하므로 PIP 자신의 xmin/xmax(확대 구간)가 메인과 달라도 그
+        # 구간 안에서 자연스럽게 독립적으로 진행됨(보이는 창만 다를 뿐 "지금
+        # 시각까지 그리기"라는 조건 자체는 항상 동일).
+        #
+        # [구현] _render_pip_inset은 자기가 받은 lines 인자의 끝에서부터
+        # 거꾸로 "set lmargin at screen ..." 등을 찾아 축 프레임을 알아내므로
+        # (_find_last_margin), 이미 실제 마진이 채워진 지금 시점의 lines를
+        # 복사해서 넘기면(원본은 안 건드림) 정확한 위치/크기를 그대로 얻으면서
+        # 도, 새로 덧붙는 부분(inset 블록)만 따로 떼어내 나중에 "매 프레임
+        # 반복 실행할 조각"으로 재사용할 수 있다.
+        _pip_inset_lines = None  # None이면 PIP 없음/커브 없음 - 애니메이션에 인셋을 안 넣음
+        if getattr(plotdef, "pip", None) and plotdef.pip.get("enabled"):
+            _pip_probe_lines = list(lines)
+            _probe_len_before = len(_pip_probe_lines)
+            self._render_pip_inset(plotdef, _pip_probe_lines, main_cmd_list, "interactive")
+            _pip_block = _pip_probe_lines[_probe_len_before:]
+            _pip_plot_idx = next((i for i, ln in enumerate(_pip_block) if ln.strip() == "plot \\"), None)
+            if _pip_plot_idx is not None:
+                # "plot \\" 이전(set origin/size/margin/배경 오브젝트/축
+                # 라벨 등)은 thresh와 무관한 정적 설정이라 원본 그대로 매
+                # 프레임 반복해도 안전 - "plot \\" 이후(곡선 명령 + 뒤이은
+                # set origin 0,0/unset object 등 원위치 복구)만 메인과 동일한
+                # 정규식으로 thresh를 건다(복구 명령들은 using절이 없어 그대로
+                # 통과함).
+                _pip_inset_lines = (
+                    _pip_block[:_pip_plot_idx]
+                    + [re.sub(r"using \(([^)]+)\):(\d+)", _wrap_threshold, ln) for ln in _pip_block[_pip_plot_idx:]]
+                )
+                # [수정 - 버그 발견] "두 번째 프레임부터 메인 plot이 인셋의
+                # 좁은 마진/확대구간 안에 그려짐" - gnuplot의 lmargin/rmargin/
+                # tmargin/bmargin(at screen)과 xrange/yrange는 origin/size와
+                # 달리 "set" 이후 계속 남아있는 세션 전역 상태라, 인셋이 자기
+                # 값(작은 마진 + pip.xmin/xmax 확대구간)으로 바꿔놓고 나면
+                # (set origin 0,0으로 되돌리는 것과는 별개로) 되돌리는 코드가
+                # 없어서 다음 프레임의 메인 "plot \\"가 인셋의 마진/구간 그대로
+                # 그려지는(실제로 실측 - 바깥 축 tic이 메인의 0~21이 아니라
+                # 인셋의 10~15로 나옴) 문제를 발견함 - 인셋 블록 맨 끝에 메인
+                # plot 자신의 마진/xrange/yrange(_build_plot_commands가 위에서
+                # 이미 한 번 세팅해둔 것, thresh와 무관한 정적 값)를 다시
+                # 그대로 찍어 복구한다.
+                _main_state_lines = [
+                    ln for ln in lines[:plot_idx]
+                    if ln.startswith(("set lmargin at screen", "set rmargin at screen",
+                                       "set tmargin at screen", "set bmargin at screen",
+                                       "set xrange", "set yrange", "set y2range"))
+                ]
+                _pip_inset_lines += _main_state_lines
 
         lines.append("xmin_anim = GPVAL_X_MIN")
         lines.append("xmax_anim = GPVAL_X_MAX")
@@ -4198,6 +4269,13 @@ class GnuplotGenerator:
             lines.append(f"set output '{gif_path.replace(chr(92), '/')}'")
             lines.append("do for [_frame_i=0:n_frames_anim] {")
             lines.append("    thresh = xmin_anim + (xmax_anim - xmin_anim) * _frame_i / n_frames_anim")
+            # [추가 - 요청] "PIP+Animation" - inset을 같이 그릴 때만 이 프레임을
+            # multiplot으로 묶는다(메인 곡선 plot 다음에 인셋 곡선 plot을 이어
+            # 그려 한 프레임에 합성 - gif animate 터미널에서 set multiplot ...
+            # unset multiplot 블록 전체가 프레임 하나로 저장되는 것을 실측
+            # 확인함). PIP가 없으면 기존과 완전히 동일(불필요한 multiplot 없음).
+            if _pip_inset_lines:
+                lines.append("    set multiplot")
             lines.append("    set arrow 9999 from thresh, graph 0 to thresh, graph 1 nohead front lw 1.5 lc rgb \"purple\" dashtype 2")
             # [수정] "Progress 문구가 legend/curve와 겹쳐 보임" - graph
             # 좌표(축 안쪽)라 legend 위치나 curve 데이터 범위에 따라 겹칠 수
@@ -4205,6 +4283,9 @@ class GnuplotGenerator:
             # 왼쪽 아래 여백(제목/legend/curve가 올 일이 없는 자리)에 고정한다.
             lines.append("    set label 9998 sprintf(\"Progress %.0f%%  (X=%.4g)\", 100.0*_frame_i/n_frames_anim, thresh) at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
             lines.extend(animated_curve_lines)
+            if _pip_inset_lines:
+                lines.extend(_pip_inset_lines)
+                lines.append("    unset multiplot")
             lines.append("}")
             lines.append("set output")
         else:
@@ -4318,6 +4399,26 @@ class GnuplotGenerator:
             # 보다 큰 값이 감지되면(=그 뒤로 버튼이 한 번 더 눌렸다는 뜻,
             # Exit이 아니라면 Resume) 처음(_frame_i=0)부터 다시 재생하도록
             # 전체를 while(1) 바깥 루프로 한 번 더 감싼다.
+            # [추가 - 요청] "PIP+Animation" - inset이 있으면 매 프레임을
+            # multiplot으로 묶는다(메인 곡선 다음에 인셋 곡선을 이어 그려 한
+            # 프레임에 합성). [주의] gnuplot의 bare "replot"은 multiplot
+            # 시퀀스 전체가 아니라 "가장 최근 plot 명령 하나"만 다시 그리는
+            # 것으로 알려져 있어(공식 문서에서도 multiplot과 함께 쓰지 말라고
+            # 권고) - 루프가 멈춘 뒤 "Progress 100%" 정지 화면을 보여줄 때
+            # bare replot을 그대로 쓰면 인셋만 남고 메인 plot이 사라질 위험이
+            # 있음(실측 확인 전 방어적으로 회피). 그래서 PIP가 있을 때는
+            # "루프 안에서 한 프레임을 그리는 것과 완전히 동일한 절차"를
+            # 함수로 만들어 정지 화면에도 그대로 재사용한다(항상 안전 -
+            # multiplot 유무와 무관하게 항상 옳음).
+            def _emit_frame(label_text_expr):
+                if _pip_inset_lines:
+                    lines.append("    set multiplot")
+                lines.append(f"    set label 9998 {label_text_expr} at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
+                lines.extend(animated_curve_lines)
+                if _pip_inset_lines:
+                    lines.extend(_pip_inset_lines)
+                    lines.append("    unset multiplot")
+
             lines.append("click_seq = 0")
             lines.append("while (1) {")
             lines.append("do for [_frame_i=0:n_frames_anim] {")
@@ -4327,14 +4428,13 @@ class GnuplotGenerator:
             lines.append("    if (exit_anim) { break }")
             lines.append("    thresh = xmin_anim + (xmax_anim - xmin_anim) * _frame_i / n_frames_anim")
             lines.append("    set arrow 9999 from thresh, graph 0 to thresh, graph 1 nohead front lw 1.5 lc rgb \"purple\" dashtype 2")
-            lines.append(f"    set label 9998 sprintf(\"Progress %.0f%%  (X=%.4g)  {_help_text}\", 100.0*_frame_i/n_frames_anim, thresh) at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
-            lines.extend(animated_curve_lines)
+            _emit_frame(f'sprintf("Progress %.0f%%  (X=%.4g)  {_help_text}", 100.0*_frame_i/n_frames_anim, thresh)')
             lines.append("    pause frame_pause_anim")
             lines.append("}")
             lines.append("if (exit_anim) { break }")
             lines.append("unset arrow 9999")
-            lines.append(f"set label 9998 sprintf(\"Progress 100%%  {_help_text} - Resume으로 처음부터 재생\") at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
-            lines.append("replot")
+            lines.append("thresh = xmax_anim")
+            _emit_frame(f'sprintf("Progress 100%%  {_help_text} - Resume으로 처음부터 재생")')
             lines.append("_finished_seq = click_seq")
             lines.append("set print _anim_status_path")
             lines.append("print sprintf(\"finished=%d\", _finished_seq)")
@@ -4343,8 +4443,8 @@ class GnuplotGenerator:
             lines.append("if (exit_anim) { break }")
             lines.append("}")
             lines.append("unset arrow 9999")
-            lines.append(f"set label 9998 sprintf(\"Progress 100%%  {_help_text}\") at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
-            lines.append("replot")
+            lines.append("thresh = xmax_anim")
+            _emit_frame(f'sprintf("Progress 100%%  {_help_text}")')
             lines.append("pause mouse close")
 
         script_text = "\n".join(lines)
@@ -6897,7 +6997,12 @@ class GnuplotGenerator:
                     )
                 except (TypeError, ValueError):
                     _mp_opacity_val = 100.0
-                if _mp_opacity_val < 100.0 - 1e-6:
+                # [수정] opacity=0(완전 투명)은 clip_shape="rect"일 때 후처리가
+                # 필요 없는 빠른 경로가 됐으므로(_render_pip_inset의 _rect_no_bg
+                # 참고 - 배경 오브젝트를 아예 안 그려 M-P 페이지 재구성과 얽힐
+                # 일이 없음), 강제 대상에서 뺀다. 0도 100도 아닌(진짜 중간)
+                # 반투명값만 여전히 강제한다.
+                if 0.0 + 1e-6 < _mp_opacity_val < 100.0 - 1e-6:
                     _mp_overrides["opacity"] = 100.0
                     _mp_warn_targets.append("배경 반투명 → 불투명")
                 if _mp_overrides:
