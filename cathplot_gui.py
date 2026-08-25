@@ -634,11 +634,17 @@ class CathPlotGUI:
         # PlotDefinition.pip(dict)와 1:1로 대응 - _resolve_pip_config()가
         # 이 tk 변수들을 그 dict로 변환한다.
         self.pip_enabled_var = tk.BooleanVar(value=False)
-        self.pip_pos_x_var = tk.StringVar(value="60")     # 좌측 상단 모서리 X(%, 왼쪽=0)
-        self.pip_pos_y_var = tk.StringVar(value="95")     # 좌측 상단 모서리 Y(%, 아래=0/위=100)
+        # [수정 - 요청] "위치입력이 좌상단인데 legend/annotation은 좌하단
+        # 기준을 씀 - 통일" - 앵커를 좌측 하단으로 바꾸고, 기준도 캔버스
+        # 전체가 아니라 큰 plot의 실제 축 프레임(axis frame)으로 통일
+        # (gnu_generator._render_pip_inset 참고). 기본값 pos_y도 기존
+        # 95(위 모서리 기준)와 시각적으로 같은 자리가 되도록 60(=95-기존
+        # size_h 기본값 35)으로 같이 조정.
+        self.pip_pos_x_var = tk.StringVar(value="60")     # 좌측 하단 모서리 X(%, 축 프레임 기준, 왼쪽=0)
+        self.pip_pos_y_var = tk.StringVar(value="60")     # 좌측 하단 모서리 Y(%, 축 프레임 기준, 아래=0/위=100)
         self.pip_size_w_var = tk.StringVar(value="35")
         self.pip_size_h_var = tk.StringVar(value="35")
-        # [추가 - 요청] 크기 단위: "%"(기본, 캔버스 전체 대비 비율) 또는
+        # [추가 - 요청] 크기 단위: "%"(기본, 축 프레임 대비 비율) 또는
         # "in"/"cm"(실제 물리적 길이 - gnu_generator._render_pip_inset이
         # 터미널 명령의 실제 캔버스 크기로 환산함)
         self.pip_size_unit_var = tk.StringVar(value="%")
@@ -2332,11 +2338,14 @@ class CathPlotGUI:
             pltfile_label.config(text=os.path.basename(self.pip_pltfile_path_var.get()), foreground="black")
 
         # --- 위치/크기 ---
-        geo_frame = ttk.LabelFrame(dlg, text="위치(캔버스 대비 %) / 크기")
+        # [수정 - 요청] "기준이 좌상단/캔버스 전체인데 legend/annotation은
+        # 좌하단/축 프레임 기준" - 라벨도 실제 동작(축 프레임 기준, 좌측
+        # 하단 모서리)에 맞게 수정.
+        geo_frame = ttk.LabelFrame(dlg, text="위치(축 프레임 대비 %) / 크기")
         geo_frame.pack(fill="x", padx=10, pady=5)
         pos_row = ttk.Frame(geo_frame)
         pos_row.pack(fill="x", padx=5, pady=3)
-        ttk.Label(pos_row, text="좌측 상단 X(%):").pack(side="left")
+        ttk.Label(pos_row, text="좌측 하단 X(%):").pack(side="left")
         ttk.Entry(pos_row, textvariable=self.pip_pos_x_var, width=6).pack(side="left", padx=(4, 12))
         ttk.Label(pos_row, text="Y(%):").pack(side="left")
         ttk.Entry(pos_row, textvariable=self.pip_pos_y_var, width=6).pack(side="left", padx=(4, 0))

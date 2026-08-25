@@ -550,13 +550,13 @@ class PlotDefinition:
     # get()의 기본값으로 항상 "꺼짐"으로 안전하게 해석되므로 기존 Template(이
     # 필드가 아예 없는 json)을 불러와도 문제 없음.
     #   enabled: bool - PIP 사용 여부
-    #   pos_x, pos_y: str(%, 0~100) - 작은 plot의 좌측 상단 모서리 위치
-    #     (기존 annotation/legend와 같은 관례: x는 왼쪽=0/오른쪽=100,
-    #     y는 아래=0/위=100 기준 - "왼쪽 위 모서리"이므로 y는 그 모서리의
-    #     세로 위치를 의미함)
-    #   size_w, size_h: str(%, 0~100) - 큰 plot 전체 캔버스 대비 작은 plot의
-    #     가로/세로 크기(요청하신 "실제 길이" 지정은 1차 구현 범위 밖 - 아래
-    #     _render_pip_inset 주석 참고)
+    #   pos_x, pos_y: str(%, 0~100) - 작은 plot의 좌측 하단 모서리 위치, 큰
+    #     plot의 실제 축 프레임(axis frame - 제목/축 제목/legend용 여백은
+    #     제외) 기준(기존 annotation/legend와 같은 관례: x는 왼쪽=0/오른쪽=
+    #     100, y는 아래=0/위=100, 앵커도 "좌측 하단"으로 통일)
+    #   size_w, size_h: str(%, 0~100) - 큰 plot의 실제 축 프레임(axis frame)
+    #     대비 작은 plot의 가로/세로 크기(size_unit이 "in"/"cm"이면 대신
+    #     실제 물리적 길이 - 아래 _render_pip_inset 주석 참고)
     #   xmin, xmax, ymin, ymax: str - 작은 plot에 적용할 확대 구간(X, Y1 공용).
     #     비워두면 메인 plot에 실제로 적용된 범위를 그대로 씀(Y2는 1차 구현
     #     범위 밖 - 메인과 항상 동일)
@@ -2893,11 +2893,27 @@ class GnuplotGenerator:
 
         [추가 - 요청] "Multi-Plot(M-P)의 한 칸 안에도 PIP를 그릴 수 있게" -
         parent_box=(px, py, pw, ph)(전체 캔버스 기준 screen fraction, gnuplot
-        origin/size와 같은 단위)를 주면, pos_x/pos_y(%)와 size_w/size_h(%)를
-        "전체 캔버스"가 아니라 이 박스(=M-P의 그 칸) 기준으로 해석한다.
-        create_multiplot_script가 각 칸의 실제 위치(cell_positions_in)를 이미
-        계산해두므로, 그 값을 page_w/page_h로 나눠 넘겨주기만 하면 된다.
-        기본값(None)은 (0,0,1,1) = 전체 캔버스(단일 plot과 동일).
+        origin/size와 같은 단위)를 주면 그 박스(=M-P의 그 칸) 안에서
+        기준(axis_box, 아래 참고)을 다시 찾는다. create_multiplot_script가
+        각 칸의 실제 위치(cell_positions_in)를 이미 계산해두므로, 그 값을
+        page_w/page_h로 나눠 넘겨주기만 하면 된다. 기본값(None)은
+        (0,0,1,1) = 전체 캔버스(단일 plot과 동일).
+
+        [수정 - 요청] "위치/크기 기준이 전체 plot(제목·범례 여백 포함)인지
+        axis frame인지 통일이 필요하다" - 기존엔 pos_x/pos_y(%)와 size_w/
+        size_h(%)가 "전체 캔버스(또는 M-P 칸) 전체"를 기준으로 했는데, 이러면
+        실측 결과 작은 plot이 축(axis frame) 밖으로 삐져나가 title/xlabel
+        여백 자리를 침범하는 경우가 있었음 - 메인(호스트) plot이 이미
+        `lines`에 남겨둔 실제 축 프레임 마진(set lmargin/rmargin/tmargin/
+        bmargin at screen ...)을 그대로 읽어와 axis_box로 쓴다(못 찾으면
+        parent_box로 폴백). pos_x/pos_y/size_w/size_h(%)는 이제 이 axis_box
+        기준.
+        [수정 - 요청] "pos 입력이 박스의 좌측 '상단' 모서리인데, legend/
+        annotation은 좌측 '하단' 기준을 써왔음 - 통일" - pos_x/pos_y가
+        이제 박스의 좌측 하단(bottom-left) 모서리 위치를 가리킨다(annotation/
+        legend와 같은 "아래=0/위=100" 좌표계와 앵커 모서리까지 일치).
+        default pos_y도 기존 95(위 모서리가 거의 맨 위)와 시각적으로 같은
+        자리가 되도록 60(=95-기존 size_h 기본값 35)으로 같이 조정했다.
 
         1차 구현 범위(간단하지만 실제로 동작하는 것 우선):
         - 확대 구간은 X/Y1에만 적용됨(Y2는 메인과 항상 동일 - 별도 UI 없음).
@@ -2917,6 +2933,29 @@ class GnuplotGenerator:
 
         pb_x, pb_y, pb_w, pb_h = parent_box if parent_box else (0.0, 0.0, 1.0, 1.0)
 
+        # [추가] 호스트 plot이 이미 emit해둔 실제 축 프레임 경계(절대 screen
+        # 좌표)를 찾는다 - 여러 개 있으면(M-P는 칸마다 하나씩) 가장 마지막
+        # 것이 "지금 이 칸"의 값이므로 뒤에서부터 찾는다. 못 찾으면(이론상
+        # 발생하면 안 되지만 안전하게) parent_box를 그대로 axis_box로 쓴다.
+        def _find_last_margin(prefix):
+            val = None
+            for _l in lines:
+                if _l.startswith(prefix):
+                    val = _l
+            if val is None:
+                return None
+            _m = re.search(r"at screen\s+([-\d.eE]+)", val)
+            return float(_m.group(1)) if _m else None
+
+        _axis_l = _find_last_margin("set lmargin at screen")
+        _axis_r = _find_last_margin("set rmargin at screen")
+        _axis_t = _find_last_margin("set tmargin at screen")
+        _axis_b = _find_last_margin("set bmargin at screen")
+        if None not in (_axis_l, _axis_r, _axis_t, _axis_b) and _axis_r > _axis_l and _axis_t > _axis_b:
+            ab_x, ab_y, ab_w, ab_h = _axis_l, _axis_b, _axis_r - _axis_l, _axis_t - _axis_b
+        else:
+            ab_x, ab_y, ab_w, ab_h = pb_x, pb_y, pb_w, pb_h
+
         def _num(key, default):
             try:
                 v = pip.get(key, "")
@@ -2924,10 +2963,10 @@ class GnuplotGenerator:
             except (TypeError, ValueError):
                 return default
 
-        # pos_x/pos_y(%)는 항상 "이 박스(parent_box) 안에서"의 상대 위치 -
-        # 단일 plot이면 박스가 캔버스 전체(pb=0,0,1,1)라 기존과 동일한 의미.
+        # pos_x/pos_y(%)는 항상 "axis_box(호스트 plot의 실제 축 프레임) 안에서"의
+        # 상대 위치 - 박스의 좌측 "하단" 모서리 기준(annotation/legend와 통일).
         _local_pos_x = _num("pos_x", 60.0) / 100.0
-        _local_pos_y = _num("pos_y", 95.0) / 100.0  # 박스 안 좌측 "위" 모서리 세로 위치(위=100/아래=0)
+        _local_pos_y = _num("pos_y", 60.0) / 100.0
 
         # [추가 - 요청] 크기(size_w/h)를 %뿐 아니라 실제 물리적 길이(cm/in)로도
         # 지정할 수 있게 - pip["size_unit"]이 "%"(기본)면 이 박스(parent_box)
@@ -2954,39 +2993,40 @@ class GnuplotGenerator:
                 size_w_page = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0
                 size_h_page = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0
         else:
-            # %는 parent_box(단일 plot이면 캔버스 전체) 기준 비율.
-            size_w_page = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0 * pb_w
-            size_h_page = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0 * pb_h
+            # %는 axis_box(호스트 plot의 실제 축 프레임) 기준 비율.
+            size_w_page = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0 * ab_w
+            size_h_page = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0 * ab_h
 
-        # [추가 - 요청] "M-P 칸에 넣었을 때 그 칸보다 크면(넘치면) 칸에 맞게
-        # 줄이고 메시지를 남길 것" - parent_box가 캔버스 전체보다 작을 때만
-        # (=M-P의 한 칸일 때만) 의미 있는 제약이라, 그 경우에만 확인한다.
-        # 여유 없이 딱 맞추면 옆 칸과 붙어 보일 수 있어 90%를 상한으로 둠.
+        # [수정 - 요청] "축 프레임보다 크면(넘치면) 맞게 줄이고 메시지를 남길
+        # 것" - 기준이 axis_box로 바뀌면서 단일 plot에서도 축보다 큰 PIP를
+        # 지정하면(예: size_w=90%) 실제로 축 밖(title/label 여백)을 침범할 수
+        # 있게 됐으므로, M-P뿐 아니라 항상 이 제약을 적용한다. 여유 없이 딱
+        # 맞추면 축 경계에 붙어 보일 수 있어 90%를 상한으로 둠.
         _MAX_FRAC = 0.9
-        _max_w_page = pb_w * _MAX_FRAC
-        _max_h_page = pb_h * _MAX_FRAC
+        _max_w_page = ab_w * _MAX_FRAC
+        _max_h_page = ab_h * _MAX_FRAC
         _size_shrink = 1.0
         if size_w_page > _max_w_page or size_h_page > _max_h_page:
             _size_shrink = min(_max_w_page / size_w_page if size_w_page > _max_w_page else 1.0,
                                 _max_h_page / size_h_page if size_h_page > _max_h_page else 1.0)
             size_w_page *= _size_shrink
             size_h_page *= _size_shrink
-            if parent_box is not None:
-                _pip_name = (plotdef.title or "plot").strip() or "plot"
-                self.warnings.append(
-                    f"'{_pip_name}'의 PIP 크기가 Multi-Plot 칸보다 커서 칸에 맞게 자동으로 줄였습니다."
-                )
+            _pip_name = (plotdef.title or "plot").strip() or "plot"
+            self.warnings.append(
+                f"'{_pip_name}'의 PIP 크기가 축 프레임보다 커서 맞게 자동으로 줄였습니다."
+            )
 
         size_w, size_h = size_w_page, size_h_page
 
-        # 위치도 parent_box 기준(로컬 0~1)을 캔버스 전체 기준(전역 0~1)으로 변환
-        origin_x = pb_x + _local_pos_x * pb_w
-        top_y = pb_y + _local_pos_y * pb_h
-        origin_y = top_y - size_h  # gnuplot의 origin은 항상 패널의 "아래" 모서리 기준
-        # 박스(parent_box) 밖으로 나가면 안 보이거나 옆 칸을 침범하니, 그
-        # 박스 안쪽으로 clamp(단일 plot이면 박스=캔버스 전체와 동일).
-        origin_x = min(max(origin_x, pb_x), max(pb_x + pb_w - size_w, pb_x))
-        origin_y = min(max(origin_y, pb_y), max(pb_y + pb_h - size_h, pb_y))
+        # 위치도 axis_box 기준(로컬 0~1)을 캔버스 전체 기준(전역 0~1)으로 변환 -
+        # pos_x/pos_y는 이제 박스의 좌측 "하단" 모서리이므로 origin(항상 패널의
+        # 아래 모서리 기준)과 그대로 일치해 별도 변환이 필요 없다.
+        origin_x = ab_x + _local_pos_x * ab_w
+        origin_y = ab_y + _local_pos_y * ab_h
+        # 박스(axis_box) 밖으로 나가면 안 보이거나 옆 칸을 침범하니, 그
+        # 박스 안쪽으로 clamp(단일 plot이면 박스=호스트 축 프레임).
+        origin_x = min(max(origin_x, ab_x), max(ab_x + ab_w - size_w, ab_x))
+        origin_y = min(max(origin_y, ab_y), max(ab_y + ab_h - size_h, ab_y))
 
         def _find_range_line(prefix):
             for _l in lines:
@@ -3064,13 +3104,34 @@ class GnuplotGenerator:
         # 절대좌표)로 직접 지정해두는데, 이 상태를 그대로 두면 inset이 아래에서
         # set origin/size로 작은 영역을 지정해도 gnuplot이 그 절대 마진을 그대로
         # 따라가 inset 영역 밖(사실상 메인 plot과 거의 같은 자리)에 축을 그려서,
-        # 지정한 작은 박스 안에는 아무것도 안 보이던 원인이었음(실측: PDF에
-        # inset이 아예 안 보임). auto 마진으로 되돌려 origin/size 박스 안에서
-        # 새로 계산되게 한다.
-        lines.append("unset lmargin")
-        lines.append("unset rmargin")
-        lines.append("unset tmargin")
-        lines.append("unset bmargin")
+        # 지정한 작은 박스 안에는 아무것도 안 보이던 원인이었었음(실측: PDF에
+        # inset이 아예 안 보임) - 그래서 원래는 auto로 되돌렸었는데, 실측해보니
+        # gnuplot의 auto 마진은 작은 박스 크기에 비례해서 줄지 않아(문자 크기
+        # 기준 고정 여백에 가까움) 상하좌우에 넓은 빈 공간이 남고 실제 축(zoom
+        # 데이터가 보이는 부분)은 박스의 절반 정도만 차지하는 문제가 있었음
+        # ("작은 plot을 크게 잡으니 오히려 확대된 부분은 작게 보인다"는 요청) -
+        # auto 대신 이 박스(origin_x/y, size_w/h) 안에서 직접 절대 여백을
+        # 계산해 최소화한다. Plot Title/Axis Title이 꺼져 있으면(tic 숫자만
+        # 필요) 여백을 더 좁게, 켜져 있으면 그 글자가 겹치지 않을 정도로만
+        # 살짝 넓힌다(정확한 텍스트 폭 계산 대신 실측 기반 고정 비율 - 이
+        # 상태로 실제 렌더링해 겹침/잘림 없음 확인).
+        _title_shown = bool(pip.get("title_on")) and bool((plotdef.title or "").strip())
+        _axis_titles_shown = bool(pip.get("axis_title_on"))
+        _inset_top_frac = 0.20 if _title_shown else 0.05
+        _inset_bottom_frac = 0.22 if _axis_titles_shown else 0.13
+        _inset_left_frac = 0.26 if _axis_titles_shown else 0.15
+        if _uses_y2:
+            _inset_right_frac = 0.24 if _axis_titles_shown else 0.13
+        else:
+            _inset_right_frac = 0.04
+        _inset_lmargin = origin_x + _inset_left_frac * size_w
+        _inset_rmargin = origin_x + size_w - _inset_right_frac * size_w
+        _inset_tmargin = origin_y + size_h - _inset_top_frac * size_h
+        _inset_bmargin = origin_y + _inset_bottom_frac * size_h
+        lines.append(f"set lmargin at screen {_inset_lmargin:.4f}")
+        lines.append(f"set rmargin at screen {_inset_rmargin:.4f}")
+        lines.append(f"set tmargin at screen {_inset_tmargin:.4f}")
+        lines.append(f"set bmargin at screen {_inset_bmargin:.4f}")
         if _override_curves:
             # [수정 - 버그] "다른(이미 그려진) plot의 곡선을 보여줄 때" 메인
             # plot이 set xtics/ytics <고정간격>으로 지정해둔 눈금 간격을 그대로
