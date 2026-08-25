@@ -542,6 +542,30 @@ class PlotDefinition:
     y1fmt: str = "Normal"
     y2fmt: str = "Normal"
 
+    # [추가 - 요청] "PIP(Picture-in-Picture) - 작은 plot을 큰 plot 안에" - 이
+    # plot 자신의 속성 하나로 취급한다(Multi-Plot처럼 별도 plot을 조합하는 게
+    # 아니라, annotations/legend처럼 이 PlotDefinition에 딸린 설정 - Template
+    # Save/Load와 Batch Set/Queue가 이미 이 객체 전체를 통째로 저장/복제하므로
+    # 별도 배선 없이 자동으로 같이 저장·복제됨). 키가 없으면(dict가 비어있으면)
+    # get()의 기본값으로 항상 "꺼짐"으로 안전하게 해석되므로 기존 Template(이
+    # 필드가 아예 없는 json)을 불러와도 문제 없음.
+    #   enabled: bool - PIP 사용 여부
+    #   pos_x, pos_y: str(%, 0~100) - 작은 plot의 좌측 상단 모서리 위치
+    #     (기존 annotation/legend와 같은 관례: x는 왼쪽=0/오른쪽=100,
+    #     y는 아래=0/위=100 기준 - "왼쪽 위 모서리"이므로 y는 그 모서리의
+    #     세로 위치를 의미함)
+    #   size_w, size_h: str(%, 0~100) - 큰 plot 전체 캔버스 대비 작은 plot의
+    #     가로/세로 크기(요청하신 "실제 길이" 지정은 1차 구현 범위 밖 - 아래
+    #     _render_pip_inset 주석 참고)
+    #   xmin, xmax, ymin, ymax: str - 작은 plot에 적용할 확대 구간(X, Y1 공용).
+    #     비워두면 메인 plot에 실제로 적용된 범위를 그대로 씀(Y2는 1차 구현
+    #     범위 밖 - 메인과 항상 동일)
+    #   title_on, legend_on: bool - 작은 plot에 Plot Title/Legend를 그릴지
+    #   font_scale: str - 메인 plot 폰트 크기 대비 배율(예: "0.6")
+    #   opaque: bool - 켜면 작은 plot 뒤에 흰 배경을 깔아 메인 plot을 가림,
+    #     끄면 투명(메인 plot의 곡선이 작은 plot 배경으로 비쳐 보임)
+    pip: dict = field(default_factory=dict)
+
 class GnuplotGenerator:
 
     def __init__(self, plot_dir=None):
@@ -2811,6 +2835,154 @@ class GnuplotGenerator:
             lines.append("unset label")
             lines.append("unset arrow")
 
+        # [추가 - 요청] PIP(부분 확대) inset이 메인 plot과 정확히 같은 curve
+        # using/색상/스타일 표현식을 재사용할 수 있도록 반환한다(마커는 제외 -
+        # _render_pip_inset 참고). 기존 호출부는 반환값을 받지 않으므로(단순히
+        # 버려짐) 아무 영향 없음.
+        return cmd_list
+
+    def _render_pip_inset(self, plotdef, lines, main_cmd_list, fmt):
+        """[추가 - 요청] "작은 plot을 큰 plot 안에(PIP)" - 메인 plot을 이미 다
+        그린 뒤(lines에 'plot ...'까지 채워진 상태) 같은 캔버스 위에 작은
+        확대 plot을 하나 더 겹쳐 그린다. 호출하는 쪽(create_script)이 이미
+        'set multiplot'으로 감싸둔 상태여야 한다(멀티플롯이 아니면 gnuplot이
+        set origin/size를 무시함).
+
+        1차 구현 범위(간단하지만 실제로 동작하는 것 우선):
+        - 크기(size_w/h)는 캔버스 전체 대비 %만 지원. "실제 길이(cm/in)" 직접
+          지정은 Auto Frame일 때 캔버스의 실제 물리적 크기를 구하는 별도 경로가
+          필요해서 다음 단계로 미룸.
+        - 확대 구간은 X/Y1에만 적용됨(Y2는 메인과 항상 동일 - 별도 UI 없음).
+        - inset 안 곡선은 선(line)만 그림, 마커는 생략(작은 박스 안에서는
+          가독성이 떨어지고, main_cmd_list 자체가 이미 마커 없이 넘어옴).
+        """
+        pip = getattr(plotdef, "pip", None) or {}
+        if not pip.get("enabled") or not main_cmd_list:
+            return
+
+        def _num(key, default):
+            try:
+                v = pip.get(key, "")
+                return float(v) if str(v).strip() else default
+            except (TypeError, ValueError):
+                return default
+
+        pos_x = _num("pos_x", 60.0) / 100.0
+        pos_y = _num("pos_y", 95.0) / 100.0  # 좌측 "위" 모서리의 세로 위치(위=100/아래=0 기준)
+        size_w = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0
+        size_h = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0
+
+        origin_x = pos_x
+        origin_y = pos_y - size_h  # gnuplot의 origin은 항상 패널의 "아래" 모서리 기준
+        # 캔버스 밖으로 나가면 아예 안 보이니, 안쪽으로 clamp
+        origin_x = min(max(origin_x, 0.0), max(1.0 - size_w, 0.0))
+        origin_y = min(max(origin_y, 0.0), max(1.0 - size_h, 0.0))
+
+        def _find_range_line(prefix):
+            for _l in lines:
+                if _l.startswith(prefix):
+                    return _l
+            return None
+
+        _pip_xmin, _pip_xmax = str(pip.get("xmin", "")).strip(), str(pip.get("xmax", "")).strip()
+        _pip_ymin, _pip_ymax = str(pip.get("ymin", "")).strip(), str(pip.get("ymax", "")).strip()
+        xrange_cmd = f"set xrange [{_pip_xmin}:{_pip_xmax}]" if _pip_xmin and _pip_xmax else (_find_range_line("set xrange") or "set autoscale x")
+        yrange_cmd = f"set yrange [{_pip_ymin}:{_pip_ymax}]" if _pip_ymin and _pip_ymax else (_find_range_line("set yrange") or "set autoscale y")
+        y2range_cmd = _find_range_line("set y2range") or "set autoscale y2"
+
+        font_scale = _num("font_scale", 0.6)
+        if font_scale <= 0:
+            font_scale = 0.6
+
+        lines.append("")
+        lines.append("# --- PIP (부분 확대) inset ---")
+
+        # [수정 - 버그 방지] 메인 plot이 남겨둔 label/arrow/object(legend,
+        # annotation)를 그대로 두면 inset의 축 범위 기준으로 다시 해석되어
+        # 완전히 엉뚱한 자리에 겹쳐 그려짐 - inset을 새로 꾸미기 전에 전부 지운다.
+        lines.append("unset label")
+        lines.append("unset arrow")
+        lines.append("unset object")
+        lines.append("unset xlabel")
+        lines.append("unset ylabel")
+        lines.append("unset y2label")
+        # [수정 - 버그] 메인 plot은 마진을 'at screen 0.xx'(캔버스 전체 기준
+        # 절대좌표)로 직접 지정해두는데, 이 상태를 그대로 두면 inset이 아래에서
+        # set origin/size로 작은 영역을 지정해도 gnuplot이 그 절대 마진을 그대로
+        # 따라가 inset 영역 밖(사실상 메인 plot과 거의 같은 자리)에 축을 그려서,
+        # 지정한 작은 박스 안에는 아무것도 안 보이던 원인이었음(실측: PDF에
+        # inset이 아예 안 보임). auto 마진으로 되돌려 origin/size 박스 안에서
+        # 새로 계산되게 한다.
+        lines.append("unset lmargin")
+        lines.append("unset rmargin")
+        lines.append("unset tmargin")
+        lines.append("unset bmargin")
+
+        if pip.get("title_on") and (plotdef.title or "").strip():
+            _title_txt = plotdef.title.replace('"', '\\"')
+            _title_size = float(plotdef.title_size or 14) * font_scale
+            lines.append(f'set title "{_title_txt}" font "{plotdef.title_font},{_title_size:.1f}"')
+        else:
+            lines.append("unset title")
+
+        _tic_size = max(9 * font_scale, 5.0)  # 축 라벨은 지웠으니(위) tic 숫자 크기만 배율 적용, 너무 작아지지 않게 하한
+        lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}"')
+        lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}"')
+        _uses_y2 = any(getattr(c, "axis", "y1") == "y2" for c in plotdef.curves)
+        if _uses_y2:
+            lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}"')
+
+        lines.append(f"set origin {origin_x:.4f},{origin_y:.4f}")
+        lines.append(f"set size {size_w:.4f},{size_h:.4f}")
+
+        if pip.get("opaque", True):
+            # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - 투명이면
+            # 이 오브젝트 자체를 안 그려서 메인 plot 곡선이 그대로 비쳐 보임.
+            # id 7100은 annotation(1번대)/Legend1(8000대)/Legend2(9000대)와
+            # 안 겹치도록 새로 예약한 번호대.
+            lines.append(
+                f"set object 7100 rectangle from screen {origin_x:.4f},{origin_y:.4f} "
+                f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
+                f'behind fc rgb "white" fillstyle solid 1.0 border lc rgb "black" lw 1'
+            )
+
+        lines.append(xrange_cmd)
+        lines.append(yrange_cmd)
+        lines.append(y2range_cmd)
+
+        if pip.get("legend_on"):
+            # id 7500대(Legend1 8000대/Legend2 9000대와 안 겹치는 번호)로 inset
+            # 전용 legend를 그림 - 위치는 1차 구현에선 "right top" 고정.
+            curve_index_map = {id(c): i for i, c in enumerate(plotdef.curves)}
+            self._render_legend_box(
+                lines, plotdef.curves, "right top", True, 1.0, 7500,
+                font_scale, 1.0, 1.0, getattr(plotdef, "is_print_mode", False),
+                curve_index_map, plotdef.legend_font,
+                axis_w_in=10.0 * size_w, legend_size=float(plotdef.legend_size or 9),
+                axis_h_in=8.0 * size_h, fmt=fmt,
+            )
+
+        # [수정 - 버그] 메인 plot이 y2축 미사용시 넣어두는 "NaN axes x1y2
+        # notitle" 더미 시리즈를 inset에도 그대로 재사용하면(main_cmd_list를
+        # 그대로 씀), 메인 plot 쪽에서 이미 set grid/set mouse/set tics scale
+        # 등을 쓴 상태와 결합해 gnuplot이 이 두 번째 plot 자체를 완전히
+        # 그리지 않는(원인 불명, 실측으로 재현·격리 확인) 현상이 있었음 -
+        # inset은 이 더미가 애초에 필요 없으므로(y2 축 예약 목적일 뿐 실제
+        # 데이터가 없음) 빼고 그린다.
+        _inset_cmd_list = [c for c in main_cmd_list if not c.startswith("NaN axes")]
+        lines.append("plot \\")
+        for i, cmd in enumerate(_inset_cmd_list):
+            if i != len(_inset_cmd_list) - 1:
+                cmd += ", \\"
+            lines.append(cmd)
+        lines.append("")
+
+        # 이 뒤에 또 다른 코드가 있어도 영향 안 받도록 원위치로 복구
+        lines.append("set origin 0,0")
+        lines.append("set size 1,1")
+        lines.append("unset label")
+        lines.append("unset object")
+
     def _get_terminal_cmd(self, fmt, outfile, plotdef=None, size_override=None, panel_scale=1.0, position=None):
         fmt = fmt.lower()
         # [추가] gnuplot은 ylabel/xlabel을 tic 숫자로부터 얼마나 띄울지 등의
@@ -3304,7 +3476,23 @@ class GnuplotGenerator:
         if fmt.lower() != "interactive":
             lines.append(f"set output '{outfile.replace(chr(92), '/')}'")
 
-        self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, circles=circles, panel_scale=_size_scale, fmt=fmt)
+        # [추가 - 요청] PIP(부분 확대 inset) - 켜져 있으면 메인 plot을 그리기
+        # 전에 'set multiplot'으로 감싸서, 메인 plot 뒤에 작은 확대 plot을 같은
+        # 캔버스에 겹쳐 그릴 수 있게 한다(멀티플롯이 아니면 gnuplot이 set
+        # origin/size를 무시해서 두 번째 plot이 안 겹치고 전체를 새로 덮어씀).
+        # origin/size를 따로 지정하지 않은 채 첫 plot을 그리면 기본값(0,0/1,1 -
+        # 캔버스 전체)이라, 메인 plot의 기존 마진/폰트 계산(is_multiplot=False
+        # 분기)은 그대로 영향 없음.
+        _pip_cfg = getattr(plotdef, "pip", None) or {}
+        _pip_on = bool(_pip_cfg.get("enabled"))
+        if _pip_on:
+            lines.append("set multiplot")
+
+        _main_cmd_list = self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, circles=circles, panel_scale=_size_scale, fmt=fmt)
+
+        if _pip_on:
+            self._render_pip_inset(plotdef, lines, _main_cmd_list, fmt)
+            lines.append("unset multiplot")
 
         # [추가] "원래(처음) plot으로 되돌리는 기능 - 2D/3D 모두" - 2D도 마우스
         # 휠/드래그로 확대·이동한 뒤 처음 축 범위로 되돌릴 방법이 없었음. 위에서
