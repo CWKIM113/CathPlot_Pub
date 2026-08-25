@@ -6027,6 +6027,203 @@ class CathPlotGUI:
         except Exception:
             pass
 
+    def _get_window_client_screen_rect(self, hwnd):
+        """[추가 - 요청] "PIP+Animation, 반투명(1~99%) + 화면 실시간 재생" -
+        오버레이 창(_open_pip_overlay_window)을 gnuplot 창의 PIP 자리에
+        픽셀 단위로 정확히 겹쳐야 하는데, _find_window_rect가 쓰는
+        GetWindowRect는 제목표시줄/테두리까지 포함한 "창 전체" 좌표라 실제
+        그림이 그려지는 영역(클라이언트 영역)과 다르다(제목표시줄만 30px
+        안팎이라 그대로 쓰면 오버레이가 계속 위로 밀려 보임) - GetClientRect
+        (클라이언트 영역 크기, 항상 좌상단이 0,0)와 ClientToScreen(그
+        좌상단의 화면 절대좌표)을 조합해서 정확한 화면 좌표 사각형을
+        구한다. 실패하면 None(호출자가 오버레이를 포기하도록)."""
+        if not hwnd:
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            rect = wintypes.RECT()
+            if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+                return None
+            pt = wintypes.POINT(0, 0)
+            if not user32.ClientToScreen(hwnd, ctypes.byref(pt)):
+                return None
+            return (pt.x, pt.y, pt.x + rect.right, pt.y + rect.bottom)
+        except Exception:
+            return None
+
+    def _read_anim_ctrl(self, ctrl_path):
+        """[추가 - 요청] _write_anim_ctrl이 쓰는 제어 파일(gnuplot이 매
+        프레임 load하는 것과 같은 파일)을 오버레이 창도 직접 읽어서, gnuplot
+        본체와 완전히 같은 신호(Pause/Speed/Exit/재시작)를 따라가게 한다 -
+        Animation Control 패널의 버튼은 이 파일만 갱신할 뿐 오버레이의
+        존재를 몰라도 되므로 패널 쪽 코드는 전혀 안 건드려도 됨. 파일이
+        아직 없거나(막 시작해서 gnuplot이 아직 안 만든 순간) 쓰는 도중이라
+        일부만 읽히면 안전한 기본값으로 채운다."""
+        result = {"paused_anim": False, "exit_anim": False, "frame_pause_anim": 0.02, "click_seq": 0}
+        try:
+            with open(ctrl_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError:
+            return result
+        for line in content.splitlines():
+            if "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key, val = key.strip(), val.strip()
+            try:
+                if key == "paused_anim":
+                    result["paused_anim"] = val == "1"
+                elif key == "exit_anim":
+                    result["exit_anim"] = val == "1"
+                elif key == "frame_pause_anim":
+                    result["frame_pause_anim"] = float(val)
+                elif key == "click_seq":
+                    result["click_seq"] = int(val)
+            except ValueError:
+                pass
+        return result
+
+    def _open_pip_overlay_window(self, patches, geometry, ctrl_path, proc, plot_window_title):
+        """[추가 - 요청] "PIP+Animation, 반투명(1~99%) + 화면 실시간 재생" -
+        gnuplot 메인 창(터미널·기존 튜닝 전부 그대로, PIP 없이 메인 곡선만
+        그림)은 전혀 안 건드리고, 미리 다 만들어둔(각 프레임에 이미 배경
+        반투명까지 PIL로 합성된 - gnu_generator._build_pip_blended_frames
+        참고) 작은 이미지 조각들을, 그 창의 PIP 자리 위에 정확히 겹치는
+        테두리 없는 별도 창(overrideredirect)에 순서대로 갈아 끼운다.
+        gnuplot 창 자체는 원래 그대로라 지금까지의 포커스/저장/인쇄 등
+        튜닝이 전혀 위험해지지 않는다.
+
+        동기화: gnuplot이 읽는 것과 동일한 제어 파일(ctrl_path)을 이
+        오버레이도 직접 읽어서(파일 기반 IPC, gnuplot과 같은 프로토콜)
+        Pause/Speed/Exit이 메인 창과 항상 같이 움직이게 한다. "다 끝난 뒤
+        Resume으로 재시작"도 gnuplot 스크립트 자신의 규칙(그 시점의
+        click_seq를 기억해두고, 그보다 큰 seq가 관측되면 처음부터 다시)을
+        그대로 재현한다.
+
+        [알려진 제한] 창을 못 찾거나(제목 매칭 실패) 이동/리사이즈하면
+        오버레이가 어긋날 수 있음 - 지금 애니메이션 창은 항상 고정 위치로
+        뜨고 크기 조정을 권장하지 않으므로 실사용에서는 크게 문제되지 않을
+        것으로 봄."""
+        try:
+            from PIL import ImageTk
+        except ImportError:
+            return None
+        if not patches:
+            return None
+
+        # [수정 - 버그 발견] "오버레이 창이 1x1로 뜸" - gnuplot이 처음엔
+        # "unknown" 터미널(범위 계산용, 화면에 안 보임)로 실행되다가 실제
+        # "windows" 터미널로 전환되는 찰나(create_animation_script 참고)에
+        # 창이 잠깐 작거나 불완전한 크기로 존재하는 순간이 있는 것으로
+        # 실측 확인됨(재현: 몇 번 중 한 번 win_w/win_h가 1로 나옴, 재시도
+        # 시 항상 정상값) - 클라이언트 영역이 너무 작으면(비정상) 잠깐
+        # 대기 후 다시 조회한다.
+        _hwnd, _client_rect = None, None
+        if plot_window_title:
+            for _attempt in range(6):
+                _hwnd, _ = self._find_window_rect(plot_window_title, timeout_sec=3.0)
+                _client_rect = self._get_window_client_screen_rect(_hwnd) if _hwnd else None
+                if _client_rect and (_client_rect[2] - _client_rect[0]) > 50 and (_client_rect[3] - _client_rect[1]) > 50:
+                    break
+                self.root.update()
+                time.sleep(0.25)
+        if not _client_rect:
+            return None
+        cleft, ctop, cright, cbottom = _client_rect
+        cw, ch = cright - cleft, cbottom - ctop
+        if cw <= 0 or ch <= 0:
+            return None
+
+        page_w, page_h = geometry["page_w"], geometry["page_h"]
+        sx, sy = cw / page_w, ch / page_h
+        ox_px = geometry["origin_x"] * page_w
+        oy_px_top = (1.0 - (geometry["origin_y"] + geometry["size_h"])) * page_h
+        ow_px = geometry["size_w"] * page_w
+        oh_px = geometry["size_h"] * page_h
+
+        win_x = int(round(cleft + ox_px * sx))
+        win_y = int(round(ctop + oy_px_top * sy))
+        win_w = max(int(round(ow_px * sx)), 1)
+        win_h = max(int(round(oh_px * sy)), 1)
+
+        overlay = tk.Toplevel(self.root)
+        overlay.overrideredirect(True)
+        try:
+            overlay.attributes("-topmost", True)
+        except Exception:
+            pass
+        # [수정 - 버그 발견] "오버레이 창이 1x1로 뜸" - geometry()로 크기를
+        # 먼저 지정해도, 그 뒤에 자식 위젯(label)을 pack()하면 Tk가 "내용에
+        # 맞춰 창 크기를 다시 계산"해버려서(이미지가 아직 안 채워진 빈
+        # Label의 자연 크기 = 사실상 0에 가까움) 방금 지정한 크기가 조용히
+        # 덮어써지는 것을 실측으로 확인함 - pack_propagate(False)로 "자식
+        # 크기에 맞춰 창을 다시 줄이지 말라"고 명시하고, 이미지까지 다 채운
+        # 뒤 geometry()를 한 번 더 호출 + update_idletasks()로 확정한다
+        # (update_idletasks 없이는 override-redirect 창의 재적용된 geometry가
+        # 실제로 반영되지 않는 것을 실측으로 확인함 - 일반 창과 다른 부분).
+        overlay.geometry(f"{win_w}x{win_h}+{win_x}+{win_y}")
+        overlay.pack_propagate(False)
+
+        _photo_frames = []
+        for p in patches:
+            _resized = p.resize((win_w, win_h)) if p.size != (win_w, win_h) else p
+            _photo_frames.append(ImageTk.PhotoImage(_resized))
+
+        label = tk.Label(overlay, bd=0, highlightthickness=0)
+        label.pack(fill="both", expand=True)
+        label.config(image=_photo_frames[0])
+        overlay._pip_overlay_photo_frames = _photo_frames  # GC 방지(참조 유지)
+        overlay.geometry(f"{win_w}x{win_h}+{win_x}+{win_y}")
+        overlay.update_idletasks()
+
+        state = {"idx": 0, "awaiting_restart": False, "finished_seq": 0, "stopped": False}
+
+        def _on_overlay_destroy(event):
+            if event.widget is overlay:
+                state["stopped"] = True
+        overlay.bind("<Destroy>", _on_overlay_destroy)
+
+        def _advance():
+            if state["stopped"] or not overlay.winfo_exists():
+                return
+            if proc is not None and proc.poll() is not None:
+                try:
+                    overlay.destroy()
+                except Exception:
+                    pass
+                return
+            ctrl = self._read_anim_ctrl(ctrl_path)
+            if ctrl["exit_anim"]:
+                try:
+                    overlay.destroy()
+                except Exception:
+                    pass
+                return
+            _seq = ctrl["click_seq"]
+
+            if state["awaiting_restart"]:
+                if _seq > state["finished_seq"]:
+                    state["idx"] = 0
+                    state["awaiting_restart"] = False
+                else:
+                    overlay.after(300, _advance)  # gnuplot 쪽 재시작 대기 폴링(0.3초)과 같은 주기
+                    return
+
+            if not ctrl["paused_anim"]:
+                label.config(image=_photo_frames[state["idx"]])
+                if state["idx"] >= len(_photo_frames) - 1:
+                    state["finished_seq"] = _seq
+                    state["awaiting_restart"] = True
+                else:
+                    state["idx"] += 1
+            _fp = ctrl["frame_pause_anim"]
+            overlay.after(max(int(_fp * 1000), 1), _advance)
+
+        _advance()
+        return overlay
+
     def _write_anim_ctrl(self, ctrl_path, paused, frame_pause, click_seq, exit_flag=0):
         """[추가 - space bar 재설계] 실행 중인 애니메이션(gnuplot)에 값을
         전달하는 작은 제어 파일을 다시 쓴다. gnuplot이 파일을 읽는 도중에
@@ -6509,18 +6706,34 @@ class CathPlotGUI:
             # 불투명/투명 중 하나로 강제" 질문을 건너뛰고 이 경로로 보낸다 -
             # 화면 실시간 재생은 여전히 완성된 프레임이 없어서(진행 중인 gnuplot
             # 창) 기존처럼 강제한다.
-            _pip_gif_blend_opacity = None
-            if fmt == "gif":
-                _pip = getattr(plotdef, "pip", None)
-                if _pip and _pip.get("enabled"):
-                    _praw = str(_pip.get("opacity", "")).strip()
-                    try:
-                        _pval = float(_praw) if _praw else (100.0 if _pip.get("opaque", True) else 0.0)
-                    except (TypeError, ValueError):
-                        _pval = 100.0
-                    if 0.0 + 1e-6 < _pval < 100.0 - 1e-6:
-                        _pip_gif_blend_opacity = max(0.0, min(100.0, _pval))
-            if _will_animate and _pip_gif_blend_opacity is None:
+            def _resolve_pip_partial_opacity(_plotdef):
+                _pip = getattr(_plotdef, "pip", None)
+                if not (_pip and _pip.get("enabled")):
+                    return None
+                _praw = str(_pip.get("opacity", "")).strip()
+                try:
+                    _pval = float(_praw) if _praw else (100.0 if _pip.get("opaque", True) else 0.0)
+                except (TypeError, ValueError):
+                    _pval = 100.0
+                if 0.0 + 1e-6 < _pval < 100.0 - 1e-6:
+                    return max(0.0, min(100.0, _pval))
+                return None
+
+            _pip_gif_blend_opacity = _resolve_pip_partial_opacity(plotdef) if fmt == "gif" else None
+            # [추가 - 요청] "반투명(1~99%) + 화면 실시간 재생" - GIF와 달리
+            # 실시간 재생은 "완성된 프레임 묶음"이 없는(gnuplot이 그때그때
+            # 그리는 살아있는 창) 구조라 프레임을 후처리로 섞을 대상 자체가
+            # 없어서 예전엔 항상 완전 불투명/투명 중 하나로 강제했는데,
+            # 이제 "메인 창은 그대로 두고 그 위에 이미 배경 반투명까지 합성
+            # 해둔 PIP 조각만 별도의 작은 창으로 겹쳐서 갈아 끼우는" 방식
+            # (_open_pip_overlay_window)으로 실제 반투명을 보여준다 - 메인
+            # gnuplot 창 자체는 전혀 안 바뀌므로 기존 튜닝에 영향 없음.
+            _pip_interactive_blend_opacity = (
+                _resolve_pip_partial_opacity(plotdef)
+                if (fmt == "interactive" and getattr(self, "animate_var", None) is not None and self.animate_var.get())
+                else None
+            )
+            if _will_animate and _pip_gif_blend_opacity is None and _pip_interactive_blend_opacity is None:
                 # [추가 - 요청] "PIP+Animation" - PIP가 켜져 있으면 원/타원
                 # 클리핑/배경 반투명을 Animation이 지원 가능한 형태(사각형+
                 # 완전불투명 또는 완전투명)로 정리한다 - _normalize_pip_for_
@@ -6529,6 +6742,7 @@ class CathPlotGUI:
                 plotdef = self._normalize_pip_for_animation(plotdef)
                 if plotdef is None:
                     return
+            _pip_overlay_result = None  # 실시간 재생 + 반투명일 때만 채워짐(아래에서 오버레이 창을 여는 데 씀)
             if fmt == "gif":
                 try:
                     duration_sec = float((self.animate_duration_var.get() or "20").strip())
@@ -6552,11 +6766,31 @@ class CathPlotGUI:
                     duration_sec = float((self.animate_duration_var.get() or "20").strip())
                 except ValueError:
                     duration_sec = 20.0
-                generator.create_animation_script(
-                    plotdef, outfile,
-                    annotations=plotdef.annotations, arrows=plotdef.arrows,
-                    circles=getattr(plotdef, "circles", []), duration_sec=duration_sec,
-                )
+                if _pip_interactive_blend_opacity is not None:
+                    # 먼저(메인 창을 열기 전에) PIP 조각들을 다 만들어둔다 -
+                    # 실패하면(PIL 없음, 위치 계산 실패 등) 조용히 안전한
+                    # 기본값(완전 불투명)으로 대체한다.
+                    _pip_overlay_result = generator._build_pip_blended_frames(
+                        plotdef, annotations=plotdef.annotations, arrows=plotdef.arrows,
+                        circles=getattr(plotdef, "circles", []), duration_sec=duration_sec,
+                        plot_dir_hint=self.plot_dir, build_full_frames=False,
+                    )
+                    _main_only_plotdef = copy.copy(plotdef)
+                    if _pip_overlay_result is not None:
+                        _main_only_plotdef.pip = {}
+                    else:
+                        _main_only_plotdef.pip = dict(plotdef.pip, opacity=100.0)
+                    generator.create_animation_script(
+                        _main_only_plotdef, outfile,
+                        annotations=plotdef.annotations, arrows=plotdef.arrows,
+                        circles=getattr(plotdef, "circles", []), duration_sec=duration_sec,
+                    )
+                else:
+                    generator.create_animation_script(
+                        plotdef, outfile,
+                        annotations=plotdef.annotations, arrows=plotdef.arrows,
+                        circles=getattr(plotdef, "circles", []), duration_sec=duration_sec,
+                    )
             else:
                 generator.create_script(
                     plotdef, outfile, fmt=fmt,
@@ -6615,6 +6849,17 @@ class CathPlotGUI:
                         # 제목을 만듦 - 파일명에서 확장자만 뗀 것).
                         plot_window_title=os.path.splitext(os.path.basename(outfile))[0],
                     )
+                    if _pip_overlay_result is not None:
+                        # [추가 - 요청] "반투명 + 화면 실시간 재생" - 메인
+                        # 창(방금 뜬, PIP 없이 메인 곡선만 있는 그 창) 위에
+                        # 미리 합성해둔 PIP 조각을 겹치는 오버레이 창을 연다.
+                        # 컨트롤 패널과 같은 ctrl_path/proc을 그대로 넘겨서
+                        # Pause/Speed/Exit이 항상 같이 움직이게 한다.
+                        self._open_pip_overlay_window(
+                            _pip_overlay_result["patches"], _pip_overlay_result,
+                            generator.last_anim_ctrl_path, generator.last_process,
+                            os.path.splitext(os.path.basename(outfile))[0],
+                        )
 
             # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로
             # 고정되던 버그. 같은 Plot Title로 Interactive PLOT을 여러 번 누르면
