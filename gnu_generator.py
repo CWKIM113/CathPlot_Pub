@@ -2876,7 +2876,7 @@ class GnuplotGenerator:
             cmd_list.append(cmd)
         return cmd_list
 
-    def _render_pip_inset(self, plotdef, lines, main_cmd_list, fmt):
+    def _render_pip_inset(self, plotdef, lines, main_cmd_list, fmt, parent_box=None):
         """[추가 - 요청] "작은 plot을 큰 plot 안에(PIP)" - 메인 plot을 이미 다
         그린 뒤(lines에 'plot ...'까지 채워진 상태) 같은 캔버스 위에 작은
         확대 plot을 하나 더 겹쳐 그린다. 호출하는 쪽(create_script)이 이미
@@ -2889,10 +2889,15 @@ class GnuplotGenerator:
         (source가 "current"가 아닐 때 GUI가 미리 채워둠), 없으면(기본,
         "현재 plot") main_cmd_list를 그대로 재사용한다.
 
+        [추가 - 요청] "Multi-Plot(M-P)의 한 칸 안에도 PIP를 그릴 수 있게" -
+        parent_box=(px, py, pw, ph)(전체 캔버스 기준 screen fraction, gnuplot
+        origin/size와 같은 단위)를 주면, pos_x/pos_y(%)와 size_w/size_h(%)를
+        "전체 캔버스"가 아니라 이 박스(=M-P의 그 칸) 기준으로 해석한다.
+        create_multiplot_script가 각 칸의 실제 위치(cell_positions_in)를 이미
+        계산해두므로, 그 값을 page_w/page_h로 나눠 넘겨주기만 하면 된다.
+        기본값(None)은 (0,0,1,1) = 전체 캔버스(단일 plot과 동일).
+
         1차 구현 범위(간단하지만 실제로 동작하는 것 우선):
-        - 크기(size_w/h)는 캔버스 전체 대비 %만 지원. "실제 길이(cm/in)" 직접
-          지정은 Auto Frame일 때 캔버스의 실제 물리적 크기를 구하는 별도 경로가
-          필요해서 다음 단계로 미룸.
         - 확대 구간은 X/Y1에만 적용됨(Y2는 메인과 항상 동일 - 별도 UI 없음).
         - inset 안 곡선은 선(line)만 그림, 마커는 생략(작은 박스 안에서는
           가독성이 떨어지고, main_cmd_list 자체가 이미 마커 없이 넘어옴).
@@ -2908,6 +2913,8 @@ class GnuplotGenerator:
         if not main_cmd_list:
             return
 
+        pb_x, pb_y, pb_w, pb_h = parent_box if parent_box else (0.0, 0.0, 1.0, 1.0)
+
         def _num(key, default):
             try:
                 v = pip.get(key, "")
@@ -2915,15 +2922,17 @@ class GnuplotGenerator:
             except (TypeError, ValueError):
                 return default
 
-        pos_x = _num("pos_x", 60.0) / 100.0
-        pos_y = _num("pos_y", 95.0) / 100.0  # 좌측 "위" 모서리의 세로 위치(위=100/아래=0 기준)
+        # pos_x/pos_y(%)는 항상 "이 박스(parent_box) 안에서"의 상대 위치 -
+        # 단일 plot이면 박스가 캔버스 전체(pb=0,0,1,1)라 기존과 동일한 의미.
+        _local_pos_x = _num("pos_x", 60.0) / 100.0
+        _local_pos_y = _num("pos_y", 95.0) / 100.0  # 박스 안 좌측 "위" 모서리 세로 위치(위=100/아래=0)
 
-        # [추가 - 요청] 크기(size_w/h)를 캔버스 대비 %뿐 아니라 실제 물리적
-        # 길이(cm/in)로도 지정할 수 있게 - pip["size_unit"]이 "%"(기본)면 기존
-        # 그대로, "in"/"cm"이면 입력값을 그 단위의 실제 길이로 보고, 터미널
-        # 명령(항상 "size W in,H in" 형태 - _get_terminal_cmd 참고)에서 캔버스
-        # 전체의 실제 물리 크기를 역으로 찾아 그 길이가 캔버스 대비 몇 %인지
-        # 환산한다. 터미널 줄을 못 찾으면(이론상 항상 있음) %로 안전하게 폴백.
+        # [추가 - 요청] 크기(size_w/h)를 %뿐 아니라 실제 물리적 길이(cm/in)로도
+        # 지정할 수 있게 - pip["size_unit"]이 "%"(기본)면 이 박스(parent_box)
+        # 기준 비율로, "in"/"cm"이면 캔버스 전체의 실제 물리 크기(터미널 명령의
+        # "size W in,H in"에서 역산 - 물리 길이는 어느 칸에 있든 절대적이므로
+        # parent_box와 무관)에 대한 비율로 환산해 "캔버스 전체 기준" 크기
+        # (size_w_page/size_h_page)를 먼저 구한다.
         _size_unit = str(pip.get("size_unit", "%") or "%").strip()
         if _size_unit in ("in", "cm"):
             _canvas_w_in, _canvas_h_in = None, None
@@ -2937,20 +2946,45 @@ class GnuplotGenerator:
                 _raw_h = _num("size_h", 35.0)
                 if _size_unit == "cm":
                     _raw_w, _raw_h = _raw_w / 2.54, _raw_h / 2.54
-                size_w = min(max(_raw_w / _canvas_w_in * 100.0, 5.0), 100.0) / 100.0
-                size_h = min(max(_raw_h / _canvas_h_in * 100.0, 5.0), 100.0) / 100.0
+                size_w_page = max(_raw_w / _canvas_w_in, 0.01)
+                size_h_page = max(_raw_h / _canvas_h_in, 0.01)
             else:
-                size_w = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0
-                size_h = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0
+                size_w_page = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0
+                size_h_page = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0
         else:
-            size_w = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0
-            size_h = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0
+            # %는 parent_box(단일 plot이면 캔버스 전체) 기준 비율.
+            size_w_page = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0 * pb_w
+            size_h_page = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0 * pb_h
 
-        origin_x = pos_x
-        origin_y = pos_y - size_h  # gnuplot의 origin은 항상 패널의 "아래" 모서리 기준
-        # 캔버스 밖으로 나가면 아예 안 보이니, 안쪽으로 clamp
-        origin_x = min(max(origin_x, 0.0), max(1.0 - size_w, 0.0))
-        origin_y = min(max(origin_y, 0.0), max(1.0 - size_h, 0.0))
+        # [추가 - 요청] "M-P 칸에 넣었을 때 그 칸보다 크면(넘치면) 칸에 맞게
+        # 줄이고 메시지를 남길 것" - parent_box가 캔버스 전체보다 작을 때만
+        # (=M-P의 한 칸일 때만) 의미 있는 제약이라, 그 경우에만 확인한다.
+        # 여유 없이 딱 맞추면 옆 칸과 붙어 보일 수 있어 90%를 상한으로 둠.
+        _MAX_FRAC = 0.9
+        _max_w_page = pb_w * _MAX_FRAC
+        _max_h_page = pb_h * _MAX_FRAC
+        _size_shrink = 1.0
+        if size_w_page > _max_w_page or size_h_page > _max_h_page:
+            _size_shrink = min(_max_w_page / size_w_page if size_w_page > _max_w_page else 1.0,
+                                _max_h_page / size_h_page if size_h_page > _max_h_page else 1.0)
+            size_w_page *= _size_shrink
+            size_h_page *= _size_shrink
+            if parent_box is not None:
+                _pip_name = (plotdef.title or "plot").strip() or "plot"
+                self.warnings.append(
+                    f"'{_pip_name}'의 PIP 크기가 Multi-Plot 칸보다 커서 칸에 맞게 자동으로 줄였습니다."
+                )
+
+        size_w, size_h = size_w_page, size_h_page
+
+        # 위치도 parent_box 기준(로컬 0~1)을 캔버스 전체 기준(전역 0~1)으로 변환
+        origin_x = pb_x + _local_pos_x * pb_w
+        top_y = pb_y + _local_pos_y * pb_h
+        origin_y = top_y - size_h  # gnuplot의 origin은 항상 패널의 "아래" 모서리 기준
+        # 박스(parent_box) 밖으로 나가면 안 보이거나 옆 칸을 침범하니, 그
+        # 박스 안쪽으로 clamp(단일 plot이면 박스=캔버스 전체와 동일).
+        origin_x = min(max(origin_x, pb_x), max(pb_x + pb_w - size_w, pb_x))
+        origin_y = min(max(origin_y, pb_y), max(pb_y + pb_h - size_h, pb_y))
 
         def _find_range_line(prefix):
             for _l in lines:
@@ -2974,7 +3008,11 @@ class GnuplotGenerator:
             yrange_cmd = _find_range_line("set yrange") or "set autoscale y"
         y2range_cmd = "set autoscale y2" if _override_curves else (_find_range_line("set y2range") or "set autoscale y2")
 
-        font_scale = _num("font_scale", 0.6)
+        # [수정 - 요청] "박스만 줄이고 폰트(legend 포함)는 그대로면, 줄어든
+        # 만큼 글자가 박스에 비해 과도하게 커 보임" - 칸에 맞추려고 박스를
+        # 줄인(_size_shrink < 1.0) 만큼 폰트도 같이 줄여서, 박스:글자 비율이
+        # 원래 의도한 대로(사용자가 지정한 font_scale 기준) 유지되게 한다.
+        font_scale = _num("font_scale", 0.6) * _size_shrink
         if font_scale <= 0:
             font_scale = 0.6
 
@@ -5913,24 +5951,6 @@ class GnuplotGenerator:
                 _cy = _row_axis_bottom[r] - _row_gap_b[r] - spacing_h_in
 
         for i, plotdef in enumerate(plots):
-            # [추가 - 요청] "PIP를 Multi-Plot과도 조합" - 이 함수는 gnuplot의
-            # 'set multiplot layout R,C' 자동 배치 모드를 쓰는데, 이 모드는
-            # plot 명령 하나마다 자동으로 다음 칸으로 넘어가므로, PIP inset을
-            # 그리려고 이 칸 안에서 plot을 한 번 더 호출하면(_render_pip_inset과
-            # 동일한 방식) 그 추가 plot이 다음 칸 자리를 하나 먹어버려 전체
-            # 배치가 한 칸씩 밀림 - single-plot(create_script)처럼 origin/size를
-            # 직접 지정하는 방식으로 바꾸지 않는 한 안전하게 합칠 수 없음(이
-            # 함수의 마진 계산이 이미 layout 모드의 자동 배치를 전제로 극도로
-            # 정교하게 맞춰져 있어, 그 전제를 깨는 변경은 회귀 위험이 큼). 1차
-            # 구현에서는 PIP가 켜진 plot이 M-P에 섞여 있으면 조용히 무시(=그
-            # 칸엔 inset 없이 원래 plot만) 하는 대신, 왜 안 보이는지 알 수
-            # 있게 경고만 남긴다.
-            if getattr(plotdef, "pip", None) and plotdef.pip.get("enabled"):
-                _pip_warn_name = (plotdef.title or f"plot {i+1}").strip() or f"plot {i+1}"
-                self.warnings.append(
-                    f"'{_pip_warn_name}'의 PIP(부분 확대) 설정은 Multi-Plot에서는 아직 "
-                    "표시되지 않습니다(해당 칸은 PIP 없이 원래 plot만 그려짐)."
-                )
             cell_left_in, cell_right_in, cell_top_in, cell_bottom_in = cell_positions_in[i]
             _row_idx, _col_idx = cell_rc[i]
             if cols > 1 and not _is_centered5:
@@ -6094,7 +6114,7 @@ class GnuplotGenerator:
             # 당겨지게 한다(위 y1/y2와 동일한 비율 계산 방식).
             _title_margin_ratio = (_eff_margin_top / margin_top) if margin_top > 1e-6 else 1.0
             _xlabel_margin_ratio = (_eff_margin_bottom / margin_bottom) if margin_bottom > 1e-6 else 1.0
-            self._build_plot_commands(
+            _cell_cmd_list = self._build_plot_commands(
                 plotdef, lines, is_multiplot=True, panel_scale=font_panel_scale,
                 annotations=getattr(plotdef, "annotations", None),
                 arrows=getattr(plotdef, "arrows", None),
@@ -6110,6 +6130,22 @@ class GnuplotGenerator:
                 title_margin_ratio=_title_margin_ratio,
                 xlabel_margin_ratio=_xlabel_margin_ratio,
             )
+
+            # [추가 - 요청] "PIP를 Multi-Plot과도 조합" - 이 칸(cell)의 실제
+            # 위치(cell_positions_in, 이미 계산돼 있음)를 캔버스 전체 대비
+            # screen fraction으로 바꿔 parent_box로 넘기면, _render_pip_inset이
+            # PIP의 위치/크기(%)를 "이 칸 기준"으로 해석해서 그 칸 안에
+            # 겹쳐 그린다(칸보다 크면 자동으로 줄이고 경고 - 함수 내부 참고).
+            # 이 칸의 margin 계산(_build_plot_commands, is_multiplot=True)은
+            # 위에서 이미 끝난 뒤라 서로 영향 없음(_render_pip_inset이 자기
+            # 마진을 스스로 unset하고 새로 잡음).
+            if getattr(plotdef, "pip", None) and plotdef.pip.get("enabled"):
+                _pb = (
+                    cell_left_in / page_w, cell_bottom_in / page_h,
+                    (cell_right_in - cell_left_in) / page_w,
+                    (cell_top_in - cell_bottom_in) / page_h,
+                )
+                self._render_pip_inset(plotdef, lines, _cell_cmd_list, fmt, parent_box=_pb)
 
         if "왼쪽" in _warned_sides or "오른쪽" in _warned_sides:
             _side_txt = "/".join(s for s in ("왼쪽", "오른쪽") if s in _warned_sides)
