@@ -6499,7 +6499,28 @@ class CathPlotGUI:
             _will_animate = (fmt == "gif") or (
                 getattr(self, "animate_var", None) is not None and self.animate_var.get() and fmt == "interactive"
             )
-            if _will_animate:
+            # [추가 - 요청] "반투명(1~99%) + GIF" - GIF 저장은 화면 실시간
+            # 재생과 달리 "완성된 프레임들"을 다루므로, 프레임마다 무거운 PDF
+            # 후처리 없이도 진짜 배경 반투명을 만들 수 있다(gnu_generator.
+            # create_pip_animation_gif_blended 참고 - "완전불투명 버전"과
+            # "PIP 없는 메인만" 버전을 각각 gnuplot이 저비용으로(전체 프레임
+            # 한 번에) 만든 뒤, 두 GIF의 프레임끼리 짝지어 PIL로만 섞음). 그래서
+            # GIF 저장일 때만 _normalize_pip_for_animation의 "반투명이면 완전
+            # 불투명/투명 중 하나로 강제" 질문을 건너뛰고 이 경로로 보낸다 -
+            # 화면 실시간 재생은 여전히 완성된 프레임이 없어서(진행 중인 gnuplot
+            # 창) 기존처럼 강제한다.
+            _pip_gif_blend_opacity = None
+            if fmt == "gif":
+                _pip = getattr(plotdef, "pip", None)
+                if _pip and _pip.get("enabled"):
+                    _praw = str(_pip.get("opacity", "")).strip()
+                    try:
+                        _pval = float(_praw) if _praw else (100.0 if _pip.get("opaque", True) else 0.0)
+                    except (TypeError, ValueError):
+                        _pval = 100.0
+                    if 0.0 + 1e-6 < _pval < 100.0 - 1e-6:
+                        _pip_gif_blend_opacity = max(0.0, min(100.0, _pval))
+            if _will_animate and _pip_gif_blend_opacity is None:
                 # [추가 - 요청] "PIP+Animation" - PIP가 켜져 있으면 원/타원
                 # 클리핑/배경 반투명을 Animation이 지원 가능한 형태(사각형+
                 # 완전불투명 또는 완전투명)로 정리한다 - _normalize_pip_for_
@@ -6513,12 +6534,19 @@ class CathPlotGUI:
                     duration_sec = float((self.animate_duration_var.get() or "20").strip())
                 except ValueError:
                     duration_sec = 20.0
-                _tmp_plt = os.path.join(self.plot_dir, f".cathplot_anim_{uuid.uuid4().hex}.plt")
-                generator.create_animation_script(
-                    plotdef, _tmp_plt,
-                    annotations=plotdef.annotations, arrows=plotdef.arrows,
-                    circles=getattr(plotdef, "circles", []), duration_sec=duration_sec, gif_path=outfile,
-                )
+                if _pip_gif_blend_opacity is not None:
+                    generator.create_pip_animation_gif_blended(
+                        plotdef, outfile,
+                        annotations=plotdef.annotations, arrows=plotdef.arrows,
+                        circles=getattr(plotdef, "circles", []), duration_sec=duration_sec,
+                    )
+                else:
+                    _tmp_plt = os.path.join(self.plot_dir, f".cathplot_anim_{uuid.uuid4().hex}.plt")
+                    generator.create_animation_script(
+                        plotdef, _tmp_plt,
+                        annotations=plotdef.annotations, arrows=plotdef.arrows,
+                        circles=getattr(plotdef, "circles", []), duration_sec=duration_sec, gif_path=outfile,
+                    )
             elif getattr(self, "animate_var", None) is not None and self.animate_var.get() and fmt == "interactive":
                 try:
                     duration_sec = float((self.animate_duration_var.get() or "20").strip())

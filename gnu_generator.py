@@ -4635,6 +4635,148 @@ class GnuplotGenerator:
         _force_focus_window_by_title(os.path.splitext(os.path.basename(outfile))[0])
         return outfile
 
+    def create_pip_animation_gif_blended(self, plotdef, gif_path, annotations=None, arrows=None, circles=None,
+                                          duration_sec=20.0):
+        """[추가 - 요청] "PIP+Animation, 반투명(1~99%) + GIF 저장" - 화면
+        실시간 재생과 달리 GIF는 "이미 완성된 프레임들의 묶음"을 다루므로,
+        정지 화면처럼 프레임마다 무거운 PDF 후처리(_apply_pip_clip)를 돌릴
+        필요 없이 훨씬 싸게 만들 수 있다:
+        1) PIP를 "완전 불투명"(opacity=100 - _render_pip_inset의 네이티브
+           빠른 경로, rect든 원/타원이든 그대로 clip_shape 유지)으로 강제한
+           애니메이션 GIF를 gnuplot이 한 번에(do-for 루프, 저비용) 만든다.
+        2) PIP를 아예 끈("메인 plot만") 애니메이션 GIF도 gnuplot이 한 번에
+           만든다.
+        3) 두 GIF는 같은 duration_sec/프레임 수/크기로 만들어지므로 프레임
+           번호가 1:1로 대응됨 - 각 프레임 쌍에서 PIP 박스 영역만 크롭해서
+           PIL로 섞는다(_apply_pip_clip과 같은 원리 - 흰색과의 차이로 잉크만
+           추출, 배경은 opacity 비율로 "완전불투명 버전"과 "메인만 버전"을
+           Image.blend, 잉크는 항상 그대로 위에 얹음 - PDF/PyMuPDF는 전혀
+           필요 없고 이미 만들어진 GIF 프레임끼리 순수 PIL 합성만 함).
+
+        [알려진 제한] 1)번(완전 불투명 버전)의 경계선은 항상 실선으로
+        그려지는데(_render_pip_inset의 네이티브 규칙 - opacity=100이면
+        실선), 합성 후 실제로는 반투명이라 점선이어야 이상적이지만 이미
+        그려진 실선을 지우고 다시 그리기가 어려워 1차 구현에서는 그대로
+        둔다(배경이 진짜로 반투명하게 섞이는 핵심 기능은 정확함 - 경계선
+        스타일만 완전불투명 때와 같은 실선으로 보임)."""
+        plot_dir = os.path.dirname(os.path.abspath(gif_path))
+        os.makedirs(plot_dir, exist_ok=True)
+
+        pip = getattr(plotdef, "pip", None) or {}
+        _opacity_raw = str(pip.get("opacity", "")).strip()
+        try:
+            _opacity = float(_opacity_raw) if _opacity_raw else (100.0 if pip.get("opaque", True) else 0.0)
+        except (TypeError, ValueError):
+            _opacity = 100.0
+        _alpha_frac = max(0.0, min(100.0, _opacity)) / 100.0
+
+        try:
+            from PIL import Image, ImageChops
+        except ImportError:
+            # PIL이 없으면 이 장식 기능은 포기하고(정말 예외적인 환경) 완전
+            # 불투명으로라도 만든다 - 이 함수가 호출된 시점엔 이미 GIF+반투명
+            # 선택을 건너뛴 뒤이므로 안전한 기본값이 필요함.
+            _fallback_plotdef = copy.copy(plotdef)
+            _fallback_plotdef.pip = dict(pip, opacity=100.0)
+            self.create_animation_script(_fallback_plotdef, gif_path, annotations=annotations, arrows=arrows,
+                                          circles=circles, duration_sec=duration_sec, gif_path=gif_path)
+            return gif_path
+
+        # [1단계] PIP 박스의 위치/크기(화면 fraction)를 알아내야 크롭 좌표를
+        # 계산할 수 있는데, opacity=100/0인 "빠른 경로"는 _render_pip_inset이
+        # 후처리 정보(clip_info)를 안 돌려준다(필요 없으니까) - 여기서는
+        # 위치/크기 "숫자"만 필요하므로, 렌더링에는 안 쓸 프로브용 복사본의
+        # opacity를 일부러 50으로 바꿔 clip_info를 받아낸다(진짜 렌더링은
+        # 아래 2/3단계에서 opacity=100으로 다시 만듦 - 여기 50은 좌표 계산
+        # 목적일 뿐 실제로 그려지지 않음).
+        _size_scale = self._compute_size_scale(plotdef)
+        _geom_lines = ["set encoding utf8", "set term unknown"]
+        _geom_main_cmd_list = self._build_plot_commands(
+            plotdef, _geom_lines, is_multiplot=False, annotations=annotations, arrows=arrows,
+            circles=circles, panel_scale=_size_scale, fmt="interactive"
+        )
+        _geom_plotdef = copy.copy(plotdef)
+        _geom_plotdef.pip = dict(pip, opacity=50.0)
+        _clip_info = self._render_pip_inset(_geom_plotdef, list(_geom_lines), _geom_main_cmd_list, "interactive")
+        if _clip_info is None:
+            # 이론상 opacity=50이면 항상 후처리 정보를 돌려줘야 하지만
+            # (원/타원이든 사각형이든), 혹시 못 받으면 좌표를 모르니 안전하게
+            # 완전 불투명으로 대체한다.
+            _fallback_plotdef = copy.copy(plotdef)
+            _fallback_plotdef.pip = dict(pip, opacity=100.0)
+            self.create_animation_script(_fallback_plotdef, gif_path, annotations=annotations, arrows=arrows,
+                                          circles=circles, duration_sec=duration_sec, gif_path=gif_path)
+            return gif_path
+        origin_x, origin_y = _clip_info["origin_x"], _clip_info["origin_y"]
+        size_w, size_h = _clip_info["size_w"], _clip_info["size_h"]
+
+        _tmp_full_gif = os.path.join(plot_dir, f".cathplot_pip_gifblend_full_{uuid.uuid4().hex}.gif")
+        _tmp_main_gif = os.path.join(plot_dir, f".cathplot_pip_gifblend_main_{uuid.uuid4().hex}.gif")
+        try:
+            # [2단계] "완전 불투명" 버전(clip_shape는 요청한 그대로 유지 -
+            # rect든 원/타원이든 이미 opacity=100에서 네이티브로 저비용 지원됨).
+            _full_plotdef = copy.copy(plotdef)
+            _full_plotdef.pip = dict(pip, opacity=100.0)
+            self.create_animation_script(_full_plotdef, _tmp_full_gif, annotations=annotations, arrows=arrows,
+                                          circles=circles, duration_sec=duration_sec, gif_path=_tmp_full_gif)
+            if not os.path.exists(_tmp_full_gif):
+                raise RuntimeError("PIP 완전불투명 버전 GIF 생성에 실패했습니다.")
+
+            # [3단계] "메인만"(PIP 완전히 끔) 버전.
+            _main_only_plotdef = copy.copy(plotdef)
+            _main_only_plotdef.pip = {}
+            self.create_animation_script(_main_only_plotdef, _tmp_main_gif, annotations=annotations, arrows=arrows,
+                                          circles=circles, duration_sec=duration_sec, gif_path=_tmp_main_gif)
+            if not os.path.exists(_tmp_main_gif):
+                raise RuntimeError("PIP 없는 메인 버전 GIF 생성에 실패했습니다.")
+
+            # [4단계] 프레임끼리 짝지어 PIL로 섞기.
+            full_im = Image.open(_tmp_full_gif)
+            main_im = Image.open(_tmp_main_gif)
+            n_frames = getattr(full_im, "n_frames", 1)
+            gif_w, gif_h = full_im.size
+
+            px0 = int(round(origin_x * gif_w))
+            px1 = int(round((origin_x + size_w) * gif_w))
+            py0 = int(round((1.0 - (origin_y + size_h)) * gif_h))
+            py1 = int(round((1.0 - origin_y) * gif_h))
+            if px1 - px0 <= 0 or py1 - py0 <= 0:
+                raise RuntimeError("PIP 박스 크기를 계산할 수 없습니다.")
+            _white = Image.new("RGB", (px1 - px0, py1 - py0), (255, 255, 255))
+
+            frames, durations = [], []
+            for i in range(n_frames):
+                full_im.seek(i)
+                main_im.seek(min(i, getattr(main_im, "n_frames", 1) - 1))
+                full_frame = full_im.convert("RGB")
+                main_frame = main_im.convert("RGB")
+
+                patch = full_frame.crop((px0, py0, px1, py1))     # 흰 배경(또는 클리핑된 모양) 위 잉크
+                beneath = main_frame.crop((px0, py0, px1, py1))   # 이 자리의 "메인 plot만"
+
+                _ink_mask = ImageChops.difference(patch, _white).convert("L")
+                _bg_blend = Image.blend(beneath, _white, _alpha_frac)
+                _composite = _bg_blend.copy()
+                _composite.paste(patch, (0, 0), mask=_ink_mask)
+
+                result = main_frame.copy()
+                result.paste(_composite, (px0, py0))
+                frames.append(result)
+                durations.append(full_im.info.get("duration", 20))
+
+            if not frames:
+                raise RuntimeError("합성할 프레임이 없습니다.")
+            frames[0].save(
+                gif_path, save_all=True, append_images=frames[1:], duration=durations, loop=0, optimize=False
+            )
+        finally:
+            for _tmp in (_tmp_full_gif, _tmp_main_gif):
+                try:
+                    os.remove(_tmp)
+                except OSError:
+                    pass
+        return gif_path
+
     def create_3d_animation_script(self, curves_3d, outfile, xlabel="", ylabel="", zlabel="", title="",
                                     xlog=False, ylog=False, zlog=False, rot_x=60, rot_z=30,
                                     style="lines", palette="rainbow", colorbox=True,
