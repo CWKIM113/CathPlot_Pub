@@ -4409,6 +4409,343 @@ class GnuplotGenerator:
         _force_focus_window_by_title(os.path.splitext(os.path.basename(outfile))[0])
         return outfile
 
+    def create_3d_animation_script(self, curves_3d, outfile, xlabel="", ylabel="", zlabel="", title="",
+                                    xlog=False, ylog=False, zlog=False, rot_x=60, rot_z=30,
+                                    style="lines", palette="rainbow", colorbox=True,
+                                    equal_xyz=False, surfaces=None,
+                                    y_min=None, y_max=None, z_min=None, z_max=None,
+                                    time_min=None, time_max=None,
+                                    duration_sec=20.0, gif_path=None):
+        """[신규] 3D Plot(splot)도 create_animation_script(2D)와 같은 방식으로
+        X(보통 Time) 값이 늘어남에 따라 curve/surface가 점점 그려지는(progress)
+        애니메이션을 만든다. 기본은 Interactive 창(화면)이고, gif_path를 주면
+        대신 애니메이션 GIF로 저장한다(2D와 동일하게 재생 속도가 저장 시점에
+        delay로 굳어지므로 GIF 모드에서는 Pause/Speed/Exit을 뺀다).
+
+        [범위 제한 - 1차 구현] 회전각(rot_x/rot_z)은 재생 내내 고정한다(카메라가
+        같이 움직이는 것까지는 범위 밖 - 재생 전 3D 팝업에서 원하는 각도로 맞춰
+        두고 재생). annotations_3d/arrows_3d(정적 3D Plot 전용 주석)는 애니메이션
+        에서는 생략한다(프레임마다 다시 그려야 해서 비용이 크고, 진행 표시
+        (경계선/Progress 문구)와 자리가 겹칠 수 있음).
+
+        [재사용] IPC 기반 Pause/Resume/Speed/Exit 제어(ctrl_path/status_path 파일
+        프로토콜)는 create_animation_script(2D)와 완전히 동일하게 만든다 -
+        cathplot_gui._open_animation_control_panel이 이 프로토콜에만 의존하고
+        2D/3D를 구분하지 않으므로 그대로 재사용된다.
+
+        [설계 - 2D와 다른 점] 2D는 이미 만들어진 "plot \\" 뒤 curve 명령의 using절을
+        정규식으로 뒤늦게 감싸는 방식(_wrap_threshold)을 쓰지만, 3D의 using절은
+        "X:Y:Z:Z"(4파트, 마지막 Z는 palette 색상용)라 2D의 정규식 패턴(2파트 가정)과
+        맞지 않는다 - 대신 create_3d_script와 동일한 x_expr 조립 로직을 이 함수
+        안에서 thresh_var 유무에 따라 두 번(범위 계산용 필터 없는 버전 / 실제
+        재생용 thresh 포함 버전) 만드는 헬퍼(_build_splot_parts)를 둔다(create_3d_
+        script 본체를 건드리지 않기 위해 그 조립 로직을 그대로 복제 - 두 함수가
+        서로 다른 실행 경로(정적 실행 vs do-for 루프 안 반복 호출)라 안전하게
+        공유하기 어려움)."""
+        plot_dir = os.path.dirname(os.path.abspath(outfile))
+        os.makedirs(plot_dir, exist_ok=True)
+        is_gif = bool(gif_path)
+        title_disp = os.path.splitext(os.path.basename(outfile))[0]
+
+        def _resolve_style(item):
+            return (item.get("style") or style or "lines")
+
+        def _build_splot_parts(thresh_var):
+            """thresh_var가 None이면 time_min/time_max 필터만(범위 계산용 "unknown"
+            프라이밍 패스), thresh_var가 있으면(예: "thresh") 그 조건까지 같이
+            NaN-마스킹 조건에 넣어(실제 재생용) splot 절 리스트를 만든다."""
+            parts = []
+            for c in curves_3d:
+                abs_path = c["dat_file"] if os.path.isabs(c["dat_file"]) else os.path.abspath(c["dat_file"])
+                try:
+                    path = os.path.relpath(abs_path, start=plot_dir)
+                except ValueError:
+                    path = abs_path
+                path = path.replace("\\", "/")
+                x_shift = c.get("x_shift", 0.0)
+                _raw_ref = f"${c['x_col']}"
+                _conds = []
+                _t_cond = self._time_range_cond(_raw_ref, time_min, time_max)
+                if _t_cond:
+                    _conds.append(_t_cond)
+                if thresh_var:
+                    _conds.append(f"({_raw_ref})<=({thresh_var})")
+                if _conds:
+                    x_expr = f"(({' && '.join(_conds)}) ? ({_raw_ref}+{x_shift}) : (0/0))"
+                else:
+                    x_expr = f"({_raw_ref}+{x_shift})"
+                using_expr = f"{x_expr}:{c['y_col']}:{c['z_col']}:{c['z_col']}"
+
+                _c_style = self._3D_STYLE_MAP.get(_resolve_style(c), "lines")
+                _pt_clause = ""
+                if _c_style in ("points", "linespoints"):
+                    marker_pt = c.get("marker_shape")
+                    marker_size = c.get("marker_size")
+                    if marker_pt is not None:
+                        _pt_clause += f" pt {marker_pt}"
+                    if marker_size:
+                        _pt_clause += f" ps {marker_size}"
+
+                title_text = (c.get("title") or "").strip()
+                if title_text and (len(curves_3d) + len(surfaces or [])) > 1:
+                    _title_rendered, _title_enh = self._render_text(title_text)
+                    _title_clause = f'title "{_title_rendered}" {_title_enh}'
+                else:
+                    _title_clause = "notitle"
+
+                parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette')
+
+            _SURFACE_DASH_CYCLE = ["", "6, 3", "1, 2", "8, 3, 1, 3", "3, 2"]
+            for _s_idx, s in enumerate(surfaces or []):
+                abs_path = s["dat_file"] if os.path.isabs(s["dat_file"]) else os.path.abspath(s["dat_file"])
+                try:
+                    path = os.path.relpath(abs_path, start=plot_dir)
+                except ValueError:
+                    path = abs_path
+                path = path.replace("\\", "/")
+                _s_title = (s.get("label") or "").strip()
+                if _s_title and (len(curves_3d) + len(surfaces or [])) > 1:
+                    _s_title_rendered, _s_title_enh = self._render_text(_s_title)
+                    _s_title_clause = f'title "{_s_title_rendered}" {_s_title_enh}'
+                else:
+                    _s_title_clause = "notitle"
+                _s_conds = []
+                _s_t_cond = self._time_range_cond("$1", time_min, time_max)
+                if _s_t_cond:
+                    _s_conds.append(_s_t_cond)
+                if thresh_var:
+                    _s_conds.append(f"($1)<=({thresh_var})")
+                _s_x_using = f"(({' && '.join(_s_conds)}) ? ($1) : (0/0))" if _s_conds else "1"
+                _s_style_raw = _resolve_style(s)
+                if _s_style_raw.lower() == "pm3d":
+                    parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with pm3d')
+                else:
+                    _s_style = self._3D_STYLE_MAP.get(_s_style_raw, "lines")
+                    _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
+                    _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
+                    _s_pt_clause = ""
+                    if _s_style in ("points", "linespoints"):
+                        _s_marker_pt = s.get("marker_shape")
+                        _s_marker_size = s.get("marker_size")
+                        if _s_marker_pt is not None:
+                            _s_pt_clause += f" pt {_s_marker_pt}"
+                        if _s_marker_size:
+                            _s_pt_clause += f" ps {_s_marker_size}"
+                    parts.append(
+                        f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}'
+                    )
+            return parts
+
+        if not curves_3d and not (surfaces or []):
+            raise RuntimeError("애니메이션을 만들 3D 커브/서피스가 없습니다.")
+
+        # [재사용] create_3d_script와 동일한 view/축/palette 설정 - 회전-반응형
+        # title 재정렬, 저장/인쇄 단축키 등 정적 3D Plot 전용의 화면-상호작용
+        # 편의 기능(위 docstring 범위 제한 참고)은 애니메이션에서는 뺀다.
+        lines = ["set encoding utf8", "set term unknown"]
+        lines.append(f"set view {rot_x},{rot_z}")
+        if equal_xyz:
+            lines.append("set view equal xyz")
+
+        def _range_clause(vmin, vmax):
+            has_min = vmin is not None and vmin != ""
+            has_max = vmax is not None and vmax != ""
+            if not has_min and not has_max:
+                return None
+            return f"[{vmin if has_min else '*'}:{vmax if has_max else '*'}]"
+        _yr = _range_clause(y_min, y_max)
+        if _yr: lines.append(f"set yrange {_yr}")
+        _zr = _range_clause(z_min, z_max)
+        if _zr: lines.append(f"set zrange {_zr}")
+        lines.append("set ticslevel 0")
+        if xlog: lines.append("set logscale x")
+        if ylog: lines.append("set logscale y")
+        if zlog:
+            lines.append("set logscale z")
+            lines.append("set logscale cb")
+        lines.append(self._3D_PALETTE_MAP.get(palette, self._3D_PALETTE_MAP["rainbow"]))
+        if not colorbox:
+            lines.append("unset colorbox")
+        lines.append("set xtics offset 0,-0.6")
+        lines.append("set ytics offset 0.3,-0.3")
+        # [수정] 애니메이션은 회전각이 고정이므로(위 docstring 참고), 정적
+        # 3D Plot처럼 rot_x/rot_z 기반 각도 계산을 그대로 한 번만 적용하면
+        # 되고 't'로 다시 계산할 필요가 없다(재정렬 bind 자체를 안 둠).
+        _R_3D = 0.7625
+        _rx_rad = math.radians(rot_x)
+        _rz_rad = math.radians(rot_z)
+
+        def _axis_label_rotate_deg(sx, sy):
+            ang = math.degrees(math.atan2(sy, sx))
+            while ang > 90:
+                ang -= 180
+            while ang < -90:
+                ang += 180
+            return ang
+
+        _xlabel_rot = _axis_label_rotate_deg(math.cos(_rz_rad), -_R_3D * math.cos(_rx_rad) * math.sin(_rz_rad))
+        _ylabel_rot = _axis_label_rotate_deg(math.sin(_rz_rad), _R_3D * math.cos(_rx_rad) * math.cos(_rz_rad))
+
+        def _snap90(a):
+            return min((0, 90, -90), key=lambda c: abs(a - c))
+        _xlabel_rot_screen = _snap90(_xlabel_rot)  # "windows" 터미널은 xlabel 임의각도 rotate 미지원(정적 3D와 동일한 실측 근거)
+        if xlabel:
+            _xlabel_text, _xlabel_enh = self._render_text(xlabel)
+            lines.append(f'set xlabel "{_xlabel_text}" rotate by {_xlabel_rot_screen:.2f} offset 0,-1.0 {_xlabel_enh}')
+        _dot_xz = -math.sin(_rx_rad) * math.cos(_rx_rad) * math.sin(_rz_rad)
+        _y_anchor_x = 1.0 if _dot_xz < 0 else 0.0
+        if ylabel:
+            _ylabel_text, _ylabel_enh = self._render_text(ylabel)
+            lines.append(f'set label 9001 "{_ylabel_text}" at graph {_y_anchor_x}, graph 0.5, graph 0 '
+                         f'rotate by {_ylabel_rot:.2f} offset 4.0,-2.1 {_ylabel_enh}')
+        if zlabel:
+            _zlabel_text, _zlabel_enh = self._render_text(zlabel)
+            lines.append(f'set zlabel "{_zlabel_text}" rotate by 90 offset -1.5,0 {_zlabel_enh}')
+        lines.append("set bmargin 6.5")
+        if title:
+            _title_text, _title_enh = self._render_text(title)
+            lines.append(f'set title "{_title_text}" {_title_enh}')
+
+        _all_titles = [(c.get("title") or "").strip() for c in curves_3d] + \
+                      [(s.get("label") or "").strip() for s in (surfaces or [])]
+        if any(_all_titles) and len(curves_3d) + len(surfaces or []) > 1:
+            lines.append("set key outside right top box")
+        if any(_resolve_style(s).lower() == "pm3d" for s in (surfaces or [])):
+            lines.append("set pm3d depthorder")
+
+        # [범위 계산용 프라이밍 패스] "unknown" 터미널(화면에 아무것도 안 그림)로
+        # time_min/time_max 필터만 적용한(thresh 없는) 전체 splot을 한 번 실행해서
+        # GPVAL_X_MIN/MAX(=애니메이션이 훑을 실제 X 범위)를 구한다 - 2D의 "정적
+        # plot을 먼저 한 번 실행" 트릭과 동일한 이유(깜빡임 방지 + 실제 범위 확보).
+        lines.append("splot " + ", \\\n      ".join(_build_splot_parts(None)))
+        if _zr is None:
+            lines.append("_z0min = GPVAL_Z_MIN")
+            lines.append("_z0max = GPVAL_Z_MAX")
+            lines.append("set zrange [_z0min:_z0max]")
+        lines.append("xmin_anim = GPVAL_X_MIN")
+        lines.append("xmax_anim = GPVAL_X_MAX")
+
+        n_frames = 150
+        try:
+            duration_sec = max(float(duration_sec), 0.5)
+        except (TypeError, ValueError):
+            duration_sec = 20.0
+        frame_pause = duration_sec / n_frames
+        lines.append(f"n_frames_anim = {n_frames}")
+        lines.append(f"frame_pause_anim = {frame_pause:.6f}")
+
+        animated_splot_cmd = "splot " + ", \\\n      ".join(_build_splot_parts("thresh"))
+
+        if is_gif:
+            # [GIF 저장] 2D와 동일 - 재생 속도는 gif 터미널의 delay로 저장 시점에
+            # 고정하므로 Pause/Speed/Exit(실시간 컨트롤)은 의미가 없어 뺀다.
+            delay_cs = max(int(round(frame_pause * 100)), 2)
+            gif_w, gif_h = 900, 650
+            lines.append(f'set terminal gif animate delay {delay_cs} size {gif_w},{gif_h} optimize')
+            lines.append(f"set output '{gif_path.replace(chr(92), '/')}'")
+            lines.append("do for [_frame_i=0:n_frames_anim] {")
+            lines.append("    thresh = xmin_anim + (xmax_anim - xmin_anim) * _frame_i / n_frames_anim")
+            lines.append("    set label 9998 sprintf(\"Progress %.0f%%  (X=%.4g)\", 100.0*_frame_i/n_frames_anim, thresh) at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
+            lines.append(f"    {animated_splot_cmd}")
+            lines.append("}")
+            lines.append("set output")
+        else:
+            _anim_win_pos = None
+            try:
+                import ctypes as _ctypes
+                _user32 = _ctypes.windll.user32
+                _scr_w = _user32.GetSystemMetrics(0)
+                _scr_h = _user32.GetSystemMetrics(1)
+                _anim_win_pos = f"{max((_scr_w - 1000) // 2, 0)},{max((_scr_h - 700) // 2, 0)}"
+            except Exception:
+                _anim_win_pos = None
+            _pos_clause = f" position {_anim_win_pos}" if _anim_win_pos else ""
+            lines.append(f"set terminal windows title '{title_disp}' font 'Malgun Gothic,11' size 1000,700{_pos_clause}")
+            lines.append("paused_anim = 0")
+            lines.append("exit_anim = 0")
+            lines.append('bind " " "paused_anim = !paused_anim"')
+            lines.append('bind "+" "frame_pause_anim = frame_pause_anim*0.5"')
+            lines.append('bind "-" "frame_pause_anim = frame_pause_anim*2.0"')
+            # [재사용] 2D create_animation_script와 완전히 동일한 파일 기반 IPC
+            # 프로토콜(ctrl_path/status_path) - cathplot_gui._open_animation_
+            # control_panel이 이 프로토콜에만 의존해서 2D/3D 구분 없이 그대로 씀.
+            _anim_uid = uuid.uuid4().hex[:8]
+            ctrl_path = outfile.rsplit(".", 1)[0] + f"_ctrl_{_anim_uid}.plt"
+            _ctrl_path_gp = ctrl_path.replace(chr(92), "/")
+            lines.append(f"_anim_ctrl_path = '{_ctrl_path_gp}'")
+            status_path = outfile.rsplit(".", 1)[0] + f"_status_{_anim_uid}.txt"
+            _status_path_gp = status_path.replace(chr(92), "/")
+            lines.append(f"_anim_status_path = '{_status_path_gp}'")
+            _help_text = "+/-: 속도"
+            lines.append("click_seq = 0")
+            lines.append("while (1) {")
+            lines.append("do for [_frame_i=0:n_frames_anim] {")
+            lines.append("    load _anim_ctrl_path")
+            lines.append("    if (exit_anim) { break }")
+            lines.append("    while (paused_anim && !exit_anim) { load _anim_ctrl_path; pause 0.1 }")
+            lines.append("    if (exit_anim) { break }")
+            lines.append("    thresh = xmin_anim + (xmax_anim - xmin_anim) * _frame_i / n_frames_anim")
+            lines.append(f"    set label 9998 sprintf(\"Progress %.0f%%  (X=%.4g)  {_help_text}\", 100.0*_frame_i/n_frames_anim, thresh) at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
+            lines.append(f"    {animated_splot_cmd}")
+            lines.append("    pause frame_pause_anim")
+            lines.append("}")
+            lines.append("if (exit_anim) { break }")
+            lines.append(f"set label 9998 sprintf(\"Progress 100%%  {_help_text} - Resume으로 처음부터 재생\") at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
+            lines.append("replot")
+            lines.append("_finished_seq = click_seq")
+            lines.append("set print _anim_status_path")
+            lines.append("print sprintf(\"finished=%d\", _finished_seq)")
+            lines.append("set print")
+            lines.append("while (click_seq <= _finished_seq && !exit_anim) { load _anim_ctrl_path; pause 0.3 }")
+            lines.append("if (exit_anim) { break }")
+            lines.append("}")
+            lines.append(f"set label 9998 sprintf(\"Progress 100%%  {_help_text}\") at screen 0.01, screen 0.02 front tc rgb \"purple\" font \",11\"")
+            lines.append("replot")
+            lines.append("pause mouse close")
+
+        script_text = "\n".join(lines)
+        gnuplot_exe = _resolve_gnuplot_exe()
+
+        if is_gif:
+            result = subprocess.run(
+                [gnuplot_exe], input=script_text, text=True, encoding="utf-8", errors="replace",
+                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
+            )
+            if result.returncode != 0:
+                debug_path = os.path.join(plot_dir, f".cathplot_failed_3d_anim_{uuid.uuid4().hex}.plt")
+                try:
+                    with open(debug_path, "w", encoding="utf-8") as f:
+                        f.write(script_text)
+                except OSError:
+                    debug_path = None
+                stderr_text = (result.stderr or "").strip()
+                msg = f"3D 애니메이션 GIF 생성 실패 (반환 코드 {result.returncode})"
+                if stderr_text:
+                    msg += f":\n{stderr_text}"
+                if debug_path:
+                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
+                raise RuntimeError(msg)
+            return gif_path
+
+        script_path = outfile.rsplit(".", 1)[0] + ".plt"
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script_text)
+        with open(ctrl_path, "w", encoding="utf-8") as f:
+            f.write("paused_anim = 0\nexit_anim = 0\nframe_pause_anim = %.6f\nclick_seq = 0\n" % frame_pause)
+        try:
+            os.remove(status_path)
+        except OSError:
+            pass
+        self.last_anim_ctrl_path = ctrl_path
+        self.last_anim_status_path = status_path
+        self.last_anim_frame_pause = frame_pause
+        self.last_process = subprocess.Popen(
+            [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
+            stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
+        )
+        _force_focus_window_by_title(title_disp)
+        return outfile
+
     _3D_PALETTE_MAP = {
         "rainbow": "set palette rgbformulae 33,13,10",
         "grayscale": "set palette gray",

@@ -4795,6 +4795,18 @@ class CathPlotGUI:
         self._mk_check(row2, "Colorbox", colorbox_var, side="left", padx=(10, 0))
         equal_xyz_var = tk.BooleanVar(value=False)
         self._mk_check(row2, "Equal XYZ scale", equal_xyz_var, side="left", padx=(10, 0))
+        # [추가 - 요청] "3D popup 창에 옵션 체크박스를 넣으면" - 2D의 메인 화면
+        # Animate 체크박스는 3D 파이프라인(create_3d_script)을 전혀 안 건드려서
+        # 지금까지 3D에서는 켜져 있어도 완전히 무시됐음(연동 자체가 없었음) -
+        # 3D는 자기 전용 팝업(여기)에 별도로 넣는다(2D 체크박스와 독립적).
+        # X(Time) 값이 늘어남에 따라 curve/surface가 점점 그려지는(progress)
+        # 애니메이션 - gnu_generator.create_3d_animation_script 참고(회전각은
+        # 재생 내내 고정, annotation/arrow는 1차 구현 범위 밖).
+        animate3d_var = tk.BooleanVar(value=False)
+        animate3d_duration_var = tk.StringVar(value="20")
+        self._mk_check(row2, "Animate", animate3d_var, color="accent", side="left", padx=(14, 0))
+        ttk.Label(row2, text="Time(s):").pack(side="left", padx=(4, 1))
+        ttk.Entry(row2, textvariable=animate3d_duration_var, width=4).pack(side="left")
 
         # [수정] "Marker Size를 세트 선택 줄로 이동(모양 앞에), Style도 세트별로
         # (curve마다 다르게 줄 수 있으므로) 이동 - Color Palette(입체채색)는
@@ -5046,7 +5058,8 @@ class CathPlotGUI:
             return (curves_final, rot_x, rot_z, "lines", palette_var.get(),
                     colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get(), surfaces_final,
                     xlabel3d_var.get(), ylabel3d_var.get(), zlabel3d_var.get(),
-                    plot_title_var.get(), time_min, time_max, y_min, y_max, z_min, z_max)
+                    plot_title_var.get(), time_min, time_max, y_min, y_max, z_min, z_max,
+                    animate3d_var.get(), animate3d_duration_var.get())
 
         def do_plot():
             # [수정] "3D Plot 추가 창은 plot 후에도 닫지 말 것" - rot_x/rot_z를
@@ -5107,6 +5120,7 @@ class CathPlotGUI:
                 "palette": palette_var.get(),
                 "colorbox": colorbox_var.get(),
                 "equal_xyz": equal_xyz_var.get(),
+                "animate3d": animate3d_var.get(), "animate3d_duration": animate3d_duration_var.get(),
                 "marker_shapes": _shapes, "marker_sizes": _sizes, "styles": _styles,
                 "annotations_3d": [
                     {"txt": d['txt'].get(), "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
@@ -5179,6 +5193,8 @@ class CathPlotGUI:
             palette_var.set(data.get("palette", palette_var.get()))
             colorbox_var.set(data.get("colorbox", True))
             equal_xyz_var.set(data.get("equal_xyz", False))
+            animate3d_var.set(data.get("animate3d", False))
+            animate3d_duration_var.set(data.get("animate3d_duration", animate3d_duration_var.get()))
 
             # [수정] "Marker Size, Style을 세트별로" - label 기준으로 각 행에
             # 복원(예전 템플릿의 "marker_size"/"style" 전역 키는 없으면 무시됨).
@@ -5250,7 +5266,8 @@ class CathPlotGUI:
     def _execute_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
                           equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
                           plot_title="", time_min=None, time_max=None,
-                          y_min=None, y_max=None, z_min=None, z_max=None):
+                          y_min=None, y_max=None, z_min=None, z_max=None,
+                          animate3d=False, animate3d_duration="20"):
         os.makedirs(self.plot_dir, exist_ok=True)
         # [수정 - 버그] "Plot Title/axis title을 blank로 두면 plot에도 blank로
         # 나와야 하는데, 선택도 안 한 첫 파일명이 뜸" - 팝업의 Plot Title
@@ -5269,34 +5286,110 @@ class CathPlotGUI:
 
         generator = GnuplotGenerator(self.plot_dir)
         try:
-            generator.create_3d_script(
-                curves, outfile, fmt="interactive",
-                # [수정 - 버그] X/Y/Z title도 같은 이유로 "or 기본값" 폴백을
-                # 없앤다 - 사용자가 비웠으면 축 title 없이 그대로 나와야 함.
-                # 기본값(Time/Data_No/surface 이름)은 다이얼로그가 열릴 때
-                # _sync_default_titles가 이미 채워주므로, 여기서 다시 덮어쓸
-                # 필요가 없다(오히려 사용자가 일부러 비운 걸 되돌리는 버그였음).
-                xlabel=xlabel3d, ylabel=ylabel3d, zlabel=zlabel3d,
-                title=title_for_plot,
-                xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
-                rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
-                annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
-                surfaces=surfaces, time_min=time_min, time_max=time_max,
-                y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
-            )
+            if animate3d:
+                # [추가 - 요청] "3D popup의 Animate 체크박스" - 2D PLOT과 동일한
+                # 방식(gnu_generator.create_3d_animation_script)으로 X(Time)
+                # 값이 늘어남에 따라 curve/surface가 점점 그려지는 애니메이션을
+                # 화면에 띄운다. annotations_3d/arrows_3d는 애니메이션에서는
+                # 아직 지원 안 함(create_3d_animation_script 참고).
+                try:
+                    _duration_sec = float((animate3d_duration or "20").strip())
+                except ValueError:
+                    _duration_sec = 20.0
+                generator.create_3d_animation_script(
+                    curves, outfile,
+                    xlabel=xlabel3d, ylabel=ylabel3d, zlabel=zlabel3d,
+                    title=title_for_plot,
+                    xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
+                    rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
+                    equal_xyz=equal_xyz, surfaces=surfaces, time_min=time_min, time_max=time_max,
+                    y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max, duration_sec=_duration_sec,
+                )
+            else:
+                generator.create_3d_script(
+                    curves, outfile, fmt="interactive",
+                    # [수정 - 버그] X/Y/Z title도 같은 이유로 "or 기본값" 폴백을
+                    # 없앤다 - 사용자가 비웠으면 축 title 없이 그대로 나와야 함.
+                    # 기본값(Time/Data_No/surface 이름)은 다이얼로그가 열릴 때
+                    # _sync_default_titles가 이미 채워주므로, 여기서 다시 덮어쓸
+                    # 필요가 없다(오히려 사용자가 일부러 비운 걸 되돌리는 버그였음).
+                    xlabel=xlabel3d, ylabel=ylabel3d, zlabel=zlabel3d,
+                    title=title_for_plot,
+                    xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
+                    rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
+                    annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
+                    surfaces=surfaces, time_min=time_min, time_max=time_max,
+                    y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
+                )
         except Exception as e:
             messagebox.showerror("3D Plot Error", str(e))
+            return
+
+        # [추가 - 요청] "저장도 animation으로 되게" 이전에 "화면 재생도 2D와
+        # 동일한 Pause/Speed/Exit 컨트롤이 뜨게" - 2D execute_plot_pipeline과
+        # 같은 크래시 확인 + Animation Control 패널 오픈 패턴(_open_animation_
+        # control_panel은 2D/3D 구분 없이 ctrl_path/status_path 프로토콜에만
+        # 의존하므로 그대로 재사용됨).
+        if animate3d and generator.last_process is not None:
+            import time as _time
+            _crashed = False
+            for _ in range(10):  # 0.2초 간격으로 최대 2초
+                _time.sleep(0.2)
+                if generator.last_process.poll() is not None:
+                    _crashed = True
+                    break
+            if _crashed:
+                _err_detail = ""
+                try:
+                    if generator.last_process.stderr:
+                        _err_detail = generator.last_process.stderr.read().decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    _err_detail = ""
+                _msg = "gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n축 설정이나 데이터 범위를 확인해주세요."
+                if _err_detail:
+                    _msg += f"\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
+                messagebox.showwarning("3D Plot", _msg)
+                generator.last_process = None
+            elif getattr(generator, "last_anim_ctrl_path", None):
+                self._open_animation_control_panel(
+                    generator.last_anim_ctrl_path, generator.last_anim_frame_pause,
+                    status_path=getattr(generator, "last_anim_status_path", None),
+                    proc=generator.last_process,
+                    plot_window_title=os.path.splitext(os.path.basename(outfile))[0],
+                )
 
     def _generate_3d_file(self, outfile, fmt, curves, rot_x, rot_z, style, palette, colorbox,
                            annotations_3d, arrows_3d, equal_xyz, surfaces, xlabel3d="", ylabel3d="", zlabel3d="",
                            plot_title="", time_min=None, time_max=None,
-                           y_min=None, y_max=None, z_min=None, z_max=None):
+                           y_min=None, y_max=None, z_min=None, z_max=None,
+                           animate3d_duration="20"):
         """Save/Print가 공통으로 쓰는, 파일로 직접 렌더링하는 부분만 뽑은 버전
-        (_execute_3d_plot의 화면(interactive) 전용 코드와 outfile/fmt만 다름)."""
+        (_execute_3d_plot의 화면(interactive) 전용 코드와 outfile/fmt만 다름).
+
+        [추가 - 요청] "저장도 animation으로 되게 하면 됨" - fmt이 "gif"면(Save
+        다이얼로그에서 Animated GIF를 골랐다는 뜻 - Animate 체크박스와 무관하게
+        GIF 확장자 선택 자체가 신호) 2D의 "Save GIF"와 동일하게 create_3d_
+        animation_script로 애니메이션 GIF를 만든다."""
         # [수정 - 버그] blank Plot Title/axis title이 폴백값으로 되돌아가던
         # 문제 - _execute_3d_plot과 동일하게 수정(위 주석 참고).
         title_for_plot = (plot_title or "").strip()
         generator = GnuplotGenerator(self.plot_dir)
+        if fmt.lower() == "gif":
+            try:
+                _duration_sec = float((animate3d_duration or "20").strip())
+            except ValueError:
+                _duration_sec = 20.0
+            generator.create_3d_animation_script(
+                curves, outfile,
+                xlabel=xlabel3d, ylabel=ylabel3d, zlabel=zlabel3d,
+                title=title_for_plot,
+                xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
+                rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
+                equal_xyz=equal_xyz, surfaces=surfaces, time_min=time_min, time_max=time_max,
+                y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
+                duration_sec=_duration_sec, gif_path=outfile,
+            )
+            return
         generator.create_3d_script(
             curves, outfile, fmt=fmt,
             xlabel=xlabel3d, ylabel=ylabel3d, zlabel=zlabel3d,
@@ -5311,7 +5404,8 @@ class CathPlotGUI:
     def _save_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
                        equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
                        plot_title="", time_min=None, time_max=None,
-                       y_min=None, y_max=None, z_min=None, z_max=None):
+                       y_min=None, y_max=None, z_min=None, z_max=None,
+                       animate3d=False, animate3d_duration="20"):
         """[추가] "3D Plot도 저장 지원" - 2D SAVE와 동일한 포맷 선택 방식,
         방향/Frame 크기 선택 등 2D의 복잡한 캐시 선택 로직 없이 지금 다이얼로그
         입력값 그대로 바로 파일로 렌더링한다."""
@@ -5331,6 +5425,11 @@ class CathPlotGUI:
             ("SVG Vector Graphic (*.svg)", "*.svg"),
             ("Enhanced Metafile (*.emf)", "*.emf"),
             ("Encapsulated PostScript (*.eps)", "*.eps"),
+            # [추가 - 요청] "저장도 animation으로 되게" - GIF 확장자를 고르면
+            # (Animate 체크박스와 무관하게) _generate_3d_file이 애니메이션
+            # GIF로 만든다(2D의 별도 "Save GIF" 버튼과 달리, 3D는 이 Save
+            # 다이얼로그 하나에서 확장자 선택만으로 통일).
+            ("Animated GIF (*.gif)", "*.gif"),
         ]
         selected_path = filedialog.asksaveasfilename(
             initialdir=self.plot_dir, initialfile=default_name,
@@ -5343,7 +5442,7 @@ class CathPlotGUI:
             self._generate_3d_file(os.path.abspath(selected_path), ext, curves, rot_x, rot_z, style, palette,
                                     colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces,
                                     xlabel3d, ylabel3d, zlabel3d, plot_title, time_min, time_max,
-                                    y_min, y_max, z_min, z_max)
+                                    y_min, y_max, z_min, z_max, animate3d_duration=animate3d_duration)
         except Exception as e:
             messagebox.showerror("Save Error", f"3D Plot 저장 중 오류가 발생했습니다:\n{e}")
             return
@@ -5353,11 +5452,17 @@ class CathPlotGUI:
     def _print_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
                         equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
                         plot_title="", time_min=None, time_max=None,
-                        y_min=None, y_max=None, z_min=None, z_max=None):
+                        y_min=None, y_max=None, z_min=None, z_max=None,
+                        animate3d=False, animate3d_duration="20"):
         """[추가] "3D Plot도 인쇄 지원" - 2D PRINT와 동일하게 EMF를 만들어
         프린터로 직접 그린다(_print_emf_and_cleanup/_pick_printer_dialog 재사용).
         2D처럼 어떤 plot을 고를지/용지 방향을 다시 묻는 절차는 3D 다이얼로그가
-        이미 그 자리에서 설정을 받은 뒤라 생략하고 프린터만 고른다."""
+        이미 그 자리에서 설정을 받은 뒤라 생략하고 프린터만 고른다.
+
+        [주의] animate3d/animate3d_duration은 여기서는 무시한다 - 인쇄는
+        항상 정적인 한 페이지(EMF)라 애니메이션 개념이 없음(_collect_3d_state가
+        Plot/Save/Print 세 버튼에 공통으로 쓰이는 튜플이라 시그니처만
+        맞춰준다)."""
         os.makedirs(self.plot_dir, exist_ok=True)
         idx = 1
         while True:
