@@ -4300,7 +4300,25 @@ class GnuplotGenerator:
         if getattr(plotdef, "pip", None) and plotdef.pip.get("enabled"):
             _pip_probe_lines = list(lines)
             _probe_len_before = len(_pip_probe_lines)
-            self._render_pip_inset(plotdef, _pip_probe_lines, main_cmd_list, "interactive")
+            _pip_clip_info = self._render_pip_inset(plotdef, _pip_probe_lines, main_cmd_list, "interactive")
+            # [추가 - 방어] "네이티브 경로를 못 타는 드문 경우" - cathplot_gui.
+            # _normalize_pip_for_animation이 opacity는 미리 0/100으로 정리해
+            # 넘기지만, 원/타원 클리핑이 네이티브로 처리되려면 그 시점에 X/Y
+            # 범위가 이미 구체적 숫자로 확정돼 있어야 한다(_render_pip_inset의
+            # _ellipse_native_ok 참고) - 반환값이 None이 아니면(=PDF 후처리가
+            # 필요하다는 뜻인데 Animation은 그걸 프레임마다 돌릴 수 없음)
+            # Multi-Plot과 동일하게 사각형으로 안전하게 대체해 다시 시도한다.
+            if _pip_clip_info is not None:
+                _pip_probe_lines = list(lines)
+                _probe_len_before = len(_pip_probe_lines)
+                _fallback_plotdef = copy.copy(plotdef)
+                _fallback_plotdef.pip = dict(plotdef.pip, clip_shape="rect")
+                self._render_pip_inset(_fallback_plotdef, _pip_probe_lines, main_cmd_list, "interactive")
+                _pip_name = (plotdef.title or "plot").strip() or "plot"
+                self.warnings.append(
+                    f"'{_pip_name}'의 PIP 원/타원 클리핑은 이 X/Y 범위 설정에서는 Animation 중 "
+                    f"저비용 처리가 안 되어 사각형으로 대체했습니다."
+                )
             _pip_block = _pip_probe_lines[_probe_len_before:]
             _pip_plot_idx = next((i for i, ln in enumerate(_pip_block) if ln.strip() == "plot \\"), None)
             if _pip_plot_idx is not None:
@@ -4314,6 +4332,24 @@ class GnuplotGenerator:
                     _pip_block[:_pip_plot_idx]
                     + [re.sub(r"using \(([^)]+)\):(\d+)", _wrap_threshold, ln) for ln in _pip_block[_pip_plot_idx:]]
                 )
+                # [수정 - 버그 발견] "원/타원 클리핑된 인셋이 애니메이션 진행과
+                # 무관하게 항상 완성된 모습으로 보임" - _render_pip_inset이
+                # 원/타원 클리핑을 적용할 때 커브의 using절을 이미 "using
+                # (_pip_ellip_ok((X)) : (Y)) ? (X) : (0/0)):(...)" 형태로
+                # 감싸놓는데(X/Y 컬럼 모두 괄호로 감싼 표현식이 됨), 위 threshold
+                # 정규식(using (EXPR):숫자 형태만 인식)은 Y쪽이 더 이상 맨
+                # 숫자가 아니라서 매칭이 안 되고 조용히 통과해버림(실측으로
+                # 발견 - 인셋이 매 프레임 항상 완성된 타원 전체를 그리고
+                # 있었음). _pip_ellip_ok(...) 호출 자체에 thresh 조건을 & &로
+                # 끼워 넣어(같은 X 표현식 재사용) 별도로 바로잡는다 - 원/타원이
+                # 아닌 경우(_pip_ellip_ok 호출 자체가 없음)에는 아무 변화 없음.
+                def _wrap_ellipse_thresh(m):
+                    _xexpr, _yexpr = m.group(1), m.group(2)
+                    return f"(_pip_ellip_ok(({_xexpr}),({_yexpr})) && (({_xexpr})<=thresh))"
+                _pip_inset_lines = [
+                    re.sub(r"_pip_ellip_ok\(\(([^)]+)\),\(([^)]+)\)\)", _wrap_ellipse_thresh, ln)
+                    for ln in _pip_inset_lines
+                ]
                 # [수정 - 버그 발견] "두 번째 프레임부터 메인 plot이 인셋의
                 # 좁은 마진/확대구간 안에 그려짐" - gnuplot의 lmargin/rmargin/
                 # tmargin/bmargin(at screen)과 xrange/yrange는 origin/size와
@@ -7069,16 +7105,18 @@ class GnuplotGenerator:
                     (cell_top_in - cell_bottom_in) / page_h,
                 )
                 _mp_plotdef = plotdef
-                # [추가 - 요청] "원/타원 클리핑" + "배경 불투명도 슬라이더" -
-                # 둘 다 PDF 후처리(_apply_pip_clip) 기반이라 이 칸만 따로
-                # 재처리하기가 M-P 페이지 전체 재구성과 얽혀 복잡함(1차 구현
-                # 범위 밖) - 요청돼 있으면 경고를 남기고 이 칸만 사각형/
-                # 완전불투명(기존 방식)으로 안전하게 대체한다.
+                # [수정 - 발견] "원/타원 클리핑은 항상 사각형으로 강제" -
+                # opacity가 0(완전 투명) 또는 100(완전 불투명)이면 원/타원도
+                # gnuplot 네이티브(_render_pip_inset의 _ellipse_native_ok)로
+                # 처리 가능함을 확인해서, 이제 클리핑 모양 자체는 미리 강제
+                # 하지 않는다 - 배경 반투명(1~99%, 여전히 PDF 후처리
+                # 필요·M-P 페이지 재구성과 얽혀 복잡함 - 1차 구현 범위 밖)만
+                # 강제로 정리한다. 드물게(X/Y 범위가 아직 구체적 숫자로
+                # 확정 안 된 경우) 그래도 네이티브 경로를 못 타면, 아래에서
+                # _render_pip_inset의 반환값을 보고 한 번 더 사각형으로
+                # 안전하게 대체한다(방어적 폴백).
                 _mp_overrides = {}
                 _mp_warn_targets = []
-                if plotdef.pip.get("clip_shape", "rect") not in (None, "rect"):
-                    _mp_overrides["clip_shape"] = "rect"
-                    _mp_warn_targets.append("원/타원 클리핑 → 사각형")
                 _mp_opacity_raw = str(plotdef.pip.get("opacity", "")).strip()
                 try:
                     _mp_opacity_val = (
@@ -7103,7 +7141,23 @@ class GnuplotGenerator:
                         f"'{_pip_name}'의 PIP {', '.join(_mp_warn_targets)}은(는) Multi-Plot에서는 "
                         f"아직 지원하지 않아 강제로 바꿔 표시했습니다."
                     )
-                self._render_pip_inset(_mp_plotdef, lines, _cell_cmd_list, fmt, parent_box=_pb)
+                _mp_probe_lines = list(lines)
+                _mp_clip_info = self._render_pip_inset(_mp_plotdef, _mp_probe_lines, _cell_cmd_list, fmt, parent_box=_pb)
+                if _mp_clip_info is not None:
+                    # 네이티브 경로를 못 탄 경우(방어적 폴백, 위 주석 참고) -
+                    # 사각형으로 다시 그린다. M-P는 _apply_pip_clip(PDF 후처리)를
+                    # 아예 안 부르므로, 반환값이 남아있으면(=후처리가 필요하다는
+                    # 뜻) 그대로 두면 클리핑 안 된 흰 사각 배경만 보이게 됨.
+                    _mp_probe_lines = list(lines)
+                    _fallback_plotdef = copy.copy(_mp_plotdef)
+                    _fallback_plotdef.pip = dict(_mp_plotdef.pip, clip_shape="rect")
+                    self._render_pip_inset(_fallback_plotdef, _mp_probe_lines, _cell_cmd_list, fmt, parent_box=_pb)
+                    _pip_name = (plotdef.title or "plot").strip() or "plot"
+                    self.warnings.append(
+                        f"'{_pip_name}'의 PIP 원/타원 클리핑은 이 X/Y 범위 설정에서는 Multi-Plot 중 "
+                        f"저비용 처리가 안 되어 사각형으로 대체했습니다."
+                    )
+                lines[:] = _mp_probe_lines
 
         if "왼쪽" in _warned_sides or "오른쪽" in _warned_sides:
             _side_txt = "/".join(s for s in ("왼쪽", "오른쪽") if s in _warned_sides)

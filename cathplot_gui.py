@@ -2534,33 +2534,34 @@ class CathPlotGUI:
         return pip
 
     def _normalize_pip_for_animation(self, plotdef):
-        """[추가 - 요청] "PIP+Animation" - PIP는 원/타원 클리핑도 배경 반투명도
-        gnuplot 자체 기능이 아니라 PDF를 다 그린 뒤 PyMuPDF/PIL로 후처리해서
-        만드는데(gnu_generator._apply_pip_clip 참고), Animation은 gnuplot이
-        자기 혼자(do-for 루프) 프레임을 계속 다시 그리는 구조라 프레임마다
-        이 무거운 후처리를 다시 돌릴 방법이 없다(실측: 그러려면 지금처럼
+        """[추가 - 요청] "PIP+Animation" - PIP의 배경 반투명(1~99%)은 gnuplot
+        자체 기능이 아니라 PDF를 다 그린 뒤 PyMuPDF/PIL로 후처리해서 만드는데
+        (gnu_generator._apply_pip_clip 참고), Animation은 gnuplot이 자기
+        혼자(do-for 루프) 프레임을 계속 다시 그리는 구조라 프레임마다 이
+        무거운 후처리를 다시 돌릴 방법이 없다(실측: 그러려면 지금처럼
         "gnuplot 하나가 계속 도는" 구조를 버리고 프레임마다 별도 렌더링을
         150번 반복해야 함 - 비현실적).
 
-        그래서 Animation에서는:
-        - 원/타원 클리핑은 항상 사각형으로 강제한다(Multi-Plot과 동일한
-          이유·동일한 처리 - 조용히, 경고 없이 강제. 클리핑은 애초에
-          "켜져 있으면 항상 후처리 필요"라 중간값이 없어 물어볼 것도 없음).
-        - 배경 불투명도는 0(완전 투명)이나 100(완전 불투명)이면 후처리가
-          필요 없는 gnuplot 네이티브 경로라 그대로 지원되지만(_render_pip_
-          inset의 _rect_fully_opaque/_rect_no_bg 참고), 그 사이(반투명)면
-          역시 후처리가 필요해 Animation에서는 못 쓴다 - 이 경우에만 사용자
-          에게 메시지로 물어봐서(요청: "반투명인 경우, 메시지를 주고") 완전
-          불투명/완전 투명 중 하나로 결정한다.
+        [수정 - 발견] "원/타원 클리핑은 항상 사각형으로 강제" - 처음엔 원/
+        타원도 항상 후처리가 필요하다고 생각해서 무조건 사각형으로 바꿨는데,
+        opacity가 0(완전 투명) 또는 100(완전 불투명)이면 원/타원도 gnuplot
+        네이티브(set object ellipse + 데이터 레벨 NaN 마스킹)로 처리 가능함을
+        확인함(_render_pip_inset의 _ellipse_native_ok 참고) - 이제 원/타원
+        클리핑 자체는 강제로 바꾸지 않는다. 배경 불투명도만 여전히 0/100
+        둘 중 하나로 정리한다(그 사이 반투명이면 사용자에게 메시지로 물어봐서
+        - 요청: "반투명인 경우, 메시지를 주고" - 완전 불투명/완전 투명 중
+        하나로 결정). 이렇게 정리해도 드물게(X/Y 범위가 아직 구체적 숫자로
+        확정 안 된 경우) 네이티브 경로를 못 타면, create_animation_script가
+        그 시점에 한 번 더 사각형으로 안전하게 대체하고 경고를 남긴다
+        (Multi-Plot과 동일한 방어적 폴백 - 여기서는 미리 예측하지 않음).
 
-        pip이 꺼져 있거나 이미 사각형+0/100이면 plotdef를 그대로 반환한다
-        (불필요한 복제/질문 없음). 사용자가 메시지에서 취소를 고르면 None을
-        반환해 호출부가 애니메이션 시작 자체를 중단하게 한다."""
+        pip이 꺼져 있거나 이미 0/100이면 plotdef를 그대로 반환한다(불필요한
+        복제/질문 없음). 사용자가 메시지에서 취소를 고르면 None을 반환해
+        호출부가 애니메이션 시작 자체를 중단하게 한다."""
         pip = getattr(plotdef, "pip", None)
         if not pip or not pip.get("enabled"):
             return plotdef
 
-        _clip_shape = str(pip.get("clip_shape", "rect") or "rect").strip().lower()
         _opacity_raw = str(pip.get("opacity", "")).strip()
         try:
             _opacity = float(_opacity_raw) if _opacity_raw else (100.0 if pip.get("opaque", True) else 0.0)
@@ -2569,8 +2570,6 @@ class CathPlotGUI:
         _opacity = max(0.0, min(100.0, _opacity))
 
         _overrides = {}
-        if _clip_shape != "rect":
-            _overrides["clip_shape"] = "rect"
         if 0.0 + 1e-6 < _opacity < 100.0 - 1e-6:
             _choice = messagebox.askyesnocancel(
                 "PIP + Animation",
