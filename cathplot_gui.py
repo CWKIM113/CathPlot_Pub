@@ -43,7 +43,7 @@ from pathlib import Path
 # win32gui는 실제로는 주석 처리된 죽은 코드에서만 참조돼 아예 삭제).
 
 from data_parser import CathenaDatParser, save_json
-from gnu_generator import PlotDefinition, CurveDefinition, GnuplotGenerator
+from gnu_generator import PlotDefinition, CurveDefinition, FunctionCurveDefinition, GnuplotGenerator
 
 # [추가] Batch Set/Queue - 항목마다 독립적인 gnuplot 프로세스를 순차로 하나씩
 # 기다리던 것을 병렬로 처리해 속도를 높인다. "무제한 동시 실행"은 gnuplot
@@ -129,6 +129,11 @@ class CathPlotGUI:
         self.comment_list = []
         self.arrow_list = []
         self.circle_list = []
+        # [추가 - 요청] Function Curve(2D) - sin(x) 같은 삼각함수/다항식/사용자
+        # 정의 함수를 데이터 없이 gnuplot 수식만으로 그리는 커브 목록. 팝업
+        # 안에서만 행을 추가/삭제하므로(화면 본문에 자리를 새로 만들지 않음),
+        # 팝업이 닫혀 있어도 값을 유지하기 위해 여기서 별도 리스트로 보관한다.
+        self.function_curves_list = []
 
         self.selected_x_key = tk.StringVar(value="")
         self.prev_x_key = ""
@@ -160,6 +165,12 @@ class CathPlotGUI:
         self.linewidth_vars = {}
         self.legend_group_vars = {}
         self.in_legend1_vars = {}  # Legend1에 이 curve를 넣을지 (기본 전체 포함)
+        # [추가 - 요청] "Cubic Spline" - 팝업에 새 칸을 넣을 자리가 없어서
+        # (요청: "선택된 커버에 대해 check box로 지정") Var list 행 자체에
+        # 체크박스 하나만 추가 - 켜면 이 curve에 gnuplot의 자연 3차 스플라인
+        # 보간(smooth csplines)을 적용한다(gnu_generator.CurveDefinition.
+        # smooth_csplines 참고).
+        self.smooth_csplines_vars = {}
 
         self.active_entry = None
         self.last_opened_dir = None
@@ -900,6 +911,18 @@ class CathPlotGUI:
         )
         marker_settings_btn.pack(side="right", padx=(1, 3))
         marker_settings_btn.configure(command=self._open_marker_settings_popup)
+
+        # [추가 - 요청] Function Curve(삼각함수/다항식/사용자정의 함수, Cubic
+        # Spline은 Var-list의 "Spl" 체크박스로 별도 처리) - Marker 버튼과
+        # 동일한 스타일/크기로 바로 왼쪽에 배치.
+        function_curves_btn = tk.Button(
+            row2_f, text="Function", width=7, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=1, pady=1,
+        )
+        function_curves_btn.pack(side="right", padx=(1, 3))
+        function_curves_btn.configure(command=self._open_function_curves_popup)
 
         # Row 2
         ttk.Label(self.plot_frame, text="Y Left Title (Y1)", style="RowHead.TLabel").grid(row=2, column=0, padx=5, pady=0, sticky="w")
@@ -1698,6 +1721,9 @@ class CathPlotGUI:
             #  레시피 개념과 동일. 지금 화면에서 Y1/Y2로 선택된 변수들만 저장됨)
             "curve_styles": self._capture_curve_recipe()[0],
 
+            # --- Function Curve(2D) - 데이터 파일 없이 수식만으로 그리는 curve들 ---
+            "function_curves": self._function_curves_to_json(),
+
             # --- Plot File Name (Batch Set에서 출력 파일명 기본값으로 사용) ---
             "filename": self.filename_var.get(),
 
@@ -2047,6 +2073,15 @@ class CathPlotGUI:
                 self.arrow_on_var.set(data.get("arrow_on", self.arrow_on_var.get()))
                 self.circle_on_var.set(data.get("circle_on", self.circle_on_var.get()))
 
+            # Function Curve(2D) - 구버전 템플릿(키가 아예 없음)에서는 기존 목록 유지
+            if "function_curves" in data:
+                for item in list(self.function_curves_list):
+                    if item['frame'] is not None:
+                        item['frame'].destroy()
+                self.function_curves_list.clear()
+                for fc in data.get("function_curves", []):
+                    self.add_function_curve_row(initial=fc)
+
             # var_no(output_no) 기준 curve 스타일(Color/Linestyle/Linewidth/Shift + 축)을
             # 현재 로드된 파일들 중 output_no가 일치하는 변수에 적용 (Batch Queue의
             # 레시피와 동일한 개념 - 어떤 dat 파일인지와 무관하게 output_no로 매칭)
@@ -2085,6 +2120,9 @@ class CathPlotGUI:
                         if key_str not in self.marker_fill_vars:
                             self.marker_fill_vars[key_str] = tk.BooleanVar(value=False)
                         self.marker_fill_vars[key_str].set(style.get("marker_fill", False))
+                        if key_str not in self.smooth_csplines_vars:
+                            self.smooth_csplines_vars[key_str] = tk.BooleanVar(value=False)
+                        self.smooth_csplines_vars[key_str].set(style.get("smooth_csplines", False))
                         axis = style.get("axis")
                         if axis == "y1" and key_str in self.selected_y1_vars:
                             self.selected_y1_vars[key_str].set(True)
@@ -2157,6 +2195,7 @@ class CathPlotGUI:
                             marker_shape=self._resolve_marker_shape(style.get("marker_shape_label", "None"), style.get("marker_fill", False)),
                             marker_size=MARKER_SIZE_MAP.get(style.get("marker_size_label", "M"), 1.0),
                             marker_max_count=(int(style["marker_max_count"]) if str(style.get("marker_max_count", "")).strip() else None),
+                            smooth_csplines=style.get("smooth_csplines", False),
                         ))
                     except ValueError:
                         continue  # X/Y 번호가 같은 경우 등은 건너뜀
@@ -2227,6 +2266,7 @@ class CathPlotGUI:
             # 한 번 더 해석한다(캐시에 없는 이름이면 조용히 "현재 plot 없음"
             # 취급 - 아래 참고).
             pip=self._resolve_pip_dict_for_batch(data.get("pip", {})),
+            function_curves=self._function_curves_from_json(data.get("function_curves", [])),
         )
 
     def _resolve_pip_dict_for_batch(self, pip_data):
@@ -3232,6 +3272,7 @@ class CathPlotGUI:
                     "marker_size_label": self.marker_size_vars[key].get() if key in self.marker_size_vars else "M",
                     "marker_max_count": (self.marker_maxcount_vars[key].get() if key in self.marker_maxcount_vars else ""),
                     "marker_fill": (self.marker_fill_vars[key].get() if key in self.marker_fill_vars else False),
+                    "smooth_csplines": (self.smooth_csplines_vars[key].get() if key in self.smooth_csplines_vars else False),
                 })
         for key, var in self.selected_y2_vars.items():
             if var.get():
@@ -3248,6 +3289,7 @@ class CathPlotGUI:
                     "marker_size_label": self.marker_size_vars[key].get() if key in self.marker_size_vars else "M",
                     "marker_max_count": (self.marker_maxcount_vars[key].get() if key in self.marker_maxcount_vars else ""),
                     "marker_fill": (self.marker_fill_vars[key].get() if key in self.marker_fill_vars else False),
+                    "smooth_csplines": (self.smooth_csplines_vars[key].get() if key in self.smooth_csplines_vars else False),
                 })
 
         # X 선택: 화면에서 실제로 X가 선택된 파일이 있으면 그 output_no(var_no)를 사용, 없으면 0(Time)
@@ -3349,6 +3391,174 @@ class CathPlotGUI:
         btn_row = ttk.Frame(popup)
         btn_row.pack(fill="x", padx=10, pady=8)
         ttk.Button(btn_row, text="완료", command=popup.destroy).pack(side="right")
+
+    # ------------------------------------------------------------------
+    # Function Curve(2D) - 데이터 파일 없이 gnuplot 수식(삼각함수/다항식/
+    # 사용자 정의 함수 등)을 그대로 하나의 curve로 추가한다. self.function_
+    # curves_list에 tk.Var 기반 dict로 값을 보관해서, 팝업을 닫았다 다시
+    # 열어도 입력한 내용이 유지된다(Comment/Arrow/Circle 목록과 동일한
+    # 방식). Cubic Spline은 이 기능과 별개로 Var-list의 "Spl" 체크박스로
+    # 기존 데이터 curve에 적용한다(사용자 요청 - 입력칸을 새로 늘리지 않고
+    # 기존 데이터 curve에 체크박스로 지정).
+    # ------------------------------------------------------------------
+    def _open_function_curves_popup(self):
+        popup = tk.Toplevel(self.root)
+        popup.title("Function Curves")
+        popup.transient(self.root)
+
+        EXPR_PX, TITLE_PX, AXIS_PX, COLOR_PX, STYLE_PX, LW_PX = 220, 110, 55, 75, 90, 55
+
+        def _cell(parent, px, height=22):
+            f = tk.Frame(parent, width=px, height=height)
+            f.pack_propagate(False)
+            f.pack(side="left")
+            return f
+
+        header_f = ttk.Frame(popup)
+        header_f.pack(fill="x", padx=10, pady=(10, 2))
+        ttk.Label(_cell(header_f, EXPR_PX), text="Expression (f(x))", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, TITLE_PX), text="Legend Title", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, AXIS_PX), text="Axis", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, COLOR_PX), text="Color", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, STYLE_PX), text="Style", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, LW_PX), text="Width", font=("Consolas", 9, "bold")).pack(side="left")
+
+        list_frame = ttk.Frame(popup)
+        list_frame.pack(fill="both", expand=True, padx=10)
+        self._func_curve_col_px = (EXPR_PX, TITLE_PX, AXIS_PX, COLOR_PX, STYLE_PX, LW_PX)
+
+        if not self.function_curves_list:
+            self.add_function_curve_row()
+        for data in self.function_curves_list:
+            self._build_function_curve_row_widgets(list_frame, data)
+
+        add_row = ttk.Frame(popup)
+        add_row.pack(fill="x", padx=10, pady=(4, 0))
+        ttk.Button(add_row, text="+ 추가",
+                   command=lambda: self._build_function_curve_row_widgets(
+                       list_frame, self.add_function_curve_row())).pack(side="left")
+
+        ttk.Label(
+            popup,
+            text="예: sin(x), 2*x**2+3*x+1, exp(-x)*cos(2*x) - gnuplot 내장 함수/식을 그대로 입력 (x의 함수).",
+            foreground="#555555"
+        ).pack(padx=10, pady=(6, 0), anchor="w")
+
+        btn_row = ttk.Frame(popup)
+        btn_row.pack(fill="x", padx=10, pady=8)
+        ttk.Button(btn_row, text="완료", command=popup.destroy).pack(side="right")
+
+    def add_function_curve_row(self, initial=None):
+        """function_curves_list에 tk.Var 기반 행 데이터를 하나 추가하고 반환한다
+        (위젯은 별도로 _build_function_curve_row_widgets가 만든다 - Template
+        Load처럼 화면이 아직 없는 시점에도 데이터만 먼저 채울 수 있도록 분리)."""
+        init = initial or {}
+        data = {
+            'expression': tk.StringVar(value=init.get('expression', "")),
+            'title': tk.StringVar(value=init.get('title', "")),
+            'axis': tk.StringVar(value=init.get('axis', "y1")),
+            'color': tk.StringVar(value=init.get('color', "Auto")),
+            'linestyle': tk.StringVar(value=init.get('linestyle', "Auto")),
+            'linewidth': tk.StringVar(value=init.get('linewidth', "1.5")),
+            'frame': None,
+        }
+        self.function_curves_list.append(data)
+        return data
+
+    def _build_function_curve_row_widgets(self, list_frame, data):
+        EXPR_PX, TITLE_PX, AXIS_PX, COLOR_PX, STYLE_PX, LW_PX = self._func_curve_col_px
+
+        def _cell(parent, px, height=22):
+            f = tk.Frame(parent, width=px, height=height)
+            f.pack_propagate(False)
+            f.pack(side="left")
+            return f
+
+        row_f = ttk.Frame(list_frame)
+        row_f.pack(fill="x", pady=1)
+        data['frame'] = row_f
+
+        ttk.Entry(_cell(row_f, EXPR_PX), textvariable=data['expression']).pack(side="left", fill="both", expand=True)
+        ttk.Entry(_cell(row_f, TITLE_PX), textvariable=data['title']).pack(side="left", fill="both", expand=True)
+        axis_combo = ttk.Combobox(_cell(row_f, AXIS_PX), textvariable=data['axis'],
+                                   values=["y1", "y2"], state="readonly")
+        axis_combo.pack(side="left", fill="both", expand=True)
+        self._disable_combobox_wheel(axis_combo)
+        color_combo = ttk.Combobox(_cell(row_f, COLOR_PX), textvariable=data['color'],
+                                    values=COLOR_LIST, state="readonly")
+        color_combo.pack(side="left", fill="both", expand=True)
+        self._disable_combobox_wheel(color_combo)
+        style_combo = ttk.Combobox(_cell(row_f, STYLE_PX), textvariable=data['linestyle'],
+                                    values=STYLE_LIST, state="readonly")
+        style_combo.pack(side="left", fill="both", expand=True)
+        self._disable_combobox_wheel(style_combo)
+        ttk.Entry(_cell(row_f, LW_PX), textvariable=data['linewidth']).pack(side="left", fill="both", expand=True)
+        ttk.Button(row_f, text="X", width=3, style="Compact.TButton",
+                   command=lambda: self._remove_function_curve_row(row_f)).pack(side="left", padx=(5, 0))
+
+    def _remove_function_curve_row(self, row_f):
+        row_f.destroy()
+        for item in self.function_curves_list:
+            if item['frame'] == row_f:
+                self.function_curves_list.remove(item)
+                break
+        if not self.function_curves_list:
+            self._build_function_curve_row_widgets(row_f.master, self.add_function_curve_row())
+
+    def _build_function_curve_defs(self):
+        """self.function_curves_list(tk.Var 기반) -> FunctionCurveDefinition 목록.
+        Expression이 비어있는 행은 건너뛴다(빈 채로 팝업만 열어본 경우 대비)."""
+        result = []
+        for data in self.function_curves_list:
+            expr = data['expression'].get().strip()
+            if not expr:
+                continue
+            result.append(FunctionCurveDefinition(
+                expression=expr,
+                title=data['title'].get().strip() or expr,
+                axis=data['axis'].get() or "y1",
+                color=COLOR_MAP.get(data['color'].get(), None) or None,
+                linestyle=STYLE_MAP.get(data['linestyle'].get(), None) or None,
+                linewidth=float(data['linewidth'].get() or 1.5),
+            ))
+        return result
+
+    def _function_curves_to_json(self):
+        """Template Save용 - tk.Var 기반 목록을 순수 dict 목록으로 변환."""
+        result = []
+        for data in self.function_curves_list:
+            expr = data['expression'].get().strip()
+            if not expr:
+                continue
+            result.append({
+                "expression": expr,
+                "title": data['title'].get(),
+                "axis": data['axis'].get(),
+                "color": data['color'].get(),
+                "linestyle": data['linestyle'].get(),
+                "linewidth": data['linewidth'].get(),
+            })
+        return result
+
+    @staticmethod
+    def _function_curves_from_json(items):
+        """Template Load용 - 순수 dict 목록 -> FunctionCurveDefinition 목록
+        (화면 tk 변수를 전혀 건드리지 않으므로 백그라운드 스레드에서도 안전 -
+        Batch Set이 _build_plotdef_from_template_data에서 사용)."""
+        result = []
+        for item in items or []:
+            expr = str(item.get("expression", "")).strip()
+            if not expr:
+                continue
+            result.append(FunctionCurveDefinition(
+                expression=expr,
+                title=item.get("title") or expr,
+                axis=item.get("axis", "y1") or "y1",
+                color=COLOR_MAP.get(item.get("color", "Auto"), None) or None,
+                linestyle=STYLE_MAP.get(item.get("linestyle", "Auto"), None) or None,
+                linewidth=float(item.get("linewidth") or 1.5),
+            ))
+        return result
 
     def _open_curve_select_popup(self, anchor_widget, title, get_checked, set_checked):
         """Legend1/Legend2 공용 curve 선택 팝업. get_checked(key)/set_checked(key, bool)로
@@ -3569,6 +3779,7 @@ class CathPlotGUI:
                     marker_shape=self._resolve_marker_shape(item.get("marker_shape_label", "None"), item.get("marker_fill", False)),
                     marker_size=MARKER_SIZE_MAP.get(item.get("marker_size_label", "M"), 1.0),
                     marker_max_count=(int(item["marker_max_count"]) if str(item.get("marker_max_count", "")).strip() else None),
+                    smooth_csplines=item.get("smooth_csplines", False),
                 ))
             except ValueError:
                 continue  # X/Y 번호가 같은 경우 등은 건너뜀
@@ -4336,6 +4547,14 @@ class CathPlotGUI:
             style_hdr_f.pack_propagate(False)
             style_hdr_f.pack(side="left")
             ttk.Label(style_hdr_f, text="Style", font=("Consolas",10,"bold")).pack(side="left")
+            # [추가 - 요청] "Cubic Spline" 체크박스 열 - Y1/Y2와 같은 좁은
+            # 폭으로 맨 뒤에 붙인다(새 필드를 위한 넓은 칸을 새로 만들 자리가
+            #없다는 요청 그대로 - 짧은 헤더 "Spl"만).
+            SMOOTH_COL_PX = 32
+            smooth_hdr_f = tk.Frame(header_f, width=SMOOTH_COL_PX, height=22)
+            smooth_hdr_f.pack_propagate(False)
+            smooth_hdr_f.pack(side="left")
+            ttk.Label(smooth_hdr_f, text="Spl", font=("Consolas", 10, "bold")).place(relx=0.5, x=_HDR_NUDGE_PX, rely=0.5, anchor="center")
 
             for pv in meta.variables:
                 title = pv.signals[0].name if pv.signals else f"OUTPUT {pv.output_no}"
@@ -4356,6 +4575,8 @@ class CathPlotGUI:
                     self.linewidth_vars[key_str] = tk.DoubleVar(value=1.5)
                 if key_str not in self.legend_group_vars:
                     self.legend_group_vars[key_str] = tk.StringVar(value="2")
+                if key_str not in self.smooth_csplines_vars:
+                    self.smooth_csplines_vars[key_str] = tk.BooleanVar(value=False)
 
                 row_frame = ttk.Frame(frame)
                 row_frame.pack(anchor="w", fill="x", padx=0, pady=0)
@@ -4441,6 +4662,12 @@ class CathPlotGUI:
                 style_combo = ttk.Combobox(style_cell_f, textvariable=self.linestyle_vars[key_str], values=STYLE_LIST, state="readonly")
                 style_combo.pack(side="left", fill="both", expand=True)
                 self._disable_combobox_wheel(style_combo)
+
+                smooth_cell_f = tk.Frame(row_frame, width=SMOOTH_COL_PX, height=22)
+                smooth_cell_f.pack_propagate(False)
+                smooth_cell_f.pack(side="left")
+                c_smooth = self._mk_check(smooth_cell_f, "", self.smooth_csplines_vars[key_str], size=19, no_pack=True)
+                c_smooth.place(relx=0.5, rely=0.5, anchor="center")
 
             if datfile not in self.file_xshift_vars:
                 self.file_xshift_vars[datfile] = tk.StringVar(value="0")
@@ -4701,13 +4928,16 @@ class CathPlotGUI:
     def open_3d_plot_dialog(self):
         eligible, skipped = self._collect_3d_curves()
         surfaces = self._collect_3d_surfaces()
+        # [수정 - 요청] "2D+3D 한번에" - 파일 기반 curve/surface가 하나도 없어도
+        # Function Surface(데이터 없이 Z=f(X,Y) 수식만으로 그리는 splot)를 이
+        # 팝업 안에서 새로 추가할 수 있으므로, 더 이상 여기서 막지 않고 항상
+        # 다이얼로그를 연다(파일이 아예 없을 때만 참고용으로 안내).
         if not eligible and not surfaces:
-            msg = "3D로 그릴 수 있는 파일이 없습니다.\n(파일마다 Y1 1개 + Y2 1개가 선택되어 있어야 합니다.\nSurface(splot) 파일은 로드만 하면 바로 사용 가능합니다.)"
+            msg = "지금 로드된 파일 중 3D로 바로 그릴 수 있는 것이 없습니다.\n(파일마다 Y1 1개 + Y2 1개가 선택되어 있어야 하고, Surface(splot) 파일은 로드만 하면 바로 사용 가능합니다.)\n아래 팝업에서 Function Surface(수식)만으로도 그릴 수 있습니다."
             if skipped:
                 msg += "\n\n제외된 파일:\n" + "\n".join(skipped)
-            messagebox.showwarning("3D Plot", msg)
-            return
-        if skipped:
+            messagebox.showinfo("3D Plot", msg)
+        elif skipped:
             proceed = messagebox.askyesno(
                 "3D Plot",
                 "다음 파일은 Y1/Y2 짝이 맞지 않아 3D에서 제외됩니다:\n\n" + "\n".join(skipped) +
@@ -4912,6 +5142,47 @@ class CathPlotGUI:
             surface_check_vars.append((v, s, shape_var, size_var, style_var_row))
             _set_idx += 1
 
+        # [추가 - 요청] "2D+3D 한번에" - Function Surface: 데이터 파일 없이
+        # Z=f(X,Y) gnuplot 수식(예: sin(x)*cos(y), x**2-y**2)을 그대로 splot에
+        # 추가한다. curve/surface처럼 로드된 파일에서 자동으로 뜨는 목록이
+        # 아니라(수식은 파일과 무관 - X 값이 연동될 file/컬럼이 필요 없음),
+        # Comment/Arrow처럼 이 팝업 안에서 직접 행을 추가/삭제하는 목록으로 둔다.
+        func_surface_rows = []
+        func_surface_frame = ttk.LabelFrame(dialog, text="Function Surface (Z=f(X,Y), 데이터 없이 수식)")
+        func_surface_frame.pack(fill="x", padx=10, pady=5)
+        fs_list_frame = ttk.Frame(func_surface_frame)
+        fs_list_frame.pack(fill="x")
+
+        def add_func_surface_row(initial=None):
+            init = initial or {}
+            row = ttk.Frame(fs_list_frame)
+            row.pack(fill="x", pady=1)
+            data = {
+                'expression': tk.StringVar(value=init.get('expression', "")),
+                'title': tk.StringVar(value=init.get('title', "")),
+                'style': tk.StringVar(value=STYLE_3D_DISPLAY_MAP.get(init.get('style', 'lines'), STYLE_3D_DISPLAY_MAP["lines"])),
+                'frame': row,
+            }
+            func_surface_rows.append(data)
+            ttk.Button(row, text="X", width=2, style="Compact.TButton",
+                       command=lambda: (row.destroy(), func_surface_rows.remove(data))).pack(side="right", padx=3)
+            ttk.Combobox(row, textvariable=data['style'], values=_style_choices_surface,
+                         width=13, state="readonly").pack(side="right", padx=4)
+            ttk.Label(row, text="Title:").pack(side="left", padx=(0, 2))
+            fs_title_entry = ttk.Entry(row, textvariable=data['title'], width=14)
+            fs_title_entry.pack(side="left", padx=2)
+            fs_title_entry.bind("<FocusIn>", lambda e: self.set_active_entry(fs_title_entry))
+            ttk.Label(row, text="Z=f(X,Y):").pack(side="left", padx=(6, 2))
+            fs_expr_entry = ttk.Entry(row, textvariable=data['expression'], width=22)
+            fs_expr_entry.pack(side="left", padx=2, fill="x", expand=True)
+            fs_expr_entry.bind("<FocusIn>", lambda e: self.set_active_entry(fs_expr_entry))
+
+        ttk.Button(func_surface_frame, text="+ Add Function Surface", command=add_func_surface_row).pack(anchor="w", padx=5, pady=(0, 2))
+        ttk.Label(
+            func_surface_frame, text="예: sin(x)*cos(y), x**2+y**2 - gnuplot 내장 함수/식을 그대로 입력 (X,Y의 함수).",
+            foreground="#555555"
+        ).pack(anchor="w", padx=5, pady=(0, 4))
+
         # [수정 - 버그] "선택 여부에 따라 Plot Title/Z title의 default가 바뀌게" -
         # 위 체크박스들이 이제서야 다 만들어졌으니, 실제로 체크된 첫 curve(없으면
         # 첫 surface)를 기준으로 Plot Title/Z title 기본값을 다시 채운다. 체크를
@@ -5093,6 +5364,19 @@ class CathPlotGUI:
                 s2["style"] = STYLE_3D_INTERNAL_MAP.get(style_var_row.get(), "lines")
                 surfaces_final.append(s2)
 
+            # [추가 - 요청] "2D+3D 한번에" - Function Surface(수식, 파일 없음).
+            # Expression이 비어있는 행은 건너뛴다(빈 채로 팝업만 열어본 경우 대비).
+            function_surfaces_final = []
+            for d in func_surface_rows:
+                expr = d['expression'].get().strip()
+                if not expr:
+                    continue
+                function_surfaces_final.append({
+                    "expression": expr,
+                    "title": d['title'].get().strip() or expr,
+                    "style": STYLE_3D_INTERNAL_MAP.get(d['style'].get(), "lines"),
+                })
+
             # [추가] "time 구간 입력" - 비우면 제한 없음(None).
             def _parse_opt_float(s):
                 s = (s or "").strip()
@@ -5112,17 +5396,28 @@ class CathPlotGUI:
             # [수정] Style이 세트별로 바뀌면서 여기서 쓰던 전역 style은 없어짐 -
             # create_3d_script의 style 파라미터는 이제 "세트에 style이 없을 때"의
             # 방어적 기본값 역할만 하므로 고정값 "lines"만 넘긴다.
+            # [추가 - 요청] "2D+3D 한번에" - Function Surface만으로도 그릴 수
+            # 있게 다이얼로그를 항상 열도록 위 open_3d_plot_dialog의 진입 가드는
+            # 없앴으므로, 셋 다(curve/surface/function_surface) 비어있는 채로
+            # Plot/Save/Print를 누르면 여기서 대신 막는다(gnuplot이 빈 splot
+            # 문법 오류를 내는 것보다 사용자에게 바로 알려주는 게 낫다).
+            if not curves_final and not surfaces_final and not function_surfaces_final:
+                messagebox.showwarning("3D Plot", "그릴 curve/surface/Function Surface가 없습니다.\n(Set 체크박스를 켜거나 Function Surface를 하나 이상 추가하세요.)")
+                return None
+
             return (curves_final, rot_x, rot_z, "lines", palette_var.get(),
                     colorbox_var.get(), annotations_3d, arrows_3d, equal_xyz_var.get(), surfaces_final,
                     xlabel3d_var.get(), ylabel3d_var.get(), zlabel3d_var.get(),
                     plot_title_var.get(), time_min, time_max, y_min, y_max, z_min, z_max,
-                    animate3d_var.get(), animate3d_duration_var.get())
+                    animate3d_var.get(), animate3d_duration_var.get(), function_surfaces_final)
 
         def do_plot():
             # [수정] "3D Plot 추가 창은 plot 후에도 닫지 말 것" - rot_x/rot_z를
             # 조금씩 바꿔가며 여러 번 그려보는 용도가 많아서, 매번 다이얼로그를
             # 다시 열고 curve/comment/arrow 설정을 새로 고르는 게 번거로웠음.
             args = _collect_3d_state()
+            if args is None:
+                return
             self._execute_3d_plot(*args)
 
         def _close_3d_dialog():
@@ -5141,11 +5436,15 @@ class CathPlotGUI:
 
         def do_save():
             args = _collect_3d_state()
+            if args is None:
+                return
             _close_3d_dialog()
             self._save_3d_plot(*args)
 
         def do_print():
             args = _collect_3d_state()
+            if args is None:
+                return
             _close_3d_dialog()
             self._print_3d_plot(*args)
 
@@ -5189,6 +5488,13 @@ class CathPlotGUI:
                      "x2": d['x2'].get(), "y2": d['y2'].get(), "z2": d['z2'].get(),
                      "color": d['color'].get(), "size": d['size'].get()}
                     for d in arrow3d_list
+                ],
+                # [추가 - 요청] "2D+3D 한번에" - Function Surface(수식, 파일과
+                # 무관하므로 curve/surface와 달리 label 매칭이 아니라 그대로 저장/복원).
+                "function_surfaces": [
+                    {"expression": d['expression'].get(), "title": d['title'].get(),
+                     "style": STYLE_3D_INTERNAL_MAP.get(d['style'].get(), "lines")}
+                    for d in func_surface_rows if d['expression'].get().strip()
                 ],
             }
 
@@ -5293,6 +5599,15 @@ class CathPlotGUI:
                 last['x2'].set(ar.get("x2", "")); last['y2'].set(ar.get("y2", "")); last['z2'].set(ar.get("z2", ""))
                 last['color'].set(ar.get("color", "Auto")); last['size'].set(ar.get("size", "M"))
 
+            # [추가 - 요청] "2D+3D 한번에" - Function Surface(수식, 파일과 무관하므로
+            # curve/surface처럼 label 매칭이 아니라 목록을 그대로 지우고 다시 만든다).
+            if "function_surfaces" in data:
+                for d in list(func_surface_rows):
+                    d['frame'].destroy()
+                func_surface_rows.clear()
+                for fs in data.get("function_surfaces", []):
+                    add_func_surface_row(initial=fs)
+
             messagebox.showinfo("3D Template", "3D 템플릿을 불러왔습니다.")
 
         # [수정] "3D popup 창도 채색?" - 메인 화면과 같은 팔레트/방식(tk.Button
@@ -5324,7 +5639,7 @@ class CathPlotGUI:
                           equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
                           plot_title="", time_min=None, time_max=None,
                           y_min=None, y_max=None, z_min=None, z_max=None,
-                          animate3d=False, animate3d_duration="20"):
+                          animate3d=False, animate3d_duration="20", function_surfaces=None):
         os.makedirs(self.plot_dir, exist_ok=True)
         # [수정 - 버그] "Plot Title/axis title을 blank로 두면 plot에도 blank로
         # 나와야 하는데, 선택도 안 한 첫 파일명이 뜸" - 팝업의 Plot Title
@@ -5359,7 +5674,8 @@ class CathPlotGUI:
                     title=title_for_plot,
                     xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
                     rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
-                    equal_xyz=equal_xyz, surfaces=surfaces, time_min=time_min, time_max=time_max,
+                    equal_xyz=equal_xyz, surfaces=surfaces, function_surfaces=function_surfaces,
+                    time_min=time_min, time_max=time_max,
                     y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max, duration_sec=_duration_sec,
                 )
             else:
@@ -5375,7 +5691,7 @@ class CathPlotGUI:
                     xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
                     rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
                     annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
-                    surfaces=surfaces, time_min=time_min, time_max=time_max,
+                    surfaces=surfaces, function_surfaces=function_surfaces, time_min=time_min, time_max=time_max,
                     y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
                 )
         except Exception as e:
@@ -5419,7 +5735,7 @@ class CathPlotGUI:
                            annotations_3d, arrows_3d, equal_xyz, surfaces, xlabel3d="", ylabel3d="", zlabel3d="",
                            plot_title="", time_min=None, time_max=None,
                            y_min=None, y_max=None, z_min=None, z_max=None,
-                           animate3d_duration="20"):
+                           animate3d_duration="20", function_surfaces=None):
         """Save/Print가 공통으로 쓰는, 파일로 직접 렌더링하는 부분만 뽑은 버전
         (_execute_3d_plot의 화면(interactive) 전용 코드와 outfile/fmt만 다름).
 
@@ -5442,7 +5758,8 @@ class CathPlotGUI:
                 title=title_for_plot,
                 xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
                 rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
-                equal_xyz=equal_xyz, surfaces=surfaces, time_min=time_min, time_max=time_max,
+                equal_xyz=equal_xyz, surfaces=surfaces, function_surfaces=function_surfaces,
+                time_min=time_min, time_max=time_max,
                 y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
                 duration_sec=_duration_sec, gif_path=outfile,
             )
@@ -5454,7 +5771,7 @@ class CathPlotGUI:
             xlog=self.xlog_var.get(), ylog=self.y1log_var.get(), zlog=self.y2log_var.get(),
             rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
             annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
-            surfaces=surfaces, time_min=time_min, time_max=time_max,
+            surfaces=surfaces, function_surfaces=function_surfaces, time_min=time_min, time_max=time_max,
             y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
         )
 
@@ -5462,7 +5779,7 @@ class CathPlotGUI:
                        equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
                        plot_title="", time_min=None, time_max=None,
                        y_min=None, y_max=None, z_min=None, z_max=None,
-                       animate3d=False, animate3d_duration="20"):
+                       animate3d=False, animate3d_duration="20", function_surfaces=None):
         """[추가] "3D Plot도 저장 지원" - 2D SAVE와 동일한 포맷 선택 방식,
         방향/Frame 크기 선택 등 2D의 복잡한 캐시 선택 로직 없이 지금 다이얼로그
         입력값 그대로 바로 파일로 렌더링한다."""
@@ -5499,7 +5816,8 @@ class CathPlotGUI:
             self._generate_3d_file(os.path.abspath(selected_path), ext, curves, rot_x, rot_z, style, palette,
                                     colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces,
                                     xlabel3d, ylabel3d, zlabel3d, plot_title, time_min, time_max,
-                                    y_min, y_max, z_min, z_max, animate3d_duration=animate3d_duration)
+                                    y_min, y_max, z_min, z_max, animate3d_duration=animate3d_duration,
+                                    function_surfaces=function_surfaces)
         except Exception as e:
             messagebox.showerror("Save Error", f"3D Plot 저장 중 오류가 발생했습니다:\n{e}")
             return
@@ -5510,7 +5828,7 @@ class CathPlotGUI:
                         equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
                         plot_title="", time_min=None, time_max=None,
                         y_min=None, y_max=None, z_min=None, z_max=None,
-                        animate3d=False, animate3d_duration="20"):
+                        animate3d=False, animate3d_duration="20", function_surfaces=None):
         """[추가] "3D Plot도 인쇄 지원" - 2D PRINT와 동일하게 EMF를 만들어
         프린터로 직접 그린다(_print_emf_and_cleanup/_pick_printer_dialog 재사용).
         2D처럼 어떤 plot을 고를지/용지 방향을 다시 묻는 절차는 3D 다이얼로그가
@@ -5531,7 +5849,7 @@ class CathPlotGUI:
             self._generate_3d_file(temp_emf, "emf", curves, rot_x, rot_z, style, palette,
                                     colorbox, annotations_3d, arrows_3d, equal_xyz, surfaces,
                                     xlabel3d, ylabel3d, zlabel3d, plot_title, time_min, time_max,
-                                    y_min, y_max, z_min, z_max)
+                                    y_min, y_max, z_min, z_max, function_surfaces=function_surfaces)
         except Exception as e:
             messagebox.showerror("Print Error", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
             return
@@ -6516,6 +6834,7 @@ class CathPlotGUI:
                     legend_group=int(self.legend_group_vars[key].get()) if key in self.legend_group_vars else 1,
                     in_legend1=self.in_legend1_vars[key].get() if key in self.in_legend1_vars else True,
                     marker_shape=_marker_shape, marker_size=_marker_size, marker_max_count=_marker_max_count,
+                    smooth_csplines=self.smooth_csplines_vars[key].get() if key in self.smooth_csplines_vars else False,
                 ))
 
             # 2. Auto Range 미리보기 값을 Min/Max 입력창에 표시 - 실제 렌더링(플롯
@@ -6654,6 +6973,7 @@ class CathPlotGUI:
                 frame_height=_resolved_frame_height,
                 frame_unit=_resolved_frame_unit,
                 curves=curves,
+                function_curves=self._build_function_curve_defs(),
                 annotations=self._collect_annotations(),
                 arrows=self._collect_arrows(),
                 circles=self._collect_circles(),

@@ -452,11 +452,35 @@ class CurveDefinition:
     marker_shape: int | None = None  # gnuplot pointtype 번호 (None = 마커 없음)
     marker_size: float = 1.0         # gnuplot pointsize
     marker_max_count: int | None = None  # None = Auto(20~30개 근처로 자동 계산)
+    # [추가 - 요청] "Cubic Spline" - 팝업에 별도 칸을 새로 넣을 자리가 없어서
+    # (요청: "선택된 커브에 대해 check box로 지정") 이 curve 자신의 데이터에
+    # gnuplot의 자연 3차 스플라인 보간(smooth csplines)을 적용할지 여부만
+    # 켜고 끄는 체크박스 - 새 함수 입력 없이 기존 데이터를 부드럽게 잇는다.
+    smooth_csplines: bool = False
 
     def __post_init__(self):
         # [위치] 데이터클래스 속성 정의 바로 아래, 일반 메서드들보다 위에 위치합니다.
         if self.x_output_no is not None and self.x_output_no == self.output_no:
             raise ValueError(f"동일한 변수 번호({self.output_no})를 X축과 Y축으로 동시에 지정할 수 없습니다.")
+
+@dataclass
+class FunctionCurveDefinition:
+    """[추가 - 요청] "함수(삼각함수 등)/사용자 정의 함수/polynomial을 curve로
+    추가" - 데이터 파일 없이 gnuplot 수식(x의 함수)을 그대로 하나의 curve로
+    그린다. gnuplot이 기본 제공하는 sin/cos/tan/exp/log/sqrt/abs 등 내장
+    함수를 expression에 그대로 쓸 수 있고(예: "sin(x)", "2*x**2+3*x+1",
+    "exp(-x)*cos(2*x)"), gnuplot 자체가 이미 다 지원하므로 별도 파서 없이
+    그대로 plot 명령의 curve 하나로 들어간다(팝업에서 "gnuplot 식 직접
+    입력" 방식으로 받기로 함 - 사용자 함수/polynomial도 이 방식 하나로
+    전부 표현 가능)."""
+    expression: str
+    title: str = ""
+    axis: str = "y1"
+    color: str | None = None
+    linestyle: str | None = None
+    linewidth: float = 1.5
+    legend_group: int = 1  # CurveDefinition과 동일한 관례 - Legend1(1)/Legend2(2)
+    in_legend1: bool = True
 
 @dataclass
 class PlotDefinition:
@@ -469,6 +493,11 @@ class PlotDefinition:
     arrows: list = field(default_factory=list)
     circles: list = field(default_factory=list)  # {"x","y","rx","ry","coord_mode"} - 원/타원 주석
     curves: list = field(default_factory=list)
+    # [추가 - 요청] "함수(삼각함수 등)/사용자 정의 함수/polynomial을 curve로
+    # 추가" - FunctionCurveDefinition 목록(데이터 파일 없이 gnuplot 수식
+    # 그대로 그리는 curve). curves(데이터 기반)와 별개 목록으로 두고
+    # _build_plot_commands가 둘 다 같은 plot 명령 안에 합쳐서 그린다.
+    function_curves: list = field(default_factory=list)
     output_format: str = "Interactive"
     xauto: bool = True
     yauto: bool = True
@@ -1806,7 +1835,10 @@ class GnuplotGenerator:
             elif _fmt_l_for_fix == "svg":
                 _mp_font_fix = MP_SVG_FONT_RENDER_FIX
 
-        uses_y2_for_log = any(getattr(curve, "axis", "y1") == "y2" for curve in plotdef.curves)
+        uses_y2_for_log = (
+            any(getattr(curve, "axis", "y1") == "y2" for curve in plotdef.curves)
+            or any(getattr(fc, "axis", "y1") == "y2" for fc in getattr(plotdef, "function_curves", []))
+        )
         # [수정] gnuplot은 "비선형(log) 축은 link를 풀기 전에 먼저 선형으로
         # 되돌려야 한다"고 요구함 (에러: "you must clear nonlinear x2 or y2
         # before linking it") - 그런데 기존엔 set logscale y2를 먼저 실행하고
@@ -2620,6 +2652,14 @@ class GnuplotGenerator:
         # 순서(i)를 기준으로 정해지므로(아래 실제 plot 명령 루프와 동일), Legend1/2
         # 둘 다 이 전체 순서 기준 매핑을 공유해서 실제 그려지는 색/스타일과 일치시킨다
         curve_index_map = {id(c): i for i, c in enumerate(plotdef.curves)}
+        # [추가 - 요청] 함수 curve도 같은 색상 순환 인덱스를 공유(실제 plot
+        # 명령 루프의 _n_data_curves + j 순서와 동일하게) - 안 넣어도
+        # curve_index_map.get()이 row_i로 안전하게 대체되지만, 색을 Auto로
+        # 둔 함수 curve의 legend 샘플 색이 실제 그려지는 색과 어긋나지
+        # 않도록 명시적으로 맞춰준다.
+        curve_index_map.update({
+            id(fc): len(plotdef.curves) + j for j, fc in enumerate(getattr(plotdef, "function_curves", []))
+        })
 
         # Legend box 폭 계산에 쓸 축의 실제 물리적 폭(인치) - multiplot에서는
         # 호출자가 이미 계산해서 넘겨주고(axis_w_in), 단일 plot 등 안 넘어온
@@ -2727,7 +2767,9 @@ class GnuplotGenerator:
         _legend_x_span = _axis_span("x", plotdef.xauto, plotdef.xmin, plotdef.xmax, getattr(plotdef, "xlog", False))
         _legend_y_span = _axis_span("y1", plotdef.yauto, plotdef.ymin, plotdef.ymax, getattr(plotdef, "y1log", False))
 
-        group1_curves = [c for c in plotdef.curves if getattr(c, "in_legend1", True)]
+        group1_curves = [c for c in plotdef.curves if getattr(c, "in_legend1", True)] + [
+            fc for fc in getattr(plotdef, "function_curves", []) if getattr(fc, "in_legend1", True)
+        ]
         if plotdef.legend_on and group1_curves:
             legend_thick_val = min(float(getattr(plotdef, "legend_thick", "1.5") or 1.5), _frame_border_lw)
             self._render_legend_box(
@@ -2742,7 +2784,9 @@ class GnuplotGenerator:
                 axis_x_span=_legend_x_span, axis_y_span=_legend_y_span,
             )
 
-        group2_curves = [c for c in plotdef.curves if getattr(c, "legend_group", 1) == 2]
+        group2_curves = [c for c in plotdef.curves if getattr(c, "legend_group", 1) == 2] + [
+            fc for fc in getattr(plotdef, "function_curves", []) if getattr(fc, "legend_group", 1) == 2
+        ]
         if getattr(plotdef, "legend2_on", False) and group2_curves:
             legend2_thick_val = min(float(getattr(plotdef, "legend2_thick", "1.5") or 1.5), _frame_border_lw)
             self._render_legend_box(
@@ -2793,9 +2837,15 @@ class GnuplotGenerator:
             using_expr = f"({x_col_expr}+{curve.x_shift}):{col_y}"
             lw = curve.linewidth * line_scale
 
+            # [추가 - 요청] "Cubic Spline" - 팝업에 새 칸을 넣을 자리가 없어서
+            # 이 curve 자신의 체크박스(smooth_csplines)로 켜고 끈다.
+            # gnuplot 문법상 smooth 절은 using 바로 뒤(notitle/axes/with보다
+            # 앞)에 와야 함.
+            _smooth_clause = " smooth csplines" if getattr(curve, "smooth_csplines", False) else ""
+
             # [수정] Legend1/2 둘 다 이제 set label로 수동으로 그리므로, 실제 plot
             # 명령에서는 gnuplot 네이티브 key용 title이 더 이상 필요 없음 (항상 notitle)
-            cmd = f'"{path}" using {using_expr} notitle axes {axis} with lines lw {lw}'
+            cmd = f'"{path}" using {using_expr}{_smooth_clause} notitle axes {axis} with lines lw {lw}'
 
             if color: cmd += f' lc rgb "{color}"'
             _dash_pat_curve = _dash_pattern_for_fmt(linestyle, fmt)
@@ -2837,6 +2887,27 @@ class GnuplotGenerator:
                     marker_cmd = f'{dbname} using 1:2 notitle axes {axis} with points pt {marker_shape} ps {marker_size}'
                     if color: marker_cmd += f' lc rgb "{color}"'
                     cmd_list.append(marker_cmd)
+
+        # [추가 - 요청] "함수(삼각함수 등)/사용자 정의 함수/polynomial을
+        # curve로 추가" - 데이터 curve와 완전히 같은 plot 명령 목록(cmd_list)
+        # 안에 그냥 하나 더 얹는다(using절이 없는 순수 gnuplot 수식이라
+        # 마커/스무딩 개념은 없음 - 그 자체가 이미 매끈한 연속 곡선).
+        # curves(데이터) 색상 순환 인덱스를 그대로 이어받아 두 목록을 합쳐도
+        # 색이 자연스럽게 이어지게 한다.
+        _n_data_curves = len(plotdef.curves)
+        for j, fcurve in enumerate(getattr(plotdef, "function_curves", [])):
+            _fc_color = fcurve.color or DEFAULT_COLORS[(_n_data_curves + j) % len(DEFAULT_COLORS)]
+            _fc_linestyle = fcurve.linestyle or DEFAULT_LINESTYLES[(_n_data_curves + j) % len(DEFAULT_LINESTYLES)]
+            _fc_is_y2 = getattr(fcurve, "axis", "y1") == "y2"
+            _fc_axis = "x1y2" if _fc_is_y2 else "x1y1"
+            _fc_lw = fcurve.linewidth * line_scale
+            _fc_cmd = f'{fcurve.expression} notitle axes {_fc_axis} with lines lw {_fc_lw}'
+            if _fc_color:
+                _fc_cmd += f' lc rgb "{_fc_color}"'
+            _fc_dash = _dash_pattern_for_fmt(_fc_linestyle, fmt)
+            if _fc_dash:
+                _fc_cmd += f" dashtype ({_fc_dash})"
+            cmd_list.append(_fc_cmd)
 
         # 마커용 인라인 데이터블록들을 'plot \\' 줄 바로 앞에 삽입
         # (gnuplot은 데이터블록을 plot에서 쓰기 전에 미리 정의해야 함)
@@ -4803,7 +4874,7 @@ class GnuplotGenerator:
     def create_3d_animation_script(self, curves_3d, outfile, xlabel="", ylabel="", zlabel="", title="",
                                     xlog=False, ylog=False, zlog=False, rot_x=60, rot_z=30,
                                     style="lines", palette="rainbow", colorbox=True,
-                                    equal_xyz=False, surfaces=None,
+                                    equal_xyz=False, surfaces=None, function_surfaces=None,
                                     y_min=None, y_max=None, z_min=None, z_max=None,
                                     time_min=None, time_max=None,
                                     duration_sec=20.0, gif_path=None):
@@ -4832,7 +4903,14 @@ class GnuplotGenerator:
         재생용 thresh 포함 버전) 만드는 헬퍼(_build_splot_parts)를 둔다(create_3d_
         script 본체를 건드리지 않기 위해 그 조립 로직을 그대로 복제 - 두 함수가
         서로 다른 실행 경로(정적 실행 vs do-for 루프 안 반복 호출)라 안전하게
-        공유하기 어려움)."""
+        공유하기 어려움).
+
+        function_surfaces: [{expression, title, style}, ...] - [추가 - 요청]
+        "2D+3D 한번에". curves_3d/surfaces와 달리 "time" 컬럼이 없는 순수 X,Y
+        전역 수식이라 재생 진행(thresh)에 맞춰 일부만 가려 그릴 방법이 없으므로
+        (어느 좌표가 "아직 안 그려진" 것인지가 정의되지 않음), thresh_var 값과
+        무관하게 매 프레임 항상 전체를 정적으로 그린다(회전각처럼 애니메이션
+        내내 고정되는 배경으로 취급 - curves_3d/surfaces만 실제로 진행됨)."""
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
         is_gif = bool(gif_path)
@@ -4841,10 +4919,14 @@ class GnuplotGenerator:
         def _resolve_style(item):
             return (item.get("style") or style or "lines")
 
+        _n_sets_anim = len(curves_3d) + len(surfaces or []) + len(function_surfaces or [])
+
         def _build_splot_parts(thresh_var):
             """thresh_var가 None이면 time_min/time_max 필터만(범위 계산용 "unknown"
             프라이밍 패스), thresh_var가 있으면(예: "thresh") 그 조건까지 같이
-            NaN-마스킹 조건에 넣어(실제 재생용) splot 절 리스트를 만든다."""
+            NaN-마스킹 조건에 넣어(실제 재생용) splot 절 리스트를 만든다. Function
+            Surface는 thresh_var와 무관하게 항상 전체를 정적으로 추가한다(docstring의
+            function_surfaces 설명 참고)."""
             parts = []
             for c in curves_3d:
                 abs_path = c["dat_file"] if os.path.isabs(c["dat_file"]) else os.path.abspath(c["dat_file"])
@@ -4878,7 +4960,7 @@ class GnuplotGenerator:
                         _pt_clause += f" ps {marker_size}"
 
                 title_text = (c.get("title") or "").strip()
-                if title_text and (len(curves_3d) + len(surfaces or [])) > 1:
+                if title_text and _n_sets_anim > 1:
                     _title_rendered, _title_enh = self._render_text(title_text)
                     _title_clause = f'title "{_title_rendered}" {_title_enh}'
                 else:
@@ -4895,7 +4977,7 @@ class GnuplotGenerator:
                     path = abs_path
                 path = path.replace("\\", "/")
                 _s_title = (s.get("label") or "").strip()
-                if _s_title and (len(curves_3d) + len(surfaces or [])) > 1:
+                if _s_title and _n_sets_anim > 1:
                     _s_title_rendered, _s_title_enh = self._render_text(_s_title)
                     _s_title_clause = f'title "{_s_title_rendered}" {_s_title_enh}'
                 else:
@@ -4925,9 +5007,14 @@ class GnuplotGenerator:
                     parts.append(
                         f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}'
                     )
+
+            for fs in (function_surfaces or []):
+                _fs_part = self._build_function_surface_part(fs, _resolve_style, _n_sets_anim > 1)
+                if _fs_part:
+                    parts.append(_fs_part)
             return parts
 
-        if not curves_3d and not (surfaces or []):
+        if not curves_3d and not (surfaces or []) and not (function_surfaces or []):
             raise RuntimeError("애니메이션을 만들 3D 커브/서피스가 없습니다.")
 
         # [재사용] create_3d_script와 동일한 view/축/palette 설정 - 회전-반응형
@@ -4998,11 +5085,16 @@ class GnuplotGenerator:
             lines.append(f'set title "{_title_text}" {_title_enh}')
 
         _all_titles = [(c.get("title") or "").strip() for c in curves_3d] + \
-                      [(s.get("label") or "").strip() for s in (surfaces or [])]
-        if any(_all_titles) and len(curves_3d) + len(surfaces or []) > 1:
+                      [(s.get("label") or "").strip() for s in (surfaces or [])] + \
+                      [(fs.get("title") or "").strip() for fs in (function_surfaces or [])]
+        if any(_all_titles) and _n_sets_anim > 1:
             lines.append("set key outside right top box")
-        if any(_resolve_style(s).lower() == "pm3d" for s in (surfaces or [])):
+        if any(_resolve_style(s).lower() == "pm3d" for s in (surfaces or [])) or \
+           any(_resolve_style(fs).lower() == "pm3d" for fs in (function_surfaces or [])):
             lines.append("set pm3d depthorder")
+        if function_surfaces:
+            lines.append("set isosamples 40,40")
+            lines.append("set samples 40,40")
 
         # [범위 계산용 프라이밍 패스] "unknown" 터미널(화면에 아무것도 안 그림)로
         # time_min/time_max 필터만 적용한(thresh 없는) 전체 splot을 한 번 실행해서
@@ -5156,12 +5248,36 @@ class GnuplotGenerator:
             parts.append(f"{raw_ref}<=({tmax})")
         return " && ".join(parts) if parts else None
 
+    def _build_function_surface_part(self, fs, resolve_style_fn, show_title):
+        """[추가 - 요청] "2D+3D 한번에" - Function Surface: Z=f(X,Y) gnuplot 수식을
+        데이터 파일 없이 그대로 splot 절 하나로 만든다. surfaces(파일 기반, using
+        1:2:3)와 달리 수식 자체가 이미 X,Y 격자 전체에 대해 정의돼 있으므로 gnuplot의
+        네이티브 "splot <expr>" 함수 플롯 문법을 그대로 쓴다(별도 using절 불필요).
+        create_3d_script(정적)와 create_3d_animation_script(애니메이션 - thresh와
+        무관하게 항상 전체를 정적으로 그림, 자세한 이유는 create_3d_animation_script
+        docstring 참고) 양쪽에서 공유한다."""
+        expr = (fs.get("expression") or "").strip()
+        if not expr:
+            return None
+        title_text = (fs.get("title") or "").strip()
+        if title_text and show_title:
+            _t_rendered, _t_enh = self._render_text(title_text)
+            _title_clause = f'title "{_t_rendered}" {_t_enh}'
+        else:
+            _title_clause = "notitle"
+        style_raw = resolve_style_fn(fs)
+        if style_raw.lower() == "pm3d":
+            return f'{expr} {_title_clause} with pm3d'
+        fs_style = self._3D_STYLE_MAP.get(style_raw, "lines")
+        return f'{expr} {_title_clause} with {fs_style} palette'
+
     def create_3d_script(self, curves_3d, outfile, fmt="interactive",
                           xlabel="", ylabel="", zlabel="", title="",
                           xlog=False, ylog=False, zlog=False,
                           rot_x=60, rot_z=30, style="lines", palette="rainbow",
                           colorbox=True, annotations_3d=None, arrows_3d=None,
-                          equal_xyz=False, surfaces=None, time_min=None, time_max=None,
+                          equal_xyz=False, surfaces=None, function_surfaces=None,
+                          time_min=None, time_max=None,
                           y_min=None, y_max=None, z_min=None, z_max=None):
         """[추가] 3D Plot(splot) - "X/Y1/Y2를 X/Y/Z로 매핑, 여러 세트를 같은 화면에
         겹쳐 그리고 Z값 기준 palette(낮음=파랑, 높음=빨강)로 색칠"하는 기능.
@@ -5181,6 +5297,12 @@ class GnuplotGenerator:
         반복). 원본 파일이 이미 gnuplot이 그대로 읽을 수 있는 형식(#/빈 줄은
         gnuplot이 자동 무시)이라 별도 가공 없이 "using 1:2:3 with lines"로
         바로 splot에 추가한다.
+        function_surfaces: [{expression, title, style}, ...] - [추가 - 요청]
+        "2D+3D 한번에" - 데이터 파일 없이 Z=f(X,Y) gnuplot 수식(예: "sin(x)*cos(y)",
+        "x**2+y**2")을 그대로 splot 절 하나로 추가한다(surfaces처럼 using절이
+        필요 없음 - gnuplot이 splot에서 함수식을 네이티브로 지원). 격자가 성기면
+        (기본 isosamples=10) 면이 각져 보여서, 이 목록이 비어있지 않으면
+        isosamples/samples를 40으로 올린다.
         equal_xyz: "set view equal xyz" - X/Y/Z를 데이터 단위 기준으로 동일 비율
         스케일링. CathPlot 축들은 단위가 제각각(예: Y가 X보다 10000배 큰 값)이라
         기본은 OFF - 켜면 값이 작은 축이 거의 한 점/직선으로 눌려 보일 수 있음
@@ -5603,10 +5725,19 @@ class GnuplotGenerator:
         # key가 전혀 안 켜져서 어떤 선이 어느 surface인지 구분이 안 됐음 -
         # surfaces도 판단에 포함한다.
         _all_titles = [(c.get("title") or "").strip() for c in curves_3d] + \
-                      [(s.get("label") or "").strip() for s in (surfaces or [])]
+                      [(s.get("label") or "").strip() for s in (surfaces or [])] + \
+                      [(fs.get("title") or "").strip() for fs in (function_surfaces or [])]
         has_title = any(_all_titles)
-        if has_title and len(curves_3d) + len(surfaces or []) > 1:
+        _n_sets = len(curves_3d) + len(surfaces or []) + len(function_surfaces or [])
+        if has_title and _n_sets > 1:
             lines.append("set key outside right top box")
+
+        # [추가 - 요청] "2D+3D 한번에" - Function Surface가 있으면 기본
+        # isosamples(10)는 면이 각져 보일 만큼 성겨서 40으로 올린다(surfaces/curves는
+        # 원본 데이터 격자를 그대로 쓰므로 영향 없음).
+        if function_surfaces:
+            lines.append("set isosamples 40,40")
+            lines.append("set samples 40,40")
 
         # [추가] "s-plot에 pm3d(Color Palette/입체채색) 옵션 필요?" - CATHENA
         # surface(splot) 데이터는 이미 gnuplot의 grid(격자) 형식(빈 줄로 블록
@@ -5616,7 +5747,8 @@ class GnuplotGenerator:
         # ("입체채색이 s-plot에만 해당하는지? curve별로 줄 수 있으면 이동, s-plot에만
         # 적용되면 s-plot에서만 활성화" 요청 반영). depthorder는 surface 중 하나라도
         # pm3d를 쓰면 필요.
-        _any_pm3d = any(_resolve_style(s).lower() == "pm3d" for s in (surfaces or []))
+        _any_pm3d = any(_resolve_style(s).lower() == "pm3d" for s in (surfaces or [])) or \
+                    any(_resolve_style(fs).lower() == "pm3d" for fs in (function_surfaces or []))
         if _any_pm3d:
             lines.append("set pm3d depthorder")
 
@@ -5665,7 +5797,7 @@ class GnuplotGenerator:
             # 1개라서 legend에서 조용히 빠지는 문제(직접 테스트로 확인) - has_title
             # 판단과 동일하게 curve+surface 합산 개수로 판단.
             title_text = (c.get("title") or "").strip()
-            if title_text and (len(curves_3d) + len(surfaces or [])) > 1:
+            if title_text and _n_sets > 1:
                 _title_rendered, _title_enh = self._render_text(title_text)
                 _title_clause = f'title "{_title_rendered}" {_title_enh}'
             else:
@@ -5687,7 +5819,7 @@ class GnuplotGenerator:
                 path = abs_path
             path = path.replace("\\", "/")
             _s_title = (s.get("label") or "").strip()
-            if _s_title and (len(curves_3d) + len(surfaces or [])) > 1:
+            if _s_title and _n_sets > 1:
                 _s_title_rendered, _s_title_enh = self._render_text(_s_title)
                 _s_title_clause = f'title "{_s_title_rendered}" {_s_title_enh}'
             else:
@@ -5720,6 +5852,12 @@ class GnuplotGenerator:
                     if _s_marker_size:
                         _s_pt_clause += f" ps {_s_marker_size}"
                 splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}')
+
+        # [추가 - 요청] "2D+3D 한번에" - Function Surface(수식만으로 그리는 Z=f(X,Y)).
+        for fs in (function_surfaces or []):
+            _fs_part = self._build_function_surface_part(fs, _resolve_style, _n_sets > 1)
+            if _fs_part:
+                splot_parts.append(_fs_part)
 
         lines.append("splot " + ", \\\n      ".join(splot_parts))
 
