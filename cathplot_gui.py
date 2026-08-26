@@ -2792,7 +2792,13 @@ class CathPlotGUI:
             비운다."""
             try:
                 with open(path, "r", encoding="utf-8") as f:
-                    lines = [ln.strip() for ln in f if ln.strip()]
+                    # [추가 - 요청] "메모장으로 직접 손볼 때 주석을 남길 수
+                    # 있는지, 첫 칸에 #?" - #으로 시작하는 줄(공백 제거 후
+                    # 기준)은 주석으로 보고 건너뛴다. 저장(List Save)은
+                    # queue_list(파일 경로)만 기록하므로 주석은 손으로 편집한
+                    # 파일에서만 유지됨 - Edit in Notepad...로 열어 직접
+                    # 적어두면 다음에 그 파일을 불러올 때도 그대로 무시된다.
+                    lines = [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
             except OSError as e:
                 messagebox.showerror("Batch Set", f"불러오기 실패:\n{e}", parent=dlg)
                 return
