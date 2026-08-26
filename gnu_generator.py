@@ -3397,6 +3397,18 @@ class GnuplotGenerator:
         _inset_cmd_list = [c for c in main_cmd_list if not c.startswith("NaN axes")]
 
         if _ellipse_native_ok:
+            # [수정 - 버그] "PIP 원/타원 클리핑 + Cubic Spline(smooth csplines)
+            # 조합에서 gnuplot이 'Can't calculate splines, need at least 3
+            # points'로 죽음" - 아래 _wrap_ellipse가 타원 밖의 점을 NaN(0/0)
+            # 으로 바꿔 넣는데, smooth csplines는 이 NaN을 plain "with lines"
+            # 처럼 건너뛰지 못하고(스플라인 계산 자체가 깨끗한 실수 데이터
+            # 열을 요구) 그대로 죽어버림 - 사각형 클리핑은 NaN 주입 없이
+            # xrange/yrange만 좁히는 방식이라 이 문제가 없음(실측으로 원인
+            # 확정: 사각형은 항상 정상, 원/타원만 죽음). 원/타원으로 자르는
+            # inset 안에서는 이 curve의 스플라인 보간을 건너뛰고 평범한
+            # 선(원본 데이터 그대로)으로 대체한다 - 메인 plot이나 사각형
+            # 클리핑에는 영향 없음.
+            _inset_cmd_list = [c.replace(" smooth csplines", "") for c in _inset_cmd_list]
             # [추가 - 발견] "원/타원으로 커브 자체를 자르기" - 데이터 포인트의
             # 화면상 위치(이 박스 자신을 기준으로 한 0~1 위치)가 타원 안에
             # 있는지를 계산해서, 밖이면 NaN(0/0)으로 만들어 그 점을 건너뛰게
@@ -4389,6 +4401,16 @@ class GnuplotGenerator:
             expr, axis, rest = m.group(1), m.group(2), m.group(3)
             return f"((x)<=thresh ? ({expr}) : 1/0) notitle axes {axis} with lines{rest}"
 
+        # [수정 - 버그] "Animation + Cubic Spline(smooth csplines) 조합에서
+        # gnuplot이 'Can't calculate splines, need at least 3 points'로 죽음" -
+        # 위 _wrap_threshold가 진행(thresh) 밖의 점을 NaN(1/0)으로 바꿔 넣는데,
+        # gnuplot의 smooth csplines는 이 NaN을 plain "with lines"처럼 건너뛰지
+        # 못하고(스플라인 계산 자체가 깨끗한 실수 데이터 열을 요구) 그대로
+        # 죽어버림(PIP의 원/타원 클리핑과 완전히 같은 근본 원인 - 아래
+        # _render_pip_inset 참고). 애니메이션 재생 중에는 이 curve의 스플라인
+        # 보간을 건너뛰고 평범한 선(원본 데이터 그대로)으로 대체한다 - 정적인
+        # 화면(Interactive, non-animated)은 영향 없음.
+        static_curve_lines = [ln.replace(" smooth csplines", "") for ln in static_curve_lines]
         animated_curve_lines = [
             _wrap_threshold_func(re.sub(r"using \(([^)]+)\):(\d+)", _wrap_threshold, ln))
             for ln in static_curve_lines
