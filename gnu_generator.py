@@ -3470,6 +3470,22 @@ class GnuplotGenerator:
                 return f"{wrapped} notitle axes {axis} with lines{rest}"
             _inset_cmd_list = [_wrap_ellipse_func(c) for c in _inset_cmd_list]
 
+            # [수정 - 버그(사용자 보고)] "타원 밖에 그림 조각(마커)이 클리핑
+            # 안 되고 나타남" - Marker(점) 명령은 "using 1:2"처럼 컬럼 번호가
+            # 괄호 없이 맨 숫자라서(데이터 curve의 "using (식):(식)"과 형태가
+            # 다름) 위 _wrap_ellipse 정규식(괄호로 감싼 식만 인식)이 못
+            # 잡아내고 그대로 통과했음(실제 렌더로 확인 - 마커 점들이 타원
+            # 경계와 무관하게 인셋 박스 전체에 그대로 찍혀 있었음). 데이터
+            # curve와 동일하게 컬럼값을 _pip_ellip_ok로 감싸 타원 밖 점은
+            # NaN 처리한다.
+            def _wrap_ellipse_marker(m):
+                xcol, ycol = m.group(1), m.group(2)
+                return (
+                    f"using (_pip_ellip_ok((${xcol}),(${ycol})) ? (${xcol}) : (0/0))"
+                    f":(_pip_ellip_ok((${xcol}),(${ycol})) ? (${ycol}) : (0/0))"
+                )
+            _inset_cmd_list = [re.sub(r"using (\d+):(\d+)\b", _wrap_ellipse_marker, c) for c in _inset_cmd_list]
+
         lines.append("plot \\")
         for i, cmd in enumerate(_inset_cmd_list):
             if i != len(_inset_cmd_list) - 1:
@@ -4500,8 +4516,17 @@ class GnuplotGenerator:
                 def _wrap_ellipse_thresh(m):
                     _xexpr, _yexpr = m.group(1), m.group(2)
                     return f"(_pip_ellip_ok(({_xexpr}),({_yexpr})) && (({_xexpr})<=thresh))"
+                # [수정 - 버그(사용자 보고), 완결성 검토로 추가 확인] Marker(점)
+                # 명령도 이제 _render_pip_inset에서 타원 클리핑용 _pip_ellip_ok
+                # 로 감싸지는데(위 marker 클리핑 버그 수정 참고), 이 줄이 그대로
+                # thresh 조건까지 같이 걸리면 "마커는 애니메이션 진행과 무관하게
+                # 항상 표시"(메인 plot의 기존 정책 - _wrap_threshold 주석 참고)
+                # 와 어긋나게 됨 - 마커 plot 명령($MarkerN으로 시작)만 이 thresh
+                # 결합에서 제외해서 공간(타원) 클리핑은 유지하되 시간(진행)
+                # 게이팅은 메인 plot과 동일하게 안 걸리게 한다.
                 _pip_inset_lines = [
-                    re.sub(r"_pip_ellip_ok\(\(([^)]+)\),\(([^)]+)\)\)", _wrap_ellipse_thresh, ln)
+                    ln if ln.strip().startswith("$Marker")
+                    else re.sub(r"_pip_ellip_ok\(\(([^)]+)\),\(([^)]+)\)\)", _wrap_ellipse_thresh, ln)
                     for ln in _pip_inset_lines
                 ]
                 # [수정 - 버그 발견] "두 번째 프레임부터 메인 plot이 인셋의

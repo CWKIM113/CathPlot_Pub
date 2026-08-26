@@ -389,6 +389,16 @@ class CathPlotGUI:
         b.pack(**pack_kw)
         return b
 
+    def _bind_hscroll_wheel(self, canvas):
+        # [추가 - 요청] "모든 block에서 가로 스크롤 가능하게" - 가로
+        # 스크롤바 자체는 마우스로 드래그해야 해서 불편할 수 있으니, 세로
+        # 휠 스크롤(Tkinter/Windows 기본)과 대칭으로 Shift+휠도 가로
+        # 스크롤에 쓸 수 있게 한다(엑셀 등 다른 프로그램에서도 흔한 관례).
+        def _on_shift_wheel(event):
+            canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+            return "break"
+        canvas.bind("<Shift-MouseWheel>", _on_shift_wheel)
+
     def _get_check_images(self, color="accent", size=15):
         # [추가 - 근본 원인 수정] "체크박스 20곳을 강조색으로 통일했더니 체크
         # 표시(흰 체크마크)가 안 보이고 그냥 색칠된 상자만 보임" - 기존
@@ -484,9 +494,18 @@ class CathPlotGUI:
         self.file_frame = ttk.LabelFrame(self.root, text="DAT Files", style=self.SECTION_STYLE["dat_files"])
         self.file_frame.pack(fill="x", padx=10, pady=0)
 
-        self.file_canvas = tk.Canvas(self.file_frame, height=85, width=120)
+        # [수정 - 요청] "모든 block에서 가로 스크롤 가능하게 - 일부 입력이
+        # 잘림" - 세로 스크롤바만 있던 이 canvas를 자기 전용 sub-frame으로
+        # 감싸서, 그 안에 가로 스크롤바도 같이 넣는다(오른쪽의 세로
+        # 스크롤바/+ 버튼은 그대로 file_frame에 직접 배치 - 얘네까지 가로로
+        # 같이 밀려나면 안 되므로).
+        self.file_canvas_frame = ttk.Frame(self.file_frame)
+        self.file_canvas = tk.Canvas(self.file_canvas_frame, height=85, width=120)
         self.file_scrollbar = ttk.Scrollbar(
             self.file_frame, orient="vertical", command=self.file_canvas.yview
+        )
+        self.file_hscrollbar = ttk.Scrollbar(
+            self.file_canvas_frame, orient="horizontal", command=self.file_canvas.xview
         )
         self.file_scrollable_frame = ttk.Frame(self.file_canvas)
 
@@ -499,15 +518,22 @@ class CathPlotGUI:
         self.file_canvas.create_window(
             (0, 0), window=self.file_scrollable_frame, anchor="nw"
         )
-        self.file_canvas.configure(yscrollcommand=self.file_scrollbar.set)
+        self.file_canvas.configure(yscrollcommand=self.file_scrollbar.set, xscrollcommand=self.file_hscrollbar.set)
 
-        self.file_canvas.pack(side="left", fill="both", expand=True, padx=5, pady=0)
+        self.file_canvas_frame.pack(side="left", fill="both", expand=True, padx=5, pady=0)
+        self.file_canvas.pack(side="top", fill="both", expand=True)
+        self.file_hscrollbar.pack(side="bottom", fill="x")
         self.file_scrollbar.pack(side="right", fill="y")
+        self._bind_hscroll_wheel(self.file_canvas)
 
-        self.add_file_btn = ttk.Button(
-            self.file_frame, text="+", width=3, command=self.add_file_row
+        # [수정 - 요청] "Dat file 추가 + 버튼에 배경색을" - ttk.Button은
+        # Windows 기본 테마에서 배경색이 잘 안 먹는 문제가 이미 여러 번
+        # 확인된 상태라(_mk_btn 주석 참고), Browse/X와 같은 tk.Button 기반
+        # 헬퍼로 통일해 확실히 색이 반영되게 한다.
+        self.add_file_btn = self._mk_btn(
+            self.file_frame, "+", self.add_file_row,
+            color="secondary", btn_width=3, side="right", padx=5, pady=0,
         )
-        self.add_file_btn.pack(side="right", padx=5, pady=0)
 
         btn_container = ttk.Frame(self.root)
         btn_container.pack(fill="x", padx=10, pady=0)
@@ -575,9 +601,17 @@ class CathPlotGUI:
         self.var_frame = ttk.LabelFrame(self.root, text="Available Variables Selection", style=self.SECTION_STYLE["variables"])
         self.var_frame.pack(fill="x", expand=False, padx=10, pady=0)
 
-        self.canvas = tk.Canvas(self.var_frame, height=290)
+        # [수정 - 요청] "모든 block에서 가로 스크롤 가능하게 - 일부 입력이
+        # 잘림" - Var list는 No/Variable/X/Y1/Y2/Color/Style/Spl 칸이 옆으로
+        # 길어서 창을 좁히면 오른쪽 칸(Style/Spl 등)이 잘리는데도 가로
+        # 스크롤 수단이 없었음 - 세로 스크롤바와 같은 방식으로 가로도 추가.
+        self.canvas_hframe = ttk.Frame(self.var_frame)
+        self.canvas = tk.Canvas(self.canvas_hframe, height=290)
         self.scrollbar = ttk.Scrollbar(
             self.var_frame, orient="vertical", command=self.canvas.yview
+        )
+        self.hscrollbar = ttk.Scrollbar(
+            self.canvas_hframe, orient="horizontal", command=self.canvas.xview
         )
         self.scrollable_frame = ttk.Frame(self.canvas)
 
@@ -590,19 +624,36 @@ class CathPlotGUI:
         self.canvas.create_window(
             (0, 0), window=self.scrollable_frame, anchor="nw"
         )
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        self.canvas.pack(side="left", fill="both", expand=True)
+        self.canvas.configure(yscrollcommand=self.scrollbar.set, xscrollcommand=self.hscrollbar.set)
+        self.canvas_hframe.pack(side="left", fill="both", expand=True)
+        self.canvas.pack(side="top", fill="both", expand=True)
+        self.hscrollbar.pack(side="bottom", fill="x")
         self.scrollbar.pack(side="right", fill="y")
+        self._bind_hscroll_wheel(self.canvas)
 
         self.plot_container = ttk.LabelFrame(self.root, text="Plot Setting", style=self.SECTION_STYLE["plot_setting"])
         self.plot_container.pack(fill="x", padx=10, pady=0)
 
-        self.plot_canvas = tk.Canvas(self.plot_container, height=330, highlightthickness=0)
-        self.plot_canvas.pack(side="left", fill="both", expand=True)
+        # [수정 - 요청] "모든 block에서 가로 스크롤 가능하게 - 일부 입력이
+        # 잘림" - 이 canvas는 자기 폭을 항상 화면 폭에 맞추는 바인딩이 있어서
+        # (아래 itemconfig(width=e.width)), 창을 좁히면 안의 내용(Title/
+        # Legend/Frame/Axis 등 여러 입력줄)이 그만큼 그대로 잘려 보이고 가로
+        # 스크롤로 나머지를 볼 방법이 없었음 - 내용 자체가 요구하는 최소
+        # 폭(plot_frame.winfo_reqwidth()) 밑으로는 안 줄이게 바꾸고, 가로
+        # 스크롤바를 추가해서 그 이하로 창이 좁아져도 스크롤로 나머지를 볼
+        # 수 있게 한다.
+        self.plot_canvas_hframe = ttk.Frame(self.plot_container)
+        self.plot_canvas = tk.Canvas(self.plot_canvas_hframe, height=330, highlightthickness=0)
 
         self.plot_scrollbar = ttk.Scrollbar(self.plot_container, orient="vertical", command=self.plot_canvas.yview)
+        self.plot_hscrollbar = ttk.Scrollbar(self.plot_canvas_hframe, orient="horizontal", command=self.plot_canvas.xview)
+        self.plot_canvas.configure(yscrollcommand=self.plot_scrollbar.set, xscrollcommand=self.plot_hscrollbar.set)
+
+        self.plot_canvas_hframe.pack(side="left", fill="both", expand=True)
+        self.plot_canvas.pack(side="top", fill="both", expand=True)
+        self.plot_hscrollbar.pack(side="bottom", fill="x")
         self.plot_scrollbar.pack(side="right", fill="y")
-        self.plot_canvas.configure(yscrollcommand=self.plot_scrollbar.set)
+        self._bind_hscroll_wheel(self.plot_canvas)
 
         self.plot_frame = ttk.Frame(self.plot_canvas)
         self.canvas_window = self.plot_canvas.create_window((0, 0), window=self.plot_frame, anchor="nw")
@@ -613,7 +664,9 @@ class CathPlotGUI:
         )
         self.plot_canvas.bind(
             "<Configure>",
-            lambda e: self.plot_canvas.itemconfig(self.canvas_window, width=e.width)
+            lambda e: self.plot_canvas.itemconfig(
+                self.canvas_window, width=max(e.width, self.plot_frame.winfo_reqwidth())
+            )
         )
 
         self.title_var = tk.StringVar(value="Plot Title")
@@ -4707,9 +4760,14 @@ class CathPlotGUI:
             # 보였음. Color/Style처럼 고정 픽셀 폭 Frame(pack_propagate(False))
             # 으로 감싸서, 안의 위젯이 무엇이든(라벨이든 체크박스든) 항상 같은
             # 폭을 쓰게 통일한다(아래 데이터 행의 X/Y1/Y2 칸도 동일하게 적용).
-            X_COL_PX = 26
-            Y1_COL_PX = 30
-            Y2_COL_PX = 30
+            # [수정 - 요청] "X radio, Y1, Y2 체크박스 사이의 간격을 0으로" -
+            # 칸 폭 자체가 체크박스/라디오 실제 크기(19px)보다 넉넉해서 그
+            # 여백만큼 옆 칸과 떨어져 보였음 - 체크박스 크기에 거의 딱
+            # 맞는 폭으로 줄여 간격을 최소화(라디오 indicator가 체크박스
+            # 이미지보다 살짝 작아 X_COL_PX는 조금 더 좁혀도 안전).
+            X_COL_PX = 20
+            Y1_COL_PX = 22
+            Y2_COL_PX = 22
             # [수정 - 버그] "X/Y1/Y2 헤더가 그 아래 입력 박스(Radio/Checkbutton)
             # 대비 우측으로 밀림" - 프레임/위젯의 요청 폭 자체는 정중앙에 오게
             # 맞춰놨는데도(place relx=0.5) 여전히 어긋나 보임 - 실측 확인:
@@ -4755,9 +4813,9 @@ class CathPlotGUI:
             # [추가 - 요청] "Cubic Spline" 체크박스 열 - Y1/Y2와 같은 좁은
             # 폭으로 맨 뒤에 붙인다(새 필드를 위한 넓은 칸을 새로 만들 자리가
             #없다는 요청 그대로 - 짧은 헤더 "Spl"만).
-            # [수정 - 요청] "Spl box 뒤 여분을 0으로" - Y1/Y2(30px)보다 살짝
-            # 넓어서(32px) 체크박스 오른쪽에 여백이 더 있어 보였음 - 동일 폭으로.
-            SMOOTH_COL_PX = 30
+            # [수정 - 요청] "Spl box 뒤 여분을 0으로" - Y1/Y2와 동일 폭으로
+            # 맞춰 여백 없이 통일.
+            SMOOTH_COL_PX = 22
             smooth_hdr_f = tk.Frame(header_f, width=SMOOTH_COL_PX, height=22)
             smooth_hdr_f.pack_propagate(False)
             smooth_hdr_f.pack(side="left")
