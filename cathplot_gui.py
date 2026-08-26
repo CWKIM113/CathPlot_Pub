@@ -1179,8 +1179,20 @@ class CathPlotGUI:
         # [수정 - 요청] "PIP 버튼은 PLOT 근방에 배치" - 기존엔 Batch Set/Queue/
         # Template Save-Load 줄(btn_container)에 있었는데, PIP는 PLOT/SAVE/
         # PRINT 실행 시 항상 같이 반영되는 설정이라 PLOT 바로 옆이 더 자연스러움.
-        self._mk_btn(self.button_frame, "PIP", self.open_pip_dialog,
-                     color="grey", fg="white", side="left", padx=5, pady=2)
+        # [수정 - 요청] "PIP 버튼 앞에 체크박스(기본 꺼짐)를 두고, PIP 버튼을
+        # 누르면 자동으로 체크되게, 팝업 안의 'PIP 사용' 체크박스는 없애고
+        # (중복이라) 이 체크박스 하나로 통일 - 팝업을 닫아도 그대로 유지"
+        # - self.pip_enabled_var를 여기서 직접 노출하고, 버튼은 그 값을
+        # True로 만든 뒤 팝업을 연다(끄고 싶으면 이 체크박스만 그냥 끄면
+        # 되고, 팝업을 다시 열 필요 없음).
+        self._mk_check(self.button_frame, "", self.pip_enabled_var, side="left", padx=(5, 0), pady=2)
+
+        def _open_pip_dialog_and_enable():
+            self.pip_enabled_var.set(True)
+            self.open_pip_dialog()
+
+        self._mk_btn(self.button_frame, "PIP", _open_pip_dialog_and_enable,
+                     color="grey", fg="white", side="left", padx=(2, 5), pady=2)
 
         # [추가 - 요청] "X변수 변화에 따른 Y변수들의 progress를 시각화" - PLOT
         # 옆에 Animate 체크박스(기본 꺼짐 - 평소엔 지금처럼 정적으로 뜸)와
@@ -2407,7 +2419,10 @@ class CathPlotGUI:
         dlg.transient(self.root)
         dlg.geometry("480x560")
 
-        self._mk_check(dlg, "PIP 사용", self.pip_enabled_var, bold=True, anchor="w", padx=10, pady=(10, 5))
+        # [수정 - 요청] "팝업 안의 PIP 사용 체크박스는 없애고, 메인 창 PIP
+        # 버튼 앞 체크박스 하나로 통일" - 여기 있던 중복 체크박스 제거
+        # (self.pip_enabled_var는 메인 창에서 이미 켜져 있는 상태로 이 팝업이
+        # 열림 - _open_pip_dialog_and_enable 참고).
 
         # --- 데이터 소스 ---
         src_frame = ttk.LabelFrame(dlg, text="작은 plot에 표시할 데이터")
@@ -2539,9 +2554,11 @@ class CathPlotGUI:
         # [수정 - 요청] "Plot Title과 Axis Title check box 분리" - 기존엔
         # Plot Title(plotdef.title)만 켜고 끌 수 있었고 X/Y1/Y2 축 제목은
         # 항상 강제로 안 보였음(_render_pip_inset 참고) - 별도 체크박스로 분리.
-        self._mk_check(opt_frame, "Plot Title 표시", self.pip_title_on_var, anchor="w", padx=5, pady=2)
-        self._mk_check(opt_frame, "Axis Title 표시", self.pip_axis_title_on_var, anchor="w", padx=5, pady=2)
-        self._mk_check(opt_frame, "Legend 표시", self.pip_legend_on_var, anchor="w", padx=5, pady=2)
+        # [수정 - 요청] "입력 box는 그냥 두고, 대신 팝업의 체크박스를 키워요" -
+        # 기본 15px 대신 Var list의 Y1/Y2 체크박스와 같은 19px로.
+        self._mk_check(opt_frame, "Plot Title 표시", self.pip_title_on_var, size=19, anchor="w", padx=5, pady=2)
+        self._mk_check(opt_frame, "Axis Title 표시", self.pip_axis_title_on_var, size=19, anchor="w", padx=5, pady=2)
+        self._mk_check(opt_frame, "Legend 표시", self.pip_legend_on_var, size=19, anchor="w", padx=5, pady=2)
 
         # [수정 - 요청] "불투명 켬/끔" 체크박스를 0~100% 슬라이더로 교체 -
         # 100=완전 불투명(기존 체크 ON과 동일한 기본 모습, 흰 배경이 메인
@@ -4789,8 +4806,14 @@ class CathPlotGUI:
                                 self.selected_y1_vars[target_key].set(False)
                                 if f_x_var.get() == target_key:
                                     f_x_var.set("")
-                        self.sync_axis_labels()
+                        # [수정 - 버그] "Axis title이 클릭 순서를 따르게" 했더니,
+                        # sync_axis_labels가 _touch_curve_order보다 먼저 호출돼
+                        # 방금 클릭한 키가 아직 _curve_order에 안 들어간 상태로
+                        # (안전망으로 맨 뒤 취급) axis title을 계산해서, 한 번
+                        # 늦게(다음 클릭에서야) 반영되는 문제가 있었음 - 순서를
+                        # 바꿔 _curve_order부터 갱신한 뒤 axis title을 계산한다.
                         self._touch_curve_order(target_key)
+                        self.sync_axis_labels()
                     return y_excl_handler
 
                 # [수정 - 버그] 위 헤더(X/Y1/Y2)와 폭을 정확히 맞추기 위해
@@ -4880,8 +4903,14 @@ class CathPlotGUI:
             self.xlabel_var.set(self.legend_vars[x_key].get() if x_key in self.legend_vars else "")
             self._updating_x = False
 
-        y1_selected = [self.legend_vars[k].get() for k, v in self.selected_y1_vars.items() if v.get()]
-        y2_selected = [self.legend_vars[k].get() for k, v in self.selected_y2_vars.items() if v.get()]
+        # [수정 - 요청] "Axis title도 curve 순서에 연동?" - 예전엔 selected_y1_
+        # vars/selected_y2_vars 딕셔너리 순서(=표에 나열된 순서)의 "첫 번째"를
+        # 그대로 썼는데, 이제 클릭(선택)한 순서(_ordered_selected_keys)의
+        # "첫 번째"를 따르도록 통일 - curve 그리기/legend 순서와 항상 같은
+        # 기준을 쓰게 됨.
+        _ordered_keys, _y1_set, _y2_set = self._ordered_selected_keys()
+        y1_selected = [self.legend_vars[k].get() for k in _ordered_keys if k in _y1_set]
+        y2_selected = [self.legend_vars[k].get() for k in _ordered_keys if k in _y2_set]
 
         if self.y1_title_auto:
             self._updating_y1 = True
@@ -5097,6 +5126,23 @@ class CathPlotGUI:
     def open_3d_plot_dialog(self):
         eligible, skipped = self._collect_3d_curves()
         surfaces = self._collect_3d_surfaces()
+
+        # [추가 - 요청] "Y1 또는 Y2가 2개 이상이면 메시지 내고 창이 닫혀야
+        # 함(지금은 열린 채로 있음)" - 어느 것끼리 짝지어야 할지 정말로
+        # 모호한 경우(_collect_3d_curves가 "모호"라고 표시한 경우)는, 다른
+        # 파일이 정상이거나 Function Surface로 대체 가능하더라도 사용자가
+        # 먼저 그 선택부터 바로잡아야 하는 실수일 가능성이 높으므로, 안내
+        # 후 팝업 자체를 열지 않고 바로 닫는다("Y1/Y2 없음"만 해당하는 경우는
+        # 기존처럼 Function Surface 전용으로 계속 열 수 있음 - 아래 분기 그대로).
+        _ambiguous = [s for s in skipped if "모호" in s]
+        if _ambiguous:
+            messagebox.showerror(
+                "3D Plot",
+                "다음 파일은 Y1 또는 Y2가 2개 이상 선택돼 있어 3D로 그릴 수 없습니다"
+                "(어느 것끼리 짝지을지 알 수 없음) - Y1/Y2 선택을 각각 1개로 줄인 뒤 다시 시도해주세요:\n\n"
+                + "\n".join(_ambiguous)
+            )
+            return
         # [수정 - 요청] "2D+3D 한번에" - 파일 기반 curve/surface가 하나도 없어도
         # Function Surface(데이터 없이 Z=f(X,Y) 수식만으로 그리는 splot)를 이
         # 팝업 안에서 새로 추가할 수 있으므로, 더 이상 여기서 막지 않고 항상
