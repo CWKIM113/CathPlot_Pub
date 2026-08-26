@@ -73,7 +73,10 @@ STYLE_MAP = {
     "Dash": "dash",
     "Dot": "dot",
     "Dash-D": "dashdot",       # Dash-Dot (일점쇄선)
-    "Short-Dash": "shortdash",
+    # [수정 - 요청] "Style box 폭을 줄이기 위해 Short-Dash -> Short-D로 축약" -
+    # 최장 옵션이 10자(Short-Dash)에서 7자(Short-D/Dash-2D 동률)로 줄어서
+    # STYLE_COL_PX도 같이 줄일 수 있게 됨(아래 STYLE_COL_PX 참고).
+    "Short-D": "shortdash",
     "Dash-2D": "dashdotdot",  # Dash-Dot-Dot (이점쇄선)
 }
 
@@ -1208,7 +1211,9 @@ class CathPlotGUI:
         self.animate_var = tk.BooleanVar(value=False)
         self.animate_duration_var = tk.StringVar(value="20")
         animate_f = ttk.Frame(self.button_frame)
-        animate_f.pack(side="left", padx=(8, 0))
+        # [수정 - 요청] "SAVE 버튼과 Animate Time box 간격을 좀 더 크게 -
+        # SAVE/PRINT 그룹과 구별되게" - 오른쪽 여백을 0 -> 16px로.
+        animate_f.pack(side="left", padx=(8, 16))
         self._mk_check(animate_f, "Animate", self.animate_var, color="accent", side="left")
         ttk.Label(animate_f, text="Time(s):").pack(side="left", padx=(4, 1))
         self._mk_entry(animate_f, self.animate_duration_var, width=4, color="accent").pack(side="left")
@@ -4722,8 +4727,12 @@ class CathPlotGUI:
             y2_hdr_f.pack_propagate(False)
             y2_hdr_f.pack(side="left")
             ttk.Label(y2_hdr_f, text="Y2", font=("Consolas", 10, "bold")).place(relx=0.5, x=_HDR_NUDGE_PX, rely=0.5, anchor="center")
-            COLOR_COL_PX = 65   # 최장 옵션(Magenta/Purple/Orange, 7자) 기준
-            STYLE_COL_PX = 70   # 최장 옵션(Short-Dash, 10자) 기준
+            # [수정 - 요청] "Color/Style box 폭을 1자, 2자씩 줄이기" - Color는
+            # 최장 옵션 글자수(7자)는 그대로지만 여유를 1자만큼 줄이고,
+            # Style은 위에서 "Short-Dash"->"Short-D"로 축약해 최장 옵션이
+            # 10자->7자가 된 만큼(+ 추가로 2자분) 같이 줄임.
+            COLOR_COL_PX = 57   # 최장 옵션(Magenta/Purple/Orange, 7자) 기준 - 1자(~8px)만큼 축소
+            STYLE_COL_PX = 50   # 최장 옵션(Short-D/Dash-2D, 7자) 기준 - 축약 반영 + 2자만큼 추가 축소
             # [수정] height=18이 "Color"/"Style" 글자(Consolas 10 bold) 높이보다
             # 낮아서 아래쪽이 잘리고 X/Y1/Y2보다 낮게 보이던 문제 - 데이터 행
             # 셀(height=22)과 맞춰서 헤더도 22로 통일
@@ -4738,7 +4747,9 @@ class CathPlotGUI:
             # [추가 - 요청] "Cubic Spline" 체크박스 열 - Y1/Y2와 같은 좁은
             # 폭으로 맨 뒤에 붙인다(새 필드를 위한 넓은 칸을 새로 만들 자리가
             #없다는 요청 그대로 - 짧은 헤더 "Spl"만).
-            SMOOTH_COL_PX = 32
+            # [수정 - 요청] "Spl box 뒤 여분을 0으로" - Y1/Y2(30px)보다 살짝
+            # 넓어서(32px) 체크박스 오른쪽에 여백이 더 있어 보였음 - 동일 폭으로.
+            SMOOTH_COL_PX = 30
             smooth_hdr_f = tk.Frame(header_f, width=SMOOTH_COL_PX, height=22)
             smooth_hdr_f.pack_propagate(False)
             smooth_hdr_f.pack(side="left")
