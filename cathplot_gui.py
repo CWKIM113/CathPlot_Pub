@@ -154,6 +154,13 @@ class CathPlotGUI:
 
         self.selected_y1_vars = {}
         self.selected_y2_vars = {}
+        # [추가 - 요청] "선택한 순서대로 curve를 그려주기(Legend/default title
+        # 순서에도 연동)" - Y1/Y2 체크박스를 클릭한 순서를 그대로 기억한다
+        # (make_y_excl_cmd 참고). 체크 해제하면 그 키만 빠지고, 다시 체크하면
+        # 원래 있던 자리가 아니라 맨 뒤에 새로 추가됨(재정렬 아니라 이어붙이기 -
+        # Multi-Plot "선택 순서대로 배치"와 동일한 규칙). _ordered_selected_keys()
+        # 가 이 리스트를 실제 그리기/legend/Batch Queue 순서로 변환한다.
+        self._curve_order = []
         self.legend_vars = {}
         self.file_xshift_vars = {}  # 파일당 하나의 X Shift (그 파일의 모든 curve에 공통 적용)
         self.marker_shape_vars = {}   # key_str -> StringVar (기본 "None" - 마커 없음)
@@ -3289,6 +3296,40 @@ class CathPlotGUI:
         threading.Thread(target=worker, daemon=True).start()
 
     # ------------------------------------------------------------------
+    # [추가 - 요청] "DAT file 중 선택한 순서대로 curve를 그려주기(Legend box
+    # 순서에도 연동)" - Y1/Y2 체크박스를 클릭한 순서(self._curve_order)를
+    # 실제 그리기 순서로 변환하는 공용 헬퍼. PLOT/SAVE/PRINT(execute_plot_
+    # pipeline)와 Batch Queue 레시피(_capture_curve_recipe) 둘 다 이걸 씀.
+    # ------------------------------------------------------------------
+    def _touch_curve_order(self, key):
+        """Y1/Y2 체크박스가 눌릴 때마다 호출됨(make_y_excl_cmd). 지금 그
+        key가 선택 상태(Y1 또는 Y2)면 순서 목록 맨 뒤에 추가(이미 있으면
+        그대로 - 재정렬 아님), 선택 해제 상태면 목록에서 뺀다."""
+        is_selected = (
+            self.selected_y1_vars.get(key, tk.BooleanVar(value=False)).get()
+            or self.selected_y2_vars.get(key, tk.BooleanVar(value=False)).get()
+        )
+        if is_selected:
+            if key not in self._curve_order:
+                self._curve_order.append(key)
+        elif key in self._curve_order:
+            self._curve_order.remove(key)
+
+    def _ordered_selected_keys(self):
+        """지금 Y1 또는 Y2로 선택된 모든 key(파일||output_no)를, 사용자가
+        클릭(선택)한 순서 그대로 반환한다 - (ordered_keys, y1_key_set,
+        y2_key_set) 튜플. self._curve_order에 없는 키(Template Load 등으로
+        클릭을 거치지 않고 프로그램적으로 선택된 경우 - 안전망)는 원래
+        순서 그대로 뒤에 덧붙인다."""
+        y1_keys = [k for k, v in self.selected_y1_vars.items() if v.get()]
+        y2_keys = [k for k, v in self.selected_y2_vars.items() if v.get()]
+        y1_set, y2_set = set(y1_keys), set(y2_keys)
+        selected = y1_set | y2_set
+        ordered = [k for k in self._curve_order if k in selected]
+        ordered += [k for k in y1_keys + y2_keys if k not in ordered]
+        return ordered, y1_set, y2_set
+
+    # ------------------------------------------------------------------
     # Batch Queue: 화면에서 지금 선택된 Y1/Y2/X (output_no=var_no 기준) 구성을
     # "레시피"로 캡처해서, 여러 dat 파일(상대경로)에 동일하게 적용하며
     # 각각 별도의 plot을 자동으로 만들어 저장한다.
@@ -3296,41 +3337,27 @@ class CathPlotGUI:
     def _capture_curve_recipe(self):
         """현재 화면에서 선택된 Y1/Y2 output_no(var_no) + 스타일과, X로 선택된 output_no를
         특정 파일명과 무관하게 레시피 형태로 추출한다."""
+        # [수정 - 요청] "선택한 순서대로" - 예전엔 selected_y1_vars/selected_y2_vars
+        # 딕셔너리 순서(=표에 나열된 순서)를 그대로 썼는데, 이제 클릭 순서
+        # (_ordered_selected_keys)를 그대로 따른다.
         recipe = []
-        for key, var in self.selected_y1_vars.items():
-            if var.get():
-                _, out_no = key.split("||")
-                recipe.append({
-                    "output_no": int(out_no),
-                    "axis": "y1",
-                    "color": self.color_vars[key].get() if key in self.color_vars else "",
-                    "linestyle": self.linestyle_vars[key].get() if key in self.linestyle_vars else "",
-                    "linewidth": self.linewidth_vars[key].get() if key in self.linewidth_vars else "1.5",
-                    "legend_group": int(self.legend_group_vars[key].get()) if key in self.legend_group_vars else 1,
-                    "in_legend1": self.in_legend1_vars[key].get() if key in self.in_legend1_vars else True,
-                    "marker_shape_label": self.marker_shape_vars[key].get() if key in self.marker_shape_vars else "None",
-                    "marker_size_label": self.marker_size_vars[key].get() if key in self.marker_size_vars else "M",
-                    "marker_max_count": (self.marker_maxcount_vars[key].get() if key in self.marker_maxcount_vars else ""),
-                    "marker_fill": (self.marker_fill_vars[key].get() if key in self.marker_fill_vars else False),
-                    "smooth_csplines": (self.smooth_csplines_vars[key].get() if key in self.smooth_csplines_vars else False),
-                })
-        for key, var in self.selected_y2_vars.items():
-            if var.get():
-                _, out_no = key.split("||")
-                recipe.append({
-                    "output_no": int(out_no),
-                    "axis": "y2",
-                    "color": self.color_vars[key].get() if key in self.color_vars else "",
-                    "linestyle": self.linestyle_vars[key].get() if key in self.linestyle_vars else "",
-                    "linewidth": self.linewidth_vars[key].get() if key in self.linewidth_vars else "1.5",
-                    "legend_group": int(self.legend_group_vars[key].get()) if key in self.legend_group_vars else 1,
-                    "in_legend1": self.in_legend1_vars[key].get() if key in self.in_legend1_vars else True,
-                    "marker_shape_label": self.marker_shape_vars[key].get() if key in self.marker_shape_vars else "None",
-                    "marker_size_label": self.marker_size_vars[key].get() if key in self.marker_size_vars else "M",
-                    "marker_max_count": (self.marker_maxcount_vars[key].get() if key in self.marker_maxcount_vars else ""),
-                    "marker_fill": (self.marker_fill_vars[key].get() if key in self.marker_fill_vars else False),
-                    "smooth_csplines": (self.smooth_csplines_vars[key].get() if key in self.smooth_csplines_vars else False),
-                })
+        ordered_keys, y1_set, _y2_set = self._ordered_selected_keys()
+        for key in ordered_keys:
+            _, out_no = key.split("||")
+            recipe.append({
+                "output_no": int(out_no),
+                "axis": "y1" if key in y1_set else "y2",
+                "color": self.color_vars[key].get() if key in self.color_vars else "",
+                "linestyle": self.linestyle_vars[key].get() if key in self.linestyle_vars else "",
+                "linewidth": self.linewidth_vars[key].get() if key in self.linewidth_vars else "1.5",
+                "legend_group": int(self.legend_group_vars[key].get()) if key in self.legend_group_vars else 1,
+                "in_legend1": self.in_legend1_vars[key].get() if key in self.in_legend1_vars else True,
+                "marker_shape_label": self.marker_shape_vars[key].get() if key in self.marker_shape_vars else "None",
+                "marker_size_label": self.marker_size_vars[key].get() if key in self.marker_size_vars else "M",
+                "marker_max_count": (self.marker_maxcount_vars[key].get() if key in self.marker_maxcount_vars else ""),
+                "marker_fill": (self.marker_fill_vars[key].get() if key in self.marker_fill_vars else False),
+                "smooth_csplines": (self.smooth_csplines_vars[key].get() if key in self.smooth_csplines_vars else False),
+            })
 
         # X 선택: 화면에서 실제로 X가 선택된 파일이 있으면 그 output_no(var_no)를 사용, 없으면 0(Time)
         x_output_no = 0
@@ -3605,7 +3632,14 @@ class CathPlotGUI:
         체크 상태를 읽고 쓴다 - Legend1은 in_legend1_vars(bool), Legend2는
         legend_group_vars(문자열 "1"/"2")를 각각 다르게 저장하지만 이 함수는
         그 차이를 신경 안 쓰고 동일하게 다룬다. tk.Menu와 달리 항목을 체크해도
-        창이 안 닫혀서 여러 개를 한 번에 고를 수 있다."""
+        창이 안 닫혀서 여러 개를 한 번에 고를 수 있다.
+
+        [추가 - 요청] "선택한 순서대로 curve를 그려주기 - curves 선택 창에서도
+        바꿀 수 있게" - 이 팝업이 이미 지금 Y1/Y2로 선택된 모든 curve를 한
+        곳에 모아 보여주므로(Legend1/Legend2 어느 쪽에서 열어도 동일), 순서
+        조정도 여기서 같이 한다. 목록은 _curve_order(클릭 순서) 그대로 보여
+        주고, 각 줄의 ▲▼로 그 curve를 한 칸씩 옮기면 _curve_order 자체가
+        바뀐다 - 별도의 새 창을 만들지 않고 기존 Curves 팝업을 그대로 재사용."""
         popup = tk.Toplevel(self.root)
         popup.title(title)
         popup.transient(self.root)
@@ -3616,37 +3650,50 @@ class CathPlotGUI:
         list_frame = ttk.Frame(popup)
         list_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-        keys = []
-        seen = set()
-        for key, var in list(self.selected_y1_vars.items()) + list(self.selected_y2_vars.items()):
-            if not var.get() or key in seen:
-                continue
-            seen.add(key)
-            keys.append(key)
+        keys, _y1_set, _y2_set = self._ordered_selected_keys()
+
+        def _reopen():
+            popup.destroy()
+            self._open_curve_select_popup(anchor_widget, title, get_checked, set_checked)
+
+        def _move(key, delta):
+            if key not in self._curve_order:
+                # 트래킹 안 된 키(프로그램적 선택 등 - 안전망): 지금 표시
+                # 순서를 그대로 기준선으로 등록한 뒤 옮긴다.
+                self._curve_order = list(keys)
+            lst = self._curve_order
+            i = lst.index(key)
+            j = i + delta
+            if 0 <= j < len(lst):
+                lst[i], lst[j] = lst[j], lst[i]
+            _reopen()
 
         if not keys:
             ttk.Label(list_frame, text="(선택된 Y1/Y2 변수 없음)").pack(padx=5, pady=10)
         else:
-            for key in keys:
+            for idx, key in enumerate(keys):
                 label = self.legend_vars[key].get() if key in self.legend_vars else key
                 check_var = tk.BooleanVar(value=get_checked(key))
 
                 def _toggle(cv=check_var, k=key):
                     set_checked(k, cv.get())
 
-                self._mk_check(list_frame, label, check_var, command=_toggle, anchor="w", pady=1)
+                row = ttk.Frame(list_frame)
+                row.pack(fill="x", anchor="w")
+                ttk.Label(row, text=f"{idx + 1}.", width=3, anchor="e").pack(side="left")
+                self._mk_check(row, label, check_var, command=_toggle, anchor="w", pady=1, side="left")
+                self._mk_btn(row, "▲", lambda k=key: _move(k, -1), color="grey", btn_width=2, side="left", padx=(6, 1))
+                self._mk_btn(row, "▼", lambda k=key: _move(k, 1), color="grey", btn_width=2, side="left", padx=1)
 
         def select_all():
             for key in keys:
                 set_checked(key, True)
-            popup.destroy()
-            self._open_curve_select_popup(anchor_widget, title, get_checked, set_checked)
+            _reopen()
 
         def select_none():
             for key in keys:
                 set_checked(key, False)
-            popup.destroy()
-            self._open_curve_select_popup(anchor_widget, title, get_checked, set_checked)
+            _reopen()
 
         btn_row = ttk.Frame(popup)
         btn_row.pack(fill="x", padx=10, pady=8)
@@ -4116,6 +4163,10 @@ class CathPlotGUI:
                 if key.startswith(prefix):
                     del d[key]
         self.file_xshift_vars.pop(datfile, None)
+        # [추가 - 요청] "선택한 순서대로 curve 그리기" 목록에도 이 파일의
+        # key가 남아있으면(파일 교체/삭제 후에도 순서 목록엔 낡은 키가 계속
+        # 남아있던 문제) 같이 정리한다.
+        self._curve_order = [k for k in self._curve_order if not k.startswith(prefix)]
 
     def load_dat_file(self, var, r_info):
         init_dir = self.last_opened_dir if (hasattr(self, 'last_opened_dir') and self.last_opened_dir) else self.cwd
@@ -4462,6 +4513,12 @@ class CathPlotGUI:
                         self.color_vars[k].set("Auto")
                     if k in self.linestyle_vars:
                         self.linestyle_vars[k].set("Auto")
+                    # [추가 - 요청] Clear All은 y_excl_handler(클릭 핸들러)를
+                    # 거치지 않고 직접 .set(False)를 호출하므로, 선택 순서
+                    # 목록에서도 여기서 같이 빼줘야 함(안 빼면 이미 지워진
+                    # curve의 낡은 키가 순서 목록에 계속 남아있게 됨).
+                    if k in self._curve_order:
+                        self._curve_order.remove(k)
         if self.selected_x_key.get().startswith(target_df):
             self.selected_x_key.set("")
             self.prev_x_key = ""
@@ -4662,6 +4719,7 @@ class CathPlotGUI:
                                 if f_x_var.get() == target_key:
                                     f_x_var.set("")
                         self.sync_axis_labels()
+                        self._touch_curve_order(target_key)
                     return y_excl_handler
 
                 # [수정 - 버그] 위 헤더(X/Y1/Y2)와 폭을 정확히 맞추기 위해
@@ -5148,6 +5206,37 @@ class CathPlotGUI:
         _set_idx = 0
         curve_check_vars = []    # [(BooleanVar, curve_dict, shape_StringVar, size_StringVar, style_StringVar), ...]
         surface_check_vars = []  # [(BooleanVar, surface_dict, shape_StringVar, size_StringVar, style_StringVar), ...]
+        # [추가 - 요청] "선택한 순서대로 curve를 그려주기 - 3D도 해당함" - 각
+        # 행의 실제 Frame 위젯을 curve_check_vars/surface_check_vars와 나란히
+        # 별도 리스트로 들고 있다가, ▲▼로 리스트 순서를 바꾸면 그 순서 그대로
+        # 다시 pack해서 화면 표시 순서도 같이 바뀌게 한다(대화상자를 통째로
+        # 다시 열지 않고 그 자리에서 즉시 반영 - Rotate X/Z 등 다른 입력값이
+        # 안 날아가게).
+        curve_check_frames = []
+        surface_check_frames = []
+
+        def _repack_3d_rows():
+            for fr in curve_check_frames + surface_check_frames:
+                fr.pack_forget()
+            for fr in curve_check_frames:
+                fr.pack(fill="x", pady=1)
+            for fr in surface_check_frames:
+                fr.pack(fill="x", pady=1)
+
+        def _move_3d_row(vars_list, frames_list, frame, delta):
+            # [수정 - 버그] 버튼이 생성 시점의 고정 인덱스를 그대로 들고
+            # 있으면, 몇 번 옮긴 뒤에는 그 버튼이 원래 자기 줄이 아니라
+            # "지금 그 인덱스에 있는 다른 줄"을 옮기게 됨 - 매번 클릭 시점에
+            # frame(각 버튼이 속한 실제 위젯) 자신의 현재 위치를 새로 찾아서
+            # 옮긴다.
+            idx = frames_list.index(frame)
+            j = idx + delta
+            if not (0 <= j < len(vars_list)):
+                return
+            vars_list[idx], vars_list[j] = vars_list[j], vars_list[idx]
+            frames_list[idx], frames_list[j] = frames_list[j], frames_list[idx]
+            _repack_3d_rows()
+
         for c in eligible:
             srow = ttk.Frame(set_frame)
             srow.pack(fill="x", pady=1)
@@ -5162,7 +5251,12 @@ class CathPlotGUI:
                          width=4, state="readonly").pack(side="right", padx=4)
             ttk.Combobox(srow, textvariable=style_var_row, values=_style_choices_curve,
                          width=13, state="readonly").pack(side="right", padx=4)
+            self._mk_btn(srow, "▼", lambda fr=srow: _move_3d_row(curve_check_vars, curve_check_frames, fr, 1),
+                         color="grey", btn_width=2, side="right", padx=1)
+            self._mk_btn(srow, "▲", lambda fr=srow: _move_3d_row(curve_check_vars, curve_check_frames, fr, -1),
+                         color="grey", btn_width=2, side="right", padx=(4, 1))
             curve_check_vars.append((v, c, shape_var, size_var, style_var_row))
+            curve_check_frames.append(srow)
             _set_idx += 1
         for s in surfaces:
             srow = ttk.Frame(set_frame)
@@ -5179,7 +5273,12 @@ class CathPlotGUI:
                          width=4, state="readonly").pack(side="right", padx=4)
             ttk.Combobox(srow, textvariable=style_var_row, values=_style_choices_surface,
                          width=13, state="readonly").pack(side="right", padx=4)
+            self._mk_btn(srow, "▼", lambda fr=srow: _move_3d_row(surface_check_vars, surface_check_frames, fr, 1),
+                         color="grey", btn_width=2, side="right", padx=1)
+            self._mk_btn(srow, "▲", lambda fr=srow: _move_3d_row(surface_check_vars, surface_check_frames, fr, -1),
+                         color="grey", btn_width=2, side="right", padx=(4, 1))
             surface_check_vars.append((v, s, shape_var, size_var, style_var_row))
+            surface_check_frames.append(srow)
             _set_idx += 1
 
         # [추가 - 요청] "2D+3D 한번에" - Function Surface: 데이터 파일 없이
@@ -6815,26 +6914,26 @@ class CathPlotGUI:
         self._last_plot_time = now
 
         try:
-            # 활성화된 Y1, Y2 키 목록 가져오기
-            #active_y1_keys = [k for k, var in self.y1_vars.items() if var.get()]
-            #active_y2_keys = [k for k, var in self.y2_vars.items() if var.get()]
-            active_y1_keys = [k for k, var in self.selected_y1_vars.items() if var.get()]
-            active_y2_keys = [k for k, var in self.selected_y2_vars.items() if var.get()]
+            # [수정 - 요청] "선택한 순서대로 curve를 그려주기(Legend box 순서에도
+            # 연동)" - 예전엔 selected_y1_vars/selected_y2_vars 딕셔너리 순서
+            # (=표에 나열된 순서, 파일 로드순+변수번호순)를 그대로 썼는데,
+            # 이제 클릭(선택)한 순서(_ordered_selected_keys)를 그대로 따른다.
+            # curves 리스트 순서가 곧 legend에 그려지는 순서이기도 해서(legend는
+            # plotdef.curves를 그대로 순회함), 이 한 곳만 바꾸면 legend도 자동으로
+            # 같이 따라옴.
+            ordered_keys, active_y1_set, active_y2_set = self._ordered_selected_keys()
 
-            if not active_y1_keys and not active_y2_keys:
+            if not ordered_keys:
                 messagebox.showwarning("Warning", "Please select at least one Y variable to plot.")
                 return
 
             curves = []
             temp_curves_info = []
 
-            for key in active_y1_keys:
+            for key in ordered_keys:
                 d_file, out_no = key.split("||")
-                temp_curves_info.append((d_file, int(out_no), self.legend_vars[key].get(), "y1", key))
-
-            for key in active_y2_keys:
-                d_file, out_no = key.split("||")
-                temp_curves_info.append((d_file, int(out_no), self.legend_vars[key].get(), "y2", key))
+                axis = "y1" if key in active_y1_set else "y2"
+                temp_curves_info.append((d_file, int(out_no), self.legend_vars[key].get(), axis, key))
 
             # 1. 각 파일별 선택된 X축을 확인하고 temp_sorted 폴더에 정렬 파일 생성
             for d_file, out_no, title, axis, key in temp_curves_info:
