@@ -3408,6 +3408,15 @@ class GnuplotGenerator:
             # inset 안에서는 이 curve의 스플라인 보간을 건너뛰고 평범한
             # 선(원본 데이터 그대로)으로 대체한다 - 메인 plot이나 사각형
             # 클리핑에는 영향 없음.
+            if any(" smooth csplines" in c for c in _inset_cmd_list):
+                _spline_titles = [c.title for c in getattr(plotdef, "curves", []) if getattr(c, "smooth_csplines", False)]
+                _pip_name = (plotdef.title or "plot").strip() or "plot"
+                self.warnings.append(
+                    f"'{_pip_name}'의 PIP 원/타원 클리핑 인셋 안에서는 Cubic Spline이 "
+                    f"gnuplot 제약(NaN 데이터와 함께 계산 불가)으로 적용되지 않고 원본 데이터의 "
+                    f"직선으로 표시됩니다{' (' + ', '.join(_spline_titles) + ')' if _spline_titles else ''} "
+                    f"- 메인 plot이나 사각형 클리핑에는 영향 없습니다."
+                )
             _inset_cmd_list = [c.replace(" smooth csplines", "") for c in _inset_cmd_list]
             # [추가 - 발견] "원/타원으로 커브 자체를 자르기" - 데이터 포인트의
             # 화면상 위치(이 박스 자신을 기준으로 한 0~1 위치)가 타원 안에
@@ -4410,6 +4419,15 @@ class GnuplotGenerator:
         # _render_pip_inset 참고). 애니메이션 재생 중에는 이 curve의 스플라인
         # 보간을 건너뛰고 평범한 선(원본 데이터 그대로)으로 대체한다 - 정적인
         # 화면(Interactive, non-animated)은 영향 없음.
+        if any(" smooth csplines" in ln for ln in static_curve_lines):
+            _spline_titles = [c.title for c in getattr(plotdef, "curves", []) if getattr(c, "smooth_csplines", False)]
+            _anim_name = (plotdef.title or "plot").strip() or "plot"
+            self.warnings.append(
+                f"'{_anim_name}' Animation 재생 중에는 Cubic Spline이 gnuplot 제약(NaN 데이터와 "
+                f"함께 계산 불가)으로 적용되지 않고 원본 데이터의 직선으로 표시됩니다"
+                f"{' (' + ', '.join(_spline_titles) + ')' if _spline_titles else ''} "
+                f"- 정적인 화면(Interactive, non-animated)에는 영향 없습니다."
+            )
         static_curve_lines = [ln.replace(" smooth csplines", "") for ln in static_curve_lines]
         animated_curve_lines = [
             _wrap_threshold_func(re.sub(r"using \(([^)]+)\):(\d+)", _wrap_threshold, ln))
