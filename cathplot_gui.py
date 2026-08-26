@@ -6852,6 +6852,14 @@ class CathPlotGUI:
                 except Exception:
                     pass
                 return
+            # [추가 - 요청] "정적(비-Animation) 화면 PLOT에도 PIP 반투명
+            # 오버레이" - ctrl_path가 없으면(애니메이션이 아니라 프레임이
+            # 하나뿐인 정적 조각) 진행/재시작 로직 자체가 의미 없으므로
+            # 건너뛰고, 메인 창(proc)이 살아있는 동안만 조용히 유지한다
+            # (이미지는 이미 처음에 한 번 채워져 있음 - 아래 label.config 참고).
+            if ctrl_path is None:
+                overlay.after(500, _advance)
+                return
             ctrl = self._read_anim_ctrl(ctrl_path)
             if ctrl["exit_anim"]:
                 try:
@@ -7403,6 +7411,7 @@ class CathPlotGUI:
                 if plotdef is None:
                     return
             _pip_overlay_result = None  # 실시간 재생 + 반투명일 때만 채워짐(아래에서 오버레이 창을 여는 데 씀)
+            _pip_static_overlay_result = None  # 정적(비-Animation) 화면 PLOT + 반투명일 때만 채워짐
             if fmt == "gif":
                 try:
                     duration_sec = float((self.animate_duration_var.get() or "20").strip())
@@ -7452,11 +7461,37 @@ class CathPlotGUI:
                         circles=getattr(plotdef, "circles", []), duration_sec=duration_sec,
                     )
             else:
-                generator.create_script(
-                    plotdef, outfile, fmt=fmt,
-                    annotations=plotdef.annotations, arrows=plotdef.arrows,
-                    circles=getattr(plotdef, "circles", [])
-                )
+                # [추가 - 요청] "정적(비-Animation) 화면 PLOT에서도 PIP 원/
+                # 타원+부분 반투명(1~99%)이 제대로 보이게" - Animation의
+                # 실시간 오버레이(_pip_interactive_blend_opacity)와 완전히
+                # 같은 개념을 프레임이 하나뿐인 정적 버전으로 적용한다.
+                # Batch/Save/Print(fmt != "interactive")는 이 오버레이 창을
+                # 띄울 화면 자체가 없으므로 대상에서 제외 - 그 경로는
+                # create_script/gnu_generator가 자체적으로 처리(PDF 계열은
+                # 이미 정상, EMF/EPS는 안전하게 사각형+가까운 극값으로 대체
+                # + 경고).
+                _static_partial_opacity = _resolve_pip_partial_opacity(plotdef) if fmt == "interactive" else None
+                if _static_partial_opacity is not None:
+                    _pip_static_overlay_result = generator.build_pip_static_overlay_patch(
+                        plotdef, annotations=plotdef.annotations, arrows=plotdef.arrows,
+                        circles=getattr(plotdef, "circles", []), plot_dir_hint=self.plot_dir,
+                    )
+                    _main_only_plotdef = copy.copy(plotdef)
+                    if _pip_static_overlay_result is not None:
+                        _main_only_plotdef.pip = {}
+                    else:
+                        _main_only_plotdef.pip = dict(plotdef.pip, opacity=100.0)
+                    generator.create_script(
+                        _main_only_plotdef, outfile, fmt=fmt,
+                        annotations=plotdef.annotations, arrows=plotdef.arrows,
+                        circles=getattr(plotdef, "circles", [])
+                    )
+                else:
+                    generator.create_script(
+                        plotdef, outfile, fmt=fmt,
+                        annotations=plotdef.annotations, arrows=plotdef.arrows,
+                        circles=getattr(plotdef, "circles", [])
+                    )
             _all_warn = _font_warn + generator.warnings
 
             # [추가] gnuplot 스크립트에 에러가 있으면(예: log축 관련 문제) 창이
@@ -7518,6 +7553,17 @@ class CathPlotGUI:
                             generator.last_anim_ctrl_path, generator.last_process,
                             os.path.splitext(os.path.basename(outfile))[0],
                         )
+                elif _pip_static_overlay_result is not None:
+                    # [추가 - 요청] "정적(비-Animation) 화면 PLOT에도 PIP
+                    # 반투명 오버레이" - Animation Control 패널은 필요 없지만
+                    # (애니메이션이 아니므로), 겹치는 조각 창 자체는 같은
+                    # 방식으로 연다(ctrl_path=None으로 넘겨 "진행/재시작"
+                    # 로직 없이 메인 창이 살아있는 동안만 정적으로 유지).
+                    self._open_pip_overlay_window(
+                        [_pip_static_overlay_result["patch"]], _pip_static_overlay_result,
+                        None, generator.last_process,
+                        os.path.splitext(os.path.basename(outfile))[0],
+                    )
 
             # [수정 - 버그] "PIP+Animation(spline 등 경고 포함) 중 멈춘 것처럼
             # 보임" - 이 경고창(messagebox.showwarning, 모달)이 예전엔 위

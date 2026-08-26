@@ -3535,6 +3535,70 @@ class GnuplotGenerator:
             }
         return None
 
+    def build_pip_static_overlay_patch(self, plotdef, annotations=None, arrows=None, circles=None, plot_dir_hint=None):
+        """[추가 - 요청] "정적(비-Animation) 화면 PLOT에서도 PIP 원/타원+부분
+        반투명(1~99%)이 제대로 보이게" - Animation의 실시간 오버레이 창
+        (_build_pip_blended_frames + cathplot_gui._open_pip_overlay_window)과
+        같은 아이디어를 프레임이 하나뿐인 정적 버전으로 구현한다.
+
+        방식: 이 plotdef를 fmt="pdf"로 한 번 렌더링하면(create_script가
+        내부적으로 _apply_pip_clip까지 이미 적용해서) PIP 원/타원·반투명이
+        완전히 올바르게 합성된 PDF가 나온다(PNG/JPG/SVG가 저장될 때 이미
+        거치는 것과 완전히 같은, 검증된 경로) - 이 PDF에서 PIP 박스 부분만
+        잘라내면 그게 곧 "화면에 겹쳐 보여줄 정확한 조각"이다. 화면
+        (Interactive) 창 자체는 PIP 없이 메인 곡선만 그리게 하고
+        (cathplot_gui 쪽에서 처리), 이 조각을 그 위에 겹치는 별도 오버레이
+        창으로 보여준다 - gnuplot의 windows 터미널/기존 튜닝은 전혀 안
+        건드림.
+
+        실패(PIL/PyMuPDF 없음, PIP가 애초에 이 후처리 대상이 아님 등)하면
+        조용히 None을 반환 - 호출자가 안전한 기본값(완전 불투명 등)으로
+        대체하도록 한다."""
+        try:
+            import pymupdf as fitz
+            from PIL import Image
+        except ImportError:
+            return None
+
+        plot_dir = plot_dir_hint or os.getcwd()
+        tmp_pdf = os.path.join(plot_dir, f".cathplot_pip_static_{uuid.uuid4().hex}.pdf")
+        try:
+            self.create_script(plotdef, tmp_pdf, fmt="pdf", annotations=annotations, arrows=arrows, circles=circles)
+            clip_info = getattr(self, "last_pip_clip_info", None)
+            if clip_info is None or not os.path.exists(tmp_pdf):
+                return None
+
+            doc = fitz.open(tmp_pdf)
+            page = doc[0]
+            _dpi = 300.0
+            _zoom = _dpi / 72.0
+            pix = page.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
+            page_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            doc.close()
+
+            page_w, page_h = pix.width, pix.height
+            ox, oy = clip_info["origin_x"], clip_info["origin_y"]
+            sw, sh = clip_info["size_w"], clip_info["size_h"]
+            px0 = int(round(ox * page_w))
+            px1 = int(round((ox + sw) * page_w))
+            py0 = int(round((1.0 - (oy + sh)) * page_h))
+            py1 = int(round((1.0 - oy) * page_h))
+            if px1 - px0 <= 0 or py1 - py0 <= 0:
+                return None
+            patch = page_img.crop((px0, py0, px1, py1))
+
+            return {
+                "patch": patch, "page_w": page_w, "page_h": page_h,
+                "origin_x": ox, "origin_y": oy, "size_w": sw, "size_h": sh,
+            }
+        except Exception:
+            return None
+        finally:
+            try:
+                os.remove(tmp_pdf)
+            except OSError:
+                pass
+
     def _apply_pip_clip(self, plotdef, pdf_path, fmt, clip_info):
         """[수정 구현] "원/타원 PIP를 흰색으로 덮는 게 아니라 실제로
         클리핑" + "배경 불투명도 슬라이더(0~100%)" - gnuplot 자신은 사각형이
@@ -4262,7 +4326,46 @@ class GnuplotGenerator:
 
         _pip_clip_info = None
         if _pip_on:
-            _pip_clip_info = self._render_pip_inset(plotdef, lines, _main_cmd_list, fmt)
+            # [수정 - 버그(사용자 보고)] "PIP 원/타원(또는 사각형)+부분 반투명
+            # (1~99%)이 EMF/EPS에서 깨짐" - 이 조합은 PDF 후처리(_apply_pip_clip)
+            # 로만 제대로 그려지는데, EMF/EPS는 PDF를 거치지 않는 별도
+            # 드라이버라(PNG/JPG/SVG는 내부적으로 PDF를 거쳐서 자동으로
+            # 적용됨) 후처리 자체가 아예 안 걸리고, 그 결과 클리핑도 반투명도
+            # 없는 깨진 모습(사각형 테두리 없음, 잉크가 안 잘리고, 범례
+            # 자리에 이상한 조각까지 남음 - 실제 렌더로 확인)이 그대로
+            # 남았음. Multi-Plot/Animation이 이미 "지원 안 되면 사각형+
+            # 완전불투명으로 안전하게 대체 + 경고"로 처리하는 것과 동일하게,
+            # EMF/EPS(및 만약을 위한 안전망으로 interactive도 포함 - 화면
+            # PLOT은 cathplot_gui가 별도 오버레이 창으로 먼저 처리하므로
+            # 보통 여기 도달하지 않음)도 똑같이 대체한다.
+            _pip_probe_lines = list(lines)
+            _pip_clip_info = self._render_pip_inset(plotdef, _pip_probe_lines, _main_cmd_list, fmt)
+            if _pip_clip_info is not None and fmt.lower() in ("emf", "eps", "interactive"):
+                # [수정 - 요청] "반투명이 EMF에 불가능하면 50%를 기준으로
+                # 투명/불투명으로 구분" - 항상 완전불투명으로 대체하면, 사용자가
+                # 낮은 opacity(주로 메인 plot이 비쳐 보이길 원함)를 준 경우
+                # 의도와 반대로 배경이 완전히 가려짐 - 원래 요청한 opacity 값을
+                # 그대로 보고 50% 미만이면 완전투명(0), 50% 이상이면 완전
+                # 불투명(100)으로 더 가까운 쪽으로 반올림한다.
+                _orig_opacity_raw = str((plotdef.pip or {}).get("opacity", "")).strip()
+                try:
+                    _orig_opacity = float(_orig_opacity_raw) if _orig_opacity_raw else (
+                        100.0 if (plotdef.pip or {}).get("opaque", True) else 0.0
+                    )
+                except (TypeError, ValueError):
+                    _orig_opacity = 100.0
+                _fallback_opacity = 100.0 if _orig_opacity >= 50.0 else 0.0
+                _fallback_plotdef = copy.copy(plotdef)
+                _fallback_plotdef.pip = dict(plotdef.pip, clip_shape="rect", opacity=_fallback_opacity)
+                _pip_probe_lines = list(lines)
+                _pip_clip_info = self._render_pip_inset(_fallback_plotdef, _pip_probe_lines, _main_cmd_list, fmt)
+                _pip_name = (plotdef.title or "plot").strip() or "plot"
+                _fallback_desc = "완전불투명" if _fallback_opacity >= 50.0 else "완전투명"
+                self.warnings.append(
+                    f"'{_pip_name}'의 PIP 원/타원(또는 부분 반투명)은 {fmt.upper()} 형식에서는 "
+                    f"지원되지 않아 사각형+{_fallback_desc}(원래 opacity {_orig_opacity:.0f}% 기준)으로 대체했습니다."
+                )
+            lines[:] = _pip_probe_lines
             lines.append("unset multiplot")
 
         # [추가] "원래(처음) plot으로 되돌리는 기능 - 2D/3D 모두" - 2D도 마우스
@@ -4344,6 +4447,13 @@ class GnuplotGenerator:
             # 건너뜀).
             if fmt.lower() == "pdf" and _pip_clip_info:
                 self._apply_pip_clip(plotdef, outfile, fmt, _pip_clip_info)
+            # [추가 - 요청] "정적(비-Animation) 화면 PLOT에서도 PIP 원/타원+
+            # 부분 반투명이 제대로 보이게" - cathplot_gui가 이 값을 읽어서
+            # (fmt="pdf"로 한 번 그려 이미 위에서 _apply_pip_clip까지 적용된
+            # 상태) 그 PDF에서 PIP 박스 부분만 잘라내 화면(Interactive) 위에
+            # 겹치는 오버레이 창을 만드는 데 쓴다(Animation의 라이브 오버레이와
+            # 같은 방식, 단 프레임이 하나뿐인 정적 버전).
+            self.last_pip_clip_info = _pip_clip_info if fmt.lower() == "pdf" else None
 
             _want_texts = []
             for _raw in (plotdef.title, plotdef.xlabel, plotdef.ylabel, plotdef.y2label):
