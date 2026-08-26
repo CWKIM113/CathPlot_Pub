@@ -1119,21 +1119,24 @@ class CathPlotGUI:
 
         btn_f.pack(fill="x", pady=0)
 
+        # [수정 - 요청] "Enable Comments/Arrows/Circles 체크박스가 꼭 필요한지 -
+        # 3D처럼 입력 있으면 자동으로 켜지고 없으면 자동으로 꺼지는 게 낫지
+        # 않은지" - _collect_annotations/_collect_arrows/_collect_circles가
+        # 이미 빈 줄을 항상 걸러내고 있어서(내용을 채우면 자동으로 그려짐),
+        # 이 체크박스들은 "채워놓고 체크를 깜빡하면 안 보이는" 혼란만 주는
+        # 중복 게이트였음 - 제거(3D 주석 목록과 동일하게 통일).
         comment_btn_col = ttk.Frame(btn_f)
         comment_btn_col.pack(side="left", padx=5)
         ttk.Button(comment_btn_col, text="+ Add Comment", command=self.add_comment_row).pack(side="top", anchor="w")
-        self._mk_check(comment_btn_col, "Enable Comments", self.comment_on_var, side="top", anchor="w")
 
         arrow_btn_col = ttk.Frame(btn_f)
         arrow_btn_col.pack(side="left", padx=15)
         ttk.Button(arrow_btn_col, text="+ Add Line/Arrow", command=self.add_arrow_row).pack(side="top", anchor="w")
-        self._mk_check(arrow_btn_col, "Enable Arrows", self.arrow_on_var, side="top", anchor="w")
 
         # [추가] "Arrow 옆에 Circle(중심축 2개 타원 - 반지름 1개만 입력하면 원)"
         circle_btn_col = ttk.Frame(btn_f)
         circle_btn_col.pack(side="left", padx=15)
         ttk.Button(circle_btn_col, text="+ Add Circle", command=self.add_circle_row).pack(side="top", anchor="w")
-        self._mk_check(circle_btn_col, "Enable Circles", self.circle_on_var, side="top", anchor="w")
 
         # [수정] "Comment/Arrow 입력창이 안 보임 - 항상 빈 칸이 하나씩 나오게
         # 해야 함(어차피 안 지워지는 빈 칸이니 기본으로 둠)" - 시작할 때 매번
@@ -4970,8 +4973,13 @@ class CathPlotGUI:
     # 있었을 뿐(git 히스토리에 남아있으니 필요하면 복원 가능).
 
     def _collect_annotations(self):
-        if not self.comment_on_var.get():
-            return []
+        # [수정 - 요청] "Enable Comments 체크박스가 꼭 필요한지 - 3D처럼 입력
+        # 있으면 자동으로 켜지고 없으면 자동으로 꺼지는 게 낫지 않은지" -
+        # 확인해보니 아래 루프가 이미 빈 줄(text/x/y 중 하나라도 없음)을
+        # 항상 걸러내고 있어서, 이 체크박스는 "내용을 채워놓고도 체크를 깜빡
+        # 잊으면 아무것도 안 보이는" 혼란만 주는 중복 게이트였음(3D의 주석
+        # 목록은 애초에 이런 별도 체크박스가 없음) - 게이트를 없애고 내용
+        # 유무로만 판단하게 통일.
         annotations = []
         for item in self.comment_list:
             text = item['txt'].get().strip()
@@ -4985,9 +4993,8 @@ class CathPlotGUI:
         return annotations
 
     def _collect_arrows(self):
-        if not self.arrow_on_var.get():
-            return []
-
+        # [수정 - 요청] _collect_annotations와 동일한 이유로 게이트 제거 -
+        # 아래 루프가 이미 빈 줄을 걸러냄.
         head_label_map = {
             "nohead": "No head", "head": "Forward",
             "backhead": "Backhead", "heads": "Both heads"
@@ -5009,8 +5016,8 @@ class CathPlotGUI:
         return arrows
 
     def _collect_circles(self):
-        if not self.circle_on_var.get():
-            return []
+        # [수정 - 요청] _collect_annotations와 동일한 이유로 게이트 제거 -
+        # 아래 루프가 이미 빈 줄을 걸러냄.
         circles = []
         for item in self.circle_list:
             x = item['x'].get().strip()
