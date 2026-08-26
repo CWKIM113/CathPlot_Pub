@@ -2541,7 +2541,15 @@ class CathPlotGUI:
         _toggle_clip_entries()
 
         # --- 확대 구간 ---
-        zoom_frame = ttk.LabelFrame(dlg, text="확대 구간 (비우면: X는 메인과 동일, Y는 자동)")
+        # [수정 - 버그] 이 라벨이 실제 동작과 어긋나 있었음 - "Y는 자동"은
+        # 데이터 소스가 "이미 그려진 plot/plt 파일"일 때만 맞고, 기본값인
+        # "현재 plot" 소스에서는 X와 마찬가지로 메인 plot의 실제 범위를 그대로
+        # 물려받음(gnu_generator._render_pip_inset의 xrange_cmd/yrange_cmd
+        # 참고) - 실제 조건 그대로 문구를 고침.
+        zoom_frame = ttk.LabelFrame(
+            dlg,
+            text="확대 구간 (비우면: X는 항상 메인과 동일 / Y는 '현재 plot' 소스면 메인과 동일, 다른 소스면 자동)"
+        )
         zoom_frame.pack(fill="x", padx=10, pady=5)
         xz_row = ttk.Frame(zoom_frame)
         xz_row.pack(fill="x", padx=5, pady=3)
