@@ -2,6 +2,7 @@
 
 import tkinter as tk
 import os
+import shlex  # Batch Set List(txt)에서 ""로 감싼 공백 포함 파일명을 안전하게 나누는 데 사용(_apply_list_file)
 import subprocess
 _NO_CONSOLE_FLAG = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # taskkill 등 호출 시 콘솔 창이 깜빡이지 않도록
 # [수정] creationflags만으로는 일부 Windows 환경에서 콘솔 창 숨김이 불완전하게
@@ -2806,17 +2807,50 @@ class CathPlotGUI:
                 queue_list.clear()
                 listbox.delete(0, "end")
             last_list_path[0] = path
+
+            def _resolve(entry):
+                p = entry if os.path.isabs(entry) else os.path.join(template_dir, entry)
+                p = os.path.normpath(p)
+                # [추가 - 요청] "확장자 없이 적어도 되는지(자동인식)" - Batch
+                # Set List는 어차피 Template(.json)만 다루므로, 그대로는 없는데
+                # 확장자가 아예 없으면 .json을 붙여 한 번 더 찾아본다.
+                if not os.path.exists(p) and not os.path.splitext(p)[1]:
+                    p_json = p + ".json"
+                    if os.path.exists(p_json):
+                        return p_json
+                return p
+
             missing = []
             added = False
             for line in lines:
-                p = line if os.path.isabs(line) else os.path.join(template_dir, line)
-                p = os.path.normpath(p)
-                if os.path.exists(p):
-                    queue_list.append(p)
-                    listbox.insert("end", os.path.basename(p))
-                    added = True
+                # [추가 - 요청] "한 줄에 여러 Template을 콤마/공백/탭으로 구분해
+                # 적을 수 있는지, 공백 포함 파일명은 ""로 감싸면" - Windows
+                # 경로/파일명엔 공백이 흔해서(예: "케이스 1.json") 무조건
+                # 나누면 멀쩡한 파일명이 두 개로 쪼개질 위험이 있음. 그래서:
+                # 1) 그 줄 전체가 그대로 존재하는 파일이면(공백 포함 파일명을
+                #    따옴표 없이 한 줄에 하나만 적은 경우 등) 나누지 않고 그대로 씀.
+                # 2) 아니면 shlex로 나눈다 - 공백/탭 구분은 기본 지원하고,
+                #    ""로 감싼 구간은 안에 공백이 있어도 하나로 유지됨.
+                # 3) shlex가 처리 못 하는 콤마 구분은 각 조각을 다시 콤마로
+                #    쪼개서 지원(따옴표 안의 콤마까지 보호하진 못하는 게
+                #    한계 - 파일명에 콤마가 실제로 들어가는 경우는 드물어서 감수).
+                if os.path.exists(_resolve(line)):
+                    entries = [line]
                 else:
-                    missing.append(line)
+                    try:
+                        tokens = shlex.split(line)
+                    except ValueError:
+                        # 따옴표 짝이 안 맞는 등 shlex가 실패하면 공백 기준으로 폴백
+                        tokens = line.split()
+                    entries = [part for tok in tokens for part in tok.split(",") if part]
+                for entry in entries:
+                    p = _resolve(entry)
+                    if os.path.exists(p):
+                        queue_list.append(p)
+                        listbox.insert("end", os.path.basename(p))
+                        added = True
+                    else:
+                        missing.append(entry)
             if replace and not missing:
                 # replace 모드는 이 파일 내용을 그대로 화면에 반영한 것이라(빠진
                 # 항목 없이) 지금 화면 상태 == 파일 내용이므로 dirty가 아님.
