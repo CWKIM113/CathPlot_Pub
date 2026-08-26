@@ -51,6 +51,21 @@ def _force_focus_window_by_title(title, timeout_sec=2.0):
             try:
                 user32.ShowWindow(hwnd, 9)  # SW_RESTORE
                 user32.SetForegroundWindow(hwnd)
+                # [수정 - 요청] "Animation 창(Plot 창)이 다른 창 뒤에 숨는
+                # 경우가 있음 - 맨 위에 뜨게" - 위 SetForegroundWindow는 입력
+                # 포커스까지 요구해서 포커스 스틸링 방지 정책에 자주 조용히
+                # 막히지만(위 docstring 참고), SetWindowPos의 HWND_TOPMOST/
+                # NOTOPMOST 토글은 입력 포커스가 아니라 Z-order(화면상
+                # 앞뒤 순서)만 바꾸는 별개의 API라 그 정책의 영향을 받지
+                # 않음(실측 확인 - 배경 프로세스가 띄운 창도 안정적으로 맨
+                # 위로 올라옴). 계속 최상위 고정이 아니라 "지금 한 번만 맨
+                # 위로" 끌어올리는 효과만 남기려고 TOPMOST로 올렸다가 곧바로
+                # NOTOPMOST로 다시 풀어준다(그래야 나중에 다른 창을 클릭하면
+                # 정상적으로 뒤로 물러남).
+                _SWP_NOMOVE, _SWP_NOSIZE, _SWP_SHOWWINDOW = 0x0002, 0x0001, 0x0040
+                _flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_SHOWWINDOW
+                user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, _flags)   # HWND_TOPMOST
+                user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, _flags)   # HWND_NOTOPMOST
             except Exception:
                 pass
             return
