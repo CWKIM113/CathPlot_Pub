@@ -1744,6 +1744,13 @@ class CathPlotGUI:
             # 이 Template만으로 surface도 재현할 수 있게 경로를 별도로 저장한다.
             "surface_files": self._capture_surface_files(),
 
+            # [추가 - 요청] "선택한 순서대로 curve 그리기"가 Template Save/
+            # Batch Set에도 반영되도록 - 클릭 순서를 "상대경로||output_no"
+            # 리스트로 저장(_capture_curve_order 참고). Batch Set은 파일명까지
+            # 그대로 매칭하고, Template Load는 output_no만 뽑아 recipe 방식으로
+            # 재해석한다(둘 다 아래 소비하는 쪽 주석 참고).
+            "curve_order": self._capture_curve_order(),
+
             # --- Advanced: Raw gnuplot 입력창 내용 ---
             "extra_gnuplot": self.raw_gnuplot_text.get("1.0", "end-1c"),
 
@@ -2142,6 +2149,38 @@ class CathPlotGUI:
                                 self.selected_y1_vars[key_str].set(False)
                 self.sync_axis_labels()
 
+            # [추가 - 요청] "선택한 순서대로 curve 그리기"를 Template Load에도
+            # 반영. 위 curve_styles 복원은 output_no로만 매칭하는 "레시피"
+            # 방식(어떤 dat 파일인지 무관 - 위 주석 참고)이라, 저장된
+            # curve_order("상대경로||output_no")에서도 output_no만 뽑아 같은
+            # 방식으로 재해석한다(파일명은 무시 - curve_styles와 매칭 방식을
+            # 맞춤). "curve_order" 키가 아예 없는 구버전 템플릿은 지금 순서
+            # 트래킹을 그대로 둔다(건드리지 않음).
+            if "curve_order" in data:
+                _output_no_order = []
+                _seen_no = set()
+                for _entry in data.get("curve_order") or []:
+                    try:
+                        _no = int(str(_entry).rsplit("||", 1)[1])
+                    except (ValueError, IndexError):
+                        continue
+                    if _no not in _seen_no:
+                        _seen_no.add(_no)
+                        _output_no_order.append(_no)
+                _no_priority = {no: i for i, no in enumerate(_output_no_order)}
+                _selected_keys = [k for k, v in self.selected_y1_vars.items() if v.get()]
+                _selected_keys += [k for k, v in self.selected_y2_vars.items() if v.get()]
+                _selected_keys = list(dict.fromkeys(_selected_keys))  # 중복 제거(순서 유지)
+
+                def _key_priority(k):
+                    try:
+                        no = int(k.split("||")[1])
+                    except (ValueError, IndexError):
+                        return len(_output_no_order)
+                    return _no_priority.get(no, len(_output_no_order))
+
+                self._curve_order = sorted(_selected_keys, key=_key_priority)
+
             messagebox.showinfo("Template", "템플릿을 불러왔습니다.")
         except Exception as e:
             messagebox.showerror("Template", f"템플릿 불러오기 실패: {e}")
@@ -2191,7 +2230,12 @@ class CathPlotGUI:
                     var_obj = var_by_no.get(output_no)
                     legend_text = var_obj.display_name if var_obj else f"var_{output_no}"
                     try:
-                        curves.append(CurveDefinition(
+                        # [수정 - 요청] "선택한 순서대로 curve 그리기"가 Batch
+                        # Set에도 반영되도록, 여기서는 (order_key, curve)
+                        # 튜플로 잠시 담아둔다 - order_key는 Template Save가
+                        # 쓰는 것과 동일한 "상대경로||output_no" 표현이라
+                        # curve_order와 정확히(파일명까지) 매칭된다.
+                        curves.append((f"{rel_path}||{output_no}", CurveDefinition(
                             dat_file=target_dat_file, output_no=output_no, title=legend_text, axis=axis,
                             x_shift=file_x_shift,
                             color=COLOR_MAP.get(style.get("color", ""), None),
@@ -2204,12 +2248,21 @@ class CathPlotGUI:
                             marker_size=MARKER_SIZE_MAP.get(style.get("marker_size_label", "M"), 1.0),
                             marker_max_count=(int(style["marker_max_count"]) if str(style.get("marker_max_count", "")).strip() else None),
                             smooth_csplines=style.get("smooth_csplines", False),
-                        ))
+                        )))
                     except ValueError:
                         continue  # X/Y 번호가 같은 경우 등은 건너뜀
 
         if not curves:
             raise ValueError("이 템플릿에는 그릴 변수(Y1/Y2)가 없습니다.")
+
+        # [추가 - 요청] curve_order(저장된 클릭 순서)가 있으면 그 순서대로
+        # 재배열 - 없는(구버전 템플릿) curve는 원래 순서 그대로 뒤에 남음
+        # (안정 정렬 - Python sorted()는 stable이라 동일 우선순위끼리는
+        # 원래 상대 순서를 유지함).
+        _order = data.get("curve_order") or []
+        _order_index = {k: i for i, k in enumerate(_order)}
+        curves.sort(key=lambda item: _order_index.get(item[0], len(_order)))
+        curves = [c for _key, c in curves]
 
         head_label_map = {"nohead": "No head", "head": "Forward", "backhead": "Backhead", "heads": "Both heads"}
 
@@ -3328,6 +3381,24 @@ class CathPlotGUI:
         ordered = [k for k in self._curve_order if k in selected]
         ordered += [k for k in y1_keys + y2_keys if k not in ordered]
         return ordered, y1_set, y2_set
+
+    def _capture_curve_order(self):
+        """[추가 - 요청] Template Save/Batch Set에도 클릭 순서를 반영하기 위해,
+        _curve_order(화면의 절대경로 기준 key)를 file_assignments와 같은
+        표현("cwd 기준 상대경로||output_no")으로 바꿔서 반환한다. Batch Set은
+        이 문자열을 파일명까지 그대로 매칭하고(파일별로 정확), Template Load는
+        같은 문자열에서 output_no만 뽑아 "레시피"(파일과 무관, curve_styles와
+        동일한 매칭 방식) 순서로 재해석한다 - load_template 쪽 주석 참고."""
+        ordered_keys, _y1, _y2 = self._ordered_selected_keys()
+        result = []
+        for key in ordered_keys:
+            d_file, out_no = key.split("||")
+            try:
+                rel_path = os.path.relpath(d_file, self.cwd)
+            except ValueError:
+                rel_path = d_file
+            result.append(f"{rel_path}||{out_no}")
+        return result
 
     # ------------------------------------------------------------------
     # Batch Queue: 화면에서 지금 선택된 Y1/Y2/X (output_no=var_no 기준) 구성을
