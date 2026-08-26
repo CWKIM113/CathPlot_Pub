@@ -4522,6 +4522,22 @@ class GnuplotGenerator:
                                        "set tmargin at screen", "set bmargin at screen",
                                        "set xrange", "set yrange", "set y2range"))
                 ]
+                # [수정 - 버그(사용자 보고)] "PIP+Animation에서 메인 legend
+                # box가 첫 프레임엔 보이다가 그 다음부터 없어짐" - 위와 완전히
+                # 같은 근본 원인: 메인 legend(_render_legend_box가 만드는
+                # "set object 8xxx"(박스)/"set label 8xxx"(글자)/"set arrow
+                # 8xxx"(색 샘플 선) - Legend1, "...9xxx" 계열 - Legend2)도
+                # margin/xrange처럼 "plot \\" 이전에 딱 한 번만 선언되는데,
+                # _render_pip_inset이 인셋을 그릴 때마다 맨 앞에서 블랭킷
+                # "unset label"/"unset object"/"unset arrow"로 지워버리고
+                # (정적 1회 렌더에서는 이미 메인 plot이 다 그려진 뒤라 무해
+                # 하지만, 애니메이션은 이 삭제가 매 프레임 반복됨) 다시
+                # 선언하지 않아 두
+                # 번째 프레임부터 메인 legend가 통째로 사라졌음 - margin/
+                # xrange와 동일하게 인셋 블록 끝에 다시 찍어 다음 프레임에
+                # 복구되게 한다.
+                _legend_id_re = re.compile(r"^set (?:object|label|arrow) (?:8\d{3}|9\d{3})\b")
+                _main_state_lines += [ln for ln in lines[:plot_idx] if _legend_id_re.match(ln)]
                 _pip_inset_lines += _main_state_lines
 
         lines.append("xmin_anim = GPVAL_X_MIN")

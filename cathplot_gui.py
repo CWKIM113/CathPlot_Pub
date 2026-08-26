@@ -7400,8 +7400,6 @@ class CathPlotGUI:
                     circles=getattr(plotdef, "circles", [])
                 )
             _all_warn = _font_warn + generator.warnings
-            if _all_warn:
-                messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
 
             # [추가] gnuplot 스크립트에 에러가 있으면(예: log축 관련 문제) 창이
             # 아예 안 뜨고 프로세스가 바로 죽는데, 그래도 Popen 자체는 성공해서
@@ -7462,6 +7460,17 @@ class CathPlotGUI:
                             generator.last_anim_ctrl_path, generator.last_process,
                             os.path.splitext(os.path.basename(outfile))[0],
                         )
+
+            # [수정 - 버그] "PIP+Animation(spline 등 경고 포함) 중 멈춘 것처럼
+            # 보임" - 이 경고창(messagebox.showwarning, 모달)이 예전엔 위
+            # create_animation_script 직후 곧바로 떴는데, 그러면 그 뒤에 오는
+            # Animation Control 패널/PIP 오버레이 창 띄우기가 사용자가 이
+            # 경고를 닫을 때까지 전부 미뤄져서(같은 메인 스레드) 애니메이션
+            # 컨트롤이 안 뜨고 멈춘 것처럼 보였음 - 경고 자체는 정보성이라
+            # 어디서 띄우든 상관없으므로, 크래시 확인/컨트롤 패널·오버레이
+            # 띄우기가 전부 끝난 뒤로 옮겨서 실제 애니메이션 UI가 먼저 보이게 한다.
+            if _all_warn:
+                messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
 
             # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로
             # 고정되던 버그. 같은 Plot Title로 Interactive PLOT을 여러 번 누르면
