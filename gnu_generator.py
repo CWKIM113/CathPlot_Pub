@@ -3273,7 +3273,7 @@ class GnuplotGenerator:
             # 당길지"라 폰트가 작을수록 절대 간격도 작아야 자연스러워서
             # font_scale에 비례시킴).
             _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
-            _lbl_ofs_y = (8.0 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
+            _lbl_ofs_y = (4.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
             _xlabel_txt = (plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
@@ -3532,6 +3532,20 @@ class GnuplotGenerator:
         # 문제는 이 네이티브 경로의 기존 문서화된 한계로 남음), 인셋이
         # 끝나면 이후 코드에 영향 없도록 원래 border 설정을 복구한다.
         _main_border_line = next((_l for _l in reversed(lines) if _l.startswith("set border")), "set border lw 1.5")
+        # [수정 - 버그(사용자 보고)] "인셋의 tic 길이가 너무 길고 테두리도
+        # 두꺼워서 흐릿하게 보임(원 안 축이 정사각형처럼 보이는 것도 이
+        # 영향)" - 메인 plot이 이미 "set tics scale"/"set border lw"를
+        # 화면 절대 단위로 한 번 정해두면(SCREEN_TIC_MAJOR_SCALE 등), 그
+        # 상태가 그대로 남아 훨씬 작은 인셋 axis box에도 똑같은 절대
+        # 길이/두께로 그려진다(font_scale로 글자만 줄이고 tic/테두리는
+        # 안 줄인 게 원인 - 실측: Interactive는 tics scale 2.0을 그대로
+        # 써서 작은 박스 안에서 tic이 과도하게 길어 보임). 다른 요소들과
+        # 같은 관례로 font_scale만큼 비례 축소했다가 인셋이 끝나면 원복한다.
+        _main_tics_line = next((_l for _l in reversed(lines) if _l.startswith("set tics scale")), "set tics scale 1.0, 0.5")
+        _tm = re.search(r"set tics scale\s+([\d.]+)\s*,\s*([\d.]+)", _main_tics_line)
+        _tic_major0, _tic_minor0 = (float(_tm.group(1)), float(_tm.group(2))) if _tm else (1.0, 0.5)
+        _bm = re.search(r"set border lw\s+([\d.]+)", _main_border_line)
+        _border_lw0 = float(_bm.group(1)) if _bm else 1.5
 
         if _rect_fully_opaque:
             # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - id 7100은
@@ -3703,6 +3717,11 @@ class GnuplotGenerator:
             # 위 주석 참고 - 인셋의 네모 축 테두리 자체를 꺼서 원/타원 밖으로
             # 삐져나오지 않게 한다.
             lines.append("unset border")
+        else:
+            # 테두리가 남는 경우(사각형 클리핑, 또는 원/타원의 PDF 후처리
+            # 경로)에는 위에서 구한 비율로 두께를 줄여서 그린다.
+            lines.append(f"set border lw {_border_lw0 * font_scale:.3f}")
+        lines.append(f"set tics scale {_tic_major0 * font_scale:.3f}, {_tic_minor0 * font_scale:.3f}")
 
         lines.append("plot \\")
         for i, cmd in enumerate(_inset_cmd_list):
@@ -3711,10 +3730,10 @@ class GnuplotGenerator:
             lines.append(cmd)
         lines.append("")
 
-        if _ellipse_native_ok:
-            # 메인 plot(또는 이후 다른 패널)에 영향 없도록 border를 원래
-            # 설정으로 복구.
-            lines.append(_main_border_line)
+        # 메인 plot(또는 이후 다른 패널)에 영향 없도록 border/tic 길이를
+        # 원래 설정으로 복구.
+        lines.append(_main_border_line)
+        lines.append(f"set tics scale {_tic_major0:.3f}, {_tic_minor0:.3f}")
 
         # 이 뒤에 또 다른 코드가 있어도 영향 안 받도록 원위치로 복구
         lines.append("set origin 0,0")
