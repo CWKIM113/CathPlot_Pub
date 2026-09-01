@@ -82,12 +82,21 @@ STYLE_MAP = {
 
 # Marker(점 마커) 모양 - 표시 라벨 -> (속 빈 pointtype, 채운 pointtype)
 # Cross/Star는 gnuplot에 채운/빈 구분이 따로 없어 동일값 사용
+# [추가 - 요청] "마커에 좌,우 방향 세모 추가" - gnuplot 내장 숫자
+# pointtype에는 좌/우 삼각형이 없어서(위/아래만 8·9/10·11로 있음),
+# gnuplot 5+ pngcairo/qt/wxt가 지원하는 "유니코드 문자를 pointtype으로
+# 직접 쓰는" 기능으로 구현함(실제 렌더링으로 좌우 방향과 속 빈/채움
+# 둘 다 정상 표시되는 것 확인). 숫자가 아니라 문자열이므로, 이 값을
+# 쓰는 쪽(gnu_generator의 pointtype 출력부)이 정수/문자열 둘 다
+# 처리하도록 맞춰야 함.
 MARKER_SHAPE_MAP = {
     "None": (None, None),
     "Circle": (6, 7),
     "Square": (4, 5),
     "Triangle": (8, 9),
     "Tri-Down": (10, 11),
+    "Tri-Left": ("◁", "◀"),
+    "Tri-Right": ("▷", "▶"),
     "Diamond": (12, 13),
     "Cross": (1, 1),
     "Star": (3, 3),
@@ -3685,7 +3694,7 @@ class CathPlotGUI:
         popup.title("Marker Settings")
         popup.transient(self.root)
 
-        CURVE_PX, SHAPE_PX, SIZE_PX, FILL_PX, MAX_PX = 160, 90, 55, 50, 65
+        CURVE_PX, SHAPE_PX, SIZE_PX, FILL_PX, MAX_PX = 160, 100, 55, 50, 65
 
         def _cell(parent, px, height=20):
             f = tk.Frame(parent, width=px, height=height)

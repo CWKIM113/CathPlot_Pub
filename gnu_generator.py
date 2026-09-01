@@ -314,6 +314,10 @@ MARKER_SYMBOL_MAP = {
     12: "◇", 13: "◆",  # Diamond
     1: "+",            # Cross
     3: "★",            # Star
+    # [추가 - 요청] Tri-Left/Tri-Right - pointtype 자체가 이미 유니코드
+    # 문자(◁◀▷▶)라 legend 기호로도 그대로 재사용한다.
+    "◁": "◁", "◀": "◀",
+    "▷": "▷", "▶": "▶",
 }
 # Legend 샘플선 위 마커 기호의 수직 보정치(ROW_H 배수, +면 위로/-면 아래로).
 # 세모류(△▲▽▼)는 잉크 무게중심이 위/아래로 치우쳐 있어 "center" 정렬만으로는
@@ -348,6 +352,25 @@ SCREEN_TIC_MINOR_SCALE = 1.0
 # 움직이면 바로 어긋나 보이는 원인이었음 - 진짜 투명이면 그 문제 자체가
 # 없어짐). 실제 plot에 거의 안 나올 특이한 마젠타 계열로 고름.
 PIP_OVERLAY_CHROMA_KEY = (255, 0, 254)
+
+def _fmt_pointtype(v):
+    """[추가 - 요청] "마커에 좌,우 방향 세모 추가" - gnuplot 내장 숫자
+    pointtype(8/9/10/11 등)에는 좌/우 삼각형이 없어서, MARKER_SHAPE_MAP의
+    Tri-Left/Tri-Right는 유니코드 문자(◁◀▷▶)를 pointtype으로 직접 쓰는
+    gnuplot 5+ 기능으로 구현했다. gnuplot 문법상 숫자는 그냥 "pt 8"처럼
+    맨숫자로 쓰지만 문자는 반드시 "pt \"◀\""처럼 따옴표로 감싸야 해서,
+    marker_shape를 그대로 f-string에 넣던 기존 다섯 군데를 전부 이 헬퍼로
+    통일한다(정수/숫자문자열이면 맨값, 그 외(유니코드 등)면 따옴표 포함).
+    """
+    if v is None:
+        return ""
+    s = str(v)
+    try:
+        int(s)
+        return s
+    except (TypeError, ValueError):
+        return f'"{s}"'
+
 
 PRINT_FONT_SCALE = 1.60     # [수정 - 버그] "PDF 그림에서 font size가 plot 대비 너무 작음(폰트
 # 크기 입력으로 해결될 사항 아님), Legend box도 너무 작음 - 폰트·legend 모두
@@ -473,7 +496,7 @@ class CurveDefinition:
     x_output_no: int | None = None  # X축 컬럼 번호 (None인 경우 플롯 전역 x_output_no 참조)
     legend_group: int = 1  # 이 curve가 Legend1(1)/Legend2(2) 중 어디에 나타날지
     in_legend1: bool = True  # Legend1(box1)에 이 curve를 넣을지 (기본 포함)
-    marker_shape: int | None = None  # gnuplot pointtype 번호 (None = 마커 없음)
+    marker_shape: int | str | None = None  # gnuplot pointtype 번호 또는 유니코드 문자(Tri-Left/Right) (None = 마커 없음)
     marker_size: float = 1.0         # gnuplot pointsize
     marker_max_count: int | None = None  # None = Auto(20~30개 근처로 자동 계산)
     # [추가 - 요청] "Cubic Spline" - 팝업에 별도 칸을 새로 넣을 자리가 없어서
@@ -1460,6 +1483,22 @@ class GnuplotGenerator:
         # (샘플선<->title 간격)이 여기 폭 계산에 빠져 있어서, 그 간격을 늘릴수록
         # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
         box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + BOX_EDGE_GAP_FRAC + LABEL_GAP_FRAC
+        # [수정 - 사용자 보고 버그] 화면(Interactive)에서 "pressure"/"flowrate"
+        # 처럼 중간 길이(7~9자) curve title이 legend box 왼쪽 테두리에 걸려
+        # 반토막으로 잘려 보이는 문제를 실제 렌더링 픽셀 대조로 확인함(글자
+        # 중간을 box 테두리가 그대로 가로지름) - 원인은 화면 전용
+        # _box_w_extra_chars가 SAMPLE_W만큼 빠져 음수로 크게 내려간 상태에서,
+        # 위 _MIN_LABEL_CHARS_IN_BOX 하한의 완만한 기울기가 이 라벨 길이대
+        # (짧은 라벨보다 길지만 하한이 촘촘히 못 따라가는 중간 길이)까지는
+        # 못 미쳐 실제 라벨 폭보다 box_w가 좁게 계산됐던 것. char_width_frac*
+        # max_label_len(실측 폰트로 정확히 잰 라벨 폭, 위 참고)에 SAMPLE_W/
+        # BOX_EDGE_GAP_FRAC/LABEL_GAP_FRAC까지 더한 "여유 0"(_box_w_extra_
+        # chars=0) 기준값을 box_w의 절대 하한으로 걸어, 어떤 포맷/길이
+        # 조합에서도 라벨 실제 폭보다 box가 좁아지지 않게 한다(이미 이보다
+        # 넉넉한 경우엔 그대로 영향 없음).
+        _box_w_floor = SAMPLE_W + char_width_frac * max_label_len + BOX_EDGE_GAP_FRAC + LABEL_GAP_FRAC
+        if box_w < _box_w_floor:
+            box_w = _box_w_floor
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
 
         # [추가] "자동 추정이 안 맞는 경우만 사용자 입력으로 직접 지정" -
@@ -2317,7 +2356,19 @@ class GnuplotGenerator:
             _title_gap = -1.0 * (1.0 - title_margin_ratio) * _title_f_scale
             lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" offset 0,{_title_gap:.3f} {title_enh}')
         else:
-            lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" {title_enh}')
+            # [수정 - 요청] "Plot Title과 top frame 사이에 tic 숫자 없는 만큼
+            # 간격을 줄여줘요" - top쪽은 bottom(tic 숫자 있음)과 달리 title
+            # 바로 아래가 곧 축 박스라 여백이 필요 이상으로 컸음. gnuplot으로
+            # 직접 렌더링해 확인(offset 0,-0.8 근방이 겹치지 않으면서 가장
+            # 타이트함) - 폰트 크기에 비례하도록 문자 크기 대비 비율로 적용.
+            # [수정 - 요청] "plot title과 top frame 사이 간극이 너무 작으니
+            # 지금보다 2배 정도 키워줘요" - 실제 렌더링 픽셀 측정 결과 -0.8일
+            # 때 title 하단이 frame 선에 거의 닿을 정도(약 3px)로 너무
+            # 타이트했음. 당겨주는 양(음수 offset의 크기)을 절반으로 줄여
+            # 간격을 눈에 띄게 확보(-0.4 근방으로 재측정 시 육안상 자연스러운
+            # 간격, 과도하게 넓지도 않음).
+            _title_gap = -0.4 * (title_size / 14.0)
+            lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" offset 0,{_title_gap:.3f} {title_enh}')
 
         # [수정 - 심각한 버그] "Print/Save에서 X title이 캔버스 맨 아래 경계에
         # 걸쳐서 잘림" - ylabel과 같은 원인(위 ylabel 주석 참고): "at screen"
@@ -2908,7 +2959,7 @@ class GnuplotGenerator:
                     marker_datablocks.append(block)
 
                     marker_size = getattr(curve, "marker_size", 1.0) * line_scale
-                    marker_cmd = f'{dbname} using 1:2 notitle axes {axis} with points pt {marker_shape} ps {marker_size}'
+                    marker_cmd = f'{dbname} using 1:2 notitle axes {axis} with points pt {_fmt_pointtype(marker_shape)} ps {marker_size}'
                     if color: marker_cmd += f' lc rgb "{color}"'
                     cmd_list.append(marker_cmd)
 
@@ -3198,6 +3249,22 @@ class GnuplotGenerator:
         # inset이 실제로 y2 curve를 쓸 때만(_uses_y2) 의미가 있음.
         _inset_curves = _override_curves or plotdef.curves
         _uses_y2 = any(getattr(c, "axis", "y1") == "y2" for c in _inset_curves)
+        # [수정 - 요청] "in-plot의 y1,y2 title과 axis frame 간격이 너무 큼,
+        # main-plot은 그렇지 않은데" - 실제 원인은 "간격이 넓다"가 아니라
+        # 정반대: 원/타원 PIP는 박스의 네 모서리가 잘려 나가는데, 기존 pull-in
+        # offset/여백 비율은 사각형 박스를 기준으로만 잡혀 있어서(원/타원인지
+        # 구분 안 함) y2label(그리고 좁은 각도에선 y1label도)이 실제 보이는
+        # 타원 안쪽이 아니라 박스 모서리 쪽(타원 밖, 곧 잘려 없어지는 영역)에
+        # 놓여버림 - PyMuPDF로 최종 렌더 픽셀 좌표와 clip_info의 타원 중심/
+        # 반지름을 직접 비교해 확인함(y2label 중심이 반지름보다 더 먼 거리에
+        # 있어 원 밖 = 완전히 안 보임, y1label도 반지름에 거의 닿을 듯 붙어
+        # 있었음) - 그래서 사용자에게는 "title이 있어야 할 자리가 비어
+        # 있다"/"눈금과 title 사이가 이상하게 크게 벌어져 있다"로 보였던 것.
+        # 원/타원일 때만 pull-in을 더 세게(당겨서 타원 안쪽 여유 공간에
+        # 오게) 하고, 그만큼 tic+label 자리를 위한 여백 비율도 넓혀준다
+        # (실제 렌더링 3종 비교로 확인 - rect는 기존 값 그대로 유지, 모서리가
+        # 안 잘리니 문제 없었음).
+        _pip_round_shape = str(pip.get("clip_shape", "rect") or "rect").strip().lower() in ("circle", "ellipse")
         if pip.get("axis_title_on"):
             # [추가 - 요청] "tic 숫자와 축 title 사이 간격이 너무 넓음(최소,
             # 거의 0이 되게)" - gnuplot 6.0으로 직접 렌더링해 offset 부호를
@@ -3206,7 +3273,7 @@ class GnuplotGenerator:
             # 당길지"라 폰트가 작을수록 절대 간격도 작아야 자연스러워서
             # font_scale에 비례시킴).
             _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
-            _lbl_ofs_y = 3.8 * font_scale  # ylabel을 tic 쪽(오른쪽)으로
+            _lbl_ofs_y = (8.0 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
             _xlabel_txt = (plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
@@ -3259,9 +3326,14 @@ class GnuplotGenerator:
         # gnuplot 6.0으로 직접 렌더링해 실측 조정함(0.22->0.13, 0.26->0.16,
         # 0.24->0.14) - 라벨이 잘리지 않는 선에서 tic 바로 아래/옆에 붙게.
         _inset_bottom_frac = 0.13
-        _inset_left_frac = 0.16 if _axis_titles_shown else 0.15
+        # [수정 - 요청] 위 _pip_round_shape 설명대로 - 원/타원은 axis title이
+        # 실제로 보이는 타원 안쪽에 들어오도록 이 tic+label 여백 자체도
+        # 사각형보다 넓게 잡아야 한다(0.16/0.14 -> 0.24/0.24, 실측 3종
+        # 비교로 확인: 이 정도는 돼야 y2label이 원 밖으로 밀려나지 않음).
+        # rect는 모서리가 안 잘리므로 기존 값을 그대로 유지한다.
+        _inset_left_frac = (0.24 if _pip_round_shape else 0.16) if _axis_titles_shown else 0.15
         if _uses_y2:
-            _inset_right_frac = 0.14 if _axis_titles_shown else 0.13
+            _inset_right_frac = (0.24 if _pip_round_shape else 0.14) if _axis_titles_shown else 0.13
         else:
             _inset_right_frac = 0.04
         _inset_lmargin = origin_x + _inset_left_frac * size_w
@@ -3374,6 +3446,45 @@ class GnuplotGenerator:
             _clip_ry_raw = str(pip.get("clip_ry", "")).strip()
             _clip_ry = _clip_rx if (_clip_shape == "circle" or not _clip_ry_raw) else _num("clip_ry", 50.0)
 
+            if _clip_shape == "circle" or (_clip_shape == "ellipse" and not _clip_ry_raw):
+                # [수정 - 요청] "반지름이 하나만 입력되면 x값 실길이 기준으로
+                # y값도 정하면 될텐데" - clip_shape=="circle"일 때뿐 아니라,
+                # clip_shape=="ellipse"인데 Ry를 비워둔 경우(=Rx만으로 원을
+                # 그리고 싶다는 뜻, 바로 위 분기와 동일한 상황)도 똑같이 이
+                # 물리 보정을 적용한다.
+                # [수정 - 버그] "circle인데 완전한 원이 아니고, W/H 크기 비와
+                # 원래 프레임의 비율에 따라 다름" - Rx==Ry(%)로 강제해도,
+                # 그 %는 "박스 자신의 폭/높이 대비"라 박스(size_w/size_h,
+                # screen 비율)나 페이지 자체가 정사각형이 아니면 물리적으로는
+                # 타원이 된다(annotation Circle이 이미 겪고 고쳤던 것과 동일한
+                # 문제 - _nice_axis_range 옆 rx_phys_in 보정 참고). 여기서도
+                # 같은 원리로: "페이지 전체의 실제 물리 크기"를 구한 뒤, Rx%가
+                # 뜻하는 물리 크기와 정확히 같은 물리 크기가 되도록 Ry%를
+                # 다시 계산한다(단순 % 그대로 쓰면 어긋남).
+                #
+                # [수정 - 버그] "여전히 완전한 원이 아님" 재현 보고를 받아
+                # 재검토한 결과: plotdef.frame_width/height는 SAVE/PRINT
+                # 물리 크기고, 화면(Interactive)은 _build_plot_commands의
+                # _is_interactive 처리에 이미 있듯 그 설정과 무관하게 항상
+                # 고정된 1000x700px 캔버스(그 코드에 이미 있는 상수 그대로
+                # ≈5.95x4.17in)로 뜬다 - frame_width/height를 그대로 썼던
+                # 게 근본 원인이었음(화면에서는 완전히 엉뚱한 기준으로
+                # 보정하고 있었음). fmt로 분기해서 화면은 이 고정 캔버스
+                # 물리 크기를, 그 외(SAVE/PRINT/Batch)는 기존처럼
+                # frame_width/height를 페이지 물리 크기로 쓴다.
+                try:
+                    if (fmt or "").lower() == "interactive":
+                        _page_w_in, _page_h_in = 5.95, 4.17
+                    else:
+                        _axis_w_in = float((plotdef.frame_width or "5").strip() or 5.0)
+                        _axis_h_in = float((plotdef.frame_height or "4").strip() or 4.0)
+                        _page_w_in = _axis_w_in / max(ab_w, 1e-6)
+                        _page_h_in = _axis_h_in / max(ab_h, 1e-6)
+                    _rx_phys_in = (_clip_rx / 100.0) * size_w * _page_w_in
+                    _clip_ry = _rx_phys_in / max(size_h * _page_h_in, 1e-9) * 100.0
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+
         # [수정 - 요청, 근본적] "네이티브 클리핑 경로 제거" - 예전엔 opacity가
         # 정확히 0%나 100%고 X/Y 범위가 구체적 숫자로 확정돼 있으면(_xr/_yr이
         # None이 아니면) "네이티브" 경로(gnuplot의 set object ellipse +
@@ -3405,6 +3516,22 @@ class GnuplotGenerator:
                 _ellipse_native_ok = True
         _ellipse_fully_opaque = _ellipse_native_ok and _opacity >= 100.0 - 1e-6
         _ellipse_no_bg = _ellipse_native_ok and _opacity <= 0.0 + 1e-6
+        # [수정 - 사용자 보고 버그] "화면(Interactive)에서 원/타원 PIP인데
+        # 원 밖으로 사각형 부분이 잘리지 않고 그대로 보임" - 이 네이티브
+        # 경로(_ellipse_native_ok)는 커브 데이터만 NaN으로 잘라내고 배경/
+        # 테두리는 object ellipse로 "장식"만 추가할 뿐, 정작 메인 plot이
+        # 이미 켜둔 "set border"(축 자체의 네모 테두리+눈금선 연결선)는
+        # 그대로 상속돼 인셋의 작은 축 상자가 평범한 직사각형으로 그려짐 -
+        # gnuplot에 "테두리를 도형으로 자르는" 기능이 없어 이 네모 상자가
+        # 원/타원 밖으로 그대로 삐져나와 보였음(정적 PLOT/SAVE/PRINT는
+        # force_postprocess의 PDF 픽셀 마스킹이 이 테두리까지 통째로
+        # 지워줘서 문제가 없었음 - 화면 네이티브 경로만 이 마스킹이 없어
+        # 겪는 문제). 원/타원 네이티브 경로일 때만 인셋 plot 직전에 테두리를
+        # 꺼서(unset border) 네모 상자 자체가 아예 그려지지 않게 하고(짧은
+        # tic 표시만 남음 - title/tic 숫자 등 텍스트가 원 밖으로 나가는
+        # 문제는 이 네이티브 경로의 기존 문서화된 한계로 남음), 인셋이
+        # 끝나면 이후 코드에 영향 없도록 원래 border 설정을 복구한다.
+        _main_border_line = next((_l for _l in reversed(lines) if _l.startswith("set border")), "set border lw 1.5")
 
         if _rect_fully_opaque:
             # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - id 7100은
@@ -3572,12 +3699,22 @@ class GnuplotGenerator:
                 )
             _inset_cmd_list = [re.sub(r"using (\d+):(\d+)\b", _wrap_ellipse_marker, c) for c in _inset_cmd_list]
 
+        if _ellipse_native_ok:
+            # 위 주석 참고 - 인셋의 네모 축 테두리 자체를 꺼서 원/타원 밖으로
+            # 삐져나오지 않게 한다.
+            lines.append("unset border")
+
         lines.append("plot \\")
         for i, cmd in enumerate(_inset_cmd_list):
             if i != len(_inset_cmd_list) - 1:
                 cmd += ", \\"
             lines.append(cmd)
         lines.append("")
+
+        if _ellipse_native_ok:
+            # 메인 plot(또는 이후 다른 패널)에 영향 없도록 border를 원래
+            # 설정으로 복구.
+            lines.append(_main_border_line)
 
         # 이 뒤에 또 다른 코드가 있어도 영향 안 받도록 원위치로 복구
         lines.append("set origin 0,0")
@@ -4709,6 +4846,78 @@ class GnuplotGenerator:
 
         static_curve_lines = lines[plot_idx:]  # "plot \\" 줄부터 끝까지(마커 데이터블록 참조 포함) - "unknown" 터미널로 이미 실행됨(화면에 안 보임)
 
+        # [추가 - 요청] "Anim+spline은 정말 불가능한가?" - gnuplot으로 직접
+        # 실측해보니 가능함을 확인했음: 문제는 "진행률 NaN과 smooth csplines를
+        # 동시에" 계산시키는 것뿐이었지, spline 자체를 미리(진행률 NaN 없는
+        # 깨끗한 원본 데이터로) 한 번 계산해서 그 결과(NaN 없는 매끄러운
+        # 점들)에 진행률만 나중에 적용하는 건 문제없이 된다(gnuplot의
+        # `set table` + `smooth csplines`로 매끄러운 좌표를 파일로 뽑아낸
+        # 뒤, 그 파일은 그냥 "with lines"라 재계산이 필요 없음). 아래에서
+        # smooth csplines가 걸린 curve마다 이 사전 계산을 시도하고, 성공하면
+        # 그 curve의 명령을 "사전 계산된 파일 + 단순 using 1:2"로 바꿔치기해서
+        # 스플라인을 유지한 채 애니메이션되게 한다(실패하면 기존처럼 직선
+        # 대체 + 경고로 안전하게 넘어감).
+        def _presmooth_curve_line(orig_line, dat_path, using_expr_for_match, plot_dir_):
+            if " smooth csplines" not in orig_line:
+                return None
+            if f'"{dat_path}"' not in orig_line:
+                return None
+            _idx = orig_line.find(" smooth csplines")
+            _suffix = orig_line[_idx + len(" smooth csplines"):]  # notitle axes ... with lines ... (스타일 그대로 보존)
+            _tmp_name = f".cathplot_presmooth_{uuid.uuid4().hex}.dat"
+            _tmp_path = os.path.join(plot_dir_, _tmp_name)
+            _mini_script = (
+                f'set table "{_tmp_name}"\n'
+                f'plot "{dat_path}" using {using_expr_for_match} smooth csplines\n'
+                f'unset table\n'
+            )
+            try:
+                _gp = _resolve_gnuplot_exe()
+                _res = subprocess.run(
+                    [_gp], input=_mini_script, text=True, encoding="utf-8", errors="replace",
+                    capture_output=True, cwd=plot_dir_, timeout=30, **_no_console_kwargs()
+                )
+                if _res.returncode != 0 or not os.path.exists(_tmp_path):
+                    return None
+                # 데이터가 3점 미만이라 애초에 spline 자체가 불가능한 경우
+                # (진행률과 무관한 원천적 한계) - 빈 파일이거나 실제 데이터
+                # 줄이 없으면 실패로 간주.
+                with open(_tmp_path, encoding="utf-8", errors="replace") as f:
+                    if not any(ln.strip() and not ln.strip().startswith("#") for ln in f):
+                        os.remove(_tmp_path)
+                        return None
+            except Exception:
+                return None
+            return f'"{_tmp_name}" using ($1):2{_suffix}', _tmp_path
+
+        _presmooth_temp_files = []
+        _failed_spline_titles = []
+        if any(" smooth csplines" in ln for ln in static_curve_lines):
+            for _curve in getattr(plotdef, "curves", []):
+                if not getattr(_curve, "smooth_csplines", False):
+                    continue
+                _abs_path = _curve.dat_file if os.path.isabs(_curve.dat_file) else os.path.abspath(_curve.dat_file)
+                try:
+                    _rel_path = os.path.relpath(_abs_path, start=self.plot_dir) if self.plot_dir else _abs_path
+                except ValueError:
+                    _rel_path = _abs_path
+                _rel_path = _rel_path.replace("\\", "/")
+                _x_col_idx = _curve.x_output_no if getattr(_curve, "x_output_no", None) is not None else default_x_col
+                _using_expr_for_match = f"(${_x_col_idx + 1}+{_curve.x_shift}):{_curve.output_no + 1}"
+                _matched = False
+                for _li, _ln in enumerate(static_curve_lines):
+                    if f'"{_rel_path}"' in _ln and f":{_curve.output_no + 1} smooth csplines" in _ln:
+                        _matched = True
+                        _result = _presmooth_curve_line(_ln, _rel_path, _using_expr_for_match, self.plot_dir)
+                        if _result:
+                            static_curve_lines[_li], _tmp_path = _result
+                            _presmooth_temp_files.append(_tmp_path)
+                        else:
+                            _failed_spline_titles.append(_curve.title)
+                        break
+                if not _matched:
+                    _failed_spline_titles.append(_curve.title)
+
         # curve 명령의 "using (X식):Y컬럼" 부분만 문턱값 필터로 감싼다 - 마커
         # 명령("using 1:2", 괄호 없음)은 이 패턴에 안 걸려 그대로 통과(마커는
         # 애니메이션 없이 항상 표시).
@@ -4743,12 +4952,11 @@ class GnuplotGenerator:
         # 보간을 건너뛰고 평범한 선(원본 데이터 그대로)으로 대체한다 - 정적인
         # 화면(Interactive, non-animated)은 영향 없음.
         if any(" smooth csplines" in ln for ln in static_curve_lines):
-            _spline_titles = [c.title for c in getattr(plotdef, "curves", []) if getattr(c, "smooth_csplines", False)]
             _anim_name = (plotdef.title or "plot").strip() or "plot"
             self.warnings.append(
-                f"'{_anim_name}' Animation 재생 중에는 Cubic Spline이 gnuplot 제약(NaN 데이터와 "
-                f"함께 계산 불가)으로 적용되지 않고 원본 데이터의 직선으로 표시됩니다"
-                f"{' (' + ', '.join(_spline_titles) + ')' if _spline_titles else ''} "
+                f"'{_anim_name}' Animation 재생 중 일부 curve는 Cubic Spline 사전 계산에 실패해서 "
+                f"원본 데이터의 직선으로 표시됩니다"
+                f"{' (' + ', '.join(_failed_spline_titles) + ')' if _failed_spline_titles else ''} "
                 f"- 정적인 화면(Interactive, non-animated)에는 영향 없습니다."
             )
         static_curve_lines = [ln.replace(" smooth csplines", "") for ln in static_curve_lines]
@@ -5444,7 +5652,7 @@ class GnuplotGenerator:
                     marker_pt = c.get("marker_shape")
                     marker_size = c.get("marker_size")
                     if marker_pt is not None:
-                        _pt_clause += f" pt {marker_pt}"
+                        _pt_clause += f" pt {_fmt_pointtype(marker_pt)}"
                     if marker_size:
                         _pt_clause += f" ps {marker_size}"
 
@@ -5490,7 +5698,7 @@ class GnuplotGenerator:
                         _s_marker_pt = s.get("marker_shape")
                         _s_marker_size = s.get("marker_size")
                         if _s_marker_pt is not None:
-                            _s_pt_clause += f" pt {_s_marker_pt}"
+                            _s_pt_clause += f" pt {_fmt_pointtype(_s_marker_pt)}"
                         if _s_marker_size:
                             _s_pt_clause += f" ps {_s_marker_size}"
                     parts.append(
@@ -6275,7 +6483,7 @@ class GnuplotGenerator:
                 marker_pt = c.get("marker_shape")
                 marker_size = c.get("marker_size")
                 if marker_pt is not None:
-                    _pt_clause += f" pt {marker_pt}"
+                    _pt_clause += f" pt {_fmt_pointtype(marker_pt)}"
                 if marker_size:
                     _pt_clause += f" ps {marker_size}"
 
@@ -6337,7 +6545,7 @@ class GnuplotGenerator:
                     _s_marker_pt = s.get("marker_shape")
                     _s_marker_size = s.get("marker_size")
                     if _s_marker_pt is not None:
-                        _s_pt_clause += f" pt {_s_marker_pt}"
+                        _s_pt_clause += f" pt {_fmt_pointtype(_s_marker_pt)}"
                     if _s_marker_size:
                         _s_pt_clause += f" ps {_s_marker_size}"
                 splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}')
