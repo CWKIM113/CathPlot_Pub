@@ -1,0 +1,93 @@
+{
+    "filename": "ROH_Pres.dat",
+    "date_line": " 18-Jun-2026  15:26  3.5.6.1                                               w2_SDCS_cooldn1_ss.inp",
+    "title_lines": [
+        " --  WOLSONG 234 MULTIPLE AVERAGE CHANNEL CIRCUIT MODEL FOR THE MODIFIED 37M FUEL ö-",
+        " --- COOL DOWN SS CALCULATION from POWER DOWN SS w/ SDCS for 9500 EFPD ----------"
+    ],
+    "format_line": "     (1X,F8.2,1X,5(F8.3,1X))",
+    "n_outputs": 5,
+    "variables": [
+        {
+            "output_no": 0,
+            "data_column": 1,
+            "signals": [
+                {
+                    "name": "Time",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 1,
+            "data_column": 2,
+            "signals": [
+                {
+                    "name": "PRESS:OHD3(1)",
+                    "multiplier": 1e-06
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 2,
+            "data_column": 3,
+            "signals": [
+                {
+                    "name": "PRESS:OHD1(1)",
+                    "multiplier": 1e-06
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 3,
+            "data_column": 4,
+            "signals": [
+                {
+                    "name": "PRESS:OHD7(1)",
+                    "multiplier": 1e-06
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 4,
+            "data_column": 5,
+            "signals": [
+                {
+                    "name": "PRESS:OHD5(1)",
+                    "multiplier": 1e-06
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 5,
+            "data_column": 6,
+            "signals": [
+                {
+                    "name": "PRESS:OHD3(1)",
+                    "multiplier": 2.5e-07
+                },
+                {
+                    "name": "PRESS:OHD1(1)",
+                    "multiplier": 2.5e-07
+                },
+                {
+                    "name": "PRESS:OHD7(1)",
+                    "multiplier": 2.5e-07
+                },
+                {
+                    "name": "PRESS:OHD5(1)",
+                    "multiplier": 2.5e-07
+                }
+            ],
+            "alias": ""
+        }
+    ],
+    "data_start_line": 31,
+    "is_surface": false,
+    "surface_base_name": ""
+}

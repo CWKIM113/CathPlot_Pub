@@ -51,6 +51,21 @@ def _force_focus_window_by_title(title, timeout_sec=2.0):
             try:
                 user32.ShowWindow(hwnd, 9)  # SW_RESTORE
                 user32.SetForegroundWindow(hwnd)
+                # [수정 - 요청] "Animation 창(Plot 창)이 다른 창 뒤에 숨는
+                # 경우가 있음 - 맨 위에 뜨게" - 위 SetForegroundWindow는 입력
+                # 포커스까지 요구해서 포커스 스틸링 방지 정책에 자주 조용히
+                # 막히지만(위 docstring 참고), SetWindowPos의 HWND_TOPMOST/
+                # NOTOPMOST 토글은 입력 포커스가 아니라 Z-order(화면상
+                # 앞뒤 순서)만 바꾸는 별개의 API라 그 정책의 영향을 받지
+                # 않음(실측 확인 - 배경 프로세스가 띄운 창도 안정적으로 맨
+                # 위로 올라옴). 계속 최상위 고정이 아니라 "지금 한 번만 맨
+                # 위로" 끌어올리는 효과만 남기려고 TOPMOST로 올렸다가 곧바로
+                # NOTOPMOST로 다시 풀어준다(그래야 나중에 다른 창을 클릭하면
+                # 정상적으로 뒤로 물러남).
+                _SWP_NOMOVE, _SWP_NOSIZE, _SWP_SHOWWINDOW = 0x0002, 0x0001, 0x0040
+                _flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_SHOWWINDOW
+                user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, _flags)   # HWND_TOPMOST
+                user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, _flags)   # HWND_NOTOPMOST
             except Exception:
                 pass
             return
@@ -325,6 +340,15 @@ SCREEN_TIC_MINOR_SCALE = 1.0
 #----------------------------------------------------------
 # Print / Save Output Scale
 #----------------------------------------------------------
+# [추가 - 요청] "반투명일 때 in-plot이 화면에 고정되고(창을 움직여도 안
+# 따라옴), 고정된 내용이 사각형 모양으로 보임" - 화면 실시간 오버레이 창
+# (_open_pip_overlay_window)은 진짜 OS 투명(Windows Tk의 -transparentcolor)
+# 을 쓰는데, 그러려면 원/타원 "바깥" 픽셀을 이 특정 색으로 정확히 채워야
+# 한다(예전엔 메인 plot을 미리 찍어둔 스냅샷을 붙여넣었는데, 그건 창을
+# 움직이면 바로 어긋나 보이는 원인이었음 - 진짜 투명이면 그 문제 자체가
+# 없어짐). 실제 plot에 거의 안 나올 특이한 마젠타 계열로 고름.
+PIP_OVERLAY_CHROMA_KEY = (255, 0, 254)
+
 PRINT_FONT_SCALE = 1.60     # [수정 - 버그] "PDF 그림에서 font size가 plot 대비 너무 작음(폰트
 # 크기 입력으로 해결될 사항 아님), Legend box도 너무 작음 - 폰트·legend 모두
 # 2배로" - PDF가 PNG/JPG의 기준(기준 포맷을 PyMuPDF로 래스터화)이 되면서
@@ -2970,7 +2994,7 @@ class GnuplotGenerator:
             cmd_list.append(cmd)
         return cmd_list
 
-    def _render_pip_inset(self, plotdef, lines, main_cmd_list, fmt, parent_box=None):
+    def _render_pip_inset(self, plotdef, lines, main_cmd_list, fmt, parent_box=None, force_postprocess=False):
         """[추가 - 요청] "작은 plot을 큰 plot 안에(PIP)" - 메인 plot을 이미 다
         그린 뒤(lines에 'plot ...'까지 채워진 상태) 같은 캔버스 위에 작은
         확대 plot을 하나 더 겹쳐 그린다. 호출하는 쪽(create_script)이 이미
@@ -3128,6 +3152,9 @@ class GnuplotGenerator:
 
         _pip_xmin, _pip_xmax = str(pip.get("xmin", "")).strip(), str(pip.get("xmax", "")).strip()
         _pip_ymin, _pip_ymax = str(pip.get("ymin", "")).strip(), str(pip.get("ymax", "")).strip()
+        # [추가 - 요청] "Ymin/Ymax 입력이 Y1에만 적용되고 Y2는 그대로 나타남 -
+        # Y2도 따로 입력받게(기본은 plot 자체 구간)" - Y1과 완전히 같은 방식.
+        _pip_y2min, _pip_y2max = str(pip.get("y2min", "")).strip(), str(pip.get("y2max", "")).strip()
         # [수정 - 버그] "다른(이미 그려진) plot의 곡선을 보여줄 때" Y 범위를
         # 안 채우면 메인 plot의 Y범위(전혀 다른 변수 스케일)를 그대로 물려받아
         # 곡선이 축 밖으로 나가 안 보이던 문제 - X(보통 Time)는 "같은 구간을
@@ -3140,7 +3167,12 @@ class GnuplotGenerator:
             yrange_cmd = "set autoscale y"
         else:
             yrange_cmd = _find_range_line("set yrange") or "set autoscale y"
-        y2range_cmd = "set autoscale y2" if _override_curves else (_find_range_line("set y2range") or "set autoscale y2")
+        if _pip_y2min and _pip_y2max:
+            y2range_cmd = f"set y2range [{_pip_y2min}:{_pip_y2max}]"
+        elif _override_curves:
+            y2range_cmd = "set autoscale y2"
+        else:
+            y2range_cmd = _find_range_line("set y2range") or "set autoscale y2"
 
         # [수정 - 요청] "박스만 줄이고 폰트(legend 포함)는 그대로면, 줄어든
         # 만큼 글자가 박스에 비해 과도하게 커 보임" - 칸에 맞추려고 박스를
@@ -3167,25 +3199,33 @@ class GnuplotGenerator:
         _inset_curves = _override_curves or plotdef.curves
         _uses_y2 = any(getattr(c, "axis", "y1") == "y2" for c in _inset_curves)
         if pip.get("axis_title_on"):
+            # [추가 - 요청] "tic 숫자와 축 title 사이 간격이 너무 넓음(최소,
+            # 거의 0이 되게)" - gnuplot 6.0으로 직접 렌더링해 offset 부호를
+            # 실측 확인함(xlabel은 y가 양수일수록, ylabel은 x가 양수일수록
+            # tic 쪽으로 붙음 - 문자 그대로 "gnuplot 기본값 대비 얼마나
+            # 당길지"라 폰트가 작을수록 절대 간격도 작아야 자연스러워서
+            # font_scale에 비례시킴).
+            _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
+            _lbl_ofs_y = 3.8 * font_scale  # ylabel을 tic 쪽(오른쪽)으로
             _xlabel_txt = (plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
                 _xl_size = float(plotdef.xlabel_size or 11) * font_scale
-                lines.append(f'set xlabel "{_xl_text}" font "{plotdef.xlabel_font},{_xl_size:.1f}" {_xl_enh}')
+                lines.append(f'set xlabel "{_xl_text}" font "{plotdef.xlabel_font},{_xl_size:.1f}" offset 0,{_lbl_ofs_x:.2f} {_xl_enh}')
             else:
                 lines.append("unset xlabel")
             _ylabel_txt = (plotdef.ylabel or "").strip()
             if _ylabel_txt:
                 _yl_text, _yl_enh = self._render_text(_ylabel_txt)
                 _yl_size = float(plotdef.ylabel_size or 11) * font_scale
-                lines.append(f'set ylabel "{_yl_text}" font "{plotdef.ylabel_font},{_yl_size:.1f}" {_yl_enh}')
+                lines.append(f'set ylabel "{_yl_text}" font "{plotdef.ylabel_font},{_yl_size:.1f}" offset {_lbl_ofs_y:.2f},0 {_yl_enh}')
             else:
                 lines.append("unset ylabel")
             _y2label_txt = (plotdef.y2label or "").strip() if _uses_y2 else ""
             if _y2label_txt:
                 _y2l_text, _y2l_enh = self._render_text(_y2label_txt)
                 _y2l_size = float(plotdef.y2label_size or 11) * font_scale
-                lines.append(f'set y2label "{_y2l_text}" font "{plotdef.y2label_font},{_y2l_size:.1f}" {_y2l_enh}')
+                lines.append(f'set y2label "{_y2l_text}" font "{plotdef.y2label_font},{_y2l_size:.1f}" offset -{_lbl_ofs_y:.2f},0 {_y2l_enh}')
             else:
                 lines.append("unset y2label")
         else:
@@ -3210,10 +3250,18 @@ class GnuplotGenerator:
         _title_shown = bool(pip.get("title_on")) and bool((plotdef.title or "").strip())
         _axis_titles_shown = bool(pip.get("axis_title_on"))
         _inset_top_frac = 0.20 if _title_shown else 0.05
-        _inset_bottom_frac = 0.22 if _axis_titles_shown else 0.13
-        _inset_left_frac = 0.26 if _axis_titles_shown else 0.15
+        # [수정 - 요청] "axis title을 켜면 tic-title 간격이 너무 넓어지고
+        # frame이 거의 정사각형으로 바뀜" - 실측 결과 원인은 두 가지였음:
+        # (1) 아래 xlabel/ylabel/y2label에 offset을 안 줘서 gnuplot 기본
+        # 간격(작은 폰트로 줄여도 비례해서 안 줄어듦)을 그대로 썼던 것,
+        # (2) 그 기본 간격을 감안해 미리 넉넉히 잡아뒀던 이 비율 자체가
+        # (2)번 수정(아래 offset 추가) 이후로는 필요 이상으로 컸던 것.
+        # gnuplot 6.0으로 직접 렌더링해 실측 조정함(0.22->0.13, 0.26->0.16,
+        # 0.24->0.14) - 라벨이 잘리지 않는 선에서 tic 바로 아래/옆에 붙게.
+        _inset_bottom_frac = 0.13
+        _inset_left_frac = 0.16 if _axis_titles_shown else 0.15
         if _uses_y2:
-            _inset_right_frac = 0.24 if _axis_titles_shown else 0.13
+            _inset_right_frac = 0.14 if _axis_titles_shown else 0.13
         else:
             _inset_right_frac = 0.04
         _inset_lmargin = origin_x + _inset_left_frac * size_w
@@ -3240,11 +3288,20 @@ class GnuplotGenerator:
         else:
             lines.append("unset title")
 
-        _tic_size = max(9 * font_scale, 5.0)  # tic 숫자 크기(축 제목과는 별개로 항상 배율 적용, 너무 작아지지 않게 하한)
-        lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}"')
-        lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}"')
+        # [수정 - 요청] "비율(font_scale)이 title에만 적용되고 tic 폰트에는
+        # 적용 안 되는 것 같다" - 실제로는 기존에도 font_scale이 곱해지고는
+        # 있었지만, 하한값(5.0)이 font_scale<=0.56 부근에서부터 그대로
+        # 발동해버려서(9*0.56=5.04) 그 아래로는 title은 계속 작아지는데
+        # tic만 5.0에 고정돼 "tic만 안 줄어든다"는 인상을 줬음 - 하한을
+        # 3.5로 낮춰 title/legend와 비슷한 범위까지는 비례가 유지되게 하고,
+        # 정말 읽기 힘들어지는 극단적으로 작은 경우에만(그 밑으로는 어차피
+        # 글자 자체가 뭉개짐) 최후 안전장치로만 작동하게 한다.
+        _tic_size = max(9 * font_scale, 3.5)
+        _tic_ofs = 0.9 * font_scale  # tic 숫자도 축 쪽으로 살짝 당겨 여백 최소화(위 xlabel/ylabel과 같은 부호 규칙)
+        lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}" offset 0,{_tic_ofs:.2f}')
+        lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}" offset {_tic_ofs:.2f},0')
         if _uses_y2:
-            lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}"')
+            lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}" offset -{_tic_ofs:.2f},0')
 
         lines.append(f"set origin {origin_x:.4f},{origin_y:.4f}")
         lines.append(f"set size {size_w:.4f},{size_h:.4f}")
@@ -3317,8 +3374,31 @@ class GnuplotGenerator:
             _clip_ry_raw = str(pip.get("clip_ry", "")).strip()
             _clip_ry = _clip_rx if (_clip_shape == "circle" or not _clip_ry_raw) else _num("clip_ry", 50.0)
 
+        # [수정 - 요청, 근본적] "네이티브 클리핑 경로 제거" - 예전엔 opacity가
+        # 정확히 0%나 100%고 X/Y 범위가 구체적 숫자로 확정돼 있으면(_xr/_yr이
+        # None이 아니면) "네이티브" 경로(gnuplot의 set object ellipse +
+        # 커브 데이터만 NaN으로 감싸는 방식)를 탔다. 그런데 이 경로는 커브
+        # 데이터만 클리핑할 뿐 title/축title/tic/legend 같은 텍스트 요소는
+        # 전혀 클리핑하지 못해서(gnuplot엔 텍스트를 도형으로 자르는 기능이
+        # 없음), 원/타원 모양을 무시하고 박스 밖까지 텍스트가 삐져나오는
+        # 문제가 있었다. 게다가 interactive(화면) 포맷은 이 native 경로가
+        # 아예 안 걸릴 때(Auto Range 등) clip_info가 반환되지 않아 대체
+        # 로직(cathplot_gui의 오버레이 창)도 못 타서 조용히 사각형으로
+        # 대체되는 등 두 경로가 계속 어긋났다.
+        #
+        # force_postprocess=True(정적 PLOT/SAVE/PRINT 전용 - create_script가
+        # 넘김)일 때는 원/타원을 항상 아래 "else" 분기(흰 배경만 깔고, 실제
+        # 모양·불투명도·경계선은 _apply_pip_clip 후처리에서 렌더된 픽셀
+        # 자체를 원/타원으로 잘라 만드는 방식 - PDF에선 이미 항상 이렇게
+        # 동작해서 검증돼 있음)로 통일한다 - 커브뿐 아니라 title/tic/legend
+        # 까지 전부 원/타원 밖은 확실히 잘려서 안 보이게 된다.
+        #
+        # Animation(create_animation_script)은 프레임마다 무거운 PDF
+        # 후처리를 돌릴 수 없어서 force_postprocess를 안 넘긴다(기본 False) -
+        # 기존처럼 범위가 구체적일 때만 네이티브를 쓰고, 아니면 그쪽 자체
+        # fallback 로직이 사각형으로 안전하게 대체한다(그대로 유지).
         _ellipse_native_ok = False
-        if _clip_shape in ("circle", "ellipse") and (_opacity <= 0.0 + 1e-6 or _opacity >= 100.0 - 1e-6):
+        if not force_postprocess and _clip_shape in ("circle", "ellipse") and (_opacity <= 0.0 + 1e-6 or _opacity >= 100.0 - 1e-6):
             _xr = _parse_range(xrange_cmd)
             _yr = _parse_range(yrange_cmd)
             if _xr is not None and _yr is not None and _xr[1] != _xr[0] and _yr[1] != _yr[0]:
@@ -3336,10 +3416,16 @@ class GnuplotGenerator:
                 f'behind fc rgb "white" fillstyle solid 1.0 border lc rgb "black" lw 1'
             )
         elif _rect_no_bg:
-            # 배경 오브젝트 자체를 안 그림 - 뒤이어 그려질 inset의 곡선/눈금/
-            # 라벨(잉크)이 메인 plot 위에 그대로 겹쳐 보임(기존 opaque=False
-            # 네이티브 동작과 동일).
-            pass
+            # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
+            # 통일 필요(가는 외곽선은 다 있는 게 낫다)" - 배경(채우기)은
+            # 여전히 안 그리지만(메인 plot이 그대로 비쳐 보여야 하므로),
+            # 경계를 알아볼 수 있게 ellipse의 no_bg 케이스와 완전히 같은
+            # 스타일(front, 검정, lw 2, 점선)로 테두리만 추가한다.
+            lines.append(
+                f"set object 7101 rectangle from screen {origin_x:.4f},{origin_y:.4f} "
+                f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
+                f'front fc rgb "black" fillstyle empty border lc rgb "black" lw 2 dashtype "."'
+            )
         elif _ellipse_fully_opaque or _ellipse_no_bg:
             _ecx = origin_x + size_w / 2.0
             _ecy = origin_y + size_h / 2.0
@@ -3408,6 +3494,15 @@ class GnuplotGenerator:
             # inset 안에서는 이 curve의 스플라인 보간을 건너뛰고 평범한
             # 선(원본 데이터 그대로)으로 대체한다 - 메인 plot이나 사각형
             # 클리핑에는 영향 없음.
+            if any(" smooth csplines" in c for c in _inset_cmd_list):
+                _spline_titles = [c.title for c in getattr(plotdef, "curves", []) if getattr(c, "smooth_csplines", False)]
+                _pip_name = (plotdef.title or "plot").strip() or "plot"
+                self.warnings.append(
+                    f"'{_pip_name}'의 PIP 원/타원 클리핑 인셋 안에서는 Cubic Spline이 "
+                    f"gnuplot 제약(NaN 데이터와 함께 계산 불가)으로 적용되지 않고 원본 데이터의 "
+                    f"직선으로 표시됩니다{' (' + ', '.join(_spline_titles) + ')' if _spline_titles else ''} "
+                    f"- 메인 plot이나 사각형 클리핑에는 영향 없습니다."
+                )
             _inset_cmd_list = [c.replace(" smooth csplines", "") for c in _inset_cmd_list]
             # [추가 - 발견] "원/타원으로 커브 자체를 자르기" - 데이터 포인트의
             # 화면상 위치(이 박스 자신을 기준으로 한 0~1 위치)가 타원 안에
@@ -3461,6 +3556,22 @@ class GnuplotGenerator:
                 return f"{wrapped} notitle axes {axis} with lines{rest}"
             _inset_cmd_list = [_wrap_ellipse_func(c) for c in _inset_cmd_list]
 
+            # [수정 - 버그(사용자 보고)] "타원 밖에 그림 조각(마커)이 클리핑
+            # 안 되고 나타남" - Marker(점) 명령은 "using 1:2"처럼 컬럼 번호가
+            # 괄호 없이 맨 숫자라서(데이터 curve의 "using (식):(식)"과 형태가
+            # 다름) 위 _wrap_ellipse 정규식(괄호로 감싼 식만 인식)이 못
+            # 잡아내고 그대로 통과했음(실제 렌더로 확인 - 마커 점들이 타원
+            # 경계와 무관하게 인셋 박스 전체에 그대로 찍혀 있었음). 데이터
+            # curve와 동일하게 컬럼값을 _pip_ellip_ok로 감싸 타원 밖 점은
+            # NaN 처리한다.
+            def _wrap_ellipse_marker(m):
+                xcol, ycol = m.group(1), m.group(2)
+                return (
+                    f"using (_pip_ellip_ok((${xcol}),(${ycol})) ? (${xcol}) : (0/0))"
+                    f":(_pip_ellip_ok((${xcol}),(${ycol})) ? (${ycol}) : (0/0))"
+                )
+            _inset_cmd_list = [re.sub(r"using (\d+):(\d+)\b", _wrap_ellipse_marker, c) for c in _inset_cmd_list]
+
         lines.append("plot \\")
         for i, cmd in enumerate(_inset_cmd_list):
             if i != len(_inset_cmd_list) - 1:
@@ -3495,7 +3606,122 @@ class GnuplotGenerator:
             }
         return None
 
-    def _apply_pip_clip(self, plotdef, pdf_path, fmt, clip_info):
+    def _chroma_mask_patch(self, patch, clip_info):
+        """[추가 - 요청] "반투명일 때 in-plot이 화면에 고정되고, 고정된 내용이
+        사각형 모양으로 보임" - 화면 실시간 오버레이 창(_open_pip_overlay_
+        window) 전용 후처리. 원/타원 바깥 픽셀을 PIP_OVERLAY_CHROMA_KEY로
+        덮어써서, 그 창이 -transparentcolor(Windows Tk)로 그 색만 진짜
+        투명하게 뚫을 수 있게 만든다 - 예전엔 그 자리에 메인 plot을 미리
+        찍어둔 스냅샷("beneath")을 붙여넣었는데, 진짜 투명이 아니라 정지된
+        이미지라서 메인 창을 움직이면 바로 어긋나 보였다(그 스냅샷 자체가
+        그대로 "고정된 사각형"으로 보이는 원인). PDF/PNG 등 실제 파일로
+        저장하는 _apply_pip_clip 쪽은 이 함수를 안 쓴다(파일에는 OS 투명이
+        없어서 여전히 beneath 스냅샷이 맞는 방식)."""
+        _shape = str(clip_info.get("clip_shape", "rect")).strip().lower()
+        if _shape not in ("circle", "ellipse"):
+            return patch
+        from PIL import Image, ImageDraw
+        w, h = patch.size
+        try:
+            _rx_pct = float(clip_info.get("clip_rx") or 50.0)
+        except (TypeError, ValueError):
+            _rx_pct = 50.0
+        try:
+            _ry_pct = float(clip_info.get("clip_ry") or _rx_pct)
+        except (TypeError, ValueError):
+            _ry_pct = _rx_pct
+        _rx = _rx_pct / 100.0 * w
+        _ry = _ry_pct / 100.0 * h
+        cx, cy = w / 2.0, h / 2.0
+        mask = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(mask).ellipse([cx - _rx, cy - _ry, cx + _rx, cy + _ry], fill=255)
+        bg = Image.new("RGB", (w, h), PIP_OVERLAY_CHROMA_KEY)
+        return Image.composite(patch.convert("RGB"), bg, mask)
+
+    def build_pip_static_overlay_patch(self, plotdef, annotations=None, arrows=None, circles=None, plot_dir_hint=None):
+        """[추가 - 요청] "정적(비-Animation) 화면 PLOT에서도 PIP 원/타원+부분
+        반투명(1~99%)이 제대로 보이게" - Animation의 실시간 오버레이 창
+        (_build_pip_blended_frames + cathplot_gui._open_pip_overlay_window)과
+        같은 아이디어를 프레임이 하나뿐인 정적 버전으로 구현한다.
+
+        방식: 이 plotdef를 fmt="pdf"로 한 번 렌더링하면(create_script가
+        내부적으로 _apply_pip_clip까지 이미 적용해서) PIP 원/타원·반투명이
+        완전히 올바르게 합성된 PDF가 나온다(PNG/JPG/SVG가 저장될 때 이미
+        거치는 것과 완전히 같은, 검증된 경로) - 이 PDF에서 PIP 박스 부분만
+        잘라내면 그게 곧 "화면에 겹쳐 보여줄 정확한 조각"이다. 화면
+        (Interactive) 창 자체는 PIP 없이 메인 곡선만 그리게 하고
+        (cathplot_gui 쪽에서 처리), 이 조각을 그 위에 겹치는 별도 오버레이
+        창으로 보여준다 - gnuplot의 windows 터미널/기존 튜닝은 전혀 안
+        건드림.
+
+        실패(PIL/PyMuPDF 없음, PIP가 애초에 이 후처리 대상이 아님 등)하면
+        조용히 None을 반환 - 호출자가 안전한 기본값(완전 불투명 등)으로
+        대체하도록 한다."""
+        try:
+            import pymupdf as fitz
+            from PIL import Image
+        except ImportError:
+            return None
+
+        plot_dir = plot_dir_hint or os.getcwd()
+        tmp_pdf = os.path.join(plot_dir, f".cathplot_pip_static_{uuid.uuid4().hex}.pdf")
+        try:
+            self.create_script(plotdef, tmp_pdf, fmt="pdf", annotations=annotations, arrows=arrows, circles=circles, pip_for_overlay=True)
+            clip_info = getattr(self, "last_pip_clip_info", None)
+            if clip_info is None or not os.path.exists(tmp_pdf):
+                return None
+
+            _dpi = 300.0
+            _zoom = _dpi / 72.0
+            # 페이지 크기(픽셀)는 래스터화 없이 메타데이터만으로 저비용 계산.
+            doc = fitz.open(tmp_pdf)
+            page = doc[0]
+            page_w = int(round(page.rect.width * _zoom))
+            page_h = int(round(page.rect.height * _zoom))
+
+            ox, oy = clip_info["origin_x"], clip_info["origin_y"]
+            sw, sh = clip_info["size_w"], clip_info["size_h"]
+            px0 = int(round(ox * page_w))
+            px1 = int(round((ox + sw) * page_w))
+            py0 = int(round((1.0 - (oy + sh)) * page_h))
+            py1 = int(round((1.0 - oy) * page_h))
+            if px1 - px0 <= 0 or py1 - py0 <= 0:
+                doc.close()
+                return None
+
+            # [수정 - 성능] "PIP plot이 너무 늦게 그려짐" - create_script가
+            # 방금 이 tmp_pdf를 만들면서(원/타원이면) 내부적으로 _apply_pip_
+            # clip을 이미 실행해 완성된 조각을 last_pip_composite_patch에
+            # 남겨뒀다 - 크기(px1-px0, py1-py0)가 지금 계산과 정확히 일치하면
+            # (같은 _dpi=300을 쓰므로 보통 일치함) 그걸 그대로 재사용해서,
+            # 페이지 전체를 또 한 번 300dpi로 래스터화하는 걸 생략한다(이
+            # 함수 하나만으로도 gnuplot 재실행 1회 + 전체 페이지 300dpi
+            # 래스터화 2회가 이미 드는데, 그 위에 세 번째 래스터화까지
+            # 얹었던 게 느려진 핵심 원인이었음).
+            _cached = getattr(self, "last_pip_composite_patch", None)
+            if _cached is not None and _cached.size == (px1 - px0, py1 - py0):
+                patch = _cached
+            else:
+                pix = page.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
+                page_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                patch = page_img.crop((px0, py0, px1, py1))
+            patch = self._chroma_mask_patch(patch, clip_info)
+            doc.close()
+
+            return {
+                "patch": patch, "page_w": page_w, "page_h": page_h,
+                "origin_x": ox, "origin_y": oy, "size_w": sw, "size_h": sh,
+                "clip_shape": clip_info.get("clip_shape"),
+            }
+        except Exception:
+            return None
+        finally:
+            try:
+                os.remove(tmp_pdf)
+            except OSError:
+                pass
+
+    def _apply_pip_clip(self, plotdef, pdf_path, fmt, clip_info, skip_beneath_if_opaque=False):
         """[수정 구현] "원/타원 PIP를 흰색으로 덮는 게 아니라 실제로
         클리핑" + "배경 불투명도 슬라이더(0~100%)" - gnuplot 자신은 사각형이
         아닌 모양으로 잘라내는 기능도, 배경만 원하는 비율로 반투명하게 섞는
@@ -3560,6 +3786,9 @@ class GnuplotGenerator:
         실패해도(PyMuPDF 없음, 렌더링 실패 등) 조용히 원본(사각형/불투명)
         PDF를 그대로 둔다 - 이 후처리는 "있으면 좋은" 장식이지 핵심
         기능이 아님."""
+        # 이번 호출에서 못 만들면(예외/조기 return) 이전 호출의 결과를
+        # 엉뚱하게 재사용하지 않도록 먼저 비워둔다.
+        self.last_pip_composite_patch = None
         try:
             import pymupdf as fitz
             from PIL import Image, ImageDraw, ImageChops
@@ -3574,16 +3803,31 @@ class GnuplotGenerator:
         )
         doc_full, doc_main, new_doc = None, None, None
         try:
-            _main_only_plotdef = copy.copy(plotdef)
-            _main_only_plotdef.pip = {}
-            self.create_script(_main_only_plotdef, _main_only_pdf, fmt="pdf")
-            if not os.path.exists(_main_only_pdf):
-                return
+            # [수정 - 성능] "반투명 없이 투명/불투명만 쓰면 더 빨라지는지?" -
+            # opacity가 정확히 100%(완전 불투명)면 배경은 항상 순백색이 되어
+            # (아래 4번 단계의 Image.blend(beneath, white, 1.0) == white,
+            # beneath 값과 무관), beneath(=메인만 다시 그린 결과)가 배경
+            # 계산에는 전혀 안 쓰인다. skip_beneath_if_opaque=True(화면
+            # 오버레이 전용 - build_pip_static_overlay_patch가 넘김. 실제
+            # SAVE/PRINT 파일에서는 박스 바깥 내용이 진짜로 필요하므로 이
+            # 플래그를 안 씀)일 때는 이 경우 gnuplot 재실행 자체를 생략한다 -
+            # dat 파일이 커서 gnuplot 실행 자체가 오래 걸리는 경우에 가장 크게
+            # 도움이 됨.
+            _opacity_val = float(clip_info.get("opacity", 100.0) or 100.0)
+            _skip_beneath = bool(skip_beneath_if_opaque) and _opacity_val >= 100.0 - 1e-6
 
             doc_full = fitz.open(pdf_path)
-            doc_main = fitz.open(_main_only_pdf)
-            page_full, page_main = doc_full[0], doc_main[0]
-            pw, ph = page_main.rect.width, page_main.rect.height
+            page_full = doc_full[0]
+            pw, ph = page_full.rect.width, page_full.rect.height
+
+            if not _skip_beneath:
+                _main_only_plotdef = copy.copy(plotdef)
+                _main_only_plotdef.pip = {}
+                self.create_script(_main_only_plotdef, _main_only_pdf, fmt="pdf")
+                if not os.path.exists(_main_only_pdf):
+                    return
+                doc_main = fitz.open(_main_only_pdf)
+                page_main = doc_main[0]
 
             # gnuplot의 origin/size는 캔버스 전체 기준 screen fraction(0~1),
             # x는 왼쪽=0/오른쪽=100%, y는 아래=0/위=100%(gnuplot 관례) -
@@ -3603,9 +3847,14 @@ class GnuplotGenerator:
             _dpi = 300.0
             _zoom = _dpi / 72.0
             pix_full = page_full.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
-            pix_main = page_main.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
             img_full = Image.frombytes("RGB", (pix_full.width, pix_full.height), pix_full.samples)
-            img_main = Image.frombytes("RGB", (pix_main.width, pix_main.height), pix_main.samples)
+            if not _skip_beneath:
+                pix_main = page_main.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
+                img_main = Image.frombytes("RGB", (pix_main.width, pix_main.height), pix_main.samples)
+            else:
+                # opacity=100%라 beneath 값 자체가 배경 계산에 안 쓰이므로
+                # (위 설명 참고), 크기만 맞는 빈 백지로 대신한다.
+                img_main = Image.new("RGB", img_full.size, (255, 255, 255))
 
             px0, py0 = int(round(x0 * _zoom)), int(round(y0 * _zoom))
             px1, py1 = px0 + int(round((x1 - x0) * _zoom)), py0 + int(round((y1 - y0) * _zoom))
@@ -3617,7 +3866,19 @@ class GnuplotGenerator:
 
             # 3) 흰색과의 차이로 "잉크가 있는 자리"만 골라내는 알파 마스크.
             _white = Image.new("RGB", patch.size, (255, 255, 255))
-            _ink_mask = ImageChops.difference(patch, _white).convert("L")
+            # [수정 - 버그] "Circle 내 in-plot이 너무 희미하게 나타남(rect
+            # 대비)" - rect는 gnuplot 네이티브라 손실이 없지만, 원/타원은
+            # 이 diff-마스크 방식이라 원천적으로 손실이 있다. 기존엔 RGB
+            # 3채널 평균(휘도 가중)을 썼는데, 이러면 색상 하나만 강한 파랑/
+            # 초록 계열의 얇은 점선은 평균이 낮게 나와 더 흐리게 나온다.
+            # 채널 중 "가장 크게 다른 값"을 쓰고(단색 잉크는 보통 1~2채널만
+            # 크게 바뀜), 거기에 제곱근 감마 곡선을 적용해 약한 신호일수록
+            # 훨씬 더 크게 끌어올린다(진하고 굵은 선은 이미 차이가 커서
+            # 영향이 적음 - 과증폭 안 됨).
+            _diff = ImageChops.difference(patch, _white)
+            _dr, _dg, _db = _diff.split()
+            _ink_mask = ImageChops.lighter(ImageChops.lighter(_dr, _dg), _db)
+            _ink_mask = _ink_mask.point(lambda v: min(255, int(255.0 * ((v / 255.0) ** 0.45))))
 
             # 4) 배경(메인 plot)과 순백색을 opacity(%) 비율로 섞은 뒤, 그
             # 위에 잉크만 그대로(항상 100%) 얹는다 - 잉크는 배경 불투명도와
@@ -3687,11 +3948,23 @@ class GnuplotGenerator:
 
             # 7) 이 합성 래스터를 새 PDF 페이지 한 장에 통째로 얹어 pdf_path를
             # 덮어씀.
+            # [수정 - 성능] "PIP plot이 너무 늦게 그려짐" - build_pip_static_
+            # overlay_patch/_build_pip_blended_frames가 이 함수 호출 직후
+            # (create_script 안에서 이미 이 함수가 다 끝난 뒤) 화면 오버레이용
+            # patch를 만들려고 방금 이 함수가 쓴 pdf_path를 다시 열어 페이지
+            # 전체를 300dpi로 세 번째 래스터화하고 있었음(이 함수 안에서 이미
+            # 2번 했는데 또) - 여기서 만든 최종 조각(경계선까지 포함해서
+            # img_main에서 박스 부분만 자른 것)을 캐시해두면 그 세 번째
+            # 래스터화를 완전히 생략할 수 있다. 같은 _dpi(300)를 쓰므로
+            # 픽셀 단위로 그대로 재사용 가능.
+            self.last_pip_composite_patch = img_main.crop((px0, py0, px1, py1)).copy()
+
             img_main.save(_composite_png, format="PNG")
             doc_full.close()
             doc_full = None
-            doc_main.close()
-            doc_main = None
+            if doc_main is not None:
+                doc_main.close()
+                doc_main = None
             new_doc = fitz.open()
             new_page = new_doc.new_page(width=pw, height=ph)
             new_page.insert_image(fitz.Rect(0, 0, pw, ph), filename=_composite_png)
@@ -4129,7 +4402,7 @@ class GnuplotGenerator:
                 f"늘리거나 title/label을 줄여 보세요."
             )
 
-    def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None, circles=None):
+    def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None, circles=None, pip_for_overlay=False):
         # [수정] "PNG/JPG를 PDF 기준으로" - gnuplot의 pngcairo/jpeg 터미널을
         # 각각 따로 부르는 대신, 이미 검증된 pdfcairo 결과를 PyMuPDF로
         # 래스터화해서 만든다(포맷 간 legend/폰트 크기 불일치의 근본 원인이던
@@ -4222,7 +4495,59 @@ class GnuplotGenerator:
 
         _pip_clip_info = None
         if _pip_on:
-            _pip_clip_info = self._render_pip_inset(plotdef, lines, _main_cmd_list, fmt)
+            # [수정 - 버그(사용자 보고)] "PIP 원/타원(또는 사각형)+부분 반투명
+            # (1~99%)이 EMF/EPS에서 깨짐" - 이 조합은 PDF 후처리(_apply_pip_clip)
+            # 로만 제대로 그려지는데, EMF/EPS는 PDF를 거치지 않는 별도
+            # 드라이버라(PNG/JPG/SVG는 내부적으로 PDF를 거쳐서 자동으로
+            # 적용됨) 후처리 자체가 아예 안 걸리고, 그 결과 클리핑도 반투명도
+            # 없는 깨진 모습(사각형 테두리 없음, 잉크가 안 잘리고, 범례
+            # 자리에 이상한 조각까지 남음 - 실제 렌더로 확인)이 그대로
+            # 남았음. Multi-Plot/Animation이 이미 "지원 안 되면 사각형+
+            # 완전불투명으로 안전하게 대체 + 경고"로 처리하는 것과 동일하게,
+            # EMF/EPS(및 만약을 위한 안전망으로 interactive도 포함 - 화면
+            # PLOT은 cathplot_gui가 별도 오버레이 창으로 먼저 처리하므로
+            # 보통 여기 도달하지 않음)도 똑같이 대체한다.
+            # [수정 - 요청, 재수정] "원 PIP가 rect처럼 메인 창에 같이 붙어서
+            # 나오고 진하기도 같아야 하는데, 화면 오버레이 방식은 항상
+            # 별도 창으로 맨 위에 따로 뜨고 화질도 못 미침" - 반투명을
+            # 없애고 투명/불투명 라디오버튼 두 개만 남긴 지금은, 화면
+            # (interactive)에서 굳이 오버레이를 쓸 이유가 없다(오버레이는
+            # 원래 "진짜 반투명"을 실시간으로 배경과 섞을 방법이 없어서
+            # 만든 것 - 이제 그 경우 자체가 UI에서 선택 불가능함).
+            # force_postprocess는 SAVE/PRINT/Batch 같은 실제 파일 출력에서만
+            # 강제한다(파일은 한 번 만들면 고정이라 완벽한 클리핑이 더
+            # 중요하고, 별도 창 문제도 없음) - 화면(interactive)은 다시
+            # rect와 동일하게 네이티브 경로를 타서 메인 창에 직접, 같은
+            # 진하기로 그려지게 한다(title/tic이 원 밖으로 아주 드물게
+            # 살짝 삐져나올 수 있는 것은 이 사용성 이득에 비해 감수함).
+            _pip_probe_lines = list(lines)
+            _pip_clip_info = self._render_pip_inset(plotdef, _pip_probe_lines, _main_cmd_list, fmt, force_postprocess=(fmt.lower() != "interactive"))
+            if _pip_clip_info is not None and fmt.lower() in ("emf", "eps", "interactive"):
+                # [수정 - 요청] "반투명이 EMF에 불가능하면 50%를 기준으로
+                # 투명/불투명으로 구분" - 항상 완전불투명으로 대체하면, 사용자가
+                # 낮은 opacity(주로 메인 plot이 비쳐 보이길 원함)를 준 경우
+                # 의도와 반대로 배경이 완전히 가려짐 - 원래 요청한 opacity 값을
+                # 그대로 보고 50% 미만이면 완전투명(0), 50% 이상이면 완전
+                # 불투명(100)으로 더 가까운 쪽으로 반올림한다.
+                _orig_opacity_raw = str((plotdef.pip or {}).get("opacity", "")).strip()
+                try:
+                    _orig_opacity = float(_orig_opacity_raw) if _orig_opacity_raw else (
+                        100.0 if (plotdef.pip or {}).get("opaque", True) else 0.0
+                    )
+                except (TypeError, ValueError):
+                    _orig_opacity = 100.0
+                _fallback_opacity = 100.0 if _orig_opacity >= 50.0 else 0.0
+                _fallback_plotdef = copy.copy(plotdef)
+                _fallback_plotdef.pip = dict(plotdef.pip, clip_shape="rect", opacity=_fallback_opacity)
+                _pip_probe_lines = list(lines)
+                _pip_clip_info = self._render_pip_inset(_fallback_plotdef, _pip_probe_lines, _main_cmd_list, fmt)
+                _pip_name = (plotdef.title or "plot").strip() or "plot"
+                _fallback_desc = "완전불투명" if _fallback_opacity >= 50.0 else "완전투명"
+                self.warnings.append(
+                    f"'{_pip_name}'의 PIP 원/타원(또는 부분 반투명)은 {fmt.upper()} 형식에서는 "
+                    f"지원되지 않아 사각형+{_fallback_desc}(원래 opacity {_orig_opacity:.0f}% 기준)으로 대체했습니다."
+                )
+            lines[:] = _pip_probe_lines
             lines.append("unset multiplot")
 
         # [추가] "원래(처음) plot으로 되돌리는 기능 - 2D/3D 모두" - 2D도 마우스
@@ -4303,7 +4628,14 @@ class GnuplotGenerator:
             # 분기를 그대로 타는 다른 포맷은 fmt가 "pdf"가 아니라 조용히
             # 건너뜀).
             if fmt.lower() == "pdf" and _pip_clip_info:
-                self._apply_pip_clip(plotdef, outfile, fmt, _pip_clip_info)
+                self._apply_pip_clip(plotdef, outfile, fmt, _pip_clip_info, skip_beneath_if_opaque=pip_for_overlay)
+            # [추가 - 요청] "정적(비-Animation) 화면 PLOT에서도 PIP 원/타원+
+            # 부분 반투명이 제대로 보이게" - cathplot_gui가 이 값을 읽어서
+            # (fmt="pdf"로 한 번 그려 이미 위에서 _apply_pip_clip까지 적용된
+            # 상태) 그 PDF에서 PIP 박스 부분만 잘라내 화면(Interactive) 위에
+            # 겹치는 오버레이 창을 만드는 데 쓴다(Animation의 라이브 오버레이와
+            # 같은 방식, 단 프레임이 하나뿐인 정적 버전).
+            self.last_pip_clip_info = _pip_clip_info if fmt.lower() == "pdf" else None
 
             _want_texts = []
             for _raw in (plotdef.title, plotdef.xlabel, plotdef.ylabel, plotdef.y2label):
@@ -4410,6 +4742,15 @@ class GnuplotGenerator:
         # _render_pip_inset 참고). 애니메이션 재생 중에는 이 curve의 스플라인
         # 보간을 건너뛰고 평범한 선(원본 데이터 그대로)으로 대체한다 - 정적인
         # 화면(Interactive, non-animated)은 영향 없음.
+        if any(" smooth csplines" in ln for ln in static_curve_lines):
+            _spline_titles = [c.title for c in getattr(plotdef, "curves", []) if getattr(c, "smooth_csplines", False)]
+            _anim_name = (plotdef.title or "plot").strip() or "plot"
+            self.warnings.append(
+                f"'{_anim_name}' Animation 재생 중에는 Cubic Spline이 gnuplot 제약(NaN 데이터와 "
+                f"함께 계산 불가)으로 적용되지 않고 원본 데이터의 직선으로 표시됩니다"
+                f"{' (' + ', '.join(_spline_titles) + ')' if _spline_titles else ''} "
+                f"- 정적인 화면(Interactive, non-animated)에는 영향 없습니다."
+            )
         static_curve_lines = [ln.replace(" smooth csplines", "") for ln in static_curve_lines]
         animated_curve_lines = [
             _wrap_threshold_func(re.sub(r"using \(([^)]+)\):(\d+)", _wrap_threshold, ln))
@@ -4482,10 +4823,39 @@ class GnuplotGenerator:
                 def _wrap_ellipse_thresh(m):
                     _xexpr, _yexpr = m.group(1), m.group(2)
                     return f"(_pip_ellip_ok(({_xexpr}),({_yexpr})) && (({_xexpr})<=thresh))"
+                # [수정 - 버그(사용자 보고), 완결성 검토로 추가 확인] Marker(점)
+                # 명령도 이제 _render_pip_inset에서 타원 클리핑용 _pip_ellip_ok
+                # 로 감싸지는데(위 marker 클리핑 버그 수정 참고), 이 줄이 그대로
+                # thresh 조건까지 같이 걸리면 "마커는 애니메이션 진행과 무관하게
+                # 항상 표시"(메인 plot의 기존 정책 - _wrap_threshold 주석 참고)
+                # 와 어긋나게 됨 - 마커 plot 명령($MarkerN으로 시작)만 이 thresh
+                # 결합에서 제외해서 공간(타원) 클리핑은 유지하되 시간(진행)
+                # 게이팅은 메인 plot과 동일하게 안 걸리게 한다.
                 _pip_inset_lines = [
-                    re.sub(r"_pip_ellip_ok\(\(([^)]+)\),\(([^)]+)\)\)", _wrap_ellipse_thresh, ln)
+                    ln if ln.strip().startswith("$Marker")
+                    else re.sub(r"_pip_ellip_ok\(\(([^)]+)\),\(([^)]+)\)\)", _wrap_ellipse_thresh, ln)
                     for ln in _pip_inset_lines
                 ]
+                # [수정 - 버그] "PIP(rect)+Animation에서 'Can't calculate
+                # splines, need at least 3 points'로 gnuplot이 죽음" -
+                # _render_pip_inset의 Cubic Spline 제거는 원/타원 클리핑용
+                # NaN(_pip_ellip_ok)에만 대응하고 rect는 애초에 그 NaN이
+                # 없어서 손대지 않았는데, 바로 위에서 건 진행률(thresh) NaN은
+                # 도형과 무관하게 모든 인셋 curve에 걸린다 - Animation 초반
+                # (진행된 지점이 아직 3개 미만일 때) rect PIP + Cubic Spline
+                # 조합에서 정확히 이 조합으로 죽는 것을 확인함. 도형 무관하게
+                # 여기서 한 번 더(원/타원은 이미 지워져 있어 안전하게 no-op)
+                # 정리한다.
+                if any(" smooth csplines" in ln for ln in _pip_inset_lines):
+                    _spline_titles = [c.title for c in getattr(plotdef, "curves", []) if getattr(c, "smooth_csplines", False)]
+                    _pip_anim_name = (plotdef.title or "plot").strip() or "plot"
+                    self.warnings.append(
+                        f"'{_pip_anim_name}'의 PIP 인셋 안에서는 Animation 재생 중 Cubic Spline이 "
+                        f"gnuplot 제약(진행률 NaN과 함께 계산 불가)으로 적용되지 않고 원본 데이터의 직선으로 "
+                        f"표시됩니다{' (' + ', '.join(_spline_titles) + ')' if _spline_titles else ''} "
+                        f"- 정적인 화면(Interactive, non-animated)에는 영향 없습니다."
+                    )
+                    _pip_inset_lines = [ln.replace(" smooth csplines", "") for ln in _pip_inset_lines]
                 # [수정 - 버그 발견] "두 번째 프레임부터 메인 plot이 인셋의
                 # 좁은 마진/확대구간 안에 그려짐" - gnuplot의 lmargin/rmargin/
                 # tmargin/bmargin(at screen)과 xrange/yrange는 origin/size와
@@ -4504,6 +4874,22 @@ class GnuplotGenerator:
                                        "set tmargin at screen", "set bmargin at screen",
                                        "set xrange", "set yrange", "set y2range"))
                 ]
+                # [수정 - 버그(사용자 보고)] "PIP+Animation에서 메인 legend
+                # box가 첫 프레임엔 보이다가 그 다음부터 없어짐" - 위와 완전히
+                # 같은 근본 원인: 메인 legend(_render_legend_box가 만드는
+                # "set object 8xxx"(박스)/"set label 8xxx"(글자)/"set arrow
+                # 8xxx"(색 샘플 선) - Legend1, "...9xxx" 계열 - Legend2)도
+                # margin/xrange처럼 "plot \\" 이전에 딱 한 번만 선언되는데,
+                # _render_pip_inset이 인셋을 그릴 때마다 맨 앞에서 블랭킷
+                # "unset label"/"unset object"/"unset arrow"로 지워버리고
+                # (정적 1회 렌더에서는 이미 메인 plot이 다 그려진 뒤라 무해
+                # 하지만, 애니메이션은 이 삭제가 매 프레임 반복됨) 다시
+                # 선언하지 않아 두
+                # 번째 프레임부터 메인 legend가 통째로 사라졌음 - margin/
+                # xrange와 동일하게 인셋 블록 끝에 다시 찍어 다음 프레임에
+                # 복구되게 한다.
+                _legend_id_re = re.compile(r"^set (?:object|label|arrow) (?:8\d{3}|9\d{3})\b")
+                _main_state_lines += [ln for ln in lines[:plot_idx] if _legend_id_re.match(ln)]
                 _pip_inset_lines += _main_state_lines
 
         lines.append("xmin_anim = GPVAL_X_MIN")
@@ -4709,6 +5095,29 @@ class GnuplotGenerator:
             _emit_frame(f'sprintf("Progress 100%%  {_help_text}")')
             lines.append("pause mouse close")
 
+        # [수정 - 버그, 근본적] "PIP(rect)+Cubic Spline+Animation에서
+        # 'Can't calculate splines, need at least 3 points'로 gnuplot이
+        # 계속 죽음" - 위에서 static_curve_lines/_pip_inset_lines 각각에
+        # smooth csplines 제거를 시도했는데도 재현된다는 보고를 받아서,
+        # 특정 코드 경로를 더 쫓기보다 "파일로 쓰기 직전" 시점에 확실한
+        # 안전망을 하나 더 둔다 - 지금까지 조립된 lines 전체를 훑어서,
+        # thresh(진행률 NaN 변수)를 실제로 참조하는 줄인데도 smooth
+        # csplines가 아직 남아있으면 무조건 지운다(정적/비-Animation
+        # 경로인 create_script는 이 함수를 안 타므로 영향 없음). 어느
+        # 조립 경로에서 놓쳤든 최종적으로 여기서 걸러지므로, "왜 이전
+        # 수정이 이 경우엔 안 먹혔는지"와 무관하게 크래시 자체는 막는다.
+        _final_spline_hits = [i for i, ln in enumerate(lines) if "thresh" in ln and " smooth csplines" in ln]
+        if _final_spline_hits:
+            _final_name = (plotdef.title or "plot").strip() or "plot"
+            if not any("Animation 재생 중" in w and "Cubic Spline" in w for w in self.warnings):
+                self.warnings.append(
+                    f"'{_final_name}' Animation 재생 중 일부 curve의 Cubic Spline이 gnuplot 제약(진행률/클리핑 "
+                    f"NaN과 함께 계산 불가)으로 적용되지 않고 원본 데이터의 직선으로 표시됩니다 - "
+                    f"정적인 화면(Interactive, non-animated)에는 영향 없습니다."
+                )
+            for _i in _final_spline_hits:
+                lines[_i] = lines[_i].replace(" smooth csplines", "")
+
         script_text = "\n".join(lines)
         gnuplot_exe = _resolve_gnuplot_exe()
 
@@ -4886,10 +5295,24 @@ class GnuplotGenerator:
                 patch = full_frame.crop((px0, py0, px1, py1))     # 흰 배경(또는 클리핑된 모양) 위 잉크
                 beneath = main_frame.crop((px0, py0, px1, py1))   # 이 자리의 "메인 plot만"
 
-                _ink_mask = ImageChops.difference(patch, _white).convert("L")
+                _diff = ImageChops.difference(patch, _white)
+                _dr, _dg, _db = _diff.split()
+                _ink_mask = ImageChops.lighter(ImageChops.lighter(_dr, _dg), _db)
+                # [수정 - 버그] 정적 PIP와 동일한 이유(위 _apply_pip_clip 주석
+                # 참고) - 얇은/점선이 흐릿하게 보이던 문제 보정.
+                _ink_mask = _ink_mask.point(lambda v: min(255, int(255.0 * ((v / 255.0) ** 0.45))))
                 _bg_blend = Image.blend(beneath, _white, _alpha_frac)
                 _composite = _bg_blend.copy()
                 _composite.paste(patch, (0, 0), mask=_ink_mask)
+                # [추가 - 요청] "반투명 + 화면 실시간 재생일 때 in-plot이
+                # 화면에 고정되고, 고정된 내용이 사각형 모양으로 보임" - 화면
+                # 오버레이 창은 이제 진짜 OS 투명(-transparentcolor)을 쓰므로,
+                # 원/타원 바깥을 크로마키 색으로 덮어씌운다(정적 PLOT과 동일한
+                # _chroma_mask_patch 재사용). GIF 파일로 저장할 때(build_full_
+                # frames=True)는 파일에 크로마키 색이 그대로 찍히면 안 되므로
+                # 이 마스킹을 건너뛴다.
+                if not build_full_frames:
+                    _composite = self._chroma_mask_patch(_composite, _clip_info)
 
                 patches.append(_composite)
                 durations.append(full_im.info.get("duration", 20))
@@ -4904,6 +5327,7 @@ class GnuplotGenerator:
                 "patches": patches, "durations": durations,
                 "origin_x": origin_x, "origin_y": origin_y, "size_w": size_w, "size_h": size_h,
                 "page_w": page_w, "page_h": page_h, "full_frames": full_frames,
+                "clip_shape": _clip_info.get("clip_shape"),
             }
         finally:
             for _tmp in (_tmp_full_gif, _tmp_main_gif):
