@@ -1483,6 +1483,22 @@ class GnuplotGenerator:
         # (샘플선<->title 간격)이 여기 폭 계산에 빠져 있어서, 그 간격을 늘릴수록
         # title이 안쪽으로 밀리기만 하고 box는 안 넓어져 오히려 더 잘려 보였음.
         box_w = SAMPLE_W + char_width_frac * (max_label_len + _box_w_extra_chars) + BOX_EDGE_GAP_FRAC + LABEL_GAP_FRAC
+        # [수정 - 사용자 보고 버그] 화면(Interactive)에서 "pressure"/"flowrate"
+        # 처럼 중간 길이(7~9자) curve title이 legend box 왼쪽 테두리에 걸려
+        # 반토막으로 잘려 보이는 문제를 실제 렌더링 픽셀 대조로 확인함(글자
+        # 중간을 box 테두리가 그대로 가로지름) - 원인은 화면 전용
+        # _box_w_extra_chars가 SAMPLE_W만큼 빠져 음수로 크게 내려간 상태에서,
+        # 위 _MIN_LABEL_CHARS_IN_BOX 하한의 완만한 기울기가 이 라벨 길이대
+        # (짧은 라벨보다 길지만 하한이 촘촘히 못 따라가는 중간 길이)까지는
+        # 못 미쳐 실제 라벨 폭보다 box_w가 좁게 계산됐던 것. char_width_frac*
+        # max_label_len(실측 폰트로 정확히 잰 라벨 폭, 위 참고)에 SAMPLE_W/
+        # BOX_EDGE_GAP_FRAC/LABEL_GAP_FRAC까지 더한 "여유 0"(_box_w_extra_
+        # chars=0) 기준값을 box_w의 절대 하한으로 걸어, 어떤 포맷/길이
+        # 조합에서도 라벨 실제 폭보다 box가 좁아지지 않게 한다(이미 이보다
+        # 넉넉한 경우엔 그대로 영향 없음).
+        _box_w_floor = SAMPLE_W + char_width_frac * max_label_len + BOX_EDGE_GAP_FRAC + LABEL_GAP_FRAC
+        if box_w < _box_w_floor:
+            box_w = _box_w_floor
         box_h = ROW_H * len(curves) + 2 * ROW_MARGIN
 
         # [추가] "자동 추정이 안 맞는 경우만 사용자 입력으로 직접 지정" -
@@ -3500,6 +3516,22 @@ class GnuplotGenerator:
                 _ellipse_native_ok = True
         _ellipse_fully_opaque = _ellipse_native_ok and _opacity >= 100.0 - 1e-6
         _ellipse_no_bg = _ellipse_native_ok and _opacity <= 0.0 + 1e-6
+        # [수정 - 사용자 보고 버그] "화면(Interactive)에서 원/타원 PIP인데
+        # 원 밖으로 사각형 부분이 잘리지 않고 그대로 보임" - 이 네이티브
+        # 경로(_ellipse_native_ok)는 커브 데이터만 NaN으로 잘라내고 배경/
+        # 테두리는 object ellipse로 "장식"만 추가할 뿐, 정작 메인 plot이
+        # 이미 켜둔 "set border"(축 자체의 네모 테두리+눈금선 연결선)는
+        # 그대로 상속돼 인셋의 작은 축 상자가 평범한 직사각형으로 그려짐 -
+        # gnuplot에 "테두리를 도형으로 자르는" 기능이 없어 이 네모 상자가
+        # 원/타원 밖으로 그대로 삐져나와 보였음(정적 PLOT/SAVE/PRINT는
+        # force_postprocess의 PDF 픽셀 마스킹이 이 테두리까지 통째로
+        # 지워줘서 문제가 없었음 - 화면 네이티브 경로만 이 마스킹이 없어
+        # 겪는 문제). 원/타원 네이티브 경로일 때만 인셋 plot 직전에 테두리를
+        # 꺼서(unset border) 네모 상자 자체가 아예 그려지지 않게 하고(짧은
+        # tic 표시만 남음 - title/tic 숫자 등 텍스트가 원 밖으로 나가는
+        # 문제는 이 네이티브 경로의 기존 문서화된 한계로 남음), 인셋이
+        # 끝나면 이후 코드에 영향 없도록 원래 border 설정을 복구한다.
+        _main_border_line = next((_l for _l in reversed(lines) if _l.startswith("set border")), "set border lw 1.5")
 
         if _rect_fully_opaque:
             # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - id 7100은
@@ -3667,12 +3699,22 @@ class GnuplotGenerator:
                 )
             _inset_cmd_list = [re.sub(r"using (\d+):(\d+)\b", _wrap_ellipse_marker, c) for c in _inset_cmd_list]
 
+        if _ellipse_native_ok:
+            # 위 주석 참고 - 인셋의 네모 축 테두리 자체를 꺼서 원/타원 밖으로
+            # 삐져나오지 않게 한다.
+            lines.append("unset border")
+
         lines.append("plot \\")
         for i, cmd in enumerate(_inset_cmd_list):
             if i != len(_inset_cmd_list) - 1:
                 cmd += ", \\"
             lines.append(cmd)
         lines.append("")
+
+        if _ellipse_native_ok:
+            # 메인 plot(또는 이후 다른 패널)에 영향 없도록 border를 원래
+            # 설정으로 복구.
+            lines.append(_main_border_line)
 
         # 이 뒤에 또 다른 코드가 있어도 영향 안 받도록 원위치로 복구
         lines.append("set origin 0,0")
