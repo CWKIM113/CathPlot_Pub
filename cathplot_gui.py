@@ -44,7 +44,7 @@ from pathlib import Path
 # win32gui는 실제로는 주석 처리된 죽은 코드에서만 참조돼 아예 삭제).
 
 from data_parser import CathenaDatParser, save_json
-from gnu_generator import PlotDefinition, CurveDefinition, FunctionCurveDefinition, GnuplotGenerator
+from gnu_generator import PlotDefinition, CurveDefinition, FunctionCurveDefinition, GnuplotGenerator, PIP_OVERLAY_CHROMA_KEY
 
 # [추가] Batch Set/Queue - 항목마다 독립적인 gnuplot 프로세스를 순차로 하나씩
 # 기다리던 것을 병렬로 처리해 속도를 높인다. "무제한 동시 실행"은 gnuplot
@@ -82,12 +82,21 @@ STYLE_MAP = {
 
 # Marker(점 마커) 모양 - 표시 라벨 -> (속 빈 pointtype, 채운 pointtype)
 # Cross/Star는 gnuplot에 채운/빈 구분이 따로 없어 동일값 사용
+# [추가 - 요청] "마커에 좌,우 방향 세모 추가" - gnuplot 내장 숫자
+# pointtype에는 좌/우 삼각형이 없어서(위/아래만 8·9/10·11로 있음),
+# gnuplot 5+ pngcairo/qt/wxt가 지원하는 "유니코드 문자를 pointtype으로
+# 직접 쓰는" 기능으로 구현함(실제 렌더링으로 좌우 방향과 속 빈/채움
+# 둘 다 정상 표시되는 것 확인). 숫자가 아니라 문자열이므로, 이 값을
+# 쓰는 쪽(gnu_generator의 pointtype 출력부)이 정수/문자열 둘 다
+# 처리하도록 맞춰야 함.
 MARKER_SHAPE_MAP = {
     "None": (None, None),
     "Circle": (6, 7),
     "Square": (4, 5),
     "Triangle": (8, 9),
     "Tri-Down": (10, 11),
+    "Tri-Left": ("◁", "◀"),
+    "Tri-Right": ("▷", "▶"),
     "Diamond": (12, 13),
     "Cross": (1, 1),
     "Star": (3, 3),
@@ -154,6 +163,21 @@ class CathPlotGUI:
         # 동시에 건드릴 수 있어 그 자체를 보호하는 작은 guard lock을 둔다.
         self._resort_locks = {}
         self._resort_locks_guard = threading.Lock()
+
+        # [추가 - 요청] "X 버튼으로 닫을 때 Batch Set/Queue가 백그라운드로 실행
+        # 중이면 이름을 보여주고 정말 종료할지 확인" - 실행 중인 배치 작업을
+        # {job_id: 표시용 이름} 형태로 추적한다. _register_batch_job/
+        # _unregister_batch_job이 시작/종료 시 채우고 비우며, on_closing에서
+        # 이 dict가 비어있지 않으면 경고 후 선택하게 한다.
+        self._active_batch_jobs = {}
+        self._batch_job_seq = 0
+        self._batch_job_lock = threading.Lock()
+
+        # [추가 - 요청] "sorted dat 삭제를 CathPlot이 마음대로 정하지 말고
+        # 사용자 옵션으로 둬라" - 기본값은 꺼짐(=안 지움, 재현성 우선).
+        # "Clean Past Plots" 버튼 옆 체크박스로 켜면 종료(X 버튼) 시
+        # plot_dir/temp_sorted를 지운다. on_closing에서 이 값을 확인한다.
+        self.delete_temp_on_close_var = tk.BooleanVar(value=False)
 
         self.selected_y1_vars = {}
         self.selected_y2_vars = {}
@@ -716,7 +740,7 @@ class CathPlotGUI:
         # (gnu_generator._render_pip_inset 참고). 기본값 pos_y도 기존
         # 95(위 모서리 기준)와 시각적으로 같은 자리가 되도록 60(=95-기존
         # size_h 기본값 35)으로 같이 조정.
-        self.pip_pos_x_var = tk.StringVar(value="60")     # 좌측 하단 모서리 X(%, 축 프레임 기준, 왼쪽=0)
+        self.pip_pos_x_var = tk.StringVar(value="10")     # 좌측 하단 모서리 X(%, 축 프레임 기준, 왼쪽=0)
         self.pip_pos_y_var = tk.StringVar(value="60")     # 좌측 하단 모서리 Y(%, 축 프레임 기준, 아래=0/위=100)
         self.pip_size_w_var = tk.StringVar(value="35")
         self.pip_size_h_var = tk.StringVar(value="35")
@@ -737,7 +761,12 @@ class CathPlotGUI:
         self.pip_xmax_var = tk.StringVar(value="")
         self.pip_ymin_var = tk.StringVar(value="")
         self.pip_ymax_var = tk.StringVar(value="")
-        self.pip_title_on_var = tk.BooleanVar(value=True)
+        # [추가 - 요청] "Ymin/Ymax 입력이 Y1에만 적용되고 Y2는 그대로(plot 전체
+        # 구간) 나타남 - Y1max/Y1min, Y2max/Y2min처럼 Y2도 따로 입력받게" -
+        # 기본값은 빈 문자열(=지정 안 함 = plot 자체 구간을 그대로 따름).
+        self.pip_y2min_var = tk.StringVar(value="")
+        self.pip_y2max_var = tk.StringVar(value="")
+        self.pip_title_on_var = tk.BooleanVar(value=False)
         # [추가 - 요청] "PIP PopUp에서 Plot Title과 Axis Title check box 분리"
         # - 기존엔 Plot Title(plotdef.title)만 껐다 켤 수 있었고, X/Y1/Y2축
         # 제목(axis label)은 항상 강제로 안 보이게 고정돼 있었음(_render_pip_
@@ -977,7 +1006,7 @@ class CathPlotGUI:
         marker_settings_btn.configure(command=self._open_marker_settings_popup)
 
         # [추가 - 요청] Function Curve(삼각함수/다항식/사용자정의 함수, Cubic
-        # Spline은 Var-list의 "Spl" 체크박스로 별도 처리) - Marker 버튼과
+        # Spline은 Var-list의 "SP" 체크박스로 별도 처리) - Marker 버튼과
         # 동일한 스타일/크기로 바로 왼쪽에 배치.
         function_curves_btn = tk.Button(
             row2_f, text="Function", width=7, font=("Malgun Gothic", 9, "bold"),
@@ -1283,6 +1312,13 @@ class CathPlotGUI:
                     self.open_multi_plot_dialog, side="left", padx=15, pady=2)
         self._mk_btn(self.button_frame, "Clean Past Plots", self.open_delete_dialog,
                      color="secondary", side="right", padx=5, pady=2)
+        # [추가 - 요청] "sorted dat 삭제 여부를 사용자가 고를 수 있게" -
+        # 체크하면 CathPlot을 X 버튼으로 닫을 때 plot_dir/temp_sorted를
+        # 지운다(기본은 안 지움 - .plt 재현성 우선). on_closing 참고.
+        ttk.Checkbutton(
+            self.button_frame, text="종료 시 sorted 캐시 삭제",
+            variable=self.delete_temp_on_close_var
+        ).pack(side="right", padx=(5, 10), pady=2)
 
         self.add_file_row()
 
@@ -1364,38 +1400,131 @@ class CathPlotGUI:
         return None
 
     def open_delete_dialog(self):
-        files = glob.glob(os.path.join(self.plot_dir, "*.plt"))
-        if not files:
+        _plt_files = glob.glob(os.path.join(self.plot_dir, "*.plt"))
+        # [수정 - 요청] "_ctrl_*.plt, _status_*.txt도 Animation용인데 일괄삭제에
+        # 같이 섞여 나오고, .txt는 아예 검색이 안 됨(패턴이 *.plt뿐이었음)" -
+        # status(.txt)도 같이 찾고, 파일명 패턴(_ctrl_/_status_)으로 Animation
+        # 내부 파일을 일반 결과물과 분리해서 보여준다. 그리고 그중에서도 지금
+        # 실행 중인 Animation이 쓰고 있는 파일(_active_anim_files, Animation
+        # Control 패널이 열려있는 동안 등록됨)은 실수로 지워서 재생이 깨지는
+        # 일이 없도록 아예 목록에서 뺀다(경고보다 안전한 방식).
+        _active = getattr(self, "_active_anim_files", set())
+        _regular_files, _anim_files, _excluded_active_count = [], [], 0
+        for f in _plt_files:
+            _base = os.path.basename(f)
+            if "_ctrl_" in _base:
+                if os.path.abspath(f) in _active:
+                    _excluded_active_count += 1
+                    continue
+                _anim_files.append(f)
+            else:
+                _regular_files.append(f)
+        for f in glob.glob(os.path.join(self.plot_dir, "*_status_*.txt")):
+            if os.path.abspath(f) in _active:
+                _excluded_active_count += 1
+                continue
+            _anim_files.append(f)
+
+        # [수정 - 요청] "Clean Past Plots가 sorted 캐시도 지우는지?" - 확인해보니
+        # 이 창(.plt 목록)과 temp_sorted 삭제(clean_past_plots 함수)가 서로
+        # 완전히 분리돼 있었고, 심지어 clean_past_plots는 어느 버튼에도 연결
+        # 안 된 죽은 코드였음. 여기 한 곳에서 같이 처리하도록 통합한다 -
+        # .plt가 하나도 없어도 temp_sorted만 남아있을 수 있으니, 그 경우도
+        # 창을 열어준다.
+        _temp_dir = os.path.join(self.plot_dir, "temp_sorted")
+        _temp_file_count = 0
+        if os.path.isdir(_temp_dir):
+            try:
+                _temp_file_count = sum(len(fs) for _, _, fs in os.walk(_temp_dir))
+            except Exception:
+                _temp_file_count = 0
+        if not _regular_files and not _anim_files and _temp_file_count == 0:
             messagebox.showinfo("Clean Info", "No past plot files found.")
             return
 
         del_win = tk.Toplevel(self.root)
         del_win.title("Delete Plot Files")
-        del_win.geometry("400x300")
+        del_win.geometry("440x520")
 
-        listbox = tk.Listbox(del_win, selectmode=tk.EXTENDED)
-        listbox.pack(fill="both", expand=True, padx=10, pady=10)
-        for f in files:
+        ttk.Label(del_win, text="결과 파일 (.plt)").pack(anchor="w", padx=10, pady=(10, 0))
+        listbox = tk.Listbox(del_win, selectmode=tk.EXTENDED, height=8)
+        listbox.pack(fill="both", expand=True, padx=10, pady=(2, 5))
+        for f in _regular_files:
             listbox.insert(tk.END, os.path.basename(f))
+
+        _anim_label = "Animation 내부 파일 (ctrl/status - 지워도 안전, 다음 Animation 실행 시 새로 만들어짐)"
+        if _excluded_active_count:
+            _anim_label += f"\n(지금 실행 중인 {_excluded_active_count}개는 목록에서 자동 제외됨)"
+        ttk.Label(del_win, text=_anim_label, wraplength=420, justify="left").pack(anchor="w", padx=10, pady=(5, 0))
+        anim_listbox = tk.Listbox(del_win, selectmode=tk.EXTENDED, height=5)
+        anim_listbox.pack(fill="both", expand=True, padx=10, pady=(2, 5))
+        for f in _anim_files:
+            anim_listbox.insert(tk.END, os.path.basename(f))
+
+        _clean_temp_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            del_win,
+            text="temp_sorted 캐시도 함께 비우기",
+            variable=_clean_temp_var,
+        ).pack(anchor="w", padx=10, pady=(0, 0))
+        ttk.Label(
+            del_win,
+            text=f"({_temp_file_count}개 파일 - 원본 dat 다시 불러오면 자동 재생성됨)",
+            wraplength=400, justify="left", foreground="#666666",
+        ).pack(anchor="w", padx=28, pady=(0, 5))
 
         def confirm_delete():
             selected_indices = listbox.curselection()
-            if not selected_indices: return
-            if messagebox.askyesno("Confirm", "Selected files will be deleted. Proceed?"):
-                failed = []
-                for i in selected_indices:
-                    filename = listbox.get(i)
-                    try:
-                        os.remove(os.path.join(self.plot_dir, filename))
-                    except Exception as e:
-                        failed.append(f"{filename}: {e}")
-                del_win.destroy()
-                self.update_plot_file_list()
-                if failed:
-                    messagebox.showerror(
-                        "Delete Error",
-                        "일부 파일을 삭제하지 못했습니다 (다른 프로그램에서 열려있을 수 있습니다):\n" + "\n".join(failed)
-                    )
+            anim_selected_indices = anim_listbox.curselection()
+            _total_selected = len(selected_indices) + len(anim_selected_indices)
+            _want_temp_clean = _clean_temp_var.get()
+            if _total_selected == 0 and not _want_temp_clean:
+                return
+            if _total_selected:
+                if not messagebox.askyesno("Confirm", f"선택한 {_total_selected}개 파일이 삭제됩니다. 계속할까요?"):
+                    return
+            if _want_temp_clean:
+                # [수정 - 요청] "sorted 폴더를 지울 때 확인이 필요해서" - .plt
+                # 파일 선택 삭제와는 별개로, temp_sorted는 영향 범위가 더 크고
+                # (Batch 재사용성·재현성과 직결) 되돌릴 수 없으므로 독립된
+                # 확인창을 하나 더 띄운다(파일 개수까지 알려줌).
+                if not messagebox.askyesno(
+                    "Confirm - temp_sorted 삭제",
+                    f"temp_sorted 폴더({_temp_file_count}개 파일)를 완전히 비웁니다.\n\n"
+                    "이 폴더를 참조하는 저장된 .plt 파일은 이후 다시 열어도 "
+                    "데이터를 찾지 못합니다(원본 dat를 다시 불러오면 자동 재생성은 됨).\n\n"
+                    "계속할까요?"
+                ):
+                    _want_temp_clean = False
+                    if not _total_selected:
+                        return
+            failed = []
+            for i in selected_indices:
+                filename = listbox.get(i)
+                try:
+                    os.remove(os.path.join(self.plot_dir, filename))
+                except Exception as e:
+                    failed.append(f"{filename}: {e}")
+            for i in anim_selected_indices:
+                filename = anim_listbox.get(i)
+                try:
+                    os.remove(os.path.join(self.plot_dir, filename))
+                except Exception as e:
+                    failed.append(f"{filename}: {e}")
+            if _want_temp_clean:
+                try:
+                    import shutil
+                    if os.path.isdir(_temp_dir):
+                        shutil.rmtree(_temp_dir)
+                except Exception as e:
+                    failed.append(f"temp_sorted: {e}")
+            del_win.destroy()
+            self.update_plot_file_list()
+            if failed:
+                messagebox.showerror(
+                    "Delete Error",
+                    "일부 파일을 삭제하지 못했습니다 (다른 프로그램에서 열려있을 수 있습니다):\n" + "\n".join(failed)
+                )
 
         ttk.Button(del_win, text="Delete Selected", command=confirm_delete).pack(pady=5)
 
@@ -1841,6 +1970,7 @@ class CathPlotGUI:
                 "clip_rx": self.pip_clip_rx_var.get(), "clip_ry": self.pip_clip_ry_var.get(),
                 "xmin": self.pip_xmin_var.get(), "xmax": self.pip_xmax_var.get(),
                 "ymin": self.pip_ymin_var.get(), "ymax": self.pip_ymax_var.get(),
+                "y2min": self.pip_y2min_var.get(), "y2max": self.pip_y2max_var.get(),
                 "title_on": self.pip_title_on_var.get(), "axis_title_on": self.pip_axis_title_on_var.get(),
                 "legend_on": self.pip_legend_on_var.get(),
                 "font_scale": self.pip_font_scale_var.get(), "opacity": self.pip_opacity_var.get(),
@@ -2072,6 +2202,8 @@ class CathPlotGUI:
             self.pip_xmax_var.set(_pip_data.get("xmax", self.pip_xmax_var.get()))
             self.pip_ymin_var.set(_pip_data.get("ymin", self.pip_ymin_var.get()))
             self.pip_ymax_var.set(_pip_data.get("ymax", self.pip_ymax_var.get()))
+            self.pip_y2min_var.set(_pip_data.get("y2min", self.pip_y2min_var.get()))
+            self.pip_y2max_var.set(_pip_data.get("y2max", self.pip_y2max_var.get()))
             self.pip_title_on_var.set(_pip_data.get("title_on", self.pip_title_on_var.get()))
             self.pip_axis_title_on_var.set(_pip_data.get("axis_title_on", self.pip_axis_title_on_var.get()))
             self.pip_legend_on_var.set(_pip_data.get("legend_on", self.pip_legend_on_var.get()))
@@ -2475,10 +2607,19 @@ class CathPlotGUI:
         확인(OK)을 누르면 tk 변수에 반영되고, PLOT/SAVE/PRINT 때 그 값을 읽어
         pip 활성화 여부와 무관하게 항상 반영한다(꺼져 있으면 _render_pip_inset이
         아무것도 안 그림)."""
+        # [수정 - 버그] "PIP 버튼을 누를 때마다 똑같은 창이 중복으로 계속 생김" -
+        # open_permanent_symbol_window(Ω 팔레트)와 같은 패턴: 이미 열려있는
+        # 창이 있으면 새로 만들지 않고 그 창을 맨 위로 올리기만 한다.
+        if hasattr(self, "_pip_dialog") and self._pip_dialog.winfo_exists():
+            self._pip_dialog.lift()
+            self._pip_dialog.focus_force()
+            return
+
         dlg = tk.Toplevel(self.root)
+        self._pip_dialog = dlg
         dlg.title("PIP - 작은 plot을 부분 확대해서 겹쳐 그리기")
         dlg.transient(self.root)
-        dlg.geometry("480x560")
+        dlg.geometry("760x540")
 
         # [수정 - 요청] "팝업 안의 PIP 사용 체크박스는 없애고, 메인 창 PIP
         # 버튼 앞 체크박스 하나로 통일" - 여기 있던 중복 체크박스 제거
@@ -2612,10 +2753,19 @@ class CathPlotGUI:
         ttk.Entry(xz_row, textvariable=self.pip_xmax_var, width=8).pack(side="left", padx=(4, 0))
         yz_row = ttk.Frame(zoom_frame)
         yz_row.pack(fill="x", padx=5, pady=(0, 5))
-        ttk.Label(yz_row, text="Y min:").pack(side="left")
+        ttk.Label(yz_row, text="Y1 min:").pack(side="left")
         ttk.Entry(yz_row, textvariable=self.pip_ymin_var, width=8).pack(side="left", padx=(4, 12))
-        ttk.Label(yz_row, text="Y max:").pack(side="left")
-        ttk.Entry(yz_row, textvariable=self.pip_ymax_var, width=8).pack(side="left", padx=(4, 0))
+        ttk.Label(yz_row, text="Y1 max:").pack(side="left")
+        ttk.Entry(yz_row, textvariable=self.pip_ymax_var, width=8).pack(side="left", padx=(4, 20))
+        # [수정 - 요청] "Y1/Y2를 같은 줄에" - 별도 행 대신 같은 yz_row에
+        # 이어서 배치(간격만 좀 더 줌).
+        ttk.Label(yz_row, text="Y2 min:").pack(side="left")
+        ttk.Entry(yz_row, textvariable=self.pip_y2min_var, width=8).pack(side="left", padx=(4, 12))
+        ttk.Label(yz_row, text="Y2 max:").pack(side="left")
+        ttk.Entry(yz_row, textvariable=self.pip_y2max_var, width=8).pack(side="left", padx=(4, 0))
+        # [추가 - 요청] "Ymin/Ymax가 Y1에만 적용되고 Y2는 그대로 나타남 - Y2도
+        # 따로 입력받게" (비우면 plot 자체 Y2 구간을 그대로 따름 -
+        # gnu_generator._render_pip_inset의 y2range_cmd 참고).
 
         # --- 표시 옵션 ---
         opt_frame = ttk.LabelFrame(dlg, text="표시 옵션")
@@ -2629,26 +2779,22 @@ class CathPlotGUI:
         self._mk_check(opt_frame, "Axis Title 표시", self.pip_axis_title_on_var, size=19, anchor="w", padx=5, pady=2)
         self._mk_check(opt_frame, "Legend 표시", self.pip_legend_on_var, size=19, anchor="w", padx=5, pady=2)
 
-        # [수정 - 요청] "불투명 켬/끔" 체크박스를 0~100% 슬라이더로 교체 -
-        # 100=완전 불투명(기존 체크 ON과 동일한 기본 모습, 흰 배경이 메인
-        # plot을 완전히 가림), 0=완전 투명(기존 체크 OFF와 동일, 배경이
-        # 사라져 메인 plot이 그대로 비쳐 보임), 그 사이는 배경만 그 비율로
-        # 메인 plot과 섞임(작은 plot 자신의 곡선/눈금/라벨은 슬라이더와
-        # 무관하게 항상 또렷하게 보임 - 클리핑 경계는 100 미만이면 항상
-        # 점선, gnu_generator._apply_pip_clip 참고).
+        # [수정 - 요청] "반투명에서 문제 있으면 슬라이더 대신 투명/불투명
+        # 라디오버튼만 쓰는 게 낫지 않은지?" - 반투명(1~99%)은 화면
+        # 오버레이에서 gnuplot을 한 번 더 돌려 배경을 만들어야 하는 유일한
+        # 경우라, 이 둘(0%/100%)로만 제한하면 그 재실행 자체를
+        # skip_beneath_if_opaque로 생략할 수 있어(_apply_pip_clip 참고)
+        # dat가 큰 경우 특히 체감 속도가 빨라진다. self.pip_opacity_var는
+        # 그대로 0/100 정수를 담는 IntVar로 유지해서, 이 값을 읽는 나머지
+        # 코드(저장/불러오기, gnu_generator 등)는 손댈 필요 없음.
         opac_row = ttk.Frame(opt_frame)
         opac_row.pack(fill="x", padx=5, pady=2)
-        ttk.Label(opac_row, text="배경 불투명도:").pack(side="left")
-        opac_value_lbl = ttk.Label(opac_row, text="100%", width=5)
-        opac_value_lbl.pack(side="right")
-        opac_scale = tk.Scale(
-            opac_row, from_=0, to=100, orient="horizontal", resolution=1,
-            showvalue=False, variable=self.pip_opacity_var, length=200,
-        )
-        opac_scale.pack(side="left", fill="x", expand=True, padx=(6, 6))
+        ttk.Label(opac_row, text="배경:").pack(side="left")
+        ttk.Radiobutton(opac_row, text="불투명 (기본)", variable=self.pip_opacity_var, value=100).pack(side="left", padx=(6, 12))
+        ttk.Radiobutton(opac_row, text="투명", variable=self.pip_opacity_var, value=0).pack(side="left")
 
         def _on_opacity_change(*_):
-            opac_value_lbl.config(text=f"{self.pip_opacity_var.get()}%")
+            pass
         _opac_trace_id = self.pip_opacity_var.trace_add("write", _on_opacity_change)
         _on_opacity_change()
 
@@ -2699,6 +2845,8 @@ class CathPlotGUI:
             "xmax": self.pip_xmax_var.get(),
             "ymin": self.pip_ymin_var.get(),
             "ymax": self.pip_ymax_var.get(),
+            "y2min": self.pip_y2min_var.get(),
+            "y2max": self.pip_y2max_var.get(),
             "title_on": self.pip_title_on_var.get(),
             "axis_title_on": self.pip_axis_title_on_var.get(),
             "legend_on": self.pip_legend_on_var.get(),
@@ -3402,6 +3550,8 @@ class CathPlotGUI:
 
     def _run_batch_set_async(self, template_paths, fmt, td3_path=None):
         """Batch Set을 백그라운드 스레드에서 실행하며 진행창을 보여준다."""
+        job_id = self._register_batch_job("Batch Set", len(template_paths))
+
         progress_win = tk.Toplevel(self.root)
         progress_win.title("Batch Set 처리 중")
         progress_win.transient(self.root)
@@ -3429,7 +3579,12 @@ class CathPlotGUI:
         self._get_installed_font_names()
 
         def worker():
-            self._run_batch_set(template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path)
+            try:
+                self._run_batch_set(template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path)
+            finally:
+                # [추가 - 요청] 작업이 끝났으니(성공/오류 무관) 실행 중 목록에서
+                # 뺀다. dict 조작은 메인 스레드에서만 하도록 after(0, ...)로 넘김.
+                self.root.after(0, lambda: self._unregister_batch_job(job_id))
             self.root.after(0, lambda: progress_win.destroy() if progress_win.winfo_exists() else None)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -3539,7 +3694,7 @@ class CathPlotGUI:
         popup.title("Marker Settings")
         popup.transient(self.root)
 
-        CURVE_PX, SHAPE_PX, SIZE_PX, FILL_PX, MAX_PX = 160, 90, 55, 50, 65
+        CURVE_PX, SHAPE_PX, SIZE_PX, FILL_PX, MAX_PX = 160, 100, 55, 50, 65
 
         def _cell(parent, px, height=20):
             f = tk.Frame(parent, width=px, height=height)
@@ -3621,7 +3776,7 @@ class CathPlotGUI:
     # 사용자 정의 함수 등)을 그대로 하나의 curve로 추가한다. self.function_
     # curves_list에 tk.Var 기반 dict로 값을 보관해서, 팝업을 닫았다 다시
     # 열어도 입력한 내용이 유지된다(Comment/Arrow/Circle 목록과 동일한
-    # 방식). Cubic Spline은 이 기능과 별개로 Var-list의 "Spl" 체크박스로
+    # 방식). Cubic Spline은 이 기능과 별개로 Var-list의 "SP" 체크박스로
     # 기존 데이터 curve에 적용한다(사용자 요청 - 입력칸을 새로 늘리지 않고
     # 기존 데이터 curve에 체크박스로 지정).
     # ------------------------------------------------------------------
@@ -4144,6 +4299,7 @@ class CathPlotGUI:
         누른 뒤 전체 작업이 끝날 때까지 창이 응답 없이 붙잡혀 있지 않는다.
         화면 설정은 스레드를 시작하기 전에(메인 스레드에서) 미리 캡처해둔다."""
         settings = self._capture_batch_queue_settings()
+        job_id = self._register_batch_job("Batch Queue", len(relative_paths))
 
         progress_win = tk.Toplevel(self.root)
         progress_win.title("Batch Queue 처리 중")
@@ -4168,7 +4324,12 @@ class CathPlotGUI:
         self._get_installed_font_names()
 
         def worker():
-            self._run_batch_queue(relative_paths, fmt, settings, progress_callback=progress_callback)
+            try:
+                self._run_batch_queue(relative_paths, fmt, settings, progress_callback=progress_callback)
+            finally:
+                # [추가 - 요청] Batch Set과 동일하게, 완료(성공/오류 무관) 시
+                # 실행 중 목록에서 제거 - 반드시 메인 스레드에서.
+                self.root.after(0, lambda: self._unregister_batch_job(job_id))
             self.root.after(0, lambda: progress_win.destroy() if progress_win.winfo_exists() else None)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -4812,14 +4973,14 @@ class CathPlotGUI:
             ttk.Label(style_hdr_f, text="Style", font=("Consolas",10,"bold")).pack(side="left")
             # [추가 - 요청] "Cubic Spline" 체크박스 열 - Y1/Y2와 같은 좁은
             # 폭으로 맨 뒤에 붙인다(새 필드를 위한 넓은 칸을 새로 만들 자리가
-            #없다는 요청 그대로 - 짧은 헤더 "Spl"만).
-            # [수정 - 요청] "Spl box 뒤 여분을 0으로" - Y1/Y2와 동일 폭으로
+            #없다는 요청 그대로 - 짧은 헤더 "SP"만, 원래 "Spl"에서 변경).
+            # [수정 - 요청] "SP box 뒤 여분을 0으로" - Y1/Y2와 동일 폭으로
             # 맞춰 여백 없이 통일.
             SMOOTH_COL_PX = 22
             smooth_hdr_f = tk.Frame(header_f, width=SMOOTH_COL_PX, height=22)
             smooth_hdr_f.pack_propagate(False)
             smooth_hdr_f.pack(side="left")
-            ttk.Label(smooth_hdr_f, text="Spl", font=("Consolas", 10, "bold")).place(relx=0.5, x=_HDR_NUDGE_PX, rely=0.5, anchor="center")
+            ttk.Label(smooth_hdr_f, text="SP", font=("Consolas", 10, "bold")).place(relx=0.5, x=_HDR_NUDGE_PX, rely=0.5, anchor="center")
 
             for pv in meta.variables:
                 title = pv.signals[0].name if pv.signals else f"OUTPUT {pv.output_no}"
@@ -6251,6 +6412,16 @@ class CathPlotGUI:
             if not hasattr(self, 'plot_dir') or not self.plot_dir:
                 self.plot_dir = os.path.join(os.path.dirname(os.path.abspath(dat_file)), "plot")
 
+            abs_dat_path = os.path.abspath(dat_file)
+
+            # [수정 - 요청 철회] "원본 dat 폴더에 두자"는 처음 방향을 다시
+            # plot_dir/temp_sorted로 되돌림 - 실제로는 원본 dat 파일들이
+            # 서로 다른 여러 폴더(공유 시뮬레이션 결과 폴더 등)에 흩어져
+            # 있는 경우가 많아서, 그 폴더마다 매번 temp_sorted가 새로
+            # 생기고 흔적이 여기저기 남는 게 더 문제라고 판단함. 대신
+            # "CathPlot을 닫을 때 이 폴더를 지울지 말지"는 사용자가 직접
+            # 고를 수 있는 옵션(delete_temp_on_close_var, 기본값 꺼짐)으로
+            # 뺐다 - on_closing 쪽 수정 참고.
             temp_dir = os.path.join(self.plot_dir, "temp_sorted")
             os.makedirs(temp_dir, exist_ok=True)
 
@@ -6258,17 +6429,27 @@ class CathPlotGUI:
             # 서로 다른 폴더에 있는 "같은 이름"의 dat 파일(예: A/out111.dat와
             # B/out111.dat)을 같은 세션에서 같이 쓰면 temp_sorted 캐시가 서로
             # 덮어써서 경고 없이 잘못된 데이터를 plot에 쓰는 심각한 문제가
-            # 있었음("파일명이 같을 때 sorted 파일이 덮어써진다" 실측 확인) -
-            # 겹칠 때만(보통은 그대로) "파일명-N_해시6자"로 구분한다. N은
-            # update_variable_selection_ui의 LabelFrame 제목에 붙는 "-1,-2"와
-            # 정확히 같은 계산(등장 순서)을 재사용해서 화면 목록과 캐시 파일명이
-            # 서로 맞아떨어지게 한다. 해시(경로 기준, 항상 결정적)는 N이 로드
-            # 순서에 따라 달라져도 실제 데이터 매칭은 항상 정확하도록 보장하는
-            # 안전장치 - N만으론 이전 세션의 다른 순서로 생긴 캐시와 헷갈릴 수
-            # 있지만, 해시가 다르면 그 캐시를 재사용하지 않고 새로 만든다.
+            # 있었음("파일명이 같을 때 sorted 파일이 덮어써진다" 실측 확인).
+            #
+            # [수정 - 버그, 근본적] "이전 plot과 현재 plot이 같은 폴더에
+            # 유사 이름으로 있으면 같은 이름의 sorted.dat가 잘못 연계되지
+            # 않는지? Batch Set은 self.file_rows(화면에 지금 열려있는 파일
+            # 목록)를 안 쓰는데?" - 정확한 지적이었음. 아래 "겹칠 때만
+            # 해시를 붙인다"는 판단 자체가 self.file_rows 기준이라, Batch
+            # Set/Queue(각 Template의 dat 경로는 self.file_rows와 전혀
+            # 무관하게 JSON에서 바로 읽음 - _build_plotdef_from_template_data
+            # 참고)에서는 서로 다른 두 Template이 같은 파일명(다른 폴더)의
+            # dat를 쓰면 이 충돌 감지가 전혀 작동하지 않아, 캐시가 조용히
+            # 뒤섞일 위험이 실제로 있었다. 이제 세션/화면 상태와 무관하게
+            # 해시(경로 기준, 항상 결정적)를 예외 없이 항상 붙인다 -
+            # 그래야 같은 세션에 없던 "예전 plot"의 캐시나, self.file_rows를
+            # 안 거치는 Batch/Template 경로에서도 절대 안 겹친다. 화면
+            # LabelFrame 제목의 "-N"은 사람이 보기 편하라고 남겨두되(같은
+            # 세션에서 동시에 열린 동일 파일명일 때만), 안전장치인 해시는
+            # 이제 그 "-N" 계산과 무관하게 항상 계산한다.
             base_name = os.path.basename(dat_file)
             name_root, ext = os.path.splitext(base_name)
-            abs_dat_path = os.path.abspath(dat_file)
+            path_hash = hashlib.md5(abs_dat_path.encode("utf-8")).hexdigest()[:6]
 
             _basename_counts = {}
             for _info in getattr(self, "file_rows", []):
@@ -6289,10 +6470,9 @@ class CathPlotGUI:
                     if os.path.abspath(_info["filename"]) == abs_dat_path:
                         _n = _seen
                         break
-                path_hash = hashlib.md5(abs_dat_path.encode("utf-8")).hexdigest()[:6]
                 sorted_filename = f"{name_root}-{_n if _n else 1}_{path_hash}_sortedX{x_col}{ext}"
             else:
-                sorted_filename = f"{name_root}_sortedX{x_col}{ext}"
+                sorted_filename = f"{name_root}_{path_hash}_sortedX{x_col}{ext}"
             sorted_filepath = os.path.join(temp_dir, sorted_filename)
 
             # [추가 - Batch 병렬화 대비] 같은 sorted_filepath를 동시에 여러
@@ -6744,6 +6924,26 @@ class CathPlotGUI:
         return result
 
     def _open_pip_overlay_window(self, patches, geometry, ctrl_path, proc, plot_window_title):
+        # [수정 - 버그, 재수정] "여러 창 Plot을 계속 눌러도 이전 창이 자동으로
+        # 안 닫힘(여러 케이스를 나란히 비교하기 위함)"이 CathPlot의 기존
+        # 원칙인데, 지난 수정에서 오버레이를 "전역에 하나만" 추적해서 새
+        # PLOT을 그릴 때마다 무조건 지워버렸음 - 그 결과 여러 창을 나란히
+        # 띄워 비교하면 "가장 최근 창에만 원이 남고, 이전 창들은 원이
+        # 사라짐"이라는 실제로는 더 나쁜 회귀가 생겼다(사용자 재보고로 확인).
+        # 원래 고치려던 문제(같은 창을 다시 그렸을 때 이전 오버레이가 안
+        # 지워지고 남는 것)는 "같은 plot_window_title"일 때만 해당하므로,
+        # 전역이 아니라 창 제목별로 추적해서 "같은 이름의 창"일 때만 이전
+        # 걸 지우고, 다른 이름의 창(=다른 비교 케이스)은 서로 안 건드린다.
+        if not hasattr(self, "_pip_overlay_windows"):
+            self._pip_overlay_windows = {}
+        _prev = self._pip_overlay_windows.get(plot_window_title)
+        if _prev is not None:
+            try:
+                if _prev.winfo_exists():
+                    _prev.destroy()
+            except Exception:
+                pass
+            self._pip_overlay_windows.pop(plot_window_title, None)
         """[추가 - 요청] "PIP+Animation, 반투명(1~99%) + 화면 실시간 재생" -
         gnuplot 메인 창(터미널·기존 튜닝 전부 그대로, PIP 없이 메인 곡선만
         그림)은 전혀 안 건드리고, 미리 다 만들어둔(각 프레임에 이미 배경
@@ -6765,7 +6965,7 @@ class CathPlotGUI:
         뜨고 크기 조정을 권장하지 않으므로 실사용에서는 크게 문제되지 않을
         것으로 봄."""
         try:
-            from PIL import ImageTk
+            from PIL import ImageTk, Image
         except ImportError:
             return None
         if not patches:
@@ -6807,11 +7007,35 @@ class CathPlotGUI:
         win_h = max(int(round(oh_px * sy)), 1)
 
         overlay = tk.Toplevel(self.root)
+        self._pip_overlay_windows[plot_window_title] = overlay
         overlay.overrideredirect(True)
         try:
             overlay.attributes("-topmost", True)
         except Exception:
             pass
+        # [추가 - 요청] "반투명일 때 in-plot이 화면에 고정되고, 고정된 내용이
+        # 사각형 모양으로 보임" - 원/타원이면 gnu_generator가 그 바깥을
+        # PIP_OVERLAY_CHROMA_KEY로 채워서 넘겨주므로(_chroma_mask_patch),
+        # 여기서 그 색만 진짜 투명(-transparentcolor, Windows Tk 전용)으로
+        # 뚫는다. 그러면 이제 정지된 스냅샷이 아니라 실시간으로 그 자리의
+        # 실제 화면이 그대로 비쳐 보인다(rect는 애초에 전체가 내용이라
+        # 손댈 필요 없음).
+        _clip_shape = str(geometry.get("clip_shape", "rect")).strip().lower()
+        if _clip_shape in ("circle", "ellipse"):
+            try:
+                _hexkey = "#%02x%02x%02x" % PIP_OVERLAY_CHROMA_KEY
+                overlay.attributes("-transparentcolor", _hexkey)
+            except Exception as _tc_err:
+                # [수정 - 진단] "여전히 원/타원 바깥이 보라색으로 그대로
+                # 보임" 재현 보고를 받아서, 원인 후보 중 하나(-transparentcolor
+                # 자체가 이 Tk/Windows 조합에서 지원 안 되거나 예외 발생)를
+                # 조용히 넘기지 않고 경고로 남긴다 - 이게 뜬다면 근본 원인이
+                # 확인되는 것이고, 안 뜨는데도 여전히 보라색이면 다른 원인
+                # (색상 정밀도 등)을 봐야 한다는 뜻이 됨.
+                self.warnings.append(
+                    f"PIP 화면 오버레이의 투명 처리(-transparentcolor)가 이 환경에서 지원되지 않아 "
+                    f"원/타원 바깥이 배경색 그대로 보일 수 있습니다 ({type(_tc_err).__name__}: {_tc_err})."
+                )
         # [수정 - 버그 발견] "오버레이 창이 1x1로 뜸" - geometry()로 크기를
         # 먼저 지정해도, 그 뒤에 자식 위젯(label)을 pack()하면 Tk가 "내용에
         # 맞춰 창 크기를 다시 계산"해버려서(이미지가 아직 안 채워진 빈
@@ -6826,7 +7050,20 @@ class CathPlotGUI:
 
         _photo_frames = []
         for p in patches:
-            _resized = p.resize((win_w, win_h)) if p.size != (win_w, win_h) else p
+            # [수정 - 버그] "원 가장자리에 보라색 테두리가 보이고, 시간이
+            # 지날수록 원과 사각형 사이가 전부 보라색으로 참" - resize()의
+            # 기본 보간 필터(부드럽게 섞는 방식)가 크로마키 순수색과 주변
+            # 실제 내용 색을 섞어버려서, 그 경계 픽셀들이 더 이상
+            # PIP_OVERLAY_CHROMA_KEY와 정확히 일치하지 않게 됨 ->
+            # -transparentcolor는 "정확히 그 색"만 투명 처리하므로, 섞인
+            # 경계 픽셀은 투명 처리가 안 되고 그대로 불투명하게 보임(보라색
+            # 테두리, 그리고 크기가 자주 안 맞아 매 프레임 resize가 걸리는
+            # Animation에서는 이게 반복 누적돼 점점 두드러져 보였던 것).
+            # NEAREST(보간 없이 가장 가까운 픽셀 그대로 복사)로 바꾸면 색이
+            # 섞이지 않아 경계가 항상 순수한 크로마키색 아니면 순수한 내용색
+            # 둘 중 하나로만 유지됨(약간 계단 형태로 보일 수 있으나 투명
+            # 처리가 정확해지는 게 우선).
+            _resized = p.resize((win_w, win_h), Image.NEAREST) if p.size != (win_w, win_h) else p
             _photo_frames.append(ImageTk.PhotoImage(_resized))
 
         label = tk.Label(overlay, bd=0, highlightthickness=0)
@@ -6841,11 +7078,52 @@ class CathPlotGUI:
         def _on_overlay_destroy(event):
             if event.widget is overlay:
                 state["stopped"] = True
+                if self._pip_overlay_windows.get(plot_window_title) is overlay:
+                    self._pip_overlay_windows.pop(plot_window_title, None)
         overlay.bind("<Destroy>", _on_overlay_destroy)
+
+        _last_resync_t = {"t": 0.0}
+
+        def _resync_overlay_position():
+            """[추가 - 요청] "반투명일 때 in-plot이 화면에 고정되고, 전체
+            창을 움직여도 화면에 고정됨(큰 문제)" - 예전엔 오버레이 창
+            위치를 맨 처음 한 번만 계산하고 이후로는 다시 안 봤음(docstring의
+            "[알려진 제한]" 참고, 실사용에서 창을 안 움직인다는 잘못된
+            가정이었음이 확인됨) - 이제 _advance가 돌 때마다(단, 너무 잦은
+            win32 호출을 피하려 150ms 이하 간격이면 건너뜀) 메인 gnuplot
+            창의 현재 위치를 다시 조회해서 오버레이를 따라가게 한다. 크기
+            (win_w/win_h, 즉 이미 리샘플해둔 _photo_frames)는 안 건드림 -
+            크기 조정까지 실시간 대응하려면 프레임을 매번 다시 리샘플해야
+            해서 비용이 크고, docstring에 이미 "크기 조정은 권장하지 않음"
+            으로 문서화돼 있어 범위 밖으로 둔다(이동만 고침)."""
+            nonlocal win_x, win_y
+            if _hwnd is None:
+                return
+            _now = time.time()
+            if _now - _last_resync_t["t"] < 0.1:
+                return
+            _last_resync_t["t"] = _now
+            try:
+                _cr = self._get_window_client_screen_rect(_hwnd)
+                if not _cr:
+                    return
+                _cl, _ct, _cr2, _cb = _cr
+                _cw2, _ch2 = _cr2 - _cl, _cb - _ct
+                if _cw2 <= 50 or _ch2 <= 50:
+                    return
+                _sx2, _sy2 = _cw2 / page_w, _ch2 / page_h
+                _nx = int(round(_cl + ox_px * _sx2))
+                _ny = int(round(_ct + oy_px_top * _sy2))
+                if (_nx, _ny) != (win_x, win_y):
+                    win_x, win_y = _nx, _ny
+                    overlay.geometry(f"{win_w}x{win_h}+{win_x}+{win_y}")
+            except Exception:
+                pass
 
         def _advance():
             if state["stopped"] or not overlay.winfo_exists():
                 return
+            _resync_overlay_position()
             if proc is not None and proc.poll() is not None:
                 try:
                     overlay.destroy()
@@ -6858,7 +7136,14 @@ class CathPlotGUI:
             # 건너뛰고, 메인 창(proc)이 살아있는 동안만 조용히 유지한다
             # (이미지는 이미 처음에 한 번 채워져 있음 - 아래 label.config 참고).
             if ctrl_path is None:
-                overlay.after(500, _advance)
+                # [수정 - 요청] "떠 있는 듯한 in-Plot 창이 조금 늦게 main
+                # plot 따라 다님" - 정적(비-Animation) 케이스는 이 500ms
+                # 주기가 곧 위치 재동기화(_resync_overlay_position) 주기
+                # 이기도 해서, 창을 계속 움직이면 최대 0.5초까지 밀려
+                # 보였다. 100ms로 줄여서 체감 지연을 크게 줄인다(내부
+                # _resync_overlay_position의 150ms 스로틀도 100ms로 같이
+                # 낮춰서 실제로 매 tick마다 갱신되게 함 - 아래 참고).
+                overlay.after(100, _advance)
                 return
             ctrl = self._read_anim_ctrl(ctrl_path)
             if ctrl["exit_anim"]:
@@ -6936,6 +7221,24 @@ class CathPlotGUI:
         핸들을 받아 둘 다 고친다."""
         state = {"paused": False, "frame_pause": initial_frame_pause, "seq": 0, "finished": False, "dead": False}
 
+        # [추가 - 요청] "실행 중인 Animation의 ctrl/status 파일을 Clean Past
+        # Plots에서 실수로 지우면 재생이 깨짐" - 지금 이 패널이 살아있는 동안
+        # 두 파일 경로를 "사용 중" 목록에 등록해서, open_delete_dialog가 이
+        # 목록에 있는 건 아예 선택 대상에서 뺄 수 있게 한다(경고보다 안전한
+        # "애초에 목록에 안 보이게"). 패널이 어떤 방식으로 닫히든(Exit 버튼,
+        # 창 X, gnuplot 강제종료 후 수동으로 닫음) <Destroy> 이벤트는 항상
+        # 한 번 발생하므로 거기서 등록 해제한다.
+        if not hasattr(self, "_active_anim_files"):
+            self._active_anim_files = set()
+        self._active_anim_files.add(os.path.abspath(ctrl_path))
+        if status_path:
+            self._active_anim_files.add(os.path.abspath(status_path))
+
+        def _unregister_anim_files(event=None):
+            self._active_anim_files.discard(os.path.abspath(ctrl_path))
+            if status_path:
+                self._active_anim_files.discard(os.path.abspath(status_path))
+
         def _bump():
             # [추가 - 요청] 버튼을 누를 때마다 1씩 증가 - gnuplot이 "끝난
             # 시점 이후로 버튼이 한 번 더 눌렸는지"를 이 값으로 감지해서
@@ -6946,6 +7249,15 @@ class CathPlotGUI:
         panel = tk.Toplevel(self.root)
         panel.title("Animation Control")
         panel.resizable(False, False)
+        panel.bind("<Destroy>", _unregister_anim_files, add="+")
+        # [수정 - 요청] "Anim Control 창이 맨 위가 아님" - 새로 만든 Toplevel은
+        # CathPlot(우리 앱) 안에서는 위로 오지만, 별도 프로세스인 gnuplot.exe
+        # 창 등 "다른 애플리케이션" 위로는 보장이 안 됨(Windows 포커스
+        # 스틸링 방지 정책과 같은 이유) - 명시적으로 topmost를 걸어준다.
+        try:
+            panel.attributes("-topmost", True)
+        except Exception:
+            pass
         # [수정 - 버그, 요청] "Ani 창은 좌상단에 작게, plot 창은 화면 중앙에" -
         # plot 창이 어디서 열릴지(OS가 정함)에 맞춰 패널 위치를 계산하던
         # 이전 방식 대신, 더 예측 가능하게 패널은 항상 화면 좌상단 구석에
@@ -7387,6 +7699,16 @@ class CathPlotGUI:
                     return max(0.0, min(100.0, _pval))
                 return None
 
+            # [수정 - 요청, 재수정] "네이티브 클리핑 경로 제거"를 한때 원/타원
+            # 전체로 넓혔었는데(오버레이 창을 항상 쓰게), 그게 오히려 "원
+            # PIP가 항상 별도 창으로 맨 위에 따로 뜨고 화질도 못 미침"이라는
+            # 더 큰 문제였음이 확인됨 - 되돌림. Opacity가 이제 0/100 라디오
+            # 버튼만 남아 진짜 반투명(1~99%)은 UI에서 아예 선택 불가능하므로,
+            # 오버레이는 원래 목적(진짜 반투명일 때만) 그대로 이
+            # _resolve_pip_partial_opacity 하나로 rect/원/타원 구분 없이
+            # 충분하다 - 원/타원도 대부분 gnu_generator의 네이티브 경로를
+            # 타서 메인 gnuplot 창에 rect와 동일하게 그려진다.
+
             _pip_gif_blend_opacity = _resolve_pip_partial_opacity(plotdef) if fmt == "gif" else None
             # [추가 - 요청] "반투명(1~99%) + 화면 실시간 재생" - GIF와 달리
             # 실시간 재생은 "완성된 프레임 묶음"이 없는(gnuplot이 그때그때
@@ -7396,6 +7718,18 @@ class CathPlotGUI:
             # 해둔 PIP 조각만 별도의 작은 창으로 겹쳐서 갈아 끼우는" 방식
             # (_open_pip_overlay_window)으로 실제 반투명을 보여준다 - 메인
             # gnuplot 창 자체는 전혀 안 바뀌므로 기존 튜닝에 영향 없음.
+            #
+            # [수정 - 요청, 재수정] "원 PIP가 항상 별도 창으로 맨 위에 따로
+            # 뜨고, 진하기도 rect에 못 미침" - 한때 원/타원이면 opacity와
+            # 무관하게 항상 이 오버레이를 쓰도록(_resolve_pip_needs_overlay)
+            # 넓혔었는데, 그게 바로 이 문제(분리된 느낌·잘못된 z-order·
+            # 화질 저하)의 원인이었다. Opacity가 이제 UI에서 0/100 라디오
+            # 버튼만 남아 진짜 반투명(1~99%) 자체가 선택 불가능해졌으므로,
+            # 원래 목적(진짜 반투명일 때만 오버레이 필요)에 맞게
+            # _resolve_pip_partial_opacity로 되돌린다 - 그러면 원/타원도
+            # rect처럼 gnu_generator의 네이티브 경로를 타고 메인 gnuplot
+            # 창에 직접, 같은 굵기/진하기로 그려진다(gnu_generator.py의
+            # force_postprocess 관련 수정과 짝을 이룸).
             _pip_interactive_blend_opacity = (
                 _resolve_pip_partial_opacity(plotdef)
                 if (fmt == "interactive" and getattr(self, "animate_var", None) is not None and self.animate_var.get())
@@ -7492,7 +7826,11 @@ class CathPlotGUI:
                         annotations=plotdef.annotations, arrows=plotdef.arrows,
                         circles=getattr(plotdef, "circles", [])
                     )
-            _all_warn = _font_warn + generator.warnings
+            # [수정 - 버그] "PLOT 경고 창에 같은 문구가 여러 번 반복됨" -
+            # _render_pip_inset이 Animation 처리 중 여러 차례(probe/실제
+            # 스크립트 등) 불려서 generator.warnings에 같은 경고가 여러 번
+            # append됨 - 순서는 유지한 채 중복만 제거해서 보여준다.
+            _all_warn = list(dict.fromkeys(_font_warn + generator.warnings))
 
             # [추가] gnuplot 스크립트에 에러가 있으면(예: log축 관련 문제) 창이
             # 아예 안 뜨고 프로세스가 바로 죽는데, 그래도 Popen 자체는 성공해서
@@ -7574,6 +7912,13 @@ class CathPlotGUI:
             # 어디서 띄우든 상관없으므로, 크래시 확인/컨트롤 패널·오버레이
             # 띄우기가 전부 끝난 뒤로 옮겨서 실제 애니메이션 UI가 먼저 보이게 한다.
             if _all_warn:
+                # [수정 - 요청, 재수정] "CathPlot 메인 화면이 맨 위에 고정됨 -
+                # 지금 Anim 중인 plot창이 맨 위에 나와야 함" - root 전체를
+                # topmost로 올렸다 내리던 이전 수정이 바로 그 원인이었다
+                # (Animation처럼 경고가 반복되는 상황에서 CathPlot 메인
+                # 창이 활성 plot/Animation 창 위로 계속 튀어 올라옴).
+                # messagebox 자체가 모달이라 원래도 포커스는 알아서 받으므로
+                # root를 통째로 topmost로 만들 필요가 없었다 - 제거.
                 messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
 
             # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로
@@ -7797,7 +8142,7 @@ class CathPlotGUI:
         # 반환해서, 호출부(Save의 "Success" 메시지, Print의 프린터 전송 단계)가
         # 자연스럽게 건너뛰어지게 한다(Print 쪽은 이미 "if os.path.exists(...)"
         # 로 게이트돼 있어 파일 삭제만으로 충분 - 코드 변경 불필요).
-        _all_warn = ([generator.last_size_warning] if generator.last_size_warning else []) + _font_warn + generator.warnings
+        _all_warn = list(dict.fromkeys(([generator.last_size_warning] if generator.last_size_warning else []) + _font_warn + generator.warnings))
         if _all_warn and not self._show_result_preview_and_confirm(outfile, _all_warn):
             return None
 
@@ -7902,7 +8247,11 @@ class CathPlotGUI:
                 generator.create_script(print_plotdef, temp_emf, fmt="emf",
                                          annotations=print_plotdef.annotations, arrows=print_plotdef.arrows,
                                          circles=getattr(print_plotdef, "circles", []))
-                _all_warn = _font_warn + generator.warnings
+                # [수정 - 버그] "PLOT 경고 창에 같은 문구가 여러 번 반복됨" -
+                # _render_pip_inset이 Animation 처리 중 여러 차례(probe/실제
+                # 스크립트 등) 불려서 generator.warnings에 같은 경고가 여러 번
+                # append됨 - 순서는 유지한 채 중복만 제거해서 보여준다.
+                _all_warn = list(dict.fromkeys(_font_warn + generator.warnings))
                 if _all_warn:
                     messagebox.showwarning("PRINT 경고", "\n\n".join(_all_warn))
                 success_path = temp_emf
@@ -8613,7 +8962,7 @@ class CathPlotGUI:
         except Exception as e:
             messagebox.showerror("Save Error", f"파일 저장 중 오류가 발생했습니다:\n{e}")
             return
-        _all_warn = _font_warn + generator.warnings
+        _all_warn = list(dict.fromkeys(_font_warn + generator.warnings))
         if _all_warn:
             messagebox.showwarning("SAVE 경고", "\n\n".join(_all_warn))
         self.update_plot_file_list()
@@ -8789,6 +9138,27 @@ class CathPlotGUI:
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _register_batch_job(self, kind, count):
+        """[추가 - 요청] Batch Set/Queue가 시작될 때 호출 - 실행 중 목록에
+        표시용 이름(예: 'Batch Set (12개 항목, 14:32 시작)')을 등록하고,
+        나중에 _unregister_batch_job으로 지울 때 쓸 job_id를 반환한다.
+        여러 배치가 동시에 실행될 수 있으므로(잠금 없음, 의도된 동작) id는
+        매번 새로 발급하며, dict 자체의 동시 접근은 _batch_job_lock으로
+        보호한다."""
+        with self._batch_job_lock:
+            self._batch_job_seq += 1
+            job_id = self._batch_job_seq
+            started_at = time.strftime("%H:%M:%S")
+            self._active_batch_jobs[job_id] = f"{kind} ({count}개 항목, {started_at} 시작)"
+        return job_id
+
+    def _unregister_batch_job(self, job_id):
+        """_register_batch_job으로 등록했던 항목을 지운다. 반드시 self.root.after(0, ...)
+        를 통해 메인 스레드에서 호출할 것(백그라운드 워커 스레드가 직접 dict를
+        건드리지 않도록)."""
+        with self._batch_job_lock:
+            self._active_batch_jobs.pop(job_id, None)
+
     def _count_running_processes(self, image_name):
         """tasklist로 특정 실행파일 이름의 프로세스가 몇 개 떠 있는지 센다.
         (taskkill /IM은 "누가 띄웠는지" 구분을 못 해서, 죽이기 전에 실제로
@@ -8808,6 +9178,25 @@ class CathPlotGUI:
 
     def on_closing(self):
         """GUI 창이 닫힐 때 temp_sorted 임시 폴더와 gnuplot 프로세스를 정리하고 프로그램을 종료합니다."""
+        # -1. [추가 - 요청] "X 버튼으로 닫기 전에, 백그라운드로 실행 중인 Batch
+        # Set/Queue가 있으면 이름을 보여주고 정말 종료할지 물어봐라" - 이 작업들은
+        # 전부 daemon 스레드라 그냥 닫으면 남은 항목이 아무 경고 없이 통째로
+        # 사라지므로(진행률 창도, batch_warnings.log도 남지 않음), 여기서 먼저
+        # 확인한다. "아니오"를 누르면 종료 자체를 취소(return)하고 창을 그대로
+        # 둔다 - 이후 단계(gnuplot 정리 등)는 전혀 진행하지 않음.
+        active_jobs = list(self._active_batch_jobs.values())
+        if active_jobs:
+            job_lines = "\n".join(f"  - {name}" for name in active_jobs)
+            proceed = messagebox.askyesno(
+                "실행 중인 Batch 작업 있음",
+                f"다음 작업이 아직 백그라운드에서 실행 중입니다:\n\n{job_lines}\n\n"
+                "지금 CathPlot을 닫으면 이 작업은 끝까지 완료되지 못하고 "
+                "즉시 중단됩니다(완료 안내창·경고 로그도 남지 않습니다).\n\n"
+                "그래도 종료하시겠습니까?"
+            )
+            if not proceed:
+                return
+
         # 0. [추가 - 버그 수정] 앱을 켜자마자(예열이 끝나기 전에) 바로 닫으면,
         # 아직 실행 중인 예열용 gnuplot.exe가 곧바로 아래 "남은 gnuplot 프로세스"
         # 검사에 걸려서 "다른 프로그램일 수도 있다"는 확인창이 떴었음 - 우리가
@@ -8860,13 +9249,20 @@ class CathPlotGUI:
         except Exception:
             pass
 
-        try:
-            temp_dir = os.path.join(self.plot_dir, "temp_sorted")
-            if os.path.exists(temp_dir):
-                import shutil
-                shutil.rmtree(temp_dir)
-        except Exception:
-            pass
+        # [수정 - 요청] "CathPlot을 닫으면 temp_sorted가 통째로 지워져서 저장해둔
+        # .plt가 상대경로로 가리키던 sorted 파일을 재현 못 함" - 무조건
+        # 삭제하던 것을 없애고, "종료 시 sorted 캐시 삭제" 체크박스
+        # (delete_temp_on_close_var, 기본값 꺼짐)로 사용자가 직접 고르게
+        # 했다. 켜져 있을 때만 예전처럼 지운다 - 꺼져 있으면(기본) 남아있는
+        # 채로 종료되어 나중에 .plt를 다시 열어도 재현 가능.
+        if self.delete_temp_on_close_var.get():
+            try:
+                temp_dir = os.path.join(self.plot_dir, "temp_sorted")
+                if os.path.exists(temp_dir):
+                    import shutil
+                    shutil.rmtree(temp_dir)
+            except Exception:
+                pass
         self.root.destroy()
 
     def insert_symbol_to_active(self, symbol):
