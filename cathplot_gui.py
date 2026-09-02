@@ -554,9 +554,14 @@ class CathPlotGUI:
         # Windows 기본 테마에서 배경색이 잘 안 먹는 문제가 이미 여러 번
         # 확인된 상태라(_mk_btn 주석 참고), Browse/X와 같은 tk.Button 기반
         # 헬퍼로 통일해 확실히 색이 반영되게 한다.
+        # [수정 - 요청] "+ 버튼이 너무 넓음(폭 2/3 정도로), 높이는 좀 더
+        # 높게(1.3배 정도 - 정사각형이 되게)" - btn_width(글자 폭 기준
+        # 3->2)를 줄이고 btn_pady(버튼 자체 내부 상하 여백, 기존 0)를
+        # 살짝 줘서 "+" 하나만 있는 버튼이 가로세로 비슷한 정사각형에
+        # 가깝게 보이도록 조정.
         self.add_file_btn = self._mk_btn(
             self.file_frame, "+", self.add_file_row,
-            color="secondary", btn_width=3, side="right", padx=5, pady=0,
+            color="secondary", btn_width=2, btn_pady=3, side="right", padx=5, pady=0,
         )
 
         btn_container = ttk.Frame(self.root)

@@ -3316,7 +3316,15 @@ class GnuplotGenerator:
         # 상태로 실제 렌더링해 겹침/잘림 없음 확인).
         _title_shown = bool(pip.get("title_on")) and bool((plotdef.title or "").strip())
         _axis_titles_shown = bool(pip.get("axis_title_on"))
-        _inset_top_frac = 0.20 if _title_shown else 0.05
+        # [수정 - 버그(사용자 보고)] "타원에서는 title/X축이 원 밖으로 나가서
+        # 안 잘림" - 왼쪽/오른쪽(Y1/Y2 title)은 이미 원/타원일 때 여백을
+        # 더 넓혔는데(_inset_left_frac/_inset_right_frac), 위/아래(Plot
+        # Title/X축)는 그 처리가 빠져있었음 - 실제 렌더링으로 확인해보니
+        # (title이 그려지는 위치는 offset을 조금 당겨도 거의 안 바뀔 만큼
+        # 원 위로 한참 벗어나 있었음) 위/아래도 같은 원리로 크게 넓혀야
+        # 함(실측: top 0.20->0.45, bottom 0.13->0.32 정도는 돼야 title/
+        # X축 tic+label이 타원 안쪽에 옴 - rect는 기존 값 유지).
+        _inset_top_frac = (0.45 if _pip_round_shape else 0.20) if _title_shown else (0.15 if _pip_round_shape else 0.05)
         # [수정 - 요청] "axis title을 켜면 tic-title 간격이 너무 넓어지고
         # frame이 거의 정사각형으로 바뀜" - 실측 결과 원인은 두 가지였음:
         # (1) 아래 xlabel/ylabel/y2label에 offset을 안 줘서 gnuplot 기본
@@ -3325,7 +3333,7 @@ class GnuplotGenerator:
         # (2)번 수정(아래 offset 추가) 이후로는 필요 이상으로 컸던 것.
         # gnuplot 6.0으로 직접 렌더링해 실측 조정함(0.22->0.13, 0.26->0.16,
         # 0.24->0.14) - 라벨이 잘리지 않는 선에서 tic 바로 아래/옆에 붙게.
-        _inset_bottom_frac = 0.13
+        _inset_bottom_frac = 0.32 if (_pip_round_shape and _axis_titles_shown) else 0.13
         # [수정 - 요청] 위 _pip_round_shape 설명대로 - 원/타원은 axis title이
         # 실제로 보이는 타원 안쪽에 들어오도록 이 tic+label 여백 자체도
         # 사각형보다 넓게 잡아야 한다(0.16/0.14 -> 0.24/0.24, 실측 3종
@@ -3356,7 +3364,16 @@ class GnuplotGenerator:
         if pip.get("title_on") and (plotdef.title or "").strip():
             _title_txt = plotdef.title.replace('"', '\\"')
             _title_size = float(plotdef.title_size or 14) * font_scale
-            lines.append(f'set title "{_title_txt}" font "{plotdef.title_font},{_title_size:.1f}"')
+            # [수정 - 버그(사용자 보고)] "타원에서는 title이 원 밖으로 나가서
+            # 잘리지 않음" - 이 title에는 offset이 아예 없어서 gnuplot
+            # 기본 위치(작은 origin/size 박스 크기에 비례해서 안 줄어드는
+            # 고정 여백 기준)를 그대로 썼고, 그 기본 여백이 인셋처럼 작은
+            # 박스에선 tmargin으로 잡아준 top_frac 여백보다 더 위로 올라가
+            # 박스(및 타원) 밖으로 넘어갔음 - 메인 plot 제목에 이미 쓰던
+            # "-0.4*(size/14)" pull-down 관례를 그대로 적용해 tmargin
+            # 쪽으로 당긴다.
+            _title_gap = -0.4 * (_title_size / 14.0)
+            lines.append(f'set title "{_title_txt}" font "{plotdef.title_font},{_title_size:.1f}" offset 0,{_title_gap:.3f}')
         else:
             lines.append("unset title")
 
