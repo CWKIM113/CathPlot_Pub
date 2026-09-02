@@ -2720,7 +2720,11 @@ class CathPlotGUI:
             values=["rect", "circle", "ellipse"], width=8, state="readonly"
         )
         clip_shape_combo.pack(side="left", padx=(4, 12))
-        ttk.Label(clip_row, text="Radius(Rx,Ry) %:").pack(side="left")
+        # [수정 - 요청] "반지름 50%가 지름 100%라 마치 메인 plot 전체를
+        # 말하는 것처럼 보여서 헷갈림" - 이 %의 기준은 메인 plot 전체가
+        # 아니라 바로 위에서 W/H%로 정한 "in-plot(PIP) 박스 자신"의 폭/
+        # 높이임(반지름 50% = 그 박스에 꽉 차는 크기)을 라벨에 명시.
+        ttk.Label(clip_row, text="Radius(Rx,Ry) %(in-plot 박스 대비,50=꽉참):").pack(side="left")
         clip_rx_entry = ttk.Entry(clip_row, textvariable=self.pip_clip_rx_var, width=6)
         clip_rx_entry.pack(side="left", padx=(4, 2))
         clip_ry_entry = ttk.Entry(clip_row, textvariable=self.pip_clip_ry_var, width=6)
