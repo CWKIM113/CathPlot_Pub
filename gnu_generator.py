@@ -1343,6 +1343,9 @@ class GnuplotGenerator:
             SAMPLE_W *= _legend_tuning["sample_mult"]
         else:
             SAMPLE_W *= 2 / 3
+        # [수정 - 요청] "style(샘플선) 길이가 너무 김 - 30% 정도 줄여도 됨" -
+        # 위에서 이미 여러 차례 조정된 최종 길이에 추가로 한 번 더 0.7배.
+        SAMPLE_W *= 0.7
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
         # 그냥 len()으로 세면 숫자/콜론/대시처럼 대문자보다 좁은 문자가 많은
         # 라벨(CATHENA 변수명 특성상 흔함, 예: "MFLO:R-SDRT1>L-STLF1")은 실제
@@ -1476,7 +1479,17 @@ class GnuplotGenerator:
         # 커지도록 바꿔(1자당 0.15씩 증가) 중간 길이 라벨도 어느 정도
         # 차등화되게 한다(긴 라벨(10자 이상)은 원래 계산값이 이 하한보다
         # 커서 여전히 영향 없음 - 정확한 기울기는 실측 재확인 필요).
-        _MIN_LABEL_CHARS_IN_BOX = 1.5 + max(max_label_len - 1, 0) * 0.15
+        # [수정 - 요청] "title-box 간격이 1자면 되는데 짧은 라벨(5자 이내)도
+        # 그 이상으로 보임" - 실제로는 1자가 아니라 기준값 1.5자였고, 게다가
+        # 1자를 넘는 순간부터 바로 늘어나기 시작해서(5자 라벨=1.5+4*0.15=
+        # 2.1자) 5자 이내에서도 이미 1자보다 훨씬 컸음. 기준을 1.0자로
+        # 낮추고, 증가 시작 기준을 "1자 넘으면"에서 "5자 넘으면"으로
+        # 옮겨 5자 이내는 항상 정확히 1.0자로 고정한다(그 이상 길이의
+        # 라벨(예: PWRDWNB 7자)에서 실제 렌더링으로 문제(잘림)가 재현되던
+        # 것을 막기 위해 넣었던 완만한 증가 자체는 유지 - 아래 _box_w_floor
+        # 하드 하한이 별개로 항상 걸려있어 라벨이 실제로 잘리는 일은 이
+        # 값을 낮춰도 발생하지 않음).
+        _MIN_LABEL_CHARS_IN_BOX = 1.0 + max(max_label_len - 5, 0) * 0.15
         if max_label_len + _box_w_extra_chars < _MIN_LABEL_CHARS_IN_BOX:
             _box_w_extra_chars = _MIN_LABEL_CHARS_IN_BOX - max_label_len
         # [수정] box가 title을 못 감싸는(밖으로 삐져나옴) 버그 - LABEL_GAP_FRAC
@@ -3574,6 +3587,19 @@ class GnuplotGenerator:
         _tic_major0, _tic_minor0 = (float(_tm.group(1)), float(_tm.group(2))) if _tm else (1.0, 0.5)
         _bm = re.search(r"set border lw\s+([\d.]+)", _main_border_line)
         _border_lw0 = float(_bm.group(1)) if _bm else 1.5
+        # [수정 - 버그(사용자 보고)] "rect/ellipse 모두 in-plot의 grid
+        # 크기가 main-plot과 동일함(조정 안되면 점으로)" - "set grid"도
+        # 위 tic/border와 같은 문제: 메인 plot이 한 번 설정한 절대 lw/
+        # dashtype(길게 끊어지는 대시)이 그대로 남아 훨씬 작은 인셋에도
+        # 똑같이 그려짐. 인셋에서만 font_scale로 줄인 lw + 촘촘한 점선
+        # (dashtype ".")으로 다시 그렸다가, 인셋이 끝나면 원래 설정으로
+        # 복구한다(요청하신 "안 되면 점으로"를 그대로 채택 - 점선은
+        # 세그먼트 길이가 원래 짧아 축소 배율과 무관하게 자연스러움).
+        _main_grid_line = next((_l for _l in reversed(lines) if _l.startswith("set grid") or _l == "unset grid"), "unset grid")
+        _has_grid = _main_grid_line.startswith("set grid")
+        if _has_grid:
+            _gm = re.match(r"(set grid [a-z0-9 ]+) lw", _main_grid_line)
+            _grid_axes = _gm.group(1) if _gm else "set grid xtics ytics"
 
         # [수정 - 버그(사용자 보고)] "원 안의 선두께가 사각형과 다름(어제는
         # 정확히 같게 했음)" - 배경/경계 장식 오브젝트의 lw가 rect(완전
@@ -3749,15 +3775,23 @@ class GnuplotGenerator:
                 )
             _inset_cmd_list = [re.sub(r"using (\d+):(\d+)\b", _wrap_ellipse_marker, c) for c in _inset_cmd_list]
 
+        # [수정 - 버그(사용자 보고)] "tic가 너무 두꺼움(사각형처럼 가는
+        # 실선으로)" - "unset border"는 테두리 "선"만 안 보이게 할 뿐,
+        # tic 표시 자체의 두께는 border에 마지막으로 지정했던 lw를 그대로
+        # 물려받는다(border를 끄기 전에 이 lw를 먼저 줄여둬야 tic도 같이
+        # 얇아짐) - 그래서 원/타원(native clip)에서도 순서를 "먼저 축소된
+        # lw로 set border, 그 다음에 unset border"로 바꿔서 tic만 남아도
+        # 얇게 나오게 한다(사각형은 border 자체가 보이므로 원래도 이미
+        # 축소된 lw를 썼음).
+        lines.append(f"set border lw {_border_lw0 * font_scale:.3f}")
         if _ellipse_native_ok:
-            # 위 주석 참고 - 인셋의 네모 축 테두리 자체를 꺼서 원/타원 밖으로
-            # 삐져나오지 않게 한다.
+            # 위 주석 참고 - 인셋의 네모 축 테두리 "선"만 꺼서 원/타원
+            # 밖으로 삐져나오지 않게 한다(tic 두께는 위에서 이미 줄여둠).
             lines.append("unset border")
-        else:
-            # 테두리가 남는 경우(사각형 클리핑, 또는 원/타원의 PDF 후처리
-            # 경로)에는 위에서 구한 비율로 두께를 줄여서 그린다.
-            lines.append(f"set border lw {_border_lw0 * font_scale:.3f}")
         lines.append(f"set tics scale {_tic_major0 * font_scale:.3f}, {_tic_minor0 * font_scale:.3f}")
+        if _has_grid:
+            _grid_lw = max(_border_lw0 * font_scale * 0.7, 0.3)
+            lines.append(f'{_grid_axes} lw {_grid_lw:.3f} dashtype "." , lw {_grid_lw:.3f} dashtype "."')
 
         lines.append("plot \\")
         for i, cmd in enumerate(_inset_cmd_list):
@@ -3770,6 +3804,8 @@ class GnuplotGenerator:
         # 원래 설정으로 복구.
         lines.append(_main_border_line)
         lines.append(f"set tics scale {_tic_major0:.3f}, {_tic_minor0:.3f}")
+        if _has_grid:
+            lines.append(_main_grid_line)
 
         # 이 뒤에 또 다른 코드가 있어도 영향 안 받도록 원위치로 복구
         lines.append("set origin 0,0")
