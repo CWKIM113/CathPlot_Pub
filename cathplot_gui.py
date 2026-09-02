@@ -1439,7 +1439,7 @@ class CathPlotGUI:
             except Exception:
                 _temp_file_count = 0
         if not _regular_files and not _anim_files and _temp_file_count == 0:
-            messagebox.showinfo("Clean Info", "No past plot files found.")
+            messagebox.showinfo("정리 안내", "이전에 저장된 plot 파일이 없습니다.")
             return
 
         del_win = tk.Toplevel(self.root)
@@ -1481,7 +1481,7 @@ class CathPlotGUI:
             if _total_selected == 0 and not _want_temp_clean:
                 return
             if _total_selected:
-                if not messagebox.askyesno("Confirm", f"선택한 {_total_selected}개 파일이 삭제됩니다. 계속할까요?"):
+                if not messagebox.askyesno("확인", f"선택한 {_total_selected}개 파일이 삭제됩니다. 계속할까요?"):
                     return
             if _want_temp_clean:
                 # [수정 - 요청] "sorted 폴더를 지울 때 확인이 필요해서" - .plt
@@ -1489,7 +1489,7 @@ class CathPlotGUI:
                 # (Batch 재사용성·재현성과 직결) 되돌릴 수 없으므로 독립된
                 # 확인창을 하나 더 띄운다(파일 개수까지 알려줌).
                 if not messagebox.askyesno(
-                    "Confirm - temp_sorted 삭제",
+                    "확인 - temp_sorted 삭제",
                     f"temp_sorted 폴더({_temp_file_count}개 파일)를 완전히 비웁니다.\n\n"
                     "이 폴더를 참조하는 저장된 .plt 파일은 이후 다시 열어도 "
                     "데이터를 찾지 못합니다(원본 dat를 다시 불러오면 자동 재생성은 됨).\n\n"
@@ -1522,7 +1522,7 @@ class CathPlotGUI:
             self.update_plot_file_list()
             if failed:
                 messagebox.showerror(
-                    "Delete Error",
+                    "삭제 오류",
                     "일부 파일을 삭제하지 못했습니다 (다른 프로그램에서 열려있을 수 있습니다):\n" + "\n".join(failed)
                 )
 
@@ -1721,7 +1721,7 @@ class CathPlotGUI:
         def on_execute(mode):
             selected_indices = plot_listbox.curselection()
             if not selected_indices:
-                messagebox.showwarning("Warning", "Please select at least one plot from the list.", parent=dialog)
+                messagebox.showwarning("경고", "목록에서 plot을 하나 이상 선택해주세요.", parent=dialog)
                 return
 
             # [수정 - 요청] "선택 순서대로 배치" 체크박스가 켜져 있으면
@@ -1744,7 +1744,7 @@ class CathPlotGUI:
 
             if layout != "Auto" and len(selected_defs) > rows * cols:
                 messagebox.showwarning(
-                    "Warning",
+                    "경고",
                     f"'{layout}' 레이아웃은 최대 {rows*cols}개까지만 담을 수 있습니다.\n"
                     f"지금 {len(selected_defs)}개를 선택하셨습니다 - 개수를 줄이거나 "
                     f"더 큰 레이아웃(또는 Auto)을 선택해주세요.",
@@ -1791,7 +1791,7 @@ class CathPlotGUI:
                 # None을 반환하고 파일도 이미 지운 상태 - 이때는 "저장됨" 메시지를
                 # 띄우면 안 됨(실제로 저장이 취소됐으므로).
                 if _result_path:
-                    messagebox.showinfo("Success", f"Saved: {os.path.basename(filepath)}")
+                    messagebox.showinfo("완료", f"저장했습니다: {os.path.basename(filepath)}")
 
             else:
                 idx = 1
@@ -1821,7 +1821,7 @@ class CathPlotGUI:
                             except OSError:
                                 pass
                 except Exception as e:
-                    messagebox.showerror("Print Error", str(e))
+                    messagebox.showerror("인쇄 오류", str(e))
 
         btn_frame = ttk.Frame(dialog)
         btn_frame.pack(fill="x", pady=15)
@@ -2818,7 +2818,23 @@ class CathPlotGUI:
         font_row = ttk.Frame(opt_frame)
         font_row.pack(fill="x", padx=5, pady=(2, 5))
         ttk.Label(font_row, text="폰트 축소 배율:").pack(side="left")
-        ttk.Entry(font_row, textvariable=self.pip_font_scale_var, width=6).pack(side="left", padx=(4, 0))
+        font_scale_entry = ttk.Entry(font_row, textvariable=self.pip_font_scale_var, width=6)
+        font_scale_entry.pack(side="left", padx=(4, 0))
+        # [추가 - 요청] "0.6이 이미 찍혀있는데 사용자가 직접 입력한 건지
+        # 기본값이 그냥 채워진 건지 구분이 안 됨 - 입력 안 하면 회색으로,
+        # 입력하면 진하게" - 아직 기본값("0.6") 그대로면 회색으로 표시해
+        # "이건 그냥 기본값입니다"를 알려주고, 실제로 타이핑하는 순간(첫
+        # 키 입력) 검정으로 바꿔서 "이제부터는 직접 정한 값"임을 표시한다.
+        # 단, Template/Batch Set에서 이미 0.6이 아닌 값을 불러온 경우는
+        # 처음부터 검정(그 값 자체가 의미 있는 사용자 값이므로).
+        if self.pip_font_scale_var.get().strip() == "0.6":
+            font_scale_entry.configure(foreground="grey")
+
+        def _font_scale_first_edit(event=None):
+            font_scale_entry.configure(foreground="black")
+            font_scale_entry.unbind("<KeyPress>")
+
+        font_scale_entry.bind("<KeyPress>", _font_scale_first_edit)
 
         btn_row = ttk.Frame(dlg)
         btn_row.pack(fill="x", padx=10, pady=15, side="bottom")
@@ -5166,7 +5182,7 @@ class CathPlotGUI:
     def clean_past_plots(self):
         """임시 파일 및 캐시 정리"""
         # 1. 처음 한 번만 삭제 확인 박스를 띄웁니다.
-        if not messagebox.askyesno("Confirm", "Do you really want to clean all past temporary plot files and caches?"):
+        if not messagebox.askyesno("확인", "이전 임시 plot 파일과 캐시를 모두 정리하시겠습니까?"):
             return
 
         deleted_count = 0
@@ -5200,9 +5216,9 @@ class CathPlotGUI:
 
             # 리스트 뷰 및 파일 리스트 새로고침
             self.update_plot_file_list()
-            messagebox.showinfo("Success", "Successfully cleaned up past temporary files and caches.")
+            messagebox.showinfo("완료", "이전 임시 파일과 캐시를 정리했습니다.")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to clean past plots: {e}")
+            messagebox.showerror("오류", f"이전 plot 정리 실패: {e}")
 
     # [삭제 - 죽은 코드] clear_all_plots/reset_history - grep 결과 이 파일 안에
     # 호출부(버튼/메뉴)가 전혀 없어(0 call sites) 화면 어디서도 실행될 수
@@ -6320,10 +6336,10 @@ class CathPlotGUI:
                                     y_min, y_max, z_min, z_max, animate3d_duration=animate3d_duration,
                                     function_surfaces=function_surfaces)
         except Exception as e:
-            messagebox.showerror("Save Error", f"3D Plot 저장 중 오류가 발생했습니다:\n{e}")
+            messagebox.showerror("저장 오류", f"3D Plot 저장 중 오류가 발생했습니다:\n{e}")
             return
         self.update_plot_file_list()
-        messagebox.showinfo("Success", f"Saved: {os.path.basename(selected_path)}")
+        messagebox.showinfo("완료", f"저장했습니다: {os.path.basename(selected_path)}")
 
     def _print_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
                         equal_xyz=False, surfaces=None, xlabel3d="", ylabel3d="", zlabel3d="",
@@ -6352,7 +6368,7 @@ class CathPlotGUI:
                                     xlabel3d, ylabel3d, zlabel3d, plot_title, time_min, time_max,
                                     y_min, y_max, z_min, z_max, function_surfaces=function_surfaces)
         except Exception as e:
-            messagebox.showerror("Print Error", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
+            messagebox.showerror("인쇄 오류", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
             return
         if not os.path.exists(temp_emf):
             return
@@ -7445,7 +7461,7 @@ class CathPlotGUI:
             ordered_keys, active_y1_set, active_y2_set = self._ordered_selected_keys()
 
             if not ordered_keys:
-                messagebox.showwarning("Warning", "Please select at least one Y variable to plot.")
+                messagebox.showwarning("경고", "그릴 Y 변수를 하나 이상 선택해주세요.")
                 return
 
             curves = []
@@ -7945,7 +7961,7 @@ class CathPlotGUI:
             return outfile
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to execute plot pipeline: {e}")
+            messagebox.showerror("오류", f"plot 생성 중 오류가 발생했습니다: {e}")
 
 
     def show_multiplot_dialog(self, mode="Batch", default_format="png"):
@@ -7985,7 +8001,7 @@ class CathPlotGUI:
         def on_execute():
             selected_indices = plot_listbox.curselection()
             if not selected_indices:
-                messagebox.showwarning("Warning", "Please select at least one plot from the list.", parent=dialog)
+                messagebox.showwarning("경고", "목록에서 plot을 하나 이상 선택해주세요.", parent=dialog)
                 return
 
             selected_defs = [available_plots[idx] for idx in selected_indices]
@@ -8030,7 +8046,7 @@ class CathPlotGUI:
             # [수정] 경고 미리보기에서 취소하면 _result_path가 None(파일도 이미
             # 삭제됨) - 이때는 "성공" 메시지를 띄우지 않는다.
             if mode == "Save" and _result_path:
-                messagebox.showinfo("Success", f"Successfully generated multiplot: {os.path.basename(filepath)}")
+                messagebox.showinfo("완료", f"멀티플롯을 생성했습니다: {os.path.basename(filepath)}")
 
         btn_frame = ttk.Frame(dialog)
         btn_frame.pack(fill="x", pady=15)
@@ -8039,7 +8055,7 @@ class CathPlotGUI:
 
     def execute_multi_plot_pipeline(self, selected_plot_defs, mode, custom_filepath=None, custom_format=None):
         if not selected_plot_defs:
-            messagebox.showwarning("Warning", "No plots selected for multi-plot execution.")
+            messagebox.showwarning("경고", "멀티플롯 실행을 위해 선택된 plot이 없습니다.")
             return None
 
         os.makedirs(self.plot_dir, exist_ok=True)
@@ -8292,7 +8308,7 @@ class CathPlotGUI:
                     self.frame_height_var.set(_orig_h)
                     self.frame_unit_var.set(_orig_unit)
         except Exception as e:
-            messagebox.showerror("Print Error", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
+            messagebox.showerror("인쇄 오류", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
             return
 
         if not (success_path and os.path.exists(success_path)):
@@ -8476,11 +8492,11 @@ class CathPlotGUI:
             printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
             names = [p[2] for p in printers]
         except Exception as e:
-            messagebox.showerror("Print Error", f"프린터 목록을 가져오지 못했습니다: {e}")
+            messagebox.showerror("인쇄 오류", f"프린터 목록을 가져오지 못했습니다: {e}")
             return None
 
         if not names:
-            messagebox.showerror("Print Error", "설치된 프린터를 찾을 수 없습니다.")
+            messagebox.showerror("인쇄 오류", "설치된 프린터를 찾을 수 없습니다.")
             return None
 
         try:
@@ -8737,13 +8753,13 @@ class CathPlotGUI:
             except Exception:
                 code = "?"
             err_msg = f"[{step}] 중 Windows 인쇄 오류 (오류 코드: {code})"
-            self.root.after(0, lambda msg=err_msg: messagebox.showerror("Print Error", msg))
+            self.root.after(0, lambda msg=err_msg: messagebox.showerror("인쇄 오류", msg))
         except Exception as e:
             try:
                 err_msg = f"[{step}] 중 오류: {e}"
             except Exception:
                 err_msg = f"[{step}] 중 알 수 없는 오류 (메시지를 표시할 수 없음)"
-            self.root.after(0, lambda msg=err_msg: messagebox.showerror("Print Error", msg))
+            self.root.after(0, lambda msg=err_msg: messagebox.showerror("인쇄 오류", msg))
         finally:
             if emf_handle:
                 gdi32.DeleteEnhMetaFile(emf_handle)
@@ -8814,7 +8830,7 @@ class CathPlotGUI:
                 ))
         except Exception as e:
             err_msg = str(e)
-            self.root.after(0, lambda msg=err_msg: messagebox.showerror("Print Error", msg))
+            self.root.after(0, lambda msg=err_msg: messagebox.showerror("인쇄 오류", msg))
         finally:
             pythoncom.CoUninitialize()
 
@@ -8960,13 +8976,13 @@ class CathPlotGUI:
                                      annotations=save_plotdef.annotations, arrows=save_plotdef.arrows,
                                      circles=getattr(save_plotdef, "circles", []))
         except Exception as e:
-            messagebox.showerror("Save Error", f"파일 저장 중 오류가 발생했습니다:\n{e}")
+            messagebox.showerror("저장 오류", f"파일 저장 중 오류가 발생했습니다:\n{e}")
             return
         _all_warn = list(dict.fromkeys(_font_warn + generator.warnings))
         if _all_warn:
             messagebox.showwarning("SAVE 경고", "\n\n".join(_all_warn))
         self.update_plot_file_list()
-        messagebox.showinfo("Success", f"Saved: {os.path.basename(selected_path)}")
+        messagebox.showinfo("완료", f"저장했습니다: {os.path.basename(selected_path)}")
 
     def _pick_plot_to_save_dialog(self):
         """SAVE 버튼을 눌렀을 때 무엇을 + 어떤 용지 방향으로 저장할지 고르는 창
