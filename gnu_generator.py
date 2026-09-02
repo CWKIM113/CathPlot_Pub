@@ -1089,7 +1089,12 @@ class GnuplotGenerator:
             _cur_axis_ratio = axis_w_in / max(axis_h_in, 0.01)
             if _cur_axis_ratio < _REF_AXIS_RATIO:
                 _axis_shape_scale = max((_cur_axis_ratio / _REF_AXIS_RATIO) ** 0.5, 0.5)
-        font_pt = (legend_size if legend_size else 9) * f_scale * _legend_font_extra * _axis_shape_scale
+        # [수정 - 사용자 보고 버그] "PIP 인셋 legend box가 아직도 상대적으로
+        # 큼 - box 내 font를 줄여서 비율을 맞춰야 하지 않나" - 인셋
+        # 전용(compact) 호출은 legend 글자 크기 자체도 추가로 한 단계 더
+        # 줄인다(margin만 좁힌 이전 수정으로는 부족했음).
+        _compact_font_scale = 0.75 if compact else 1.0
+        font_pt = (legend_size if legend_size else 9) * f_scale * _legend_font_extra * _axis_shape_scale * _compact_font_scale
         # [주의] pngcairo가 pdfcairo보다 legend 글자를 아주 약간 더 크게 그리는
         # 경향이 실측됐지만(동일 스크립트, 터미널만 다르게 비교), 보정 계수가
         # panel_scale/legend_size에 따라 비선형으로 달라져 신뢰할 수 있는 고정
@@ -1437,7 +1442,9 @@ class GnuplotGenerator:
         # 실제 GDI 렌더링과 또 어긋난 사례(이 파일 다른 곳에서도 반복된
         # 문제, "실측 화면(windows 터미널)을 캡처해서 직접 확인" 주석
         # 참고) - 0.65로 덜 공격적으로 되돌려 여유를 둔다.
-        BOX_EDGE_GAP_FRAC = (0.65 if (not is_print_mode and not compact) else (0.7 + 1 / 3)) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
+        # [수정 - 요청] "main legend box와 style 간격 조금 더 줘요" - 0.65
+        # 에서 조금 더 늘림(0.9). print/compact는 그대로 유지.
+        BOX_EDGE_GAP_FRAC = (0.9 if (not is_print_mode and not compact) else (0.7 + 1 / 3)) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
         # [수정] "screen 창에서도 마진이 너무 넓다(5자 이상 줄여야 함)" - 예전엔
         # screen의 char_width_in 계수(0.0049)가 실측 재보정이 안 돼 실제 폭을
         # 과소평가한다는 이유로 여유분을 6.7자까지 늘려뒀었는데, 그 결과 라벨이
@@ -5271,9 +5278,19 @@ class GnuplotGenerator:
                 # 있었음). _pip_ellip_ok(...) 호출 자체에 thresh 조건을 & &로
                 # 끼워 넣어(같은 X 표현식 재사용) 별도로 바로잡는다 - 원/타원이
                 # 아닌 경우(_pip_ellip_ok 호출 자체가 없음)에는 아무 변화 없음.
+                # [수정 - 버그, 코드 리뷰로 발견] "_pip_ellip_ok"를 y1/y2용
+                # 두 함수(_pip_ellip_ok_y1/_pip_ellip_ok_y2)로 나눈 뒤 이
+                # 정규식이 그 이름 변경을 못 따라가서(정확히 "_pip_ellip_ok("
+                # 만 인식, "_pip_ellip_ok_y1("/"_pip_ellip_ok_y2("는 다음
+                # 글자가 "("가 아니라 "_"라 매칭 실패) 조용히 통과해버리는
+                # 잠재 버그를 발견 - 애니메이션 중 PIP 원/타원 인셋이 진행률과
+                # 무관하게 항상 완성된 채로 보이는 재발 원인. 함수명 뒤에
+                # "_y1"/"_y2" 접미사가 있을 수도 있게 정규식을 넓히고, 치환
+                # 결과에도 그 접미사를 그대로 보존한다.
                 def _wrap_ellipse_thresh(m):
-                    _xexpr, _yexpr = m.group(1), m.group(2)
-                    return f"(_pip_ellip_ok(({_xexpr}),({_yexpr})) && (({_xexpr})<=thresh))"
+                    _fn_suffix = m.group(1) or ""
+                    _xexpr, _yexpr = m.group(2), m.group(3)
+                    return f"(_pip_ellip_ok{_fn_suffix}(({_xexpr}),({_yexpr})) && (({_xexpr})<=thresh))"
                 # [수정 - 버그(사용자 보고), 완결성 검토로 추가 확인] Marker(점)
                 # 명령도 이제 _render_pip_inset에서 타원 클리핑용 _pip_ellip_ok
                 # 로 감싸지는데(위 marker 클리핑 버그 수정 참고), 이 줄이 그대로
@@ -5281,10 +5298,10 @@ class GnuplotGenerator:
                 # 항상 표시"(메인 plot의 기존 정책 - _wrap_threshold 주석 참고)
                 # 와 어긋나게 됨 - 마커 plot 명령($MarkerN으로 시작)만 이 thresh
                 # 결합에서 제외해서 공간(타원) 클리핑은 유지하되 시간(진행)
-                # 게이팅은 메인 plot과 동일하게 안 걸리게 한다.
+                # 게이팅은 메인 plot과 동일하게 안 되게 한다.
                 _pip_inset_lines = [
                     ln if ln.strip().startswith("$Marker")
-                    else re.sub(r"_pip_ellip_ok\(\(([^)]+)\),\(([^)]+)\)\)", _wrap_ellipse_thresh, ln)
+                    else re.sub(r"_pip_ellip_ok(_y[12])?\(\(([^)]+)\),\(([^)]+)\)\)", _wrap_ellipse_thresh, ln)
                     for ln in _pip_inset_lines
                 ]
                 # [수정 - 버그] "PIP(rect)+Animation에서 'Can't calculate
@@ -5319,11 +5336,24 @@ class GnuplotGenerator:
                 # plot 자신의 마진/xrange/yrange(_build_plot_commands가 위에서
                 # 이미 한 번 세팅해둔 것, thresh와 무관한 정적 값)를 다시
                 # 그대로 찍어 복구한다.
+                # [수정 - 사용자 보고 버그] "Anim 시작하면서 main-plot의
+                # title들 font가 in-plot 수준으로 작아짐" - margin/xrange와
+                # 완전히 같은 원인: gnuplot의 set title/xlabel/ylabel/
+                # y2label도 margin처럼 "plot 이후 계속 남아있는 세션 전역
+                # 상태"라, 인셋이 자기 축소 폰트로 다시 set title/ylabel/...
+                # 을 해버리면(_render_pip_inset이 항상 이렇게 함) 그 뒤로
+                # 이어지는 프레임의 메인 "plot \\"가 인셋의 작은 폰트 그대로
+                # 다시 그려짐 - margin/xrange와 동일하게 인셋 블록 끝에
+                # 메인 자신의 title/xlabel/ylabel/y2label을 다시 찍어 복구.
                 _main_state_lines = [
                     ln for ln in lines[:plot_idx]
                     if ln.startswith(("set lmargin at screen", "set rmargin at screen",
                                        "set tmargin at screen", "set bmargin at screen",
-                                       "set xrange", "set yrange", "set y2range"))
+                                       "set xrange", "set yrange", "set y2range",
+                                       "set title", "unset title",
+                                       "set xlabel", "unset xlabel",
+                                       "set ylabel", "unset ylabel",
+                                       "set y2label", "unset y2label"))
                 ]
                 # [수정 - 버그(사용자 보고)] "PIP+Animation에서 메인 legend
                 # box가 첫 프레임엔 보이다가 그 다음부터 없어짐" - 위와 완전히

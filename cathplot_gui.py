@@ -7423,19 +7423,17 @@ class CathPlotGUI:
         faster_btn.pack(side="left", padx=3)
 
         def do_exit():
-            # [수정 - 버그, 코드 리뷰로 발견] "즉시 종료함(창이 닫힘)"이라고
-            # 설명서에 적혀 있는데 실제로는 exit_flag만 파일에 써서
-            # gnuplot이 스스로 루프를 빠져나가 "pause mouse close"로
-            # 넘어갈 뿐, 창은 계속 떠 있었음 - 제어 파일 신호는 그대로
-            # 남겨두되(혹시 gnuplot이 마침 그 시점을 확인 중이면 깔끔하게
-            # 빠져나가도록), 프로세스를 직접 종료해 실제로 창이 닫히게 한다.
+            # [수정 - 사용자 보고 버그] "Exit Animation을 누르면 plot 창
+            # 자체가 사라짐(심각한 문제)" - 이전 수정(코드 리뷰로 발견)이
+            # "즉시 종료함(창이 닫힘)"이라는 설명서 문구를 그대로 구현하려고
+            # proc.terminate()로 gnuplot 프로세스 자체를 죽였는데, 그 창이
+            # 곧 메인 plot 창이라 애니메이션만 멈추려 한 것인데 plot 결과
+            # 전체가 같이 사라져버림 - 사용자가 원하는 동작은 "애니메이션만
+            # 멈추고 plot 창은 그대로 유지"이므로 원래 방식(exit_flag만
+            # 써서 gnuplot이 스스로 루프를 빠져나가 "pause mouse close"로
+            # 넘어가게 함 - 창은 그대로 떠 있고 사용자가 직접 닫을 수 있음)
+            # 으로 되돌린다.
             self._write_anim_ctrl(ctrl_path, False, state["frame_pause"], _bump(), exit_flag=1)
-            if proc is not None:
-                try:
-                    if proc.poll() is None:
-                        proc.terminate()
-                except Exception:
-                    pass
             panel.destroy()
 
         pal = self.PALETTE
