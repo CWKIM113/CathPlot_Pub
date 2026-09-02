@@ -3370,10 +3370,21 @@ class GnuplotGenerator:
         # 글자 자체가 뭉개짐) 최후 안전장치로만 작동하게 한다.
         _tic_size = max(9 * font_scale, 3.5)
         _tic_ofs = 0.9 * font_scale  # tic 숫자도 축 쪽으로 살짝 당겨 여백 최소화(위 xlabel/ylabel과 같은 부호 규칙)
-        lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}" offset 0,{_tic_ofs:.2f}')
-        lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}" offset {_tic_ofs:.2f},0')
+        # [수정 - 버그(사용자 보고)] "원/타원 밖으로 in-plot 사각형의 가장자리가
+        # 삐져나옴(border는 unset했는데도)" - "unset border"는 네 변을 잇는
+        # 테두리 "선"만 지울 뿐, gnuplot이 기본으로 반대쪽 변에도 그리는
+        # 거울상(mirror) tic 표시는 그대로 남는다(메인 plot은 이미 "set ytics
+        # nomirror"를 한 번 해뒀지만, 인셋이 여기서 font/offset을 주려고
+        # "set xtics/ytics"를 다시 선언하면서 그 옵션이 초기화됨) - 실측(확대
+        # 렌더)으로 top/right 쪽에 mirror tic이 원 밖으로 튀어나온 것 확인.
+        # 인셋은 항상 자기 쪽(왼쪽 Y1/아래 X, y2 쓰면 오른쪽 Y2) tic만
+        # 필요하므로 nomirror를 명시한다.
+        lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}" offset 0,{_tic_ofs:.2f} nomirror')
+        lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}" offset {_tic_ofs:.2f},0 nomirror')
         if _uses_y2:
-            lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}" offset -{_tic_ofs:.2f},0')
+            lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}" offset -{_tic_ofs:.2f},0 nomirror')
+        else:
+            lines.append("unset y2tics")
 
         lines.append(f"set origin {origin_x:.4f},{origin_y:.4f}")
         lines.append(f"set size {size_w:.4f},{size_h:.4f}")
