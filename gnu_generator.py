@@ -3558,6 +3558,14 @@ class GnuplotGenerator:
         _bm = re.search(r"set border lw\s+([\d.]+)", _main_border_line)
         _border_lw0 = float(_bm.group(1)) if _bm else 1.5
 
+        # [수정 - 버그(사용자 보고)] "원 안의 선두께가 사각형과 다름(어제는
+        # 정확히 같게 했음)" - 배경/경계 장식 오브젝트의 lw가 rect(완전
+        # 불투명 1 / 완전투명 점선 2)와 ellipse(둘 다 2)로 서로 다르게
+        # 하드코딩돼 있었고, 게다가 font_scale과 무관한 고정값이라 인셋
+        # 크기가 달라져도 안 줄어들었음 - 위에서 이미 구해둔 메인 border
+        # 두께(_border_lw0)에 font_scale을 곱한 값 하나로 rect/ellipse
+        # 모두 통일한다(다른 요소들과 같은 관례).
+        _deco_lw = _border_lw0 * font_scale
         if _rect_fully_opaque:
             # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - id 7100은
             # annotation(1번대)/Legend1(8000대)/Legend2(9000대)와 안 겹치도록
@@ -3565,18 +3573,18 @@ class GnuplotGenerator:
             lines.append(
                 f"set object 7100 rectangle from screen {origin_x:.4f},{origin_y:.4f} "
                 f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
-                f'behind fc rgb "white" fillstyle solid 1.0 border lc rgb "black" lw 1'
+                f'behind fc rgb "white" fillstyle solid 1.0 border lc rgb "black" lw {_deco_lw:.2f}'
             )
         elif _rect_no_bg:
             # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
             # 통일 필요(가는 외곽선은 다 있는 게 낫다)" - 배경(채우기)은
             # 여전히 안 그리지만(메인 plot이 그대로 비쳐 보여야 하므로),
             # 경계를 알아볼 수 있게 ellipse의 no_bg 케이스와 완전히 같은
-            # 스타일(front, 검정, lw 2, 점선)로 테두리만 추가한다.
+            # 스타일(front, 검정, 점선)로 테두리만 추가한다.
             lines.append(
                 f"set object 7101 rectangle from screen {origin_x:.4f},{origin_y:.4f} "
                 f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
-                f'front fc rgb "black" fillstyle empty border lc rgb "black" lw 2 dashtype "."'
+                f'front fc rgb "black" fillstyle empty border lc rgb "black" lw {_deco_lw:.2f} dashtype "."'
             )
         elif _ellipse_fully_opaque or _ellipse_no_bg:
             _ecx = origin_x + size_w / 2.0
@@ -3596,7 +3604,7 @@ class GnuplotGenerator:
             lines.append(
                 f"set object 7101 ellipse at screen {_ecx:.4f},{_ecy:.4f} "
                 f"size screen {_erx*2:.4f},{_ery*2:.4f} front fc rgb \"black\" fillstyle empty "
-                f"border lc rgb \"black\" lw 2 {_boundary_dash}"
+                f"border lc rgb \"black\" lw {_deco_lw:.2f} {_boundary_dash}"
             )
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
