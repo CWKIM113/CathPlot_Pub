@@ -304,9 +304,11 @@ class CathenaDatParser:
                     break
 
                 #
-                # blank
+                # blank or comment (#, !, **, = 로 시작하는 줄 - 요청대로
+                # OUTPUT 아래 signal 목록 사이에 낀 주석/빈 줄도 signal
+                # 이름으로 잘못 읽히지 않게 여기서도 건너뛴다)
                 #
-                if txt.strip() == "":
+                if is_comment_or_blank(txt):
                     i += 1
                     continue
 
