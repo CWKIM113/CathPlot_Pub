@@ -3071,6 +3071,50 @@ class GnuplotGenerator:
             cmd_list.append(cmd)
         return cmd_list
 
+    def _presmooth_spline_curve(self, orig_line, dat_path, using_expr_for_match, plot_dir_):
+        """[추가 - 요청] "PIP in-plot(원/타원)에서 spline이 안 됨 - rect는
+        되는데 원/타원은 왜 안 되나" - Animation의 메인 커브 스플라인
+        사전계산(원래 create_animation_script 안의 지역 함수였음, PIP
+        인셋에서도 똑같이 쓰기 위해 공용 메서드로 뽑아냄)과 완전히 같은
+        원리: gnuplot 자신의 `smooth csplines`를 "진행률/타원 NaN이 섞이지
+        않은 원본 데이터"에 대해 먼저(`set table`) 계산시켜 매끄러운 좌표를
+        평범한 숫자 데이터 파일로 뽑아낸 뒤, 실제 plot에서는 그 파일을
+        NaN과 무관한 "with lines"로 그대로 그린다(재계산 불필요) - 그러면
+        나중에 원/타원 클리핑이나 애니메이션 진행률이 이 위에 NaN을
+        끼워 넣어도(이미 매끄러운 점들 중 일부를 건너뛰는 것뿐이라) 문제
+        없다. 실패(원본 데이터가 3점 미만 등)하면 None을 돌려주고, 호출부가
+        기존처럼 직선 대체 + 경고로 안전하게 넘어간다."""
+        if " smooth csplines" not in orig_line:
+            return None
+        if f'"{dat_path}"' not in orig_line:
+            return None
+        _idx = orig_line.find(" smooth csplines")
+        _suffix = orig_line[_idx + len(" smooth csplines"):]  # notitle axes ... with lines ... (스타일 그대로 보존)
+        _tmp_name = f".cathplot_presmooth_{uuid.uuid4().hex}.dat"
+        _tmp_path = os.path.join(plot_dir_, _tmp_name)
+        _mini_script = (
+            f'set table "{_tmp_name}"\n'
+            f'plot "{dat_path}" using {using_expr_for_match} smooth csplines\n'
+            f'unset table\n'
+        )
+        try:
+            _gp = _resolve_gnuplot_exe()
+            _res = subprocess.run(
+                [_gp], input=_mini_script, text=True, encoding="utf-8", errors="replace",
+                capture_output=True, cwd=plot_dir_, timeout=30, **_no_console_kwargs()
+            )
+            if _res.returncode != 0 or not os.path.exists(_tmp_path):
+                return None
+            # 데이터가 3점 미만이라 애초에 spline 자체가 불가능한 경우(원천적
+            # 한계) - 빈 파일이거나 실제 데이터 줄이 없으면 실패로 간주.
+            with open(_tmp_path, encoding="utf-8", errors="replace") as f:
+                if not any(ln.strip() and not ln.strip().startswith("#") for ln in f):
+                    os.remove(_tmp_path)
+                    return None
+        except Exception:
+            return None
+        return f'"{_tmp_name}" using ($1):2{_suffix}', _tmp_path
+
     def _render_pip_inset(self, plotdef, lines, main_cmd_list, fmt, parent_box=None, force_postprocess=False):
         """[추가 - 요청] "작은 plot을 큰 plot 안에(PIP)" - 메인 plot을 이미 다
         그린 뒤(lines에 'plot ...'까지 채워진 상태) 같은 캔버스 위에 작은
@@ -3673,24 +3717,54 @@ class GnuplotGenerator:
         _inset_cmd_list = [c for c in main_cmd_list if not c.startswith("NaN axes")]
 
         if _ellipse_native_ok:
-            # [수정 - 버그] "PIP 원/타원 클리핑 + Cubic Spline(smooth csplines)
-            # 조합에서 gnuplot이 'Can't calculate splines, need at least 3
-            # points'로 죽음" - 아래 _wrap_ellipse가 타원 밖의 점을 NaN(0/0)
-            # 으로 바꿔 넣는데, smooth csplines는 이 NaN을 plain "with lines"
-            # 처럼 건너뛰지 못하고(스플라인 계산 자체가 깨끗한 실수 데이터
-            # 열을 요구) 그대로 죽어버림 - 사각형 클리핑은 NaN 주입 없이
-            # xrange/yrange만 좁히는 방식이라 이 문제가 없음(실측으로 원인
-            # 확정: 사각형은 항상 정상, 원/타원만 죽음). 원/타원으로 자르는
-            # inset 안에서는 이 curve의 스플라인 보간을 건너뛰고 평범한
-            # 선(원본 데이터 그대로)으로 대체한다 - 메인 plot이나 사각형
-            # 클리핑에는 영향 없음.
-            if any(" smooth csplines" in c for c in _inset_cmd_list):
-                _spline_titles = [c.title for c in getattr(plotdef, "curves", []) if getattr(c, "smooth_csplines", False)]
+            # [수정 - 요청] "PIP in-plot(원/타원)에서 spline 되는 방안이
+            # 없을까요? - rect는 되는데 원/타원은 왜 안 되나" - 근본 원인은:
+            # 아래 _wrap_ellipse가 타원 밖의 점을 NaN(0/0)으로 바꿔 넣는데,
+            # gnuplot의 smooth csplines는 이 NaN을 plain "with lines"처럼
+            # 건너뛰지 못하고(스플라인 계산 자체가 깨끗한 실수 데이터 열을
+            # 요구) 그대로 죽어버림('Can't calculate splines...') - 사각형
+            # 클리핑은 NaN 주입 없이 xrange/yrange만 좁히는 방식이라 이
+            # 문제가 없음(실측으로 원인 확정: 사각형은 항상 정상, 원/타원만
+            # 죽음). Animation의 메인 커브가 이미 쓰고 있는 것과 완전히
+            # 같은 해법을 여기서도 적용한다: gnuplot 자신의 smooth
+            # csplines를 NaN이 섞이지 않은 원본 데이터로 먼저(set table)
+            # 계산시켜 매끄러운 좌표를 파일로 뽑아낸 뒤, 그 파일은 그냥
+            # "with lines"이므로 이후 원/타원 NaN이 끼워져도(이미 매끄러운
+            # 점들 중 일부를 건너뛰는 것뿐) 문제없다 - self.
+            # _presmooth_spline_curve 참고. 데이터가 3점 미만 등으로
+            # 실패하는 경우에만 기존처럼 직선 대체 + 경고로 안전하게
+            # 넘어간다.
+            _default_x_col = getattr(plotdef, "x_output_no", 0)
+            _pip_spline_titles_ok = []
+            _pip_spline_titles_failed = []
+            for _curve in _inset_curves:
+                if not getattr(_curve, "smooth_csplines", False):
+                    continue
+                _abs_path = _curve.dat_file if os.path.isabs(_curve.dat_file) else os.path.abspath(_curve.dat_file)
+                try:
+                    _rel_path = os.path.relpath(_abs_path, start=self.plot_dir) if self.plot_dir else _abs_path
+                except ValueError:
+                    _rel_path = _abs_path
+                _rel_path = _rel_path.replace("\\", "/")
+                _x_col_idx = _curve.x_output_no if getattr(_curve, "x_output_no", None) is not None else _default_x_col
+                _using_expr_for_match = f"(${_x_col_idx + 1}+{_curve.x_shift}):{_curve.output_no + 1}"
+                for _li, _ln in enumerate(_inset_cmd_list):
+                    if f'"{_rel_path}"' in _ln and f":{_curve.output_no + 1} smooth csplines" in _ln:
+                        _result = self._presmooth_spline_curve(_ln, _rel_path, _using_expr_for_match, self.plot_dir)
+                        if _result:
+                            _inset_cmd_list[_li], _ = _result
+                            _pip_spline_titles_ok.append(_curve.title)
+                        else:
+                            _pip_spline_titles_failed.append(_curve.title)
+                        break
+                else:
+                    _pip_spline_titles_failed.append(_curve.title)
+            if _pip_spline_titles_failed:
                 _pip_name = (plotdef.title or "plot").strip() or "plot"
                 self.warnings.append(
                     f"'{_pip_name}'의 PIP 원/타원 클리핑 인셋 안에서는 Cubic Spline이 "
-                    f"gnuplot 제약(NaN 데이터와 함께 계산 불가)으로 적용되지 않고 원본 데이터의 "
-                    f"직선으로 표시됩니다{' (' + ', '.join(_spline_titles) + ')' if _spline_titles else ''} "
+                    f"gnuplot 제약(원본 데이터가 3점 미만 등)으로 적용되지 않고 원본 데이터의 "
+                    f"직선으로 표시됩니다 ({', '.join(_pip_spline_titles_failed)}) "
                     f"- 메인 plot이나 사각형 클리핑에는 영향 없습니다."
                 )
             _inset_cmd_list = [c.replace(" smooth csplines", "") for c in _inset_cmd_list]
@@ -4935,42 +5009,19 @@ class GnuplotGenerator:
         # 그 curve의 명령을 "사전 계산된 파일 + 단순 using 1:2"로 바꿔치기해서
         # 스플라인을 유지한 채 애니메이션되게 한다(실패하면 기존처럼 직선
         # 대체 + 경고로 안전하게 넘어감).
-        def _presmooth_curve_line(orig_line, dat_path, using_expr_for_match, plot_dir_):
-            if " smooth csplines" not in orig_line:
-                return None
-            if f'"{dat_path}"' not in orig_line:
-                return None
-            _idx = orig_line.find(" smooth csplines")
-            _suffix = orig_line[_idx + len(" smooth csplines"):]  # notitle axes ... with lines ... (스타일 그대로 보존)
-            _tmp_name = f".cathplot_presmooth_{uuid.uuid4().hex}.dat"
-            _tmp_path = os.path.join(plot_dir_, _tmp_name)
-            _mini_script = (
-                f'set table "{_tmp_name}"\n'
-                f'plot "{dat_path}" using {using_expr_for_match} smooth csplines\n'
-                f'unset table\n'
-            )
-            try:
-                _gp = _resolve_gnuplot_exe()
-                _res = subprocess.run(
-                    [_gp], input=_mini_script, text=True, encoding="utf-8", errors="replace",
-                    capture_output=True, cwd=plot_dir_, timeout=30, **_no_console_kwargs()
-                )
-                if _res.returncode != 0 or not os.path.exists(_tmp_path):
-                    return None
-                # 데이터가 3점 미만이라 애초에 spline 자체가 불가능한 경우
-                # (진행률과 무관한 원천적 한계) - 빈 파일이거나 실제 데이터
-                # 줄이 없으면 실패로 간주.
-                with open(_tmp_path, encoding="utf-8", errors="replace") as f:
-                    if not any(ln.strip() and not ln.strip().startswith("#") for ln in f):
-                        os.remove(_tmp_path)
-                        return None
-            except Exception:
-                return None
-            return f'"{_tmp_name}" using ($1):2{_suffix}', _tmp_path
-
+        # [수정 - 요청] "PIP in-plot(원/타원)에서도 spline이 되면 좋겠다"는
+        # 후속 요청으로 PIP 인셋에서도 같은 원리를 쓰기 위해, 이 로직을
+        # 공용 메서드 self._presmooth_spline_curve로 뽑아냈다(동작은 완전히
+        # 동일, 호출부만 self. 경유).
         _presmooth_temp_files = []
         _failed_spline_titles = []
         if any(" smooth csplines" in ln for ln in static_curve_lines):
+            # [수정 - 버그, 코드 리뷰로 발견] default_x_col이 이 함수 안에
+            # 어디에도 정의돼 있지 않아, curve별 x_output_no가 명시돼 있지
+            # 않으면(=plot 전역 기본 X컬럼을 그대로 쓰는 흔한 경우)
+            # NameError로 애니메이션 생성 자체가 죽는 잠재 버그 - 실제
+            # GUI는 항상 구체적인 x_output_no를 넘겨서 지금까지 안 드러났음.
+            default_x_col = getattr(plotdef, "x_output_no", 0)
             for _curve in getattr(plotdef, "curves", []):
                 if not getattr(_curve, "smooth_csplines", False):
                     continue
@@ -4986,7 +5037,7 @@ class GnuplotGenerator:
                 for _li, _ln in enumerate(static_curve_lines):
                     if f'"{_rel_path}"' in _ln and f":{_curve.output_no + 1} smooth csplines" in _ln:
                         _matched = True
-                        _result = _presmooth_curve_line(_ln, _rel_path, _using_expr_for_match, self.plot_dir)
+                        _result = self._presmooth_spline_curve(_ln, _rel_path, _using_expr_for_match, self.plot_dir)
                         if _result:
                             static_curve_lines[_li], _tmp_path = _result
                             _presmooth_temp_files.append(_tmp_path)
