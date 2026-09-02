@@ -2380,7 +2380,12 @@ class GnuplotGenerator:
             # 타이트했음. 당겨주는 양(음수 offset의 크기)을 절반으로 줄여
             # 간격을 눈에 띄게 확보(-0.4 근방으로 재측정 시 육안상 자연스러운
             # 간격, 과도하게 넓지도 않음).
-            _title_gap = -0.4 * (title_size / 14.0)
+            # [수정 - 요청] "plot-title과 top frame 간격을 지금의 1.5배로" -
+            # 렌더링 픽셀 측정 기준(-0.4일 때 title 하단~frame 간격=32px)
+            # 으로 1.5배(48px)가 되는 지점을 실측(-0.8=>3px, -0.4=>32px,
+            # -0.18=>41px, -0.01=>48px)해서 찾음 - 당기는 양을 사실상
+            # 없앤 값(0에 가까움)이 목표 간격과 정확히 일치했음.
+            _title_gap = -0.01 * (title_size / 14.0)
             lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" offset 0,{_title_gap:.3f} {title_enh}')
 
         # [수정 - 심각한 버그] "Print/Save에서 X title이 캔버스 맨 아래 경계에
