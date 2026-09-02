@@ -1418,7 +1418,11 @@ class GnuplotGenerator:
         # 두께(lw)만으로도 거의 다 채워져 시각적으로 안 보였음(우측 정렬이면
         # 샘플선이 box 오른쪽 테두리에 바로 붙는 쪽이라 특히 눈에 띔) - screen과
         # 동일한 계수(0.7+1/3)로 맞춘다.
-        BOX_EDGE_GAP_FRAC = (0.7 + 1 / 3) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
+        # [수정 - 요청] "main-plot legend 안 title-box 마진이 아직도 큼(1글자
+        # 간격으로 하라고 했는데)" - 실제 렌더링 확인 결과 화면에서 샘플선
+        # 오른쪽 끝<->box 테두리 간격이 눈에 띄게 넓어 보였음. print/save는
+        # 기존 그대로(0.7+1/3) 유지하고 화면만 절반 수준(0.35)으로 더 줄인다.
+        BOX_EDGE_GAP_FRAC = (0.35 if not is_print_mode else (0.7 + 1 / 3)) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
         # [수정] "screen 창에서도 마진이 너무 넓다(5자 이상 줄여야 함)" - 예전엔
         # screen의 char_width_in 계수(0.0049)가 실측 재보정이 안 돼 실제 폭을
         # 과소평가한다는 이유로 여유분을 6.7자까지 늘려뒀었는데, 그 결과 라벨이
@@ -3401,7 +3405,7 @@ class GnuplotGenerator:
             # 당길지"라 폰트가 작을수록 절대 간격도 작아야 자연스러워서
             # font_scale에 비례시킴).
             _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
-            _lbl_ofs_y = (4.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
+            _lbl_ofs_y = (5.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
             _xlabel_txt = (plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
@@ -3584,7 +3588,15 @@ class GnuplotGenerator:
         if not force_postprocess and _clip_shape in ("circle", "ellipse") and (_opacity <= 0.0 + 1e-6 or _opacity >= 100.0 - 1e-6):
             _xr = _parse_range(xrange_cmd)
             _yr = _parse_range(yrange_cmd)
-            if _xr is not None and _yr is not None and _xr[1] != _xr[0] and _yr[1] != _yr[0]:
+            # [수정 - 사용자 보고 버그] "인셋 안에 커브가 하나만 보임(2개
+            # 있어야 하는데)" - y2 curve가 있는데 y2range가 구체적인 숫자로
+            # 확정 안 돼 있으면(아래 _pip_ellip_ok_y2가 y1 range로 y2 값을
+            # 잘못 정규화해 거의 전부 NaN 처리되는) 문제를 막기 위해, y2를
+            # 쓰는 경우 y2range도 concrete해야만 네이티브 경로를 탄다(안
+            # 그러면 기존처럼 안전하게 사각형/후처리 경로로 대체됨).
+            _y2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
+            if (_xr is not None and _yr is not None and _xr[1] != _xr[0] and _yr[1] != _yr[0]
+                    and _y2r is not None and _y2r[1] != _y2r[0]):
                 _ellipse_native_ok = True
         _ellipse_fully_opaque = _ellipse_native_ok and _opacity >= 100.0 - 1e-6
         _ellipse_no_bg = _ellipse_native_ok and _opacity <= 0.0 + 1e-6
@@ -3698,13 +3710,38 @@ class GnuplotGenerator:
             # id 7500대(Legend1 8000대/Legend2 9000대와 안 겹치는 번호)로 inset
             # 전용 legend를 그림 - 위치는 1차 구현에선 "right top" 고정.
             # (다른 plot의 곡선을 보여주는 경우 _inset_curves를 씀)
+            # [수정 - 사용자 보고 버그] "in-plot의 legend box가 너무 작아
+            # title을 자름(pressure/flowrate 두 줄이 겹쳐 보임)" - 실제
+            # 렌더링으로 확인한 원인: axis_w_in/axis_h_in에 "페이지 전체가
+            # 10x8in"이라는 고정 가정(10.0*size_w, 8.0*size_h)을 그대로
+            # 썼는데, 실제 인셋의 축 상자는 이 박스(origin/size) 안에서도
+            # margin(_inset_lmargin 등)만큼 더 줄어든 훨씬 작은 영역이라
+            # (특히 axis_title_on으로 여백이 넓어질수록 더 작아짐) 실제
+            # 물리 크기보다 축 크기를 과대평가해서 줄 높이(ROW_H = 물리
+            # 줄높이/axis_h_in)가 필요한 것보다 작게 계산됨(두 줄이 겹침).
+            # 메인 plot 자신의 legend가 쓰는 것과 같은 방식(실제 lmargin/
+            # rmargin/tmargin/bmargin으로 물리 폭/높이를 역산)으로 바꿔
+            # 비율을 main-plot과 동일하게 맞춘다.
+            if (fmt or "").lower() == "interactive":
+                _pip_canvas_w_in, _pip_canvas_h_in = 5.95, 4.17
+            else:
+                try:
+                    _pip_canvas_w_in = float((plotdef.frame_width or "5").strip() or 5.0)
+                    _pip_canvas_h_in = float((plotdef.frame_height or "4").strip() or 4.0)
+                    if (plotdef.frame_unit or "in") == "cm":
+                        _pip_canvas_w_in /= 2.54
+                        _pip_canvas_h_in /= 2.54
+                except (TypeError, ValueError):
+                    _pip_canvas_w_in, _pip_canvas_h_in = 5.0, 4.0
+            _pip_legend_axis_w_in = max((_inset_rmargin - _inset_lmargin) * _pip_canvas_w_in, 0.3)
+            _pip_legend_axis_h_in = max((_inset_tmargin - _inset_bmargin) * _pip_canvas_h_in, 0.3)
             curve_index_map = {id(c): i for i, c in enumerate(_inset_curves)}
             self._render_legend_box(
                 lines, _inset_curves, "right top", True, 1.0, 7500,
                 font_scale, 1.0, 1.0, getattr(plotdef, "is_print_mode", False),
                 curve_index_map, plotdef.legend_font,
-                axis_w_in=10.0 * size_w, legend_size=float(plotdef.legend_size or 9),
-                axis_h_in=8.0 * size_h, fmt=fmt,
+                axis_w_in=_pip_legend_axis_w_in, legend_size=float(plotdef.legend_size or 9),
+                axis_h_in=_pip_legend_axis_h_in, fmt=fmt,
             )
 
         # [수정 - 버그] 메인 plot이 y2축 미사용시 넣어두는 "NaN axes x1y2
@@ -3777,26 +3814,46 @@ class GnuplotGenerator:
             # 바꾼 뒤, 이 박스 안에서 축(margin)이 차지하는 비율만큼 다시
             # "박스 내 0~1 위치"로 변환하고, 타원 중심(0.5,0.5) 기준 표준
             # 타원 방정식으로 판정한다.
+            # [수정 - 사용자 보고 버그] "인셋 안에 커브가 하나만 보임(2개
+            # 있어야 하는데)" - 실제 렌더링으로 확인한 원인: _pip_ellip_ok가
+            # y1/y2 구분 없이 항상 yrange(Y1 범위)로만 y값을 정규화했음 -
+            # Y2 curve(예: flowrate, -252~128)의 실제 값을 Y1 범위(예: 0~8)
+            # 기준으로 정규화하면 거의 모든 점이 [0,1] 범위를 한참 벗어나
+            # "타원 밖"으로 판정되어 Y2 curve 전체가 NaN 처리(=안 보임)됨.
+            # y1/y2용 함수를 따로 만들어 각 curve가 실제로 속한 축의 range로
+            # 정규화하도록 분리한다("axes x1y2"가 있는 줄만 y2용 함수를 씀).
             _exmin, _exmax = _parse_range(xrange_cmd)
             _eymin, _eymax = _parse_range(yrange_cmd)
             _erx_box = _clip_rx / 100.0
             _ery_box = _clip_ry / 100.0
-            lines.append(
-                f"_pip_ellip_ok(x,y) = "
-                f"((((x-({_exmin}))/(({_exmax})-({_exmin})))*(1-{_inset_left_frac}-{_inset_right_frac})"
-                f"+{_inset_left_frac}-0.5)**2)/(({_erx_box})**2) + "
-                f"((((y-({_eymin}))/(({_eymax})-({_eymin})))*(1-{_inset_bottom_frac}-{_inset_top_frac})"
-                f"+{_inset_bottom_frac}-0.5)**2)/(({_ery_box})**2) <= 1"
-            )
 
-            def _wrap_ellipse(m):
-                expr = m.group(1)
-                col = m.group(2)
+            def _ellip_ok_body(y0, y1):
                 return (
-                    f"using (_pip_ellip_ok(({expr}),(${col})) ? ({expr}) : (0/0))"
-                    f":(_pip_ellip_ok(({expr}),(${col})) ? (${col}) : (0/0))"
+                    f"((((x-({_exmin}))/(({_exmax})-({_exmin})))*(1-{_inset_left_frac}-{_inset_right_frac})"
+                    f"+{_inset_left_frac}-0.5)**2)/(({_erx_box})**2) + "
+                    f"((((y-({y0}))/(({y1})-({y0})))*(1-{_inset_bottom_frac}-{_inset_top_frac})"
+                    f"+{_inset_bottom_frac}-0.5)**2)/(({_ery_box})**2) <= 1"
                 )
-            _inset_cmd_list = [re.sub(r"using \(([^)]+)\):(\d+)", _wrap_ellipse, c) for c in _inset_cmd_list]
+            lines.append(f"_pip_ellip_ok_y1(x,y) = {_ellip_ok_body(_eymin, _eymax)}")
+            if _uses_y2:
+                _ey2min, _ey2max = _y2r
+                lines.append(f"_pip_ellip_ok_y2(x,y) = {_ellip_ok_body(_ey2min, _ey2max)}")
+
+            def _ellip_fn_for(cmd):
+                return "_pip_ellip_ok_y2" if "axes x1y2" in cmd else "_pip_ellip_ok_y1"
+
+            def _wrap_ellipse_line(cmd):
+                _fn = _ellip_fn_for(cmd)
+
+                def _wrap(m):
+                    expr = m.group(1)
+                    col = m.group(2)
+                    return (
+                        f"using ({_fn}(({expr}),(${col})) ? ({expr}) : (0/0))"
+                        f":({_fn}(({expr}),(${col})) ? (${col}) : (0/0))"
+                    )
+                return re.sub(r"using \(([^)]+)\):(\d+)", _wrap, cmd)
+            _inset_cmd_list = [_wrap_ellipse_line(c) for c in _inset_cmd_list]
 
             # [추가 - 발견(완결성 검토)] Function Curve(using절이 없는 순수
             # gnuplot 수식)는 위 정규식이 "using ..."을 못 찾아 그대로 통과돼
@@ -3804,9 +3861,9 @@ class GnuplotGenerator:
             # 확인: 데이터 curve는 타원대로 잘리는데 함수 curve만 박스
             # 네모 모서리까지 그대로 그려짐). 함수 curve는 이미 x의 함수라
             # gnuplot이 plot 문맥에서 기본 제공하는 더미변수 x를 그대로 써서
-            # 같은 _pip_ellip_ok(x,y) 판정 함수로 감싼다(0/0 대신 1/0을 써도
-            # 결과는 같은 NaN - 위 데이터 curve와 스타일만 다름, 기존 관용구
-            # 유지 목적으로 그대로 0/0 사용).
+            # 같은 _pip_ellip_ok_y1/y2(x,y) 판정 함수로 감싼다(0/0 대신
+            # 1/0을 써도 결과는 같은 NaN - 위 데이터 curve와 스타일만 다름,
+            # 기존 관용구 유지 목적으로 그대로 0/0 사용).
             _FC_NOTITLE_RE = re.compile(r"^(.*) notitle axes (x1y1|x1y2) with lines(.*)$")
 
             def _wrap_ellipse_func(cmd):
@@ -3816,25 +3873,30 @@ class GnuplotGenerator:
                 if not m:
                     return cmd
                 expr, axis, rest = m.group(1), m.group(2), m.group(3)
-                wrapped = f"(_pip_ellip_ok((x),({expr})) ? ({expr}) : (0/0))"
+                _fn = "_pip_ellip_ok_y2" if axis == "x1y2" else "_pip_ellip_ok_y1"
+                wrapped = f"({_fn}((x),({expr})) ? ({expr}) : (0/0))"
                 return f"{wrapped} notitle axes {axis} with lines{rest}"
             _inset_cmd_list = [_wrap_ellipse_func(c) for c in _inset_cmd_list]
 
             # [수정 - 버그(사용자 보고)] "타원 밖에 그림 조각(마커)이 클리핑
             # 안 되고 나타남" - Marker(점) 명령은 "using 1:2"처럼 컬럼 번호가
             # 괄호 없이 맨 숫자라서(데이터 curve의 "using (식):(식)"과 형태가
-            # 다름) 위 _wrap_ellipse 정규식(괄호로 감싼 식만 인식)이 못
-            # 잡아내고 그대로 통과했음(실제 렌더로 확인 - 마커 점들이 타원
-            # 경계와 무관하게 인셋 박스 전체에 그대로 찍혀 있었음). 데이터
-            # curve와 동일하게 컬럼값을 _pip_ellip_ok로 감싸 타원 밖 점은
-            # NaN 처리한다.
-            def _wrap_ellipse_marker(m):
-                xcol, ycol = m.group(1), m.group(2)
-                return (
-                    f"using (_pip_ellip_ok((${xcol}),(${ycol})) ? (${xcol}) : (0/0))"
-                    f":(_pip_ellip_ok((${xcol}),(${ycol})) ? (${ycol}) : (0/0))"
-                )
-            _inset_cmd_list = [re.sub(r"using (\d+):(\d+)\b", _wrap_ellipse_marker, c) for c in _inset_cmd_list]
+            # 다름) 위 _wrap_ellipse_line 정규식(괄호로 감싼 식만 인식)이
+            # 못 잡아내고 그대로 통과했음(실제 렌더로 확인 - 마커 점들이
+            # 타원 경계와 무관하게 인셋 박스 전체에 그대로 찍혀 있었음).
+            # 데이터 curve와 동일하게 컬럼값을 감싸 타원 밖 점은 NaN 처리
+            # 한다(마커도 "axes x1y2" 여부로 y1/y2용 함수를 구분).
+            def _wrap_ellipse_marker(cmd):
+                _fn = _ellip_fn_for(cmd)
+
+                def _wrap(m):
+                    xcol, ycol = m.group(1), m.group(2)
+                    return (
+                        f"using ({_fn}((${xcol}),(${ycol})) ? (${xcol}) : (0/0))"
+                        f":({_fn}((${xcol}),(${ycol})) ? (${ycol}) : (0/0))"
+                    )
+                return re.sub(r"using (\d+):(\d+)\b", _wrap, cmd)
+            _inset_cmd_list = [_wrap_ellipse_marker(c) for c in _inset_cmd_list]
 
         # [수정 - 버그(사용자 보고)] "tic가 너무 두꺼움(사각형처럼 가는
         # 실선으로)" - "unset border"는 테두리 "선"만 안 보이게 할 뿐,
@@ -3849,6 +3911,22 @@ class GnuplotGenerator:
             # 위 주석 참고 - 인셋의 네모 축 테두리 "선"만 꺼서 원/타원
             # 밖으로 삐져나오지 않게 한다(tic 두께는 위에서 이미 줄여둠).
             lines.append("unset border")
+            # [추가 - 요청] "in-plot의 축frame은 curve처럼 진한 실선이어야
+            # 함(투명인 경우도 마찬가지)" - gnuplot 네이티브 border는 계속
+            # 꺼둔 채로(tic 두께에는 영향 없음), 대신 축 박스의 실제 네 변
+            # 위치(_inset_lmargin 등)에 curve와 같은 굵기(lw 3.0)의 장식용
+            # 사각형을 새로 그려 "굵은 실선 테두리"로 보이게 한다. 이 네
+            # 모서리는 위 적응형 여백 계산(_safety=0.85)이 항상 타원
+            # 안쪽에 들어오도록 이미 보장해주므로(볼록도형인 타원 안에
+            # 네 꼭짓점이 있으면 그 사이 직선도 항상 안쪽 - 기하학적으로
+            # 항상 성립), 원/타원 밖으로 삐져나갈 일이 없다. 불투명/투명
+            # 여부와 무관하게 항상 같은 굵은 실선(사용자 명시적 확인 -
+            # 점선/얇게로 바꿀 필요 없음).
+            lines.append(
+                f"set object 7102 rectangle from screen {_inset_lmargin:.4f},{_inset_bmargin:.4f} "
+                f"to screen {_inset_rmargin:.4f},{_inset_tmargin:.4f} "
+                f'front fc rgb "black" fillstyle empty border lc rgb "black" lw 3.0'
+            )
         lines.append(f"set tics scale {_tic_major0 * font_scale:.3f}, {_tic_minor0 * font_scale:.3f}")
         if _has_grid:
             _grid_lw = max(_border_lw0 * font_scale * 0.7, 0.3)
