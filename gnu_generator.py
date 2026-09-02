@@ -1028,7 +1028,7 @@ class GnuplotGenerator:
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
                             axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None,
                             align="Auto", fmt=None, box_w_pct_override=None, box_h_pct_override=None,
-                            axis_x_span=None, axis_y_span=None):
+                            axis_x_span=None, axis_y_span=None, compact=False):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -1222,7 +1222,13 @@ class GnuplotGenerator:
         # 화면만 크게 유지한다
         # [수정] "legend box 테두리와 첫/끝 줄 글자 사이 여백도 줄여달라"는
         # 요청으로 print 쪽 계수를 0.12 -> 0.08로 축소(화면은 그대로 유지).
-        _row_margin_ratio = 0.08 if is_print_mode else 0.3
+        # [수정 - 사용자 보고 버그] "PIP 인셋 자체 legend box가 너무 크고
+        # box 내 마진도 너무 큼" - 화면(screen)용 여유(0.3)는 원래 넓은
+        # 메인 legend를 기준으로 잡은 값이라, 훨씬 좁은 인셋 안에서는
+        # 상대적으로 과하게 크게 보임 - 인셋 legend 호출(compact=True)은
+        # is_print_mode/fmt와 무관하게 항상 좁은 값(print과 동일한 0.08)
+        # 을 쓴다.
+        _row_margin_ratio = 0.08 if (is_print_mode or compact) else 0.3
         ROW_MARGIN = _row_margin_ratio * ROW_H
         # [수정] "문자 하나당 대략적인 폭(인치)"을 legend 라벨 폭 추정뿐 아니라
         # legend box와 axis frame 사이 간격(1자 정도)에도 재사용한다 - font_pt에
@@ -1407,7 +1413,10 @@ class GnuplotGenerator:
         # [수정] "Print/Save에서도 title이 샘플선에 붙어 보인다"는 후속 피드백으로
         # print도 소폭(0.4 -> 0.6) 늘림 - box_w가 폭 폭주 우려가 있어 screen(1.4)
         # 만큼은 아니고 절반 정도만 늘림.
-        LABEL_GAP_FRAC = (0.6 if is_print_mode else 1.4) * char_width_frac   # 샘플선 <-> curve title 간격
+        # [수정 - 사용자 보고 버그] PIP 인셋 legend(compact=True)는 화면
+        # 여부와 무관하게 print과 같은 좁은 간격을 쓴다(인셋 자체가 좁아
+        # 화면용 넉넉한 간격(1.4)이 상대적으로 과하게 커 보였음).
+        LABEL_GAP_FRAC = (0.6 if (is_print_mode or compact) else 1.4) * char_width_frac   # 샘플선 <-> curve title 간격
         # [수정] "screen에서 박스 테두리와 샘플선이 붙어 보인다"는 재확인 피드백.
         # 계산해보면 print/screen 공통 계수(0.3)는 기본 legend_size(9pt) 기준
         # 물리 간격이 0.013in 안팎(≈2px)에 불과해, 샘플선 자체의 굵기(lw)나
@@ -1422,7 +1431,13 @@ class GnuplotGenerator:
         # 간격으로 하라고 했는데)" - 실제 렌더링 확인 결과 화면에서 샘플선
         # 오른쪽 끝<->box 테두리 간격이 눈에 띄게 넓어 보였음. print/save는
         # 기존 그대로(0.7+1/3) 유지하고 화면만 절반 수준(0.35)으로 더 줄인다.
-        BOX_EDGE_GAP_FRAC = (0.35 if not is_print_mode else (0.7 + 1 / 3)) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
+        # [수정 - 버그(사용자 보고), 재조정] 0.35까지 줄였더니 실제 화면
+        # (Windows GDI 렌더링)에서는 완전히 붙어 보임(0에 가까움) - PIL
+        # 추정 폭 기준 테스트(Cairo 렌더링)에서는 괜찮아 보였던 것이
+        # 실제 GDI 렌더링과 또 어긋난 사례(이 파일 다른 곳에서도 반복된
+        # 문제, "실측 화면(windows 터미널)을 캡처해서 직접 확인" 주석
+        # 참고) - 0.65로 덜 공격적으로 되돌려 여유를 둔다.
+        BOX_EDGE_GAP_FRAC = (0.65 if (not is_print_mode and not compact) else (0.7 + 1 / 3)) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
         # [수정] "screen 창에서도 마진이 너무 넓다(5자 이상 줄여야 함)" - 예전엔
         # screen의 char_width_in 계수(0.0049)가 실측 재보정이 안 돼 실제 폭을
         # 과소평가한다는 이유로 여유분을 6.7자까지 늘려뒀었는데, 그 결과 라벨이
@@ -3096,8 +3111,15 @@ class GnuplotGenerator:
         _suffix = orig_line[_idx + len(" smooth csplines"):]  # notitle axes ... with lines ... (스타일 그대로 보존)
         _tmp_name = f".cathplot_presmooth_{uuid.uuid4().hex}.dat"
         _tmp_path = os.path.join(plot_dir_, _tmp_name)
+        # [수정 - 사용자 보고 버그] "X/Y 확대 구간을 좁게 주면 in-plot이
+        # 직선으로 나옴" - 기본 samples(100)는 원본 데이터의 "전체" X
+        # 범위에 걸쳐 고르게 뽑히므로, PIP가 그 중 아주 좁은 구간만 확대해
+        # 보여주면 그 좁은 구간 안에는 샘플이 1~2개밖에 안 남아 직선처럼
+        # 보임(실제 재현 확인) - 어떤 확대 구간에서도 촘촘하게 보이도록
+        # 샘플 수를 넉넉히 늘려서 미리 뽑아둔다.
         _mini_script = (
             f'set table "{_tmp_name}"\n'
+            f'set samples 2000\n'
             f'plot "{dat_path}" using {using_expr_for_match} smooth csplines\n'
             f'unset table\n'
         )
@@ -3397,40 +3419,6 @@ class GnuplotGenerator:
                     pass
 
         _pip_round_shape = _clip_shape in ("circle", "ellipse")
-        if pip.get("axis_title_on"):
-            # [추가 - 요청] "tic 숫자와 축 title 사이 간격이 너무 넓음(최소,
-            # 거의 0이 되게)" - gnuplot 6.0으로 직접 렌더링해 offset 부호를
-            # 실측 확인함(xlabel은 y가 양수일수록, ylabel은 x가 양수일수록
-            # tic 쪽으로 붙음 - 문자 그대로 "gnuplot 기본값 대비 얼마나
-            # 당길지"라 폰트가 작을수록 절대 간격도 작아야 자연스러워서
-            # font_scale에 비례시킴).
-            _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
-            _lbl_ofs_y = (5.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
-            _xlabel_txt = (plotdef.xlabel or "").strip()
-            if _xlabel_txt:
-                _xl_text, _xl_enh = self._render_text(_xlabel_txt)
-                _xl_size = float(plotdef.xlabel_size or 11) * font_scale
-                lines.append(f'set xlabel "{_xl_text}" font "{plotdef.xlabel_font},{_xl_size:.1f}" offset 0,{_lbl_ofs_x:.2f} {_xl_enh}')
-            else:
-                lines.append("unset xlabel")
-            _ylabel_txt = (plotdef.ylabel or "").strip()
-            if _ylabel_txt:
-                _yl_text, _yl_enh = self._render_text(_ylabel_txt)
-                _yl_size = float(plotdef.ylabel_size or 11) * font_scale
-                lines.append(f'set ylabel "{_yl_text}" font "{plotdef.ylabel_font},{_yl_size:.1f}" offset {_lbl_ofs_y:.2f},0 {_yl_enh}')
-            else:
-                lines.append("unset ylabel")
-            _y2label_txt = (plotdef.y2label or "").strip() if _uses_y2 else ""
-            if _y2label_txt:
-                _y2l_text, _y2l_enh = self._render_text(_y2label_txt)
-                _y2l_size = float(plotdef.y2label_size or 11) * font_scale
-                lines.append(f'set y2label "{_y2l_text}" font "{plotdef.y2label_font},{_y2l_size:.1f}" offset -{_lbl_ofs_y:.2f},0 {_y2l_enh}')
-            else:
-                lines.append("unset y2label")
-        else:
-            lines.append("unset xlabel")
-            lines.append("unset ylabel")
-            lines.append("unset y2label")
         # [수정 - 버그] 메인 plot은 마진을 'at screen 0.xx'(캔버스 전체 기준
         # 절대좌표)로 직접 지정해두는데, 이 상태를 그대로 두면 inset이 아래에서
         # set origin/size로 작은 영역을 지정해도 gnuplot이 그 절대 마진을 그대로
@@ -3467,6 +3455,12 @@ class GnuplotGenerator:
         # 당긴다 - Rx/Ry가 크면(원이 넉넉하면) rect와 완전히 같은 프레임이
         # 나오고, Rx/Ry가 작을 때만 그만큼 더 좁아진다(실제 클리핑이
         # 필요한 만큼만 여백도 늘어나는 셈).
+        # [수정 - 위치 이동] 아래 Y1/Y2 축 title의 pull-in량(_lbl_ofs_y)도
+        # 이 축소비율(_s)을 그대로 참고해야 해서(사용자 보고: "R을 작게
+        # 하면 in-plot y-title이 원 밖으로 나감" - R이 작을수록 고정된
+        # pull-in만으로는 부족해짐), axis_title_on 블록보다 이 계산을
+        # 앞으로 옮겼다(margin 자체의 계산 로직은 그대로).
+        _s = 1.0
         if _pip_round_shape and _clip_rx and _clip_ry:
             _erx_box0 = _clip_rx / 100.0
             _ery_box0 = _clip_ry / 100.0
@@ -3497,6 +3491,48 @@ class GnuplotGenerator:
             _inset_bottom_frac = _bottom_frac_rect
             _inset_left_frac = _left_frac_rect
             _inset_right_frac = _right_frac_rect
+
+        if pip.get("axis_title_on"):
+            # [추가 - 요청] "tic 숫자와 축 title 사이 간격이 너무 넓음(최소,
+            # 거의 0이 되게)" - gnuplot 6.0으로 직접 렌더링해 offset 부호를
+            # 실측 확인함(xlabel은 y가 양수일수록, ylabel은 x가 양수일수록
+            # tic 쪽으로 붙음 - 문자 그대로 "gnuplot 기본값 대비 얼마나
+            # 당길지"라 폰트가 작을수록 절대 간격도 작아야 자연스러워서
+            # font_scale에 비례시킴).
+            # [수정 - 사용자 보고 버그] "R을 작게 주면(예: 30%) in-plot의
+            # Y1/Y2 title이 원 밖으로 나감" - 이 pull-in량이 R(원/타원
+            # 크기)과 무관한 고정값이었던 게 원인 - R이 작을수록 축 title
+            # 자체의 위치도 원 안쪽으로 더 세게 당겨야 하므로, 위에서 구한
+            # 적응형 축소비율 _s(작을수록 더 타이트한 원)의 역수만큼 더
+            # 세게 당긴다(_s=1.0인 넉넉한 경우엔 기존과 동일한 5.5).
+            _s_safe = max(_s, 0.15)
+            _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
+            _lbl_ofs_y = (5.5 / _s_safe if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
+            _xlabel_txt = (plotdef.xlabel or "").strip()
+            if _xlabel_txt:
+                _xl_text, _xl_enh = self._render_text(_xlabel_txt)
+                _xl_size = float(plotdef.xlabel_size or 11) * font_scale
+                lines.append(f'set xlabel "{_xl_text}" font "{plotdef.xlabel_font},{_xl_size:.1f}" offset 0,{_lbl_ofs_x:.2f} {_xl_enh}')
+            else:
+                lines.append("unset xlabel")
+            _ylabel_txt = (plotdef.ylabel or "").strip()
+            if _ylabel_txt:
+                _yl_text, _yl_enh = self._render_text(_ylabel_txt)
+                _yl_size = float(plotdef.ylabel_size or 11) * font_scale
+                lines.append(f'set ylabel "{_yl_text}" font "{plotdef.ylabel_font},{_yl_size:.1f}" offset {_lbl_ofs_y:.2f},0 {_yl_enh}')
+            else:
+                lines.append("unset ylabel")
+            _y2label_txt = (plotdef.y2label or "").strip() if _uses_y2 else ""
+            if _y2label_txt:
+                _y2l_text, _y2l_enh = self._render_text(_y2label_txt)
+                _y2l_size = float(plotdef.y2label_size or 11) * font_scale
+                lines.append(f'set y2label "{_y2l_text}" font "{plotdef.y2label_font},{_y2l_size:.1f}" offset -{_lbl_ofs_y:.2f},0 {_y2l_enh}')
+            else:
+                lines.append("unset y2label")
+        else:
+            lines.append("unset xlabel")
+            lines.append("unset ylabel")
+            lines.append("unset y2label")
         _inset_lmargin = origin_x + _inset_left_frac * size_w
         _inset_rmargin = origin_x + size_w - _inset_right_frac * size_w
         _inset_tmargin = origin_y + size_h - _inset_top_frac * size_h
@@ -3741,7 +3777,7 @@ class GnuplotGenerator:
                 font_scale, 1.0, 1.0, getattr(plotdef, "is_print_mode", False),
                 curve_index_map, plotdef.legend_font,
                 axis_w_in=_pip_legend_axis_w_in, legend_size=float(plotdef.legend_size or 9),
-                axis_h_in=_pip_legend_axis_h_in, fmt=fmt,
+                axis_h_in=_pip_legend_axis_h_in, fmt=fmt, compact=True,
             )
 
         # [수정 - 버그] 메인 plot이 y2축 미사용시 넣어두는 "NaN axes x1y2
