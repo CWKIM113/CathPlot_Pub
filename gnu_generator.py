@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from data_parser import CathenaDatParser  # 파서 모듈 임포트
+from data_parser import CathenaDatParser, is_comment_or_blank, strip_inline_comment  # 파서 모듈 임포트
 from dataclasses import dataclass, field
 import math
 import os
@@ -757,8 +757,8 @@ class GnuplotGenerator:
         pts = []
         max_col = max(x_col_idx, y_col_idx)
         for row in file_lines[dat_info.data_start_line:]:
-            text = row.strip()
-            if not text:
+            text = strip_inline_comment(row).strip()
+            if is_comment_or_blank(text):
                 continue
             fields = re.split(r'[,\s]+', text)
             if len(fields) <= max_col:
@@ -872,8 +872,8 @@ class GnuplotGenerator:
             # 헤더/데이터 경계는 이미 파서가 판단해둔 data_start_line을 그대로 사용
             # ("---","===","OUTPUT" 등을 다시 문자열로 추측하는 중복 로직을 두지 않음)
             for row in file_lines[dat_info.data_start_line:]:
-                text = row.strip()
-                if not text:
+                text = strip_inline_comment(row).strip()
+                if is_comment_or_blank(text):
                     continue
 
                 fields = re.split(r'[,\s]+', text)

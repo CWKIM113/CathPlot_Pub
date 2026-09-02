@@ -39,6 +39,35 @@ import re
 
 
 # ==========================================================
+# COMMENT HANDLING (.dat 파일 공용)
+# ==========================================================
+# [추가 - 요청] "dat parsing에서 #, !, **, = 등으로 시작하면 comment이고
+# 중간에도 ! 이후는 comment로 처리되고 있나요? 안 되어 있으면 반영해줘요" -
+# 기존엔 "#"/"---"/"==="/"**"만(그것도 헤더 경계 탐색에서만) 일부 인식됐고,
+# 실제 데이터 행 파싱(resort_dat_file 등)에서는 숫자 변환 실패 시 그 줄을
+# 통째로 버리는 것으로 우연히 비슷하게 동작했을 뿐 의도된 주석 규칙은
+# 아니었음(중간(inline) 주석은 전혀 없었음). 아래 두 함수로 dat 파싱
+# 전체(헤더 경계 탐색 + 실제 데이터 행 읽기, Cathena/Generic 공통)와
+# cathplot_gui.py의 데이터 행 읽기 루프(resort_dat_file 등)에서 공유해서
+# 쓴다.
+COMMENT_LINE_PREFIXES = ("#", "!", "**", "=")
+
+
+def is_comment_or_blank(line):
+    """줄 전체가 주석이거나 빈 줄이면 True (앞뒤 공백 제거 후 판정)."""
+    text = line.strip()
+    return (not text) or text.startswith(COMMENT_LINE_PREFIXES)
+
+
+def strip_inline_comment(line):
+    """"!" 이후(그 줄 안에서 처음 나오는 지점부터 끝까지)를 주석으로 보고
+    잘라낸다 - 데이터 값 자체에 "!"가 올 일이 없어 안전(다른 마커(#/**/=)는
+    줄 맨 앞에서만 주석으로 취급 - 요청대로 inline은 "!"만 적용)."""
+    idx = line.find("!")
+    return line if idx < 0 else line[:idx]
+
+
+# ==========================================================
 # DATA CLASSES
 # ==========================================================
 
@@ -358,7 +387,7 @@ class CathenaDatParser:
                 for j in range(i - 1, -1, -1):
                     prev_line = lines[j].strip()
                     
-                    if not prev_line or "---" in prev_line or "===" in prev_line or "**" in prev_line:
+                    if is_comment_or_blank(prev_line) or "---" in prev_line or "===" in prev_line or "**" in prev_line:
                         continue
                     if self._is_numeric_row(prev_line):
                         continue
@@ -406,8 +435,11 @@ class CathenaDatParser:
 
     @staticmethod
     def _is_numeric_row(line):
-        txt = line.strip()
-        if not txt or "---" in txt or "===" in txt or "**" in txt:
+        # [수정 - 요청] "#, !, **, =로 시작하면 comment" 규칙 반영 - inline
+        # "!" 주석도 먼저 잘라내고 판정한다(주석 뒤에 숫자가 남아 우연히
+        # 숫자 행으로 오인되지 않게).
+        txt = strip_inline_comment(line).strip()
+        if is_comment_or_blank(txt) or "---" in txt or "===" in txt or "**" in txt:
             return False
         try:
             parts = re.split(r'[,\s]+', txt)

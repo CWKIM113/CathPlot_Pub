@@ -43,7 +43,7 @@ from pathlib import Path
 # 기능을 한 번도 안 쓰면 이 비용 자체가 안 든다(기능은 완전히 동일 -
 # win32gui는 실제로는 주석 처리된 죽은 코드에서만 참조돼 아예 삭제).
 
-from data_parser import CathenaDatParser, save_json
+from data_parser import CathenaDatParser, save_json, is_comment_or_blank, strip_inline_comment
 from gnu_generator import PlotDefinition, CurveDefinition, FunctionCurveDefinition, GnuplotGenerator, PIP_OVERLAY_CHROMA_KEY
 
 # [추가] Batch Set/Queue - 항목마다 독립적인 gnuplot 프로세스를 순차로 하나씩
@@ -3118,7 +3118,13 @@ class CathPlotGUI:
                     # queue_list(파일 경로)만 기록하므로 주석은 손으로 편집한
                     # 파일에서만 유지됨 - Edit in Notepad...로 열어 직접
                     # 적어두면 다음에 그 파일을 불러올 때도 그대로 무시된다.
-                    lines = [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
+                    # [수정 - 요청] "dat 파싱과 같은 규칙(#,!,**,= 줄 시작 +
+                    # inline !)을 여기도 적용" - data_parser의 공용 주석
+                    # 규칙을 그대로 재사용해 통일함.
+                    lines = [
+                        stripped for ln in f
+                        if not is_comment_or_blank(stripped := strip_inline_comment(ln).strip())
+                    ]
             except OSError as e:
                 messagebox.showerror("Batch Set", f"불러오기 실패:\n{e}", parent=dlg)
                 return
@@ -6521,10 +6527,13 @@ class CathPlotGUI:
                 with open(dat_file, 'r', encoding='utf-8', errors='ignore') as f:
                     lines = f.readlines()
 
+                # [수정 - 요청] "#, !, **, =로 시작하면 comment, 중간의 !도
+                # comment" - data_parser의 공용 규칙을 그대로 적용(inline
+                # "!" 먼저 잘라낸 뒤 줄 전체 주석/빈 줄 여부 판정).
                 data_rows = []
                 for line in lines[dat_info.data_start_line:]:
-                    stripped = line.strip()
-                    if not stripped:
+                    stripped = strip_inline_comment(line).strip()
+                    if is_comment_or_blank(stripped):
                         continue
                     parts = re.split(r'[,\s]+', stripped)
                     try:
@@ -6584,8 +6593,8 @@ class CathPlotGUI:
             return values
 
         for line in lines[dat_info.data_start_line:]:
-            text = line.strip()
-            if not text:
+            text = strip_inline_comment(line).strip()
+            if is_comment_or_blank(text):
                 continue
             parts = re.split(r'[,\s]+', text)
             if len(parts) <= col_idx:
@@ -6615,8 +6624,8 @@ class CathPlotGUI:
 
         max_col = max(col_idx, x_idx)
         for line in lines[dat_info.data_start_line:]:
-            text = line.strip()
-            if not text:
+            text = strip_inline_comment(line).strip()
+            if is_comment_or_blank(text):
                 continue
             parts = re.split(r'[,\s]+', text)
             if len(parts) <= max_col:
