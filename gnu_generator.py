@@ -1489,7 +1489,15 @@ class GnuplotGenerator:
         # 것을 막기 위해 넣었던 완만한 증가 자체는 유지 - 아래 _box_w_floor
         # 하드 하한이 별개로 항상 걸려있어 라벨이 실제로 잘리는 일은 이
         # 값을 낮춰도 발생하지 않음).
-        _MIN_LABEL_CHARS_IN_BOX = 1.0 + max(max_label_len - 5, 0) * 0.15
+        # [수정 - 요청, 후속] "8자(pressure/flowrate)도 여전히 커 보임" -
+        # 5자부터 다시 늘던 것마저 체감상 너무 컸다는 재확인 - 아예
+        # 완전히 평평한 1.0자로 고정한다(어떤 길이든 최소 여백은 항상
+        # 1.0자). 예전에 이 하한을 늘렸던 이유(PWRDWNB 7자 등 중간 길이
+        # 라벨이 실제로 잘리던 버그)는 _box_w_floor 하드 하한이 이미
+        # 별개로(라벨 실측 폭 + 0 여백 기준) 항상 걸려있어서 완전히
+        # 막아주므로, 이 소프트 하한은 그냥 "보기 좋은 최소 여백"
+        # 역할만 하면 되고 길이에 비례해 키울 필요가 없음.
+        _MIN_LABEL_CHARS_IN_BOX = 1.0
         if max_label_len + _box_w_extra_chars < _MIN_LABEL_CHARS_IN_BOX:
             _box_w_extra_chars = _MIN_LABEL_CHARS_IN_BOX - max_label_len
         # [수정] box가 title을 못 감싸는(밖으로 삐져나옴) 버그 - LABEL_GAP_FRAC
@@ -3282,7 +3290,65 @@ class GnuplotGenerator:
         # 오게) 하고, 그만큼 tic+label 자리를 위한 여백 비율도 넓혀준다
         # (실제 렌더링 3종 비교로 확인 - rect는 기존 값 그대로 유지, 모서리가
         # 안 잘리니 문제 없었음).
-        _pip_round_shape = str(pip.get("clip_shape", "rect") or "rect").strip().lower() in ("circle", "ellipse")
+        # [이동 - 요청] "circle을 키우기보다 W/H를 크게 하거나 circle을
+        # 줄이면 clipping이 필요해진다" - 아래 margin(top/bottom/left/
+        # right_frac) 계산에서 실제 Rx/Ry(및 물리보정 결과)를 참고해
+        # "이 여백이면 축 박스 모서리가 실제로 타원 안에 들어오는지"를
+        # 직접 계산해야 해서, clip_shape/opacity/Rx/Ry 판정 블록 전체를
+        # (원래 아래쪽, PIP 배경/테두리 오브젝트 그리는 부분 바로 앞에
+        # 있던 것) 여기로 앞당겼다 - 값 자체나 계산 방식은 그대로.
+        _clip_shape = str(pip.get("clip_shape", "rect") or "rect").strip().lower()
+        _opacity_raw = str(pip.get("opacity", "")).strip()
+        try:
+            _opacity = float(_opacity_raw) if _opacity_raw else (100.0 if pip.get("opaque", True) else 0.0)
+        except (TypeError, ValueError):
+            _opacity = 100.0
+        _opacity = max(0.0, min(100.0, _opacity))
+        _rect_fully_opaque = (_clip_shape == "rect") and (_opacity >= 100.0 - 1e-6)
+        _rect_no_bg = (_clip_shape == "rect") and (_opacity <= 0.0 + 1e-6)
+
+        def _parse_range(range_cmd):
+            _m = re.match(r"set (?:x|y|y2)range\s*\[\s*([^:\]]+)\s*:\s*([^:\]]+)\s*\]", range_cmd)
+            if not _m:
+                return None
+            try:
+                return float(_m.group(1)), float(_m.group(2))
+            except ValueError:
+                return None
+
+        _clip_rx = _clip_ry = None
+        if _clip_shape in ("circle", "ellipse"):
+            # [추가] annotation의 Circle과 같은 관례 - Ry를 안 주면(빈 값)
+            # Rx를 그대로 써서 원이 된다. clip_shape=="circle"이면 항상
+            # Rx==Ry(원)로 강제한다.
+            _clip_rx = _num("clip_rx", 50.0)
+            _clip_ry_raw = str(pip.get("clip_ry", "")).strip()
+            _clip_ry = _clip_rx if (_clip_shape == "circle" or not _clip_ry_raw) else _num("clip_ry", 50.0)
+
+            if _clip_shape == "circle" or (_clip_shape == "ellipse" and not _clip_ry_raw):
+                # [수정 - 버그] "circle인데 완전한 원이 아니고, W/H 크기 비와
+                # 원래 프레임의 비율에 따라 다름" - Rx==Ry(%)로 강제해도,
+                # 그 %는 "박스 자신의 폭/높이 대비"라 박스(size_w/size_h,
+                # screen 비율)나 페이지 자체가 정사각형이 아니면 물리적으로는
+                # 타원이 된다 - "페이지 전체의 실제 물리 크기"를 구한 뒤,
+                # Rx%가 뜻하는 물리 크기와 정확히 같은 물리 크기가 되도록
+                # Ry%를 다시 계산한다(단순 % 그대로 쓰면 어긋남). 화면
+                # (Interactive)은 frame_width/height와 무관하게 항상 고정된
+                # 1000x700px 캔버스(≈5.95x4.17in)로 뜬다.
+                try:
+                    if (fmt or "").lower() == "interactive":
+                        _page_w_in, _page_h_in = 5.95, 4.17
+                    else:
+                        _axis_w_in = float((plotdef.frame_width or "5").strip() or 5.0)
+                        _axis_h_in = float((plotdef.frame_height or "4").strip() or 4.0)
+                        _page_w_in = _axis_w_in / max(ab_w, 1e-6)
+                        _page_h_in = _axis_h_in / max(ab_h, 1e-6)
+                    _rx_phys_in = (_clip_rx / 100.0) * size_w * _page_w_in
+                    _clip_ry = _rx_phys_in / max(size_h * _page_h_in, 1e-9) * 100.0
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+
+        _pip_round_shape = _clip_shape in ("circle", "ellipse")
         if pip.get("axis_title_on"):
             # [추가 - 요청] "tic 숫자와 축 title 사이 간격이 너무 넓음(최소,
             # 거의 0이 되게)" - gnuplot 6.0으로 직접 렌더링해 offset 부호를
@@ -3334,34 +3400,55 @@ class GnuplotGenerator:
         # 상태로 실제 렌더링해 겹침/잘림 없음 확인).
         _title_shown = bool(pip.get("title_on")) and bool((plotdef.title or "").strip())
         _axis_titles_shown = bool(pip.get("axis_title_on"))
-        # [수정 - 버그(사용자 보고)] "타원에서는 title/X축이 원 밖으로 나가서
-        # 안 잘림" - 왼쪽/오른쪽(Y1/Y2 title)은 이미 원/타원일 때 여백을
-        # 더 넓혔는데(_inset_left_frac/_inset_right_frac), 위/아래(Plot
-        # Title/X축)는 그 처리가 빠져있었음 - 실제 렌더링으로 확인해보니
-        # (title이 그려지는 위치는 offset을 조금 당겨도 거의 안 바뀔 만큼
-        # 원 위로 한참 벗어나 있었음) 위/아래도 같은 원리로 크게 넓혀야
-        # 함(실측: top 0.20->0.45, bottom 0.13->0.32 정도는 돼야 title/
-        # X축 tic+label이 타원 안쪽에 옴 - rect는 기존 값 유지).
-        _inset_top_frac = (0.45 if _pip_round_shape else 0.20) if _title_shown else (0.15 if _pip_round_shape else 0.05)
-        # [수정 - 요청] "axis title을 켜면 tic-title 간격이 너무 넓어지고
-        # frame이 거의 정사각형으로 바뀜" - 실측 결과 원인은 두 가지였음:
-        # (1) 아래 xlabel/ylabel/y2label에 offset을 안 줘서 gnuplot 기본
-        # 간격(작은 폰트로 줄여도 비례해서 안 줄어듦)을 그대로 썼던 것,
-        # (2) 그 기본 간격을 감안해 미리 넉넉히 잡아뒀던 이 비율 자체가
-        # (2)번 수정(아래 offset 추가) 이후로는 필요 이상으로 컸던 것.
-        # gnuplot 6.0으로 직접 렌더링해 실측 조정함(0.22->0.13, 0.26->0.16,
-        # 0.24->0.14) - 라벨이 잘리지 않는 선에서 tic 바로 아래/옆에 붙게.
-        _inset_bottom_frac = 0.32 if (_pip_round_shape and _axis_titles_shown) else 0.13
-        # [수정 - 요청] 위 _pip_round_shape 설명대로 - 원/타원은 axis title이
-        # 실제로 보이는 타원 안쪽에 들어오도록 이 tic+label 여백 자체도
-        # 사각형보다 넓게 잡아야 한다(0.16/0.14 -> 0.24/0.24, 실측 3종
-        # 비교로 확인: 이 정도는 돼야 y2label이 원 밖으로 밀려나지 않음).
-        # rect는 모서리가 안 잘리므로 기존 값을 그대로 유지한다.
-        _inset_left_frac = (0.24 if _pip_round_shape else 0.16) if _axis_titles_shown else 0.15
-        if _uses_y2:
-            _inset_right_frac = (0.24 if _pip_round_shape else 0.14) if _axis_titles_shown else 0.13
+        # 사각형(rect) 기준 여백 - 모든 모양에 공통인 "최소 필요" 여백
+        # (tic 숫자/title 텍스트가 안 겹칠 정도). 원/타원은 아래에서 이
+        # 값을 그대로 쓰거나, 필요할 때만(모서리가 실제로 원/타원 밖으로
+        # 나가는 경우에만) 늘린다.
+        _top_frac_rect = 0.20 if _title_shown else 0.05
+        _bottom_frac_rect = 0.13
+        _left_frac_rect = 0.16 if _axis_titles_shown else 0.15
+        _right_frac_rect = (0.14 if _axis_titles_shown else 0.13) if _uses_y2 else 0.04
+        # [수정 - 사용자 의견] "circle을 키울 게 아니라 W/H를 크게 하거나
+        # 상태에서 circle을 줄이면 clipping이 필요해진다" - 즉 원/타원일
+        # 때 무조건 큰 고정값(예: top 0.45)으로 여백을 넓히면, Rx/Ry가
+        # 넉넉해서(원이 커서) 사실 안 늘려도 되는 경우까지 rect와 다른
+        # (작아 보이는) 프레임이 되어버림. 대신 실제 Rx/Ry(물리보정 반영된
+        # _clip_rx/_clip_ry)로 "사각형 기준 여백의 네 모서리가 실제로 이
+        # 타원 안에 들어오는지" 직접 계산해서, 안 들어올 때만(=모서리가
+        # 밖으로 나갈 때만) 필요한 만큼만 네 여백을 중심 쪽으로 균일하게
+        # 당긴다 - Rx/Ry가 크면(원이 넉넉하면) rect와 완전히 같은 프레임이
+        # 나오고, Rx/Ry가 작을 때만 그만큼 더 좁아진다(실제 클리핑이
+        # 필요한 만큼만 여백도 늘어나는 셈).
+        if _pip_round_shape and _clip_rx and _clip_ry:
+            _erx_box0 = _clip_rx / 100.0
+            _ery_box0 = _clip_ry / 100.0
+            _dx_l = 0.5 - _left_frac_rect
+            _dx_r = 0.5 - _right_frac_rect
+            _dy_t = 0.5 - _top_frac_rect
+            _dy_b = 0.5 - _bottom_frac_rect
+            # 네 모서리 각각의 "타원 방정식 값"(<=1이면 안쪽) 중 최댓값(가장
+            # 심하게 벗어난 모서리) 기준으로 균일 축소 비율 s를 구한다.
+            # safety(0.85)는 모서리 "점" 자체가 아니라 그 근처에 놓일 글자
+            # 획 두께/여유를 위한 완충치(실측 기반 - 1.0 그대로면 딱 닿아서
+            # 여전히 살짝 걸려 보일 수 있음).
+            _safety = 0.85
+            _ratios = [
+                (_dx_l / _erx_box0) ** 2 + (_dy_t / _ery_box0) ** 2,
+                (_dx_r / _erx_box0) ** 2 + (_dy_t / _ery_box0) ** 2,
+                (_dx_l / _erx_box0) ** 2 + (_dy_b / _ery_box0) ** 2,
+                (_dx_r / _erx_box0) ** 2 + (_dy_b / _ery_box0) ** 2,
+            ]
+            _max_ratio = max(_ratios)
+            _s = 1.0 if _max_ratio <= _safety else (_safety / _max_ratio) ** 0.5
+            _inset_top_frac = 0.5 - _s * _dy_t
+            _inset_bottom_frac = 0.5 - _s * _dy_b
+            _inset_left_frac = 0.5 - _s * _dx_l
+            _inset_right_frac = 0.5 - _s * _dx_r
         else:
-            _inset_right_frac = 0.04
+            _inset_top_frac = _top_frac_rect
+            _inset_bottom_frac = _bottom_frac_rect
+            _inset_left_frac = _left_frac_rect
+            _inset_right_frac = _right_frac_rect
         _inset_lmargin = origin_x + _inset_left_frac * size_w
         _inset_rmargin = origin_x + size_w - _inset_right_frac * size_w
         _inset_tmargin = origin_y + size_h - _inset_top_frac * size_h
@@ -3424,113 +3511,8 @@ class GnuplotGenerator:
         lines.append(f"set origin {origin_x:.4f},{origin_y:.4f}")
         lines.append(f"set size {size_w:.4f},{size_h:.4f}")
 
-        # [추가 - 요청] "원/타원으로 클리핑" + "배경 불투명도 슬라이더" -
-        # clip_shape가 rect가 아니거나 opacity가 100% 미만이면 이 사각
-        # 배경/테두리를 gnuplot이 최종 모습 그대로 그리게 두지 않는다
-        # (클리핑 후 사각 테두리 조각이 타원 모서리 밖으로 삐져나와 보이고,
-        # 배경 반투명도 gnuplot 자체엔 없는 기능). 최종 배경 채우기(원하는
-        # 비율로 메인 plot과 섞기)와 테두리(원/타원 또는 반투명 사각형이면
-        # 점선)는 create_script가 렌더링이 끝난 뒤 PDF를 후처리(_apply_pip_
-        # clip)하면서 다시 그린다 - 여기서는 "완전 불투명 사각형"(기존
-        # 기본값, clip_shape=="rect" and opacity>=100)일 때만 그 최종 모습을
-        # gnuplot이 직접 그리고(후처리 불필요, 기존과 동일하게 빠름), 그 밖의
-        # 모든 경우엔 잉크(곡선/눈금/라벨)를 후처리에서 추출할 수 있도록
-        # 흰 배경만(테두리 없이) 임시로 깔아 둔다.
-        _clip_shape = str(pip.get("clip_shape", "rect") or "rect").strip().lower()
-        _opacity_raw = str(pip.get("opacity", "")).strip()
-        try:
-            _opacity = float(_opacity_raw) if _opacity_raw else (100.0 if pip.get("opaque", True) else 0.0)
-        except (TypeError, ValueError):
-            _opacity = 100.0
-        _opacity = max(0.0, min(100.0, _opacity))
-        _rect_fully_opaque = (_clip_shape == "rect") and (_opacity >= 100.0 - 1e-6)
-        # [추가 - 발견] "opacity=0(완전 투명) + rect도 후처리 없이 빠른 경로로" -
-        # 원래는 opacity<100이면 전부(0 포함) _apply_pip_clip 후처리(gnuplot
-        # 서브프로세스 재실행 + 300dpi 전체 페이지 래스터 2장 + PIL 합성)를
-        # 타게 만들어뒀는데, opacity=0에서는 그 후처리 결과가 수학적으로
-        # "배경 오브젝트를 아예 안 그리고 잉크만 메인 plot 위에 직접 겹쳐
-        # 그리는" 이 네이티브 경로와 항상 정확히 같은 픽셀 결과가 됨
-        # (Image.blend(beneath, white, 0.0) == beneath 그 자체이므로) - 굳이
-        # 무거운 후처리를 거칠 이유가 없어 여기서 걸러낸다. 이러면 Animation
-        # 처럼 프레임마다 무거운 후처리를 도저히 감당 못 하는 경우에도 "rect +
-        # 완전 불투명/완전 투명" 두 값은 항상 저비용으로 지원 가능해진다
-        # (정지 화면에서도 부가 이득 - 벡터 그대로 유지되고 렌더링도 빨라짐).
-        _rect_no_bg = (_clip_shape == "rect") and (_opacity <= 0.0 + 1e-6)
-
-        # [추가 - 발견] "원/타원도 완전불투명/완전투명이면 후처리 없이 네이티브로" -
-        # gnuplot에 실제로 있는 걸 다시 확인해보니: (1) set object N ellipse
-        # ... behind로 타원 배경을 채우면 뒤이은 plot이 그 위에 정상적으로
-        # 겹쳐 그려지고(사각형 object 7100과 완전히 같은 방식), (2) set object
-        # N ellipse ... front border로 타원 테두리(점선 dashtype 포함)도
-        # 네이티브로 그려짐 - 전부 pngcairo로 실측(픽셀 확인)했음. 남은 문제는
-        # "커브 자체를 타원 모양으로 자르는 것"뿐인데, 이것도 이미 코드 곳곳에
-        # 쓰는 "조건이 거짓이면 NaN(0/0)으로 건너뛰기" 관용구를 그대로 응용해서
-        # (데이터 포인트의 화면상 위치가 타원 안에 있는지를 계산하는 gnuplot
-        # 함수 ellip_ok를 만들어 using절에 끼워 넣음) 후처리 없이 실측으로
-        # 성공 확인함(조밀한 데이터로 렌더링 시 타원 경계에서 정확히 끊김).
-        # 그래서 이제 원/타원도 opacity가 0 또는 100이면(중간값은 여전히
-        # "배경을 반투명하게 섞기"가 필요해 네이티브로 안 됨 - PDF 후처리 유지)
-        # rect와 완전히 같은 지위로 저비용 처리한다. 유일한 전제조건은 X/Y
-        # 범위가 이 시점에 이미 구체적인 숫자로 확정돼 있어야 한다는 것(아래
-        # _parse_range 참고) - "set autoscale x"처럼 숫자가 아직 없으면(드문
-        # 경우) 안전하게 예전 후처리 경로로 폴백한다.
-        def _parse_range(range_cmd):
-            _m = re.match(r"set (?:x|y|y2)range\s*\[\s*([^:\]]+)\s*:\s*([^:\]]+)\s*\]", range_cmd)
-            if not _m:
-                return None
-            try:
-                return float(_m.group(1)), float(_m.group(2))
-            except ValueError:
-                return None
-
-        _clip_rx = _clip_ry = None
-        if _clip_shape in ("circle", "ellipse"):
-            # [추가] annotation의 Circle과 같은 관례 - Ry를 안 주면(빈 값)
-            # Rx를 그대로 써서 원이 된다. clip_shape=="circle"이면 항상
-            # Rx==Ry(원)로 강제한다.
-            _clip_rx = _num("clip_rx", 50.0)
-            _clip_ry_raw = str(pip.get("clip_ry", "")).strip()
-            _clip_ry = _clip_rx if (_clip_shape == "circle" or not _clip_ry_raw) else _num("clip_ry", 50.0)
-
-            if _clip_shape == "circle" or (_clip_shape == "ellipse" and not _clip_ry_raw):
-                # [수정 - 요청] "반지름이 하나만 입력되면 x값 실길이 기준으로
-                # y값도 정하면 될텐데" - clip_shape=="circle"일 때뿐 아니라,
-                # clip_shape=="ellipse"인데 Ry를 비워둔 경우(=Rx만으로 원을
-                # 그리고 싶다는 뜻, 바로 위 분기와 동일한 상황)도 똑같이 이
-                # 물리 보정을 적용한다.
-                # [수정 - 버그] "circle인데 완전한 원이 아니고, W/H 크기 비와
-                # 원래 프레임의 비율에 따라 다름" - Rx==Ry(%)로 강제해도,
-                # 그 %는 "박스 자신의 폭/높이 대비"라 박스(size_w/size_h,
-                # screen 비율)나 페이지 자체가 정사각형이 아니면 물리적으로는
-                # 타원이 된다(annotation Circle이 이미 겪고 고쳤던 것과 동일한
-                # 문제 - _nice_axis_range 옆 rx_phys_in 보정 참고). 여기서도
-                # 같은 원리로: "페이지 전체의 실제 물리 크기"를 구한 뒤, Rx%가
-                # 뜻하는 물리 크기와 정확히 같은 물리 크기가 되도록 Ry%를
-                # 다시 계산한다(단순 % 그대로 쓰면 어긋남).
-                #
-                # [수정 - 버그] "여전히 완전한 원이 아님" 재현 보고를 받아
-                # 재검토한 결과: plotdef.frame_width/height는 SAVE/PRINT
-                # 물리 크기고, 화면(Interactive)은 _build_plot_commands의
-                # _is_interactive 처리에 이미 있듯 그 설정과 무관하게 항상
-                # 고정된 1000x700px 캔버스(그 코드에 이미 있는 상수 그대로
-                # ≈5.95x4.17in)로 뜬다 - frame_width/height를 그대로 썼던
-                # 게 근본 원인이었음(화면에서는 완전히 엉뚱한 기준으로
-                # 보정하고 있었음). fmt로 분기해서 화면은 이 고정 캔버스
-                # 물리 크기를, 그 외(SAVE/PRINT/Batch)는 기존처럼
-                # frame_width/height를 페이지 물리 크기로 쓴다.
-                try:
-                    if (fmt or "").lower() == "interactive":
-                        _page_w_in, _page_h_in = 5.95, 4.17
-                    else:
-                        _axis_w_in = float((plotdef.frame_width or "5").strip() or 5.0)
-                        _axis_h_in = float((plotdef.frame_height or "4").strip() or 4.0)
-                        _page_w_in = _axis_w_in / max(ab_w, 1e-6)
-                        _page_h_in = _axis_h_in / max(ab_h, 1e-6)
-                    _rx_phys_in = (_clip_rx / 100.0) * size_w * _page_w_in
-                    _clip_ry = _rx_phys_in / max(size_h * _page_h_in, 1e-9) * 100.0
-                except (TypeError, ValueError, ZeroDivisionError):
-                    pass
-
+        # [이동됨] clip_shape/opacity/_clip_rx/_clip_ry 판정 블록은 위쪽
+        # (margin 계산 앞)으로 옮겨졌음 - 아래는 그 결과를 그대로 재사용.
         # [수정 - 요청, 근본적] "네이티브 클리핑 경로 제거" - 예전엔 opacity가
         # 정확히 0%나 100%고 X/Y 범위가 구체적 숫자로 확정돼 있으면(_xr/_yr이
         # None이 아니면) "네이티브" 경로(gnuplot의 set object ellipse +
