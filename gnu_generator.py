@@ -5392,8 +5392,21 @@ class GnuplotGenerator:
                 # 번째 프레임부터 메인 legend가 통째로 사라졌음 - margin/
                 # xrange와 동일하게 인셋 블록 끝에 다시 찍어 다음 프레임에
                 # 복구되게 한다.
-                _legend_id_re = re.compile(r"^set (?:object|label|arrow) (?:8\d{3}|9\d{3})\b")
-                _main_state_lines += [ln for ln in lines[:plot_idx] if _legend_id_re.match(ln)]
+                # [수정 - 버그 발견] 위 legend(8xxx/9xxx) 복구와 완전히 같은
+                # 원인이 사용자가 추가한 Multi Annotations(Comment/Arrow/
+                # Circle)에도 그대로 있었음 - 이들은 "set label N"/"set
+                # arrow N"/"set object N"을 1번대(1,2,3..)로 쓰는데
+                # (_render_text 주변 참고), legend와 마찬가지로 plot 이전에
+                # 딱 한 번만 선언되고 PIP 인셋이 매 프레임 "unset label"/
+                # "unset arrow"/"unset object"로 지운 뒤 자기 것만 다시
+                # 그리므로, legend처럼 두 번째 프레임부터 메인 plot의
+                # Comment/Arrow/Circle이 전부 사라진다 - PIP 자신의 배경/
+                # 테두리 장식은 7100/7101로 예약돼 있어(위 주석 참고) 겹치지
+                # 않으므로, ID가 순수 숫자인 label/arrow/object 전부를 같은
+                # 방식으로 복구 대상에 포함시킨다(legend의 8xxx/9xxx도 이
+                # 조건에 포함되므로 위 _legend_id_re는 이 정규식으로 대체).
+                _restorable_id_re = re.compile(r"^set (?:object|label|arrow) \d+\b")
+                _main_state_lines += [ln for ln in lines[:plot_idx] if _restorable_id_re.match(ln)]
                 _pip_inset_lines += _main_state_lines
 
         lines.append("xmin_anim = GPVAL_X_MIN")
