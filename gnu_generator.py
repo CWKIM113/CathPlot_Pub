@@ -3512,9 +3512,20 @@ class GnuplotGenerator:
             # 자체의 위치도 원 안쪽으로 더 세게 당겨야 하므로, 위에서 구한
             # 적응형 축소비율 _s(작을수록 더 타이트한 원)의 역수만큼 더
             # 세게 당긴다(_s=1.0인 넉넉한 경우엔 기존과 동일한 5.5).
-            _s_safe = max(_s, 0.15)
+            # [수정 - 버그(사용자 보고), 위 "R이 작을수록 더 세게 당김"
+            # 로직과 충돌 발견] "Radius를 30%처럼 작게 주면 이번엔 반대로
+            # in-plot의 y-title이 tic 숫자에 겹침" - 실제 렌더링으로 재현·
+            # 원인 확인: 위 _s(적응형 여백 축소비율)는 R이 작을수록 왼쪽/
+            # 오른쪽 여백 비율(_inset_left_frac 등) 자체를 이미 더 크게
+            # 넉넉히 잡아주는데(0.16 -> R=30%에서 0.28 등, 모서리가 원
+            # 안에 들어오게), 여기 있던 "1/_s_safe"가 그 위에 또 "R이
+            # 작을수록 더 세게 당기기"까지 이중으로 적용해서 오히려 tic
+            # 쪽으로 너무 당겨져 겹쳐버렸음(이중 보정). 여백 자체가 이미
+            # R에 맞게 적응하므로, pull-in량은 R과 무관하게 다시 고정값으로
+            # 되돌린다(실제 렌더링으로 R=30%/50%/75% 모두 재확인 - 겹침도
+            # 원 밖으로 나감도 없음).
             _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
-            _lbl_ofs_y = (5.5 / _s_safe if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
+            _lbl_ofs_y = (4.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
             _xlabel_txt = (plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
@@ -5345,6 +5356,15 @@ class GnuplotGenerator:
                 # 이어지는 프레임의 메인 "plot \\"가 인셋의 작은 폰트 그대로
                 # 다시 그려짐 - margin/xrange와 동일하게 인셋 블록 끝에
                 # 메인 자신의 title/xlabel/ylabel/y2label을 다시 찍어 복구.
+                # [수정 - 버그(사용자 보고)] "main-plot title font는 커졌는데
+                # tic 숫자는 안 커짐 / main-plot 축 frame이 진한 실선으로
+                # 안 보임" - 바로 위와 완전히 같은 원인인데 목록에서 빠져
+                # 있었음: "set border"/"set xtics"/"set ytics"/"set y2tics"
+                # /"set tics scale"도 margin/title과 똑같이 "plot 이후에도
+                # 계속 남는 세션 전역 상태"라, 인셋이 자기 축소 폰트/두께로
+                # 다시 설정(_render_pip_inset이 매번 그렇게 함)하면 그 뒤
+                # 프레임의 메인 plot도 인셋의 작은 값을 그대로 물려받았음 -
+                # 나머지와 동일하게 목록에 추가.
                 _main_state_lines = [
                     ln for ln in lines[:plot_idx]
                     if ln.startswith(("set lmargin at screen", "set rmargin at screen",
@@ -5353,7 +5373,10 @@ class GnuplotGenerator:
                                        "set title", "unset title",
                                        "set xlabel", "unset xlabel",
                                        "set ylabel", "unset ylabel",
-                                       "set y2label", "unset y2label"))
+                                       "set y2label", "unset y2label",
+                                       "set border", "unset border",
+                                       "set xtics", "set ytics", "set y2tics", "unset y2tics",
+                                       "set tics scale", "set grid", "unset grid"))
                 ]
                 # [수정 - 버그(사용자 보고)] "PIP+Animation에서 메인 legend
                 # box가 첫 프레임엔 보이다가 그 다음부터 없어짐" - 위와 완전히
