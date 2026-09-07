@@ -133,6 +133,42 @@ _GNUPLOT_FALLBACK_PATHS = [
     r"C:\Program Files (x86)\gnuplot\bin\gnuplot.exe",
     r"C:\Program Files (x86)\gnuplot\bin\wgnuplot.exe",
 ]
+
+# [추가 - 사용자 질문] "10sin(x)로 쓰면 plot 오류가 나는데 안 되나?" -
+# gnuplot은 숫자와 함수/변수 사이의 암시적 곱셈(예: "10sin(x)", "2x",
+# "3(x+1)")을 지원하지 않음(실측 확인: "10sin(x)"는 "unexpected or
+# unrecognized token: sin"으로 파싱 자체가 실패 - 반드시 "10*sin(x)"처럼
+# "*"를 명시해야 함). Function Curve 입력칸은 사용자가 입력한 식을 그대로
+# gnuplot에 넘기므로, 이 흔한 실수를 gnuplot에 보내기 전에 자동으로
+# 고쳐준다.
+_NUM_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+
+def _fix_implicit_multiplication(expr):
+    """"10sin(x)"/"2x"/"3(x+1)" 같은 암시적 곱셈 표기에 빠진 "*"를 끼워
+    넣어 gnuplot이 이해하는 "10*sin(x)"/"2*x"/"3*(x+1)"로 바꾼다. 과학적
+    표기(예: "1e-5")는 숫자 자체의 일부이므로 안 건드리고(_NUM_TOKEN_RE가
+    이미 유효한 지수부만 숫자에 포함시킴 - "2exp(x)"의 "e"는 뒤에 숫자가
+    안 와서 지수부로 안 먹히고 그대로 "2" 뒤에 "*"가 붙어 "2*exp(x)"가
+    됨), 문자+문자 조합(예: "xsin")은 여러 글자짜리 식별자/함수 이름과
+    구분할 수 없어 손대지 않는다. 이미 "*"가 있으면 그대로 통과(멱등)."""
+    if not expr:
+        return expr
+    out = []
+    i, n = 0, len(expr)
+    while i < n:
+        ch = expr[i]
+        if ch.isdigit():
+            m = _NUM_TOKEN_RE.match(expr, i)
+            out.append(m.group(0))
+            i = m.end()
+            if i < n and (expr[i].isalpha() or expr[i] in "(_"):
+                out.append("*")
+            continue
+        out.append(ch)
+        i += 1
+        if ch == ")" and i < n and (expr[i].isalpha() or expr[i] in "(_" or expr[i].isdigit()):
+            out.append("*")
+    return "".join(out)
 _gnuplot_exe_cache = None
 
 def _resolve_gnuplot_exe():
@@ -824,7 +860,7 @@ class GnuplotGenerator:
         selected.sort(key=lambda p: p[0])
         return selected
 
-    def _nice_axis_range(self, plotdef, axis, is_log=False):
+    def _nice_axis_range(self, plotdef, axis, is_log=False, extra_values=None):
         parser = CathenaDatParser()
         
         # 변수 초기화
@@ -910,6 +946,18 @@ class GnuplotGenerator:
 
                 if math.isfinite(value):
                     values.append(value)
+
+        # [추가 - 사용자 보고 버그] "sin 값이 음수에서 잘림 - y1축 범위를
+        # 늘려야 하는데" - 이 함수는 원래 plotdef.curves(실제 .dat 파일)만
+        # 훑어서 y1/y2 범위를 정하고 Function Curve(예: "10*sin(x)", 값이
+        # -10~10)는 전혀 고려하지 않았음 - 실제 데이터(예: 0~10대 압력값)만
+        # 보고 범위를 정하면 함수의 음수 구간이 축 범위 밖으로 잘려 나감.
+        # 호출부(_build_plot_commands)가 이 축에 배정된 Function Curve를
+        # 실제 gnuplot으로 미리 계산해(_eval_function_curve_range) 얻은
+        # min/max를 여기 값 목록에 그냥 섞어 넣기만 하면, 아래 "보기 좋은
+        # 범위" 계산이 데이터와 함수 양쪽을 다 포함해서 자동으로 넓어진다.
+        if extra_values:
+            values.extend(v for v in extra_values if math.isfinite(v))
 
         if not values:
             return None
@@ -2029,6 +2077,30 @@ class GnuplotGenerator:
             except (ValueError, TypeError):
                 shared_x_range = None
 
+        # [추가 - 사용자 보고 버그] "sin 값이 음수에서 잘림 - y1축 범위를
+        # 늘려야 하는데" - Auto 범위(plotdef.yauto)는 원래 plotdef.curves
+        # (실제 .dat 파일)만 훑어서 정해지고 Function Curve(예: "10*sin(x)",
+        # 값이 -10~10)는 전혀 반영되지 않아 데이터가 항상 양수(예:
+        # 압력 0~10대)면 함수의 음수 구간이 축 밖으로 잘려나갔음. 이 축에
+        # 배정된 Function Curve들을 실제 gnuplot으로 미리 계산해(수식이
+        # 무엇이든 Python이 직접 계산할 필요 없이 gnuplot 자신에게 물어봄)
+        # 얻은 min/max를 _nice_axis_range의 "보기 좋은 범위" 계산에 같이
+        # 섞어 넣는다 - Manual(사용자가 직접 ymin/ymax 지정)일 때는 사용자
+        # 설정이 항상 우선이라야 하므로 손대지 않는다(아래 yauto 분기
+        # 안에서만 적용).
+        def _fc_extra_values(target_axis):
+            if not shared_x_range or not getattr(plotdef, "function_curves", None):
+                return None
+            _x_lo, _x_hi = shared_x_range
+            _vals = []
+            for _fc in plotdef.function_curves:
+                if getattr(_fc, "axis", "y1") != target_axis:
+                    continue
+                _rng = self._eval_function_curve_range(_fc.expression, _x_lo, _x_hi, self.plot_dir or os.getcwd())
+                if _rng:
+                    _vals.extend(_rng)
+            return _vals or None
+
         y1_auto_tics = ""
         # [추가] "tic 숫자에 소수점/음수가 있으면 여백도 그만큼 넓어야 하지
         # 않나?" - 맞는 지적(margin 계산이 Scientific/Power10 형식만 챙기고
@@ -2037,7 +2109,7 @@ class GnuplotGenerator:
         # tic 숫자들의 최대 글자수를 추정할 수 있게 한다.
         _y1_min_val = _y1_max_val = _y1_step_val = None
         if plotdef.yauto:
-            nice_y1 = self._nice_axis_range(plotdef, "y1", is_log=getattr(plotdef, "y1log", False))
+            nice_y1 = self._nice_axis_range(plotdef, "y1", is_log=getattr(plotdef, "y1log", False), extra_values=_fc_extra_values("y1"))
             if nice_y1:
                 ymin, ymax, y1_auto_tics = nice_y1
                 lines.append(f"set yrange [{self._format_number(ymin)}:{self._format_number(ymax)}]")
@@ -2060,7 +2132,7 @@ class GnuplotGenerator:
             lines.append(f"set y2range [{_y2min}:{_y2max}]")
             _y2_min_val, _y2_max_val = _y2min, _y2max
         elif uses_y2:
-            nice_y2 = self._nice_axis_range(plotdef, "y2", is_log=getattr(plotdef, "y2log", False))
+            nice_y2 = self._nice_axis_range(plotdef, "y2", is_log=getattr(plotdef, "y2log", False), extra_values=_fc_extra_values("y2"))
             if nice_y2:
                 y2min, y2max, y2_auto_tics = nice_y2
                 lines.append(f"set y2range [{self._format_number(y2min)}:{self._format_number(y2max)}]")
@@ -3001,6 +3073,26 @@ class GnuplotGenerator:
             lines.append("# --- Advanced raw gnuplot (사용자 입력) ---")
             lines.extend(plotdef.extra_gnuplot.splitlines())
 
+        # [수정 - 사용자 보고 버그] "10*sin(x) 그림이 이상함(들쭉날쭉한
+        # 지그재그, peak 값들이 다 달라야 정상인데 다 다름)" - gnuplot은
+        # 함수 curve를 기본 "set samples"(100개)로만 표본을 뽑아 그리는데,
+        # X축이 (CATHENA Time처럼) 수백~수천 단위인데 sin(x)는 x가 "라디안"
+        # 기준이라 한 주기가 2π≈6.28에 불과함 - 예를 들어 X범위가 0~1050이면
+        # 100개 표본 간격은 약 10.5(한 주기보다 더 넓음)라 한 주기에 표본이
+        # 1개도 안 남아 나이퀴스트 조건을 크게 못 채워 에일리어싱(실제
+        # 파형과 무관한 들쭉날쭉/불규칙한 peak 높이)이 생김 - 이 파일 다른
+        # 곳(_presmooth_spline_curve)에서 이미 같은 이유로 쓰던 값(2000)과
+        # 동일하게 맞춰서 훨씬 촘촘하게 뽑는다(Function Curve가 있을 때만 -
+        # 없는 스크립트의 기존 동작에는 영향 없음). [수정 - 버그] 반드시
+        # "plot \" 줄이 나오기 전에 "set" 명령으로 넣어야 함 - "plot \" 뒤에
+        # 이어지는 줄은 전부 plot의 curve 목록(연속행)으로 취급돼, 그 사이에
+        # "set samples ..."를 끼워 넣으면 gnuplot이 "set"을 명령이 아니라
+        # (앞 curve 식의 연속으로) 식 안의 미정의 변수로 오인해 파싱이
+        # 깨짐(실제 렌더로 재현 확인 - "undefined variable: set" 에러로
+        # 출력 파일이 조용히 0바이트가 됨).
+        if getattr(plotdef, "function_curves", None):
+            lines.append("set samples 2000")
+
         plot_line_idx = len(lines)
         lines.append("plot \\")
         cmd_list = []
@@ -3095,7 +3187,8 @@ class GnuplotGenerator:
             _fc_is_y2 = getattr(fcurve, "axis", "y1") == "y2"
             _fc_axis = "x1y2" if _fc_is_y2 else "x1y1"
             _fc_lw = fcurve.linewidth * line_scale
-            _fc_cmd = f'{fcurve.expression} notitle axes {_fc_axis} with lines lw {_fc_lw}'
+            _fc_expr = _fix_implicit_multiplication(fcurve.expression)
+            _fc_cmd = f'{_fc_expr} notitle axes {_fc_axis} with lines lw {_fc_lw}'
             if _fc_color:
                 _fc_cmd += f' lc rgb "{_fc_color}"'
             _fc_dash = _dash_pattern_for_fmt(_fc_linestyle, fmt)
@@ -3163,6 +3256,69 @@ class GnuplotGenerator:
                 cmd += f" dashtype ({_dash_pat})"
             cmd_list.append(cmd)
         return cmd_list
+
+    def _eval_function_curve_range(self, expr, x_lo, x_hi, plot_dir_):
+        """[추가 - 사용자 보고 버그] "Function Curve(예: 10*sin(x))의 음수
+        구간이 y1축 범위 밖으로 잘림" - Python은 사용자가 입력한 gnuplot
+        수식(임의의 함수/연산자 조합)을 직접 계산할 방법이 없으므로,
+        _presmooth_spline_curve와 같은 방식으로 실제 gnuplot을 짧게 한 번
+        더 돌려("set table"로 [x_lo:x_hi] 구간을 계산시켜 좌표를 그대로
+        파일로 뽑음) 그 결과에서 y값의 (min, max)만 읽어온다 - gnuplot
+        자신이 계산하므로 어떤 수식이든 100% 같은 결과가 보장된다. 실패
+        (수식 오류, gnuplot 없음 등)하면 None을 돌려주고, 호출부는 기존처럼
+        데이터 기준 범위만 쓰면 된다(안전한 폴백 - 새 기능 추가 전 동작과
+        동일)."""
+        if x_lo is None or x_hi is None:
+            return None
+        try:
+            if float(x_lo) == float(x_hi):
+                return None
+        except (TypeError, ValueError):
+            return None
+        expr_fixed = _fix_implicit_multiplication(expr)
+        _tmp_name = f".cathplot_fcrange_{uuid.uuid4().hex}.dat"
+        _tmp_path = os.path.join(plot_dir_, _tmp_name)
+        _mini_script = (
+            f"set xrange [{x_lo}:{x_hi}]\n"
+            f"set samples 2000\n"
+            f'set table "{_tmp_name}"\n'
+            f"plot {expr_fixed}\n"
+            f"unset table\n"
+        )
+        try:
+            _gp = _resolve_gnuplot_exe()
+            _res = subprocess.run(
+                [_gp], input=_mini_script, text=True, encoding="utf-8", errors="replace",
+                capture_output=True, cwd=plot_dir_, timeout=15, **_no_console_kwargs()
+            )
+            if _res.returncode != 0 or not os.path.exists(_tmp_path):
+                return None
+            y_vals = []
+            with open(_tmp_path, encoding="utf-8", errors="replace") as f:
+                for ln in f:
+                    s = ln.strip()
+                    if not s or s.startswith("#"):
+                        continue
+                    parts = s.split()
+                    if len(parts) < 2:
+                        continue
+                    try:
+                        y = float(parts[1])
+                    except ValueError:
+                        continue
+                    if math.isfinite(y):
+                        y_vals.append(y)
+            if not y_vals:
+                return None
+            return min(y_vals), max(y_vals)
+        except Exception:
+            return None
+        finally:
+            try:
+                if os.path.exists(_tmp_path):
+                    os.remove(_tmp_path)
+            except OSError:
+                pass
 
     def _presmooth_spline_curve(self, orig_line, dat_path, using_expr_for_match, plot_dir_):
         """[추가 - 요청] "PIP in-plot(원/타원)에서 spline이 안 됨 - rect는
