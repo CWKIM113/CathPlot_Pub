@@ -2146,7 +2146,18 @@ class GnuplotGenerator:
             lines.append("unset grid")
 
         lines.append("set mouse")
-        lines.append(f"set border lw {1.5 * border_scale}")
+        # [수정 - 버그(사용자 보고), 근본 원인 발견] "Anim+PIP(원/타원)에서
+        # main-plot 축 frame이 사라짐" - gnuplot 자체를 최소 재현으로
+        # 직접 실측해 원인 확정: "unset border"로 한 번 끈 뒤에는 맨
+        # "set border lw X"(막대기 없는, 활성 변 지정 없는 형태)로 다시
+        # 켜도 4변이 온전히 안 돌아오고 모서리 짧은 눈금만 남는 gnuplot
+        # 자체의 동작임(공식 기본값 31=전체 4변을 명시로 줘야 완전히
+        # 복구됨 - PIP 원/타원(_ellipse_native_ok)이 인셋마다 "unset
+        # border"를 쓰고, Animation은 그 뒤 매 프레임 이 줄을 그대로
+        # 재사용해 복구하므로 두 번째 프레임부터 정확히 이 증상이 재현
+        # 됐음). 아래에서 이 줄이 그대로 "복구용" 문자열(_main_border_line)
+        # 로도 재사용되므로, 여기서부터 명시적으로 31을 붙여둔다.
+        lines.append(f"set border 31 lw {1.5 * border_scale}")
 
         # [핵심 수정] 이 고정 마진 설정이 is_multiplot 여부와 무관하게 항상 실행되고
         # 있어서, create_multiplot_script가 각 칸(cell)마다 미리 계산해둔 올바른
@@ -3679,7 +3690,7 @@ class GnuplotGenerator:
         # tic 표시만 남음 - title/tic 숫자 등 텍스트가 원 밖으로 나가는
         # 문제는 이 네이티브 경로의 기존 문서화된 한계로 남음), 인셋이
         # 끝나면 이후 코드에 영향 없도록 원래 border 설정을 복구한다.
-        _main_border_line = next((_l for _l in reversed(lines) if _l.startswith("set border")), "set border lw 1.5")
+        _main_border_line = next((_l for _l in reversed(lines) if _l.startswith("set border")), "set border 31 lw 1.5")
         # [수정 - 버그(사용자 보고)] "인셋의 tic 길이가 너무 길고 테두리도
         # 두꺼워서 흐릿하게 보임(원 안 축이 정사각형처럼 보이는 것도 이
         # 영향)" - 메인 plot이 이미 "set tics scale"/"set border lw"를
@@ -3692,7 +3703,7 @@ class GnuplotGenerator:
         _main_tics_line = next((_l for _l in reversed(lines) if _l.startswith("set tics scale")), "set tics scale 1.0, 0.5")
         _tm = re.search(r"set tics scale\s+([\d.]+)\s*,\s*([\d.]+)", _main_tics_line)
         _tic_major0, _tic_minor0 = (float(_tm.group(1)), float(_tm.group(2))) if _tm else (1.0, 0.5)
-        _bm = re.search(r"set border lw\s+([\d.]+)", _main_border_line)
+        _bm = re.search(r"set border(?:\s+\d+)?\s+lw\s+([\d.]+)", _main_border_line)
         _border_lw0 = float(_bm.group(1)) if _bm else 1.5
         # [수정 - 버그(사용자 보고)] "rect/ellipse 모두 in-plot의 grid
         # 크기가 main-plot과 동일함(조정 안되면 점으로)" - "set grid"도
@@ -3970,7 +3981,11 @@ class GnuplotGenerator:
         # lw로 set border, 그 다음에 unset border"로 바꿔서 tic만 남아도
         # 얇게 나오게 한다(사각형은 border 자체가 보이므로 원래도 이미
         # 축소된 lw를 썼음).
-        lines.append(f"set border lw {_border_lw0 * font_scale:.3f}")
+        # [수정 - 안전장치] 위와 같은 이유로, 이 인셋 자신의 border도 항상
+        # 전체 4변(31)을 명시해서 켠다 - 이전 프레임에서 어떤 이유로든
+        # border가 "꺼진 채"로 남아있었더라도 이 줄만으로 항상 완전히
+        # 복구되게 한다.
+        lines.append(f"set border 31 lw {_border_lw0 * font_scale:.3f}")
         if _ellipse_native_ok:
             # 위 주석 참고 - 인셋의 네모 축 테두리 "선"만 꺼서 원/타원
             # 밖으로 삐져나오지 않게 한다(tic 두께는 위에서 이미 줄여둠).
