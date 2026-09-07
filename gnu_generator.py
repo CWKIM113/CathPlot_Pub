@@ -2913,8 +2913,22 @@ class GnuplotGenerator:
                         ry_val = rx_val
                 else:
                     ry_val = ry_raw or rx_val
-                grx = _coord_clause(rx_val, _mode, 0.05)
-                gry = _coord_clause(ry_val, _mode, 0.05)
+                # [수정 - 사용자 보고 버그] "반지름 입력인데 그려진 것은
+                # 지름으로 그려짐" - gnuplot의 "set object ellipse ... size
+                # <w>,<h>"는 (반지름이 아니라) 가로/세로 "지름"을 뜻함(PIP
+                # 자신의 원/타원 경계 장식(위 object 7100/7101, "size screen
+                # {_erx*2},{_ery*2}")도 같은 이유로 이미 2배를 해서 넘기고
+                # 있음 - 그쪽과의 일관성을 위해 UI는 그대로 "Radius"로 두고
+                # 코드에서 2배를 해 gnuplot에 넘긴다). 좌표값(data)/%(pct)
+                # 두 모드 다 선형 환산이라 원본 문자열 값을 2배 한 뒤
+                # _coord_clause에 넘기는 것만으로 그대로 반영된다.
+                def _double_val(v):
+                    try:
+                        return str(float(v) * 2)
+                    except (TypeError, ValueError):
+                        return v
+                grx = _coord_clause(_double_val(rx_val), _mode, 0.10)
+                gry = _coord_clause(_double_val(ry_val), _mode, 0.10)
                 _color = (ell.get("color") or "").strip() or "black"
                 lines.append(
                     f'set object {i+1} ellipse at {gx},{gy} size {grx},{gry} '
@@ -3859,6 +3873,27 @@ class GnuplotGenerator:
         # inset은 이 더미가 애초에 필요 없으므로(y2 축 예약 목적일 뿐 실제
         # 데이터가 없음) 빼고 그린다.
         _inset_cmd_list = [c for c in main_cmd_list if not c.startswith("NaN axes")]
+
+        # [수정 - 사용자 보고 버그] "in-plot에 marker를 지정하면 marker
+        # 크기가 줄지 않음" - 이 인셋은 main_cmd_list를 그대로 재사용해서
+        # curve line은 의도적으로 main-plot과 같은 굵기를 유지하지만(위
+        # border 관련 주석 참고 - "curve와 같은 굵기"가 기준), marker(점
+        # 데이터, "with points ... ps N")는 그 자체가 덩어리진 도형이라
+        # 작은 인셋 박스 안에서는 원래 크기 그대로면 상대적으로 훨씬 커
+        # 보임(tic/border/grid 등 다른 "인셋 전용 축 장식"은 이미 font_scale
+        # 로 줄이고 있는데 marker만 빠져 있었음) - "with points"가 있는
+        # 명령만 골라 그 ps 값에 font_scale을 곱해 다른 인셋 요소들과 같은
+        # 비율로 줄인다(rect/circle/ellipse 모두 공통 - clip 모양과 무관).
+        def _scale_marker_ps(cmd):
+            if " with points " not in cmd:
+                return cmd
+            def _repl(m):
+                try:
+                    return f" ps {float(m.group(1)) * font_scale:.3f}"
+                except ValueError:
+                    return m.group(0)
+            return re.sub(r" ps ([\d.]+)", _repl, cmd)
+        _inset_cmd_list = [_scale_marker_ps(c) for c in _inset_cmd_list]
 
         if _ellipse_native_ok:
             # [수정 - 요청] "PIP in-plot(원/타원)에서 spline 되는 방안이
