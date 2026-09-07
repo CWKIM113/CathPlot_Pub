@@ -1215,7 +1215,26 @@ class GnuplotGenerator:
         # 여백이 과하게 넓어짐"이라는, 이전에 이미 발견해 고쳤던 버그가
         # 되돌리는 과정에서 같이 사라져 재발했음 - fmt=="interactive"일
         # 때는 is_print_mode와 무관하게 화면용 튜닝을 쓰도록 되돌린다.
-        _legend_tuning = ({"row_mult": 1.2, "box_chars": -2.0, "sample_mult": 1.0, "text_corr": 1.0}
+        # [수정 - 사용자 보고 버그, 근본 원인] "box 테두리<->title 간격이
+        # 1글자로 요청했는데도 라벨이 길수록(17자=10자, 8자=4자 식으로)
+        # 더 벌어짐" - 고정 폭(가산)이 아니라 "라벨 길이에 비례"해서
+        # 벌어진다는 게 핵심 단서: max_label_len 자체가 실제보다 크게
+        # 추정되고 있다는 뜻(길이에 비례하는 오차는 절대값이 아니라 배율
+        # 오차에서만 나옴). max_label_len은 PIL(freetype)로 measure한 폭에
+        # text_corr을 곱해서 구하는데, screen(Interactive)만 유독
+        # text_corr=1.0(보정 없음)으로 남아있었음 - 바로 위 주석에도 있듯
+        # "실측 못 해서 안전하게 1.0 유지"라고 명시적으로 적어둔 부분.
+        # 이 파일에서 이미 PDF/PNG(pdfcairo/pngcairo)는 PyMuPDF 실측으로
+        # "PIL 추정치가 실제 렌더링보다 정확히 1.5배 크다"(text_corr=2/3)는
+        # 것을 확인한 바 있음 - screen(gnuplot windows 터미널, GDI 렌더링)도
+        # PIL(FreeType 기반) 추정과는 별개의 렌더링 엔진이라 같은 종류의
+        # 오차가 있을 가능성이 높고, 사용자가 알려준 두 수치(17자->10자,
+        # 8자->4자 gap)로 역산해도 대략 1.6~2.1배 과대추정 범위로 나와
+        # 방향과 크기가 PDF/PNG 사례와 부합함 - 같은 보정(2/3)을 screen에도
+        # 적용한다. [주의] 이 값은 PDF처럼 PyMuPDF로 직접 실측한 게 아니라
+        # 사용자가 눈대중으로 알려준 두 지점에서 역산한 추정치이므로, 실제
+        # Windows 화면에서 다시 확인 후 필요하면 추가 조정 요청 바람.
+        _legend_tuning = ({"row_mult": 1.2, "box_chars": -2.0, "sample_mult": 1.0, "text_corr": 2 / 3}
                           if (not is_print_mode or _fmt_l == "interactive")
                           else _FORMAT_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0, "sample_mult": 1.0, "text_corr": 1.0}))
         ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * _legend_tuning["row_mult"]
@@ -4006,18 +4025,27 @@ class GnuplotGenerator:
             # [추가 - 요청] "in-plot의 축frame은 curve처럼 진한 실선이어야
             # 함(투명인 경우도 마찬가지)" - gnuplot 네이티브 border는 계속
             # 꺼둔 채로(tic 두께에는 영향 없음), 대신 축 박스의 실제 네 변
-            # 위치(_inset_lmargin 등)에 curve와 같은 굵기(lw 3.0)의 장식용
-            # 사각형을 새로 그려 "굵은 실선 테두리"로 보이게 한다. 이 네
-            # 모서리는 위 적응형 여백 계산(_safety=0.85)이 항상 타원
-            # 안쪽에 들어오도록 이미 보장해주므로(볼록도형인 타원 안에
-            # 네 꼭짓점이 있으면 그 사이 직선도 항상 안쪽 - 기하학적으로
-            # 항상 성립), 원/타원 밖으로 삐져나갈 일이 없다. 불투명/투명
-            # 여부와 무관하게 항상 같은 굵은 실선(사용자 명시적 확인 -
-            # 점선/얇게로 바꿀 필요 없음).
+            # 위치(_inset_lmargin 등)에 curve와 같은 굵기의 장식용 사각형을
+            # 새로 그려 "굵은 실선 테두리"로 보이게 한다. 이 네 모서리는 위
+            # 적응형 여백 계산(_safety=0.85)이 항상 타원 안쪽에 들어오도록
+            # 이미 보장해주므로(볼록도형인 타원 안에 네 꼭짓점이 있으면 그
+            # 사이 직선도 항상 안쪽 - 기하학적으로 항상 성립), 원/타원
+            # 밖으로 삐져나갈 일이 없다. 불투명/투명 여부와 무관하게 항상
+            # 같은 굵은 실선(사용자 명시적 확인 - 점선/얇게로 바꿀 필요
+            # 없음).
+            # [수정 - 사용자 보고 버그] "PIP in-plot의 axis frame 선이
+            # main-plot보다 더 두꺼움" - 위에서 "curve와 같은 굵기"라고
+            # 적어놓고 실제로는 고정값 3.0을 박아뒀던 게 문제. curve
+            # 기본 lw(1.5)와 main-plot border lw(_border_lw0, 기본값도
+            # 1.5)가 원래 같은 기준(1.5)에서 출발하므로, 진짜 "curve/
+            # main-plot과 같은 굵기"가 되려면 하드코딩된 3.0이 아니라
+            # main-plot border 두께를 그대로 써야 한다(font_scale은 안
+            # 곱함 - 위 의도대로 인셋 크기/투명도와 무관하게 항상 같은
+            # 굵기 유지).
             lines.append(
                 f"set object 7102 rectangle from screen {_inset_lmargin:.4f},{_inset_bmargin:.4f} "
                 f"to screen {_inset_rmargin:.4f},{_inset_tmargin:.4f} "
-                f'front fc rgb "black" fillstyle empty border lc rgb "black" lw 3.0'
+                f'front fc rgb "black" fillstyle empty border lc rgb "black" lw {_border_lw0:.3f}'
             )
         lines.append(f"set tics scale {_tic_major0 * font_scale:.3f}, {_tic_minor0 * font_scale:.3f}")
         if _has_grid:
