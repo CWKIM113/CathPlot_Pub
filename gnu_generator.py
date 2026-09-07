@@ -1355,7 +1355,9 @@ class GnuplotGenerator:
         else:
             SAMPLE_W *= 2 / 3
         # [수정 - 요청] "style(샘플선) 길이가 너무 김 - 30% 정도 줄여도 됨" -
-        # 위에서 이미 여러 차례 조정된 최종 길이에 추가로 한 번 더 0.7배.
+        # 애니메이션이 아닌 일반(정지) 화면 스크린샷 기준으로 확인된 요청
+        # (Anim 없는 경우가 기준) - 위에서 이미 여러 차례 조정된 최종
+        # 길이에 추가로 한 번 더 0.7배.
         SAMPLE_W *= 0.7
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
         # 그냥 len()으로 세면 숫자/콜론/대시처럼 대문자보다 좁은 문자가 많은
@@ -1442,17 +1444,14 @@ class GnuplotGenerator:
         # 실제 GDI 렌더링과 또 어긋난 사례(이 파일 다른 곳에서도 반복된
         # 문제, "실측 화면(windows 터미널)을 캡처해서 직접 확인" 주석
         # 참고) - 0.65로 덜 공격적으로 되돌려 여유를 둔다.
-        # [수정 - 사용자 보고 버그, 재조정 - 실제 화면(Windows GDI)으로 반대
-        # 방향 확인됨] pngcairo 근사 렌더링만 보고 0.9->0.3으로 줄였더니
-        # 실제 화면에서는 오히려 "우측 style과 border 간격이 거의 없어짐 -
-        # 이전(0.9)보다도 1.5배 더 키워야 함"으로 확인됨 - 이 파일에서 이미
-        # 여러 차례(0.7+1/3->0.35->0.65->0.9) 겪었던 "pngcairo/PDF 기준
-        # 테스트와 실제 GDI 렌더링이 어긋나는" 바로 그 문제가 이번에도
-        # 재발한 것 - pngcairo 기준 판단을 버리고 사용자가 실측으로 확인한
-        # 값(기존 0.9의 1.5배=1.35)을 그대로 반영한다. compact(인셋
-        # legend)는 이번에 재확인된 보고가 없어 되돌린다(원래 값 유지).
+        # [보류 - 사용자 요청] "Anim 화면 스크린샷 기준으로 공용 코드를
+        # 튜닝하면 Print/Save 등 다른 곳도 매번 재검증해야 해서 힘들다" -
+        # 이 값은 Animation 창 스크린샷으로 실측(1.35)했는데, 그 실측이
+        # Animation 렌더링 맥락(반복 redraw) 특유의 것일 수도 있어 이
+        # 공용 코드에는 아직 반영하지 않고 Animation 이전 값(0.9)으로
+        # 되돌려둔다 - 별도로 정적 화면에서 확인된 뒤에 다시 조정할 것.
         if not is_print_mode and not compact:
-            _box_edge_gap_mult = 1.35
+            _box_edge_gap_mult = 0.9
         else:
             _box_edge_gap_mult = 0.7 + 1 / 3
         BOX_EDGE_GAP_FRAC = _box_edge_gap_mult * char_width_frac  # 박스 테두리 <-> 샘플선 간격
@@ -3536,7 +3535,7 @@ class GnuplotGenerator:
             # 되돌린다(실제 렌더링으로 R=30%/50%/75% 모두 재확인 - 겹침도
             # 원 밖으로 나감도 없음).
             _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
-            _lbl_ofs_y = (6.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
+            _lbl_ofs_y = (4.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
             _xlabel_txt = (plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
