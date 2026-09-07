@@ -3921,6 +3921,23 @@ class GnuplotGenerator:
             _gm = re.match(r"(set grid [a-z0-9 ]+) lw", _main_grid_line)
             _grid_axes = _gm.group(1) if _gm else "set grid xtics ytics"
 
+        # [수정 - 사용자 보고 버그] "화면(Interactive) 하단 마우스 좌표
+        # readout이 메인이 아니라 in-plot(PIP 인셋) 좌표로 나옴(PIP 없을
+        # 때는 맞았음)" - 인셋은 자기 확대 구간을 보여주려고 xrange/yrange/
+        # y2range를 자기 것으로 바꿔서 plot한 뒤, margin/border/tic/grid는
+        # 위에서 이미 원래대로 복구하면서도 정작 xrange/yrange/y2range는
+        # 복구를 안 하고 있었음 - gnuplot의 마우스 좌표 readout은 "현재
+        # 활성 xrange/yrange"를 그대로 데이터 좌표로 표시하므로, 화면
+        # 위치(margin)는 메인으로 돌아왔는데 그 안의 데이터 범위는 인셋의
+        # 좁은 확대 구간인 채로 남아 엉뚱한 값이 나왔던 것. border/tic과
+        # 똑같은 방식(lines를 거꾸로 훑어 메인이 마지막으로 설정해둔 값을
+        # 찾음)으로 캡처해뒀다가, 아래 복구 블록에서 그대로 다시 선언한다
+        # (실제 plot을 다시 그리는 게 아니라 "set" 상태만 다시 선언하는
+        # 것이라 이미 그려진 인셋 화면은 전혀 안 건드림).
+        _main_xrange_line = next((_l for _l in reversed(lines) if _l.startswith(("set xrange", "set autoscale x"))), None)
+        _main_yrange_line = next((_l for _l in reversed(lines) if _l.startswith(("set yrange", "set autoscale y")) and not _l.startswith(("set autoscale y2",))), None)
+        _main_y2range_line = next((_l for _l in reversed(lines) if _l.startswith(("set y2range", "set autoscale y2"))), None)
+
         # [수정 - 버그(사용자 보고)] "원 안의 선두께가 사각형과 다름(어제는
         # 정확히 같게 했음)" - 배경/경계 장식 오브젝트의 lw가 rect(완전
         # 불투명 1 / 완전투명 점선 2)와 ellipse(둘 다 2)로 서로 다르게
@@ -4256,6 +4273,18 @@ class GnuplotGenerator:
         lines.append(f"set tics scale {_tic_major0:.3f}, {_tic_minor0:.3f}")
         if _has_grid:
             lines.append(_main_grid_line)
+
+        # [수정 - 사용자 보고 버그] 위 xrange/yrange/y2range 캡처 참고 -
+        # 인셋이 자기 확대 구간으로 바꿔둔 xrange/yrange/y2range를 여기서
+        # 메인 값으로 되돌린다(실제 plot을 다시 그리지 않으므로 이미 그린
+        # 인셋 화면 픽셀에는 영향 없음 - "set" 상태만 원복해 이후 마우스
+        # 좌표 readout/줌 리셋('R' 키) 등이 다시 메인 데이터 범위를 보게 함).
+        if _main_xrange_line:
+            lines.append(_main_xrange_line)
+        if _main_yrange_line:
+            lines.append(_main_yrange_line)
+        if _main_y2range_line:
+            lines.append(_main_y2range_line)
 
         # 이 뒤에 또 다른 코드가 있어도 영향 안 받도록 원위치로 복구
         lines.append("set origin 0,0")
