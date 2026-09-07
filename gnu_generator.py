@@ -1423,7 +1423,13 @@ class GnuplotGenerator:
         # [수정 - 사용자 보고 버그] PIP 인셋 legend(compact=True)는 화면
         # 여부와 무관하게 print과 같은 좁은 간격을 쓴다(인셋 자체가 좁아
         # 화면용 넉넉한 간격(1.4)이 상대적으로 과하게 커 보였음).
-        LABEL_GAP_FRAC = (0.6 if (is_print_mode or compact) else 1.4) * char_width_frac   # 샘플선 <-> curve title 간격
+        # [수정 - 요청] "main-plot legend box 내 margin을 1글자로(좌우
+        # 모두 1자여도 됨) - screen에만 해당" - title<->샘플선(왼쪽) 쪽도
+        # 오른쪽(BOX_EDGE_GAP_FRAC)과 동일하게 "1글자"로 통일한다. PIP/
+        # Animation 여부와 무관한 공용 값(compact/is_print_mode 분기만
+        # 그대로 유지 - PIP는 별도 compact 분기로 이미 분리돼 있어 이
+        # 변경의 영향을 안 받음).
+        LABEL_GAP_FRAC = (0.6 if (is_print_mode or compact) else 1.0) * char_width_frac   # 샘플선 <-> curve title 간격
         # [수정] "screen에서 박스 테두리와 샘플선이 붙어 보인다"는 재확인 피드백.
         # 계산해보면 print/screen 공통 계수(0.3)는 기본 legend_size(9pt) 기준
         # 물리 간격이 0.013in 안팎(≈2px)에 불과해, 샘플선 자체의 굵기(lw)나
@@ -1450,8 +1456,15 @@ class GnuplotGenerator:
         # Animation 렌더링 맥락(반복 redraw) 특유의 것일 수도 있어 이
         # 공용 코드에는 아직 반영하지 않고 Animation 이전 값(0.9)으로
         # 되돌려둔다 - 별도로 정적 화면에서 확인된 뒤에 다시 조정할 것.
+        # [수정 - 요청] "main-plot legend box 내 margin을 1글자로(좌우
+        # 모두 1자여도 됨) - screen에만 해당, PIP/Anim과 무관해야 함" -
+        # 왼쪽(LABEL_GAP_FRAC)과 동일하게 "1글자"로 맞춘다. compact(PIP
+        # 인셋)/print는 그대로 유지 - 이 분기 자체가 이미 PIP/Anim 유무와
+        # 무관하게 화면(screen)이면 항상 같은 값을 쓰므로, 별도로 PIP나
+        # Animation 여부를 참조하는 코드는 없음(요청하신 "PIP·Anim과
+        # 무관해야 함" 조건은 이미 만족).
         if not is_print_mode and not compact:
-            _box_edge_gap_mult = 0.9
+            _box_edge_gap_mult = 1.0
         else:
             _box_edge_gap_mult = 0.7 + 1 / 3
         BOX_EDGE_GAP_FRAC = _box_edge_gap_mult * char_width_frac  # 박스 테두리 <-> 샘플선 간격
