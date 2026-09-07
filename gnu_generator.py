@@ -4029,6 +4029,19 @@ class GnuplotGenerator:
         lines.append("set origin 0,0")
         lines.append("set size 1,1")
         lines.append("unset label")
+        # [수정 - 버그(사용자 보고), 근본 원인 발견] "PIP+Animation에서
+        # legend의 flowrate 샘플선이 원래 자리와 엉뚱한 자리에 동시에
+        # 나타남" - gnuplot 최소 재현으로 원인 확정: "set arrow N from
+        # graph X,Y ..."는 선언 시점의 margin이 아니라, 그 이후 "아무
+        # plot이든" 실행되는 시점에 그때 활성화된 margin으로 다시 계산돼
+        # 그려진다. 이 인셋의 legend 화살표(7500번대, Animation 인셋
+        # 자신의 작은 margin 기준으로 선언됨)를 여기서 안 지우고 두면,
+        # 프레임이 끝나고 "복구"된 메인 margin으로 다음 프레임의 메인
+        # plot이 그려질 때 이 화살표가 엉뚱한 위치(메인 margin 기준)에
+        # 같이 다시 그려짐 - 바로 아래 "unset object"는 있었는데 "unset
+        # arrow"만 빠져있었음. 최소 재현 스크립트로 이 한 줄 추가만으로
+        # 완전히 해결되는 것을 확인함.
+        lines.append("unset arrow")
         lines.append("unset object")
 
         # [추가 - 요청] "원/타원으로 클리핑" + "배경 불투명도 슬라이더" -
