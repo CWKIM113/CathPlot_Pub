@@ -1442,9 +1442,26 @@ class GnuplotGenerator:
         # 실제 GDI 렌더링과 또 어긋난 사례(이 파일 다른 곳에서도 반복된
         # 문제, "실측 화면(windows 터미널)을 캡처해서 직접 확인" 주석
         # 참고) - 0.65로 덜 공격적으로 되돌려 여유를 둔다.
-        # [수정 - 요청] "main legend box와 style 간격 조금 더 줘요" - 0.65
-        # 에서 조금 더 늘림(0.9). print/compact는 그대로 유지.
-        BOX_EDGE_GAP_FRAC = (0.9 if (not is_print_mode and not compact) else (0.7 + 1 / 3)) * char_width_frac  # 박스 테두리 <-> 샘플선 간격
+        # [수정 - 사용자 보고 버그, 재조정] "1글자 간격으로 하라고 했는데
+        # 아직도 너무 넓음" - 실제 렌더링(pngcairo 근사)으로 직접 측정해보니
+        # 0.9는 시각적으로 1자보다 훨씬 넓어 보였음(대략 3~4자 폭) - 0.3으로
+        # 크게 줄임. [주의] 이 값은 이 파일에서 여러 차례(0.7+1/3->0.35->
+        # 0.65->0.9) 방향을 바꿔가며 조정됐던 이력이 있는데, 코멘트를 보면
+        # "실제 화면(Windows GDI 렌더링)과 pngcairo/PDF 기준 테스트가
+        # 어긋난 사례"가 이미 있었음(0.35 때 재현된 문제) - 이번 조정도
+        # pngcairo 근사 기준이라, 실제 화면(windows 터미널)에서 확인 후
+        # 미세 조정이 필요할 수 있음.
+        # [수정 - 요청] "in-plot(PIP 인셋)은 가로세로 모두 마진이 너무 큼" -
+        # compact(인셋 legend)는 그동안 print와 같은 값(0.7+1/3)을 공유
+        #했는데, 위와 같은 이유로 이것도 과했음 - screen과 비슷한 수준으로
+        # 별도로 낮춘다(print/save는 그대로 유지).
+        if not is_print_mode and not compact:
+            _box_edge_gap_mult = 0.3
+        elif compact:
+            _box_edge_gap_mult = 0.3
+        else:
+            _box_edge_gap_mult = 0.7 + 1 / 3
+        BOX_EDGE_GAP_FRAC = _box_edge_gap_mult * char_width_frac  # 박스 테두리 <-> 샘플선 간격
         # [수정] "screen 창에서도 마진이 너무 넓다(5자 이상 줄여야 함)" - 예전엔
         # screen의 char_width_in 계수(0.0049)가 실측 재보정이 안 돼 실제 폭을
         # 과소평가한다는 이유로 여유분을 6.7자까지 늘려뒀었는데, 그 결과 라벨이
@@ -3525,7 +3542,7 @@ class GnuplotGenerator:
             # 되돌린다(실제 렌더링으로 R=30%/50%/75% 모두 재확인 - 겹침도
             # 원 밖으로 나감도 없음).
             _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
-            _lbl_ofs_y = (4.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
+            _lbl_ofs_y = (6.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
             _xlabel_txt = (plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
