@@ -1076,7 +1076,7 @@ class GnuplotGenerator:
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
                             axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None,
                             align="Auto", fmt=None, box_w_pct_override=None, box_h_pct_override=None,
-                            axis_x_span=None, axis_y_span=None, compact=False):
+                            axis_x_span=None, axis_y_span=None, compact=False, marker_size_factor=1.0):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -1845,7 +1845,15 @@ class GnuplotGenerator:
                 # 서로 달라서(예: "+"는 원/사각형보다 훨씬 작고 얇게 그려짐),
                 # 같은 font_pt로 찍어도 시각적 크기가 들쭥날쭥해 보이는 문제 -
                 # 기호별 배율을 둬서 시각적 크기를 서로 맞춘다.
-                symbol_pt = _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0)
+                # [수정 - 사용자 요청] "in-plot marker 크기가 인셋 크기 비율을
+                # 반영해야" - curve 위 marker(ps)는 이제 인셋 크기(size_w/
+                # size_h)에 비례해 줄어드는데(_render_pip_inset의
+                # marker_size_factor로 여기 전달), 이 legend 기호는 여전히
+                # font_pt(폰트 축소 배율 기준)만 따라가면 서로 다시 어긋나
+                # 보일 수 있어(이전에 이미 한 번 고쳤던 "legend와 curve
+                # marker 크기가 다르다" 문제 재발 방지) 같은 배율을 곱한다
+                # (텍스트 자체 크기(font_pt)는 안 건드림 - 가독성 유지).
+                symbol_pt = _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0) * marker_size_factor
                 # [수정 - 사용자 보고 버그] "in-plot legend에 marker가 안
                 # 보임" - 텍스트 라벨(바로 아래)은 너무 작아지지 않도록
                 # 최소 5pt 하한을 이미 두고 있는데, 마커 기호(유니코드 글자
@@ -4241,6 +4249,14 @@ class GnuplotGenerator:
         lines.append(yrange_cmd)
         lines.append(y2range_cmd)
 
+        # [수정 - 사용자 요청] "in-plot marker 크기가 인셋 크기 비율을
+        # 반영해야" - 인셋의 가로/세로 중 큰 쪽을 "크기 기반" marker 축소
+        # 배율로 쓴다. legend_on 여부와 무관하게 아래 두 곳(legend 안
+        # marker 기호, curve 위 marker) 모두에서 같은 값을 써야 서로
+        # 어긋나지 않으므로, legend 켜짐 여부를 타는 if 블록 밖(여기)에서
+        # 한 번만 계산해 둔다.
+        _size_factor = min(1.0, max(size_w, size_h))
+
         if pip.get("legend_on"):
             # id 7500대(Legend1 8000대/Legend2 9000대와 안 겹치는 번호)로 inset
             # 전용 legend를 그림 - 위치는 1차 구현에선 "right top" 고정.
@@ -4271,12 +4287,17 @@ class GnuplotGenerator:
             _pip_legend_axis_w_in = max((_inset_rmargin - _inset_lmargin) * _pip_canvas_w_in, 0.3)
             _pip_legend_axis_h_in = max((_inset_tmargin - _inset_bmargin) * _pip_canvas_h_in, 0.3)
             curve_index_map = {id(c): i for i, c in enumerate(_inset_curves)}
+            # [수정 - 사용자 요청] "in-plot marker 크기가 인셋 크기 비율을
+            # 반영해야" - 위(legend_on 여부와 무관하게 계산해 둔) _size_factor를
+            # legend 쪽 marker 기호에도 그대로 써서, curve 위 marker와
+            # legend 안 marker 기호 크기가 서로 어긋나지 않게 한다.
             self._render_legend_box(
                 lines, _inset_curves, "right top", True, 1.0, 7500,
                 font_scale, 1.0, 1.0, getattr(plotdef, "is_print_mode", False),
                 curve_index_map, plotdef.legend_font,
                 axis_w_in=_pip_legend_axis_w_in, legend_size=float(plotdef.legend_size or 9),
                 axis_h_in=_pip_legend_axis_h_in, fmt=fmt, compact=True,
+                marker_size_factor=_size_factor,
             )
 
         # [수정 - 버그] 메인 plot이 y2축 미사용시 넣어두는 "NaN axes x1y2
@@ -4314,9 +4335,24 @@ class GnuplotGenerator:
         # 뭉개지거나 사실상 안 보이게 될 수 있었음(legend 쪽 마커 기호는
         # 이미 5pt 절대 하한이 있음 - _render_legend_box의 symbol_pt 참고).
         # curve marker는 pt가 아닌 ps(점 크기 배수)라 절대 pt 하한을 그대로
-        # 쓸 수 없어, 원래 크기(marker_size로 사용자가 지정한 ps)의 35%
+        # 쓸 수 없어, 원래 크기(marker_size로 사용자가 지정한 ps)의 30%
         # 밑으로는 더 줄지 않게 배율 자체에 하한을 둔다.
-        _marker_ps_scale = max(font_scale * 0.75, 0.35)
+        # [수정 - 사용자 재확인] "당연히 in-plot의 marker크기는 main-plot
+        # 대비 plot 비율만큼 줄었나요?" -> "기본은 크기 반영인데, 너무
+        # 작거나 하면 제한치를 줘요" - 지금까지는 font_scale(사용자가
+        # 별도로 지정하는 "폰트 축소 배율")로만 줄였는데, 이건 인셋의
+        # 실제 물리적 크기(size_w/size_h, 축 대비 %)와는 별개 값이라 -
+        # 예를 들어 인셋을 90%로 크게 잡아도 font_scale=0.6이면 marker는
+        # 항상 45%로만 줄고, 10%로 작게 잡아도 똑같이 45%였음(위 marker
+        # 개수 수정과 달리 크기는 인셋의 실제 크기를 전혀 반영 못 하고
+        # 있었음). 인셋의 가로/세로 중 큰 쪽(size_w, size_h)을 "기본"
+        # 배율로 쓰고(_size_factor는 위 legend 마커 호출부에서 이미 계산해
+        # 둔 것을 그대로 재사용 - 둘이 어긋나면 다시 "legend와 curve marker
+        # 크기가 다르다" 문제가 재발함), 위 legend 마커와의 일관성을 위해
+        # 기존 0.75(compact legend 배율)와 font_scale은 그대로 곱하되,
+        # 결과가 너무 작아지면(작은 인셋에서 사실상 안 보이는 것을 막기
+        # 위해) 하한을 0.35 -> 0.3으로 살짝 낮춰서 크기 반영에 더 여유를 준다.
+        _marker_ps_scale = max(font_scale * 0.75 * _size_factor, 0.3)
         def _scale_marker_ps(cmd):
             if " with points " not in cmd:
                 return cmd
