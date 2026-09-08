@@ -4057,12 +4057,23 @@ class GnuplotGenerator:
         # 로 줄이고 있는데 marker만 빠져 있었음) - "with points"가 있는
         # 명령만 골라 그 ps 값에 font_scale을 곱해 다른 인셋 요소들과 같은
         # 비율로 줄인다(rect/circle/ellipse 모두 공통 - clip 모양과 무관).
+        # [수정 - 사용자 보고 버그, 재조정] "in-plot legend box 안 marker와
+        # in-plot curve 위 marker 크기가 너무 다름(curve 쪽이 훨씬 큼) -
+        # legend box보다 1.5~2배 정도면 됨" - 원인: 인셋 자신의 legend는
+        # font_scale에 더해 "compact"(PIP 인셋 전용) 배율 0.75를 한 번 더
+        # 곱해서 줄이는데(_render_legend_box의 _compact_font_scale, 바로
+        # 위 self._render_legend_box(..., compact=True) 호출 참고), curve
+        # 위 marker(ps)는 font_scale만 곱하고 이 compact 배율은 안 곱해서
+        # 서로 줄어드는 비율이 달랐음 - legend와 같은 기준이 되도록 같은
+        # 0.75를 여기도 곱한다(legend가 compact=True로 항상 이 배율을
+        # 쓰므로 여기서도 조건 없이 곱함).
+        _marker_ps_scale = font_scale * 0.75
         def _scale_marker_ps(cmd):
             if " with points " not in cmd:
                 return cmd
             def _repl(m):
                 try:
-                    return f" ps {float(m.group(1)) * font_scale:.3f}"
+                    return f" ps {float(m.group(1)) * _marker_ps_scale:.3f}"
                 except ValueError:
                     return m.group(0)
             return re.sub(r" ps ([\d.]+)", _repl, cmd)
