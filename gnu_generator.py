@@ -3861,12 +3861,30 @@ class GnuplotGenerator:
             # 기존에 이미 실측 검증됐던 font_scale=0.6 기준 smoke_test에서
             # xlabel이 tic 숫자와 겹치는 회귀가 실제 렌더링으로 확인됨 -
             # 검증 없이 더 진행하면 위험해 일단 원래(선형 비례) 공식으로
-            # 되돌린다. 낮은 font_scale에서 title이 멀어져 보이는 문제
-            # 자체는 남아있어 별도로 다시 봐야 함(예: 0.6 부근은 그대로
-            # 유지하고 그보다 낮을 때만 추가 보정하는 방식 등 - 실제 화면
-            # 재확인 필요).
-            _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
-            _lbl_ofs_y = (4.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
+            # 되돌렸었음.
+            # [수정 - 사용자 재보고, 근본 원인 확정] "main-plot은 문제
+            # 없는데 in-plot만 title이 축과 멀다" - gnuplot의 xlabel/ylabel
+            # "offset" 값은 "글자(라벨) 자신의 font 크기"가 아니라 터미널
+            # 기본 문자 크기 기준의 고정 단위라서, 이 offset 값 자체를
+            # font_scale에 비례해서 계속 줄이면(위 sqrt 실험 이전의 원래
+            # 선형 비례식도 마찬가지) font_scale이 작아질수록 "당기는 힘"만
+            # 계속 약해지고 글자는 더 작아져 - 결과적으로 절대 픽셀 간격은
+            # 오히려 더 벌어짐(실측 확인: 격리 렌더+픽셀 측정으로, offset을
+            # font_scale에 그대로 비례시키면 font_scale 0.6->0.1 사이에서
+            # label-tic 간격이 7px->25px로 3배 이상 벌어짐, 반대로 offset
+            # 값 자체를 0.6 기준 값(2.7)으로 고정하면 font_scale 0.1에서도
+            # 간격이 다시 ~7-8px로 돌아오는 것을 확인함 - 위 sqrt 실험이
+            # 실패했던 것도 sqrt(s)>s가 "font_scale=0.6인 기준점 자체"의
+            # pull 세기까지 더 세게 만들어버렸기 때문이었음, 기준점은 안
+            # 건드리고 그 아래만 고정하면 그 회귀도 피해진다).
+            # 그래서 "offset 계산에만" 쓰는 별도 배율을 만들어, 이미 실측
+            # 검증된 font_scale=0.6 시점의 pull 세기 아래로는 더 줄지
+            # 않게(0.6에서 고정) 한다 - font_scale>=0.6(더 큰 인셋)에서는
+            # 기존과 완전히 동일(회귀 없음), font_scale<0.6에서만 pull이
+            # 더 세져(정확히는 "덜 약해져") 절대 간격이 유지된다.
+            _ofs_fs = max(font_scale, 0.6)
+            _lbl_ofs_x = 2.6 * _ofs_fs  # xlabel을 tic 쪽(위)으로
+            _lbl_ofs_y = (4.5 if _pip_round_shape else 3.8) * _ofs_fs  # ylabel을 tic 쪽(오른쪽)으로
             _xlabel_txt = (plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
@@ -3931,7 +3949,14 @@ class GnuplotGenerator:
             # 박스(및 타원) 밖으로 넘어갔음 - 메인 plot 제목에 이미 쓰던
             # "-0.4*(size/14)" pull-down 관례를 그대로 적용해 tmargin
             # 쪽으로 당긴다.
-            _title_gap = -0.4 * (_title_size / 14.0)
+            # [수정 - 사용자 재보고] ylabel/xlabel의 _lbl_ofs_x/y와 같은
+            # 이유(위 _ofs_fs 도입부 설명 참고) - 이 비율도 font_scale이
+            # 작아질수록(=_title_size가 작아질수록) pull이 약해져 절대
+            # 간격이 커지므로, font_scale=0.6에 해당하는 크기(14*0.6=8.4)
+            # 밑으로는 이 "당기는 힘 계산용" 크기가 더 줄지 않게 한다(실제
+            # 렌더 font 크기 _title_size 자체는 위 6.0 하한을 그대로 유지 -
+            # 여기선 pull 세기 계산에만 별도 하한을 둠).
+            _title_gap = -0.4 * (max(_title_size, 14.0 * 0.6) / 14.0)
             lines.append(f'set title "{_title_txt}" font "{plotdef.title_font},{_title_size:.1f}" offset 0,{_title_gap:.3f}')
         else:
             lines.append("unset title")
