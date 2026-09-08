@@ -2607,6 +2607,21 @@ class CathPlotGUI:
         except OSError:
             return []
 
+        # [수정 - 사용자 보고 버그] "PIP 인셋 안에 두 가지 그림이 겹쳐 보임" -
+        # 소스로 지정한 .plt 파일 자신이 (CathPlot이 만든 파일이니 흔히 그럴
+        # 수 있듯) 자기 자신의 PIP 인셋 구간을 포함하고 있으면, 그 인셋 자신의
+        # curve plot 명령도(Rect 클리핑이면 NaN 감싸기 없이 메인과 똑같은
+        # "using (...):N notitle axes ... with lines" 형식이라) 이 정규식에
+        # 그대로 다시 매치돼, 메인 curve + 인셋 curve가 중복으로 섞여
+        # 들어갔음(실제로 서로 다른 확대/축소 구간의 같은 데이터라 "두 그림이
+        # 겹쳐" 보이는 원인). _parse_plt_titles가 이미 같은 이유로 하던 것과
+        # 동일하게, "# --- PIP (부분 확대) inset ---" 주석 이후는 아예
+        # 보지 않는다(있으면 그 앞부분만, 없으면 전체를 그대로 검색).
+        marker_pip = "# --- PIP (부분 확대) inset ---"
+        idx = text.find(marker_pip)
+        if idx >= 0:
+            text = text[:idx]
+
         # [수정 - 사용자 보고 버그] "in-plot으로 .plt를 지정하면 그 파일이 아니라
         # 현재 main-plot을 불러옴" - 실제 렌더링으로 재현·확인한 근본 원인:
         # Cubic Spline이 켜진 curve는 _build_plot_commands가 y 컬럼 번호와

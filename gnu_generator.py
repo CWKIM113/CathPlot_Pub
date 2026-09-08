@@ -5641,10 +5641,38 @@ class GnuplotGenerator:
                 _pip_clip_info = self._render_pip_inset(_fallback_plotdef, _pip_probe_lines, _main_cmd_list, fmt)
                 _pip_name = (plotdef.title or "plot").strip() or "plot"
                 _fallback_desc = "완전불투명" if _fallback_opacity >= 50.0 else "완전투명"
-                self.warnings.append(
-                    f"'{_pip_name}'의 PIP 원/타원(또는 부분 반투명)은 {fmt.upper()} 형식에서는 "
-                    f"지원되지 않아 사각형+{_fallback_desc}(원래 opacity {_orig_opacity:.0f}% 기준)으로 대체했습니다."
-                )
+                # [수정 - 사용자 보고 버그] "opacity를 완전불투명(100%)으로
+                # 뒀는데도 이 경고가 뜨고 원이 사각형으로 대체됨 - 메시지가
+                # '반투명이라 이 형식에서 지원 안 됨'이라고 하는데 반투명이
+                # 아닌데 왜?" - 실제 코드를 다시 살펴보고 확인한 근본 원인:
+                # 이 fallback은 opacity가 진짜 중간값(반투명)일 때뿐 아니라,
+                # 원/타원인데 X/Y(+Y2) 확대 구간이 "구체적인 숫자"로 안
+                # 잡혀 있어도(_ellipse_native_ok가 요구) 똑같이 걸림 - 그런데
+                # 위 xrange_cmd/yrange_cmd/y2range_cmd 구성 로직상, PIP 소스가
+                # "현재 화면"이 아니면(예: ".plt 파일"/"저장된 plot") Y(Y2도)
+                # 범위를 사용자가 직접 안 채우는 한 항상 autoscale로 빠지게
+                # 되어 있어서, opacity와 무관하게 이 경우엔 사실상 "항상"
+                # 사각형으로 대체됨. 그런데 메시지는 opacity가 원인인 것처럼만
+                # 말해서 "opacity를 이미 100%로 뒀는데 왜 이 경고가 뜨나"라는
+                # 혼란을 그대로 남겼음 - opacity가 실제로 0/100(완전)인데도
+                # 대체된 경우는 "범위가 구체적이지 않아서"가 진짜 원인이므로
+                # 그 경우를 구분해서 실제로 고칠 수 있는 방법(Min/Max 채우기)을
+                # 알려준다.
+                _pip_shape_now = str((plotdef.pip or {}).get("clip_shape", "rect")).strip().lower()
+                _is_partial_opacity = 0.0 + 1e-6 < _orig_opacity < 100.0 - 1e-6
+                if _pip_shape_now in ("circle", "ellipse") and not _is_partial_opacity:
+                    self.warnings.append(
+                        f"'{_pip_name}'의 PIP 원/타원은 X·Y(Y2 곡선을 쓰면 Y2도) 확대 구간이 "
+                        f"구체적인 숫자로 지정되지 않아 사각형으로 대체했습니다(opacity와는 무관 - "
+                        f"완전불투명/완전투명이어도 발생) - 데이터 소스가 '현재 화면'이 아니면(저장된 "
+                        f"plot/.plt 파일) Y 범위가 자동으로 비워지니, PIP 팝업의 확대 구간에서 X min/max, "
+                        f"Y1 min/max(및 필요하면 Y2 min/max)를 직접 채워 넣어보세요."
+                    )
+                else:
+                    self.warnings.append(
+                        f"'{_pip_name}'의 PIP 원/타원(또는 부분 반투명)은 {fmt.upper()} 형식에서는 "
+                        f"지원되지 않아 사각형+{_fallback_desc}(원래 opacity {_orig_opacity:.0f}% 기준)으로 대체했습니다."
+                    )
             lines[:] = _pip_probe_lines
 
             # [수정 - 사용자 재보고, 근본적 재시도] "PIP 인셋 위에서만 마우스
