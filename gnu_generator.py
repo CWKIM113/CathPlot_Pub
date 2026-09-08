@@ -5573,19 +5573,6 @@ class GnuplotGenerator:
         _pip_on = bool(_pip_cfg.get("enabled"))
         if _pip_on:
             lines.append("set multiplot")
-            # [수정 시도 - 효과 없었음, 근거는 남겨둠] "화면(Interactive)에서
-            # 커서가 main-plot 위에 있을 때는 좌표값이 안 나오고 in-plot
-            # (PIP 인셋)에서만 나타남" - main plot이 자기 origin/size를 한
-            # 번도 명시하지 않는 것이 원인일 것으로 추정해 여기서 명시
-            # 선언을 추가해봤으나, 사용자가 화면에서 직접 재확인한 결과
-            # 효과가 없었음(하단에 "mouse not in active plot"이라는 gnuplot
-            # 자체 메시지가 그대로 뜸) - 실제 근본 원인과 진짜 수정은 이
-            # 함수 아래쪽, PIP 인셋을 다 그린 "뒤"에 main을 한 번 더 조용히
-            # 재실행하는 부분 참고(gnuplot의 멀티플롯 마우스 추적은 "가장
-            # 마지막에 실행된 plot 명령"만 인식하는 것으로 보임 - 상태
-            # 선언 순서가 아니라 "마지막으로 그린 게 누구냐"의 문제였음).
-            # 여기 이 두 줄은 렌더링 결과에 영향이 없어(0,0/1,1은 원래도
-            # 기본값) 해가 되지 않으므로 그대로 둔다.
             lines.append("set origin 0,0")
             lines.append("set size 1,1")
 
@@ -5675,36 +5662,24 @@ class GnuplotGenerator:
                     )
             lines[:] = _pip_probe_lines
 
-            # [수정 - 사용자 재보고, 근본적 재시도] "PIP 인셋 위에서만 마우스
-            # 좌표/우클릭이 되고 main-plot에서는 안 됨" - 이전 시도(origin/size
-            # 명시 선언, set 상태만 원복)는 모두 효과가 없었음(사용자가 화면
-            # 하단에서 직접 "mouse not in active plot"이라는 gnuplot 자체
-            # 메시지를 확인해줌) - gnuplot의 멀티플롯 마우스 추적은 "가장
-            # 마지막에 실행된 plot 명령"만 인식하는 것으로 보이는데, PIP
-            # 인셋이 항상 맨 마지막에 그려져서 구조적으로 인셋만 추적되고
-            # 있었음.
-            # [발견 - 실측 렌더링] main plot을 인셋 뒤에 "다시" 그려도(같은
-            # curve 명령을 origin 0,0/size 1,1로 재실행) 인셋 픽셀이 지워지지
-            # 않는 것을 직접 렌더링으로 확인함 - main 자신은 캔버스 전체를
-            # 흰 배경으로 채우는 명령이 없고(PIP 인셋만 자기 영역에 흰 배경
-            # 객체를 깔아둠) gnuplot 멀티플롯이 각 plot 명령마다 전체를
-            # 지우지 않기 때문으로 보임. 이 성질을 이용해, PIP 인셋을 다
-            # 그린 뒤 main의 curve plot 명령을 "보이지 않게"(이미 있는
-            # 그림과 완전히 같은 자리에 같은 내용을 다시 그리는 것뿐이라
-            # 육안 차이 없음 - 실측 확인) 한 번 더 실행해서 gnuplot이
-            # "마지막으로 그린 plot"을 다시 main으로 인식하게 만든다.
-            # [범위 제한] 이미지/인쇄 저장(PDF/PNG 등)에는 마우스 추적이
-            # 필요 없고, 겹쳐 그리기로 인한 미세한 안티에일리어싱 차이
-            # 위험까지 감수할 이유가 없어 interactive(화면)에서만 적용한다.
-            if fmt.lower() == "interactive" and _main_cmd_list:
-                lines.append("set origin 0,0")
-                lines.append("set size 1,1")
-                lines.append("plot \\")
-                for i, cmd in enumerate(_main_cmd_list):
-                    if i != len(_main_cmd_list) - 1:
-                        cmd += ", \\"
-                    lines.append(cmd)
-
+            # [되돌림 - 아래 참고] "PIP 인셋 위에서만 마우스 좌표/우클릭이
+            # 되고 main-plot에서는 안 됨" 문제를, PIP를 다 그린 뒤 main의
+            # curve plot 명령을 원래와 같은 자리에 "조용히" 한 번 더
+            # 재실행해서 gnuplot이 main을 다시 "마지막으로 그린 plot"으로
+            # 인식하게 만드는 방법을 시도했었다(margin은 그대로 두면 PIP의
+            # 좁은 축 상자 안에서 재실행되는 문제 발견 -> margin 복구 추가
+            # -> 그러자 이번엔 title/xlabel/ylabel/y2label이 PIP의 작은
+            # 폰트로 겹쳐 "유령 라벨"로 보이는 문제 발견 -> 그것도 복구
+            # 추가 -> 그래도 tic 숫자(font/offset)가 여전히 작은 유령으로
+            # 남는 것을 발견 - 복구해야 할 gnuplot 상태가 계속 늘어나
+            # (margin/title/label/tic 이후에도 더 있을 수 있음) 한 번에
+            # 다 잡았다고 확신하기 어려운 상태에서 커밋하는 것은 위험 판단.
+            # 시각적으로 완전히 깨끗하다고 검증되기 전까지는 "마우스는
+            # 되지만 화면에 유령 텍스트가 남는" 새로운 회귀를 만들 수 있어
+            # 되돌린다 - 마우스 추적 문제 자체는 다시 미해결로 남김(향후
+            # 재시도 시 gnuplot 상태를 개별로 하나씩 복구하는 대신, main을
+            # 처음 그릴 때 쓴 "set" 계열 줄 전체를 스냅샷해서 통째로
+            # 재실행하는 방식을 고려할 것 - 개별 항목을 놓칠 위험이 적음).
             lines.append("unset multiplot")
 
         # [추가] "원래(처음) plot으로 되돌리는 기능 - 2D/3D 모두" - 2D도 마우스
