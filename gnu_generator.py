@@ -3459,6 +3459,23 @@ class GnuplotGenerator:
         _override_curves = pip.get("curves")
         if _override_curves:
             main_cmd_list = self._curve_cmd_list_for(_override_curves, fmt)
+        elif pip.get("source") == "pltfile" and str(pip.get("pltfile_path", "")).strip():
+            # [수정 - 사용자 보고 버그] "in-plot으로 .plt를 지정하면 그 파일이
+            # 아니라 현재 main-plot을 불러옴" - source가 ".plt 파일"인데
+            # pip["curves"]가 비어있으면(cathplot_gui._parse_plt_curves가
+            # 그 파일에서 곡선을 하나도 못 찾은 경우 - 예: 예전엔 Cubic
+            # Spline이 켜진 curve가 있으면 정규식이 아예 매치 못 했음, 이제
+            # 고쳤지만 그 외에도 우리 자신의 생성 포맷과 조금이라도 다르면
+            # 여전히 실패할 수 있음) 아래에서 조용히 "현재 화면"(이 plot
+            # 자신의 curves)으로 대체되는데, 지금까지는 그 사실을 사용자가
+            # 전혀 알 수 없어 "완전히 다른 plot의 곡선이 나온다"는 혼란스러운
+            # 버그처럼 보였음 - 명확한 경고를 남긴다.
+            _pip_name = (plotdef.title or "plot").strip() or "plot"
+            self.warnings.append(
+                f"'{_pip_name}'의 PIP가 지정된 .plt 파일에서 곡선을 하나도 찾지 못해 "
+                f"현재 plot 자신의 곡선을 대신 보여줍니다 - CathPlot이 직접 생성한 .plt "
+                f"파일인지, 형식이 바뀌지 않았는지 확인해 주세요."
+            )
 
         if not main_cmd_list:
             return

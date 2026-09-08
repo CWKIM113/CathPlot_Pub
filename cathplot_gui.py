@@ -2607,8 +2607,19 @@ class CathPlotGUI:
         except OSError:
             return []
 
+        # [수정 - 사용자 보고 버그] "in-plot으로 .plt를 지정하면 그 파일이 아니라
+        # 현재 main-plot을 불러옴" - 실제 렌더링으로 재현·확인한 근본 원인:
+        # Cubic Spline이 켜진 curve는 _build_plot_commands가 y 컬럼 번호와
+        # "notitle" 사이에 " smooth csplines"를 끼워 넣는데(gnuplot 문법상
+        # smooth 절은 using 바로 뒤에 와야 함), 이 정규식은 y 컬럼 번호
+        # 바로 뒤에 공백만 있고 곧장 "notitle"이 온다고 가정해서 그 사이에
+        # 낀 "smooth csplines" 때문에 매치가 통째로 실패했음(실측: 두 curve
+        # 모두 Spline이 켜진 .plt로 직접 검증 - 매치 0건). 곡선을 하나도
+        # 못 찾으면(curves=[]) 조용히 "현재 화면"으로 대체돼(_resolve_pip_
+        # config), 사용자에게는 원인도 알려주지 않고 완전히 다른 plot의
+        # 곡선이 나오는 것처럼 보였음 - smooth 절을 선택적으로 허용한다.
         pattern = re.compile(
-            r'"([^"]+)"\s+using\s+\(\$(\d+)\+([^)]*)\):(\d+)\s+notitle\s+axes\s+(x1y1|x1y2)'
+            r'"([^"]+)"\s+using\s+\(\$(\d+)\+([^)]*)\):(\d+)(?:\s+smooth\s+csplines)?\s+notitle\s+axes\s+(x1y1|x1y2)'
             r'\s+with\s+lines\s+lw\s+([\d.]+)(?:\s+lc\s+rgb\s+"([^"]+)")?'
         )
         base_dir = os.path.dirname(os.path.abspath(plt_path))
