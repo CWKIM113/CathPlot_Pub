@@ -780,7 +780,7 @@ class CathPlotGUI:
         # get() 기본값으로 꺼짐(기존 동작과 동일)이라 안전함.
         self.pip_axis_title_on_var = tk.BooleanVar(value=False)
         self.pip_legend_on_var = tk.BooleanVar(value=False)
-        self.pip_font_scale_var = tk.StringVar(value="0.6")
+        self.pip_font_scale_var = tk.StringVar(value="0.35")
         # [수정 - 요청] "불투명 켬/끔" 체크박스 -> "배경 불투명도(%) 슬라이더"
         # (0~100, 기본 100=완전 불투명 - 기존 opaque=True 체크와 동일한 기본
         # 모습). Template Save/Load는 구 "opaque"(bool) 키도 그대로 읽어
@@ -2829,14 +2829,21 @@ class CathPlotGUI:
         ttk.Label(font_row, text="폰트 축소 배율:").pack(side="left")
         font_scale_entry = ttk.Entry(font_row, textvariable=self.pip_font_scale_var, width=6)
         font_scale_entry.pack(side="left", padx=(4, 0))
-        # [추가 - 요청] "0.6이 이미 찍혀있는데 사용자가 직접 입력한 건지
-        # 기본값이 그냥 채워진 건지 구분이 안 됨 - 입력 안 하면 회색으로,
-        # 입력하면 진하게" - 아직 기본값("0.6") 그대로면 회색으로 표시해
-        # "이건 그냥 기본값입니다"를 알려주고, 실제로 타이핑하는 순간(첫
-        # 키 입력) 검정으로 바꿔서 "이제부터는 직접 정한 값"임을 표시한다.
-        # 단, Template/Batch Set에서 이미 0.6이 아닌 값을 불러온 경우는
-        # 처음부터 검정(그 값 자체가 의미 있는 사용자 값이므로).
-        if self.pip_font_scale_var.get().strip() == "0.6":
+        # [추가 - 요청] "기본값이 이미 찍혀있는데 사용자가 직접 입력한
+        # 건지 기본값이 그냥 채워진 건지 구분이 안 됨 - 입력 안 하면
+        # 회색으로, 입력하면 진하게" - 아직 기본값 그대로면 회색으로
+        # 표시해 "이건 그냥 기본값입니다"를 알려주고, 실제로 타이핑하는
+        # 순간(첫 키 입력) 검정으로 바꿔서 "이제부터는 직접 정한 값"임을
+        # 표시한다. 단, Template/Batch Set에서 이미 기본값이 아닌 값을
+        # 불러온 경우는 처음부터 검정(그 값 자체가 의미 있는 사용자
+        # 값이므로).
+        # [수정 - 사용자 보고 버그] "PIP in-plot legend font/box가
+        # 상대적으로 너무 큼 - 기본은 적절하게 보여야 함" - 기본값 0.6은
+        # 작은 인셋 안에서 legend가 과도하게 커 보였음(실제 렌더링 비교로
+        # 확인). 기본값을 0.35로 낮춤(0.2~0.6 범위 모두 그대로 입력 가능 -
+        # 이 배율에 상한/하한을 두는 코드는 없음, 텍스트만 가독성을 위한
+        # 최소 크기(5pt) 하한이 항상 보장됨).
+        if self.pip_font_scale_var.get().strip() == "0.35":
             font_scale_entry.configure(foreground="grey")
 
         def _font_scale_first_edit(event=None):

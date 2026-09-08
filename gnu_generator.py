@@ -3562,9 +3562,14 @@ class GnuplotGenerator:
         # 만큼 글자가 박스에 비해 과도하게 커 보임" - 칸에 맞추려고 박스를
         # 줄인(_size_shrink < 1.0) 만큼 폰트도 같이 줄여서, 박스:글자 비율이
         # 원래 의도한 대로(사용자가 지정한 font_scale 기준) 유지되게 한다.
-        font_scale = _num("font_scale", 0.6) * _size_shrink
+        # [수정 - 사용자 보고 버그] "PIP in-plot legend font/box가 상대적으로
+        # 너무 큼 - 기본은 적절하게 보여야 함" - 기존 기본값(0.6)은 작은
+        # 인셋 안에서 legend가 과도하게 커 보였음(실제 렌더링으로 0.6/0.35
+        # /0.2 비교 확인 - 0.35가 적당한 절충점). GUI 기본값도 함께 0.35로
+        # 낮춤(cathplot_gui.py의 pip_font_scale_var).
+        font_scale = _num("font_scale", 0.35) * _size_shrink
         if font_scale <= 0:
-            font_scale = 0.6
+            font_scale = 0.35
 
         lines.append("")
         lines.append("# --- PIP (부분 확대) inset ---")
