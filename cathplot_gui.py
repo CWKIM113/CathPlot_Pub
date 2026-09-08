@@ -794,6 +794,22 @@ class CathPlotGUI:
         self.pip_source_var = tk.StringVar(value="current")
         self.pip_cached_name_var = tk.StringVar(value="")
         self.pip_pltfile_path_var = tk.StringVar(value="")
+        # [추가 - 요청] "PIP 표시옵션에서 Plot Title/X/Y1/Y2 title을 default를
+        # 제시하고 수정 가능하게" - 지금까지 in-plot의 Plot/axis title은
+        # 항상 메인 plot 자신의 title_var/xlabel_var/ylabel_var/y2label_var를
+        # 그대로 썼는데(gnu_generator._render_pip_inset), PIP의 데이터 소스가
+        # "다른(이미 그려진) plot"이나 ".plt 파일"일 때는 그 원본이 title이
+        # 없거나 다른 title을 쓸 수도 있어 항상 메인 것만 강제로 보여주는 게
+        # 부적절할 수 있음 - 인셋 전용으로 독립적으로 지정 가능한 텍스트
+        # 필드를 추가한다. 빈 문자열(기본)이면 기존과 동일하게 메인 plot의
+        # 값을 그대로 물려받고(구버전 Template과도 호환), 팝업을 열 때
+        # 비어있으면 편의상 메인의 현재 값을 기본으로 미리 채워 보여준다
+        # (open_pip_dialog 참고) - 그대로 두면 메인과 동일하게 나오고, 필요시
+        # 자유롭게 고쳐서 인셋만 다른(또는 빈) title을 쓸 수 있다.
+        self.pip_title_text_var = tk.StringVar(value="")
+        self.pip_xlabel_text_var = tk.StringVar(value="")
+        self.pip_ylabel_text_var = tk.StringVar(value="")
+        self.pip_y2label_text_var = tk.StringVar(value="")
 
         self.title_font_var = tk.StringVar(value="Malgun Gothic")
         self.title_size_var = tk.StringVar(value="14")
@@ -1981,6 +1997,8 @@ class CathPlotGUI:
                 "y2min": self.pip_y2min_var.get(), "y2max": self.pip_y2max_var.get(),
                 "title_on": self.pip_title_on_var.get(), "axis_title_on": self.pip_axis_title_on_var.get(),
                 "legend_on": self.pip_legend_on_var.get(),
+                "title_text": self.pip_title_text_var.get(), "xlabel_text": self.pip_xlabel_text_var.get(),
+                "ylabel_text": self.pip_ylabel_text_var.get(), "y2label_text": self.pip_y2label_text_var.get(),
                 "font_scale": self.pip_font_scale_var.get(), "opacity": self.pip_opacity_var.get(),
                 "source": self.pip_source_var.get(),
                 "cached_name": self.pip_cached_name_var.get(),
@@ -2215,6 +2233,10 @@ class CathPlotGUI:
             self.pip_title_on_var.set(_pip_data.get("title_on", self.pip_title_on_var.get()))
             self.pip_axis_title_on_var.set(_pip_data.get("axis_title_on", self.pip_axis_title_on_var.get()))
             self.pip_legend_on_var.set(_pip_data.get("legend_on", self.pip_legend_on_var.get()))
+            self.pip_title_text_var.set(_pip_data.get("title_text", self.pip_title_text_var.get()))
+            self.pip_xlabel_text_var.set(_pip_data.get("xlabel_text", self.pip_xlabel_text_var.get()))
+            self.pip_ylabel_text_var.set(_pip_data.get("ylabel_text", self.pip_ylabel_text_var.get()))
+            self.pip_y2label_text_var.set(_pip_data.get("y2label_text", self.pip_y2label_text_var.get()))
             self.pip_font_scale_var.set(_pip_data.get("font_scale", self.pip_font_scale_var.get()))
             # [수정 - 요청] "불투명 켬/끔" 체크박스 -> 0~100% 슬라이더로 교체 -
             # 예전 Template(구 "opaque" bool 키만 있음)도 그대로 불러와지도록
@@ -2791,6 +2813,48 @@ class CathPlotGUI:
         self._mk_check(opt_frame, "Axis Title 표시", self.pip_axis_title_on_var, size=19, anchor="w", padx=5, pady=2)
         self._mk_check(opt_frame, "Legend 표시", self.pip_legend_on_var, size=19, anchor="w", padx=5, pady=2)
 
+        # [추가 - 요청] "PIP 표시옵션에서 Plot Title/X/Y1/Y2 title을 default를
+        # 제시하고 수정 가능하게 - 불러오는 in-plot의 원본 파일에 title 등이
+        # 없을 경우나 수정할 경우를 생각해서" - 지금까지 in-plot의 Plot/axis
+        # title은 항상 메인 plot 자신의 title_var/xlabel_var/ylabel_var/
+        # y2label_var를 그대로 썼는데(_render_pip_inset), PIP 데이터 소스가
+        # "다른(이미 그려진) plot"이나 ".plt 파일"이면 그 원본은 title이
+        # 아예 없거나 메인과 다른 title을 쓸 수 있어 항상 메인 것만 강제로
+        # 보여주는 게 부적절할 수 있음 - 인셋 전용으로 독립 지정 가능한
+        # 텍스트 필드를 추가한다. 아직 한 번도 손대지 않아 비어있으면(신규
+        # PIP거나 구버전 Template) 팝업을 열 때마다 편의상 메인의 현재 값을
+        # 기본으로 미리 채워 보여준다 - 그대로 두면 지금까지와 동일하게
+        # 메인과 같은 title이 나오고, 필요하면 자유롭게 고쳐서 인셋만 다른
+        # (또는 빈) title을 쓸 수 있다. 한 번이라도 값이 들어간 뒤에는(빈
+        # 문자열로 일부러 지운 경우 포함) 그 값을 그대로 유지하고 더 이상
+        # 메인 값으로 덮어쓰지 않는다.
+        if not self.pip_title_text_var.get().strip():
+            self.pip_title_text_var.set(self.title_var.get())
+        if not self.pip_xlabel_text_var.get().strip():
+            self.pip_xlabel_text_var.set(self.xlabel_var.get())
+        if not self.pip_ylabel_text_var.get().strip():
+            self.pip_ylabel_text_var.set(self.ylabel_var.get())
+        if not self.pip_y2label_text_var.get().strip():
+            self.pip_y2label_text_var.set(self.y2label_var.get())
+
+        title_txt_row1 = ttk.Frame(opt_frame)
+        title_txt_row1.pack(fill="x", padx=5, pady=(4, 2))
+        ttk.Label(title_txt_row1, text="Plot Title:").pack(side="left")
+        ttk.Entry(title_txt_row1, textvariable=self.pip_title_text_var, width=16).pack(side="left", padx=(4, 12))
+        ttk.Label(title_txt_row1, text="X Title:").pack(side="left")
+        ttk.Entry(title_txt_row1, textvariable=self.pip_xlabel_text_var, width=12).pack(side="left", padx=(4, 0))
+        title_txt_row2 = ttk.Frame(opt_frame)
+        title_txt_row2.pack(fill="x", padx=5, pady=(0, 2))
+        ttk.Label(title_txt_row2, text="Y1 Title:").pack(side="left")
+        ttk.Entry(title_txt_row2, textvariable=self.pip_ylabel_text_var, width=16).pack(side="left", padx=(4, 12))
+        ttk.Label(title_txt_row2, text="Y2 Title:").pack(side="left")
+        ttk.Entry(title_txt_row2, textvariable=self.pip_y2label_text_var, width=12).pack(side="left", padx=(4, 0))
+        ttk.Label(
+            opt_frame,
+            text="(기본은 메인 plot의 title과 동일 - 원본 파일에 title이 없거나 다르게 쓰려면 직접 수정)",
+            foreground="gray"
+        ).pack(fill="x", padx=5, pady=(0, 4))
+
         # [수정 - 요청] "반투명에서 문제 있으면 슬라이더 대신 투명/불투명
         # 라디오버튼만 쓰는 게 낫지 않은지?" - 반투명(1~99%)은 화면
         # 오버레이에서 gnuplot을 한 번 더 돌려 배경을 만들어야 하는 유일한
@@ -2887,6 +2951,10 @@ class CathPlotGUI:
             "title_on": self.pip_title_on_var.get(),
             "axis_title_on": self.pip_axis_title_on_var.get(),
             "legend_on": self.pip_legend_on_var.get(),
+            "title_text": self.pip_title_text_var.get(),
+            "xlabel_text": self.pip_xlabel_text_var.get(),
+            "ylabel_text": self.pip_ylabel_text_var.get(),
+            "y2label_text": self.pip_y2label_text_var.get(),
             "font_scale": self.pip_font_scale_var.get(),
             "opacity": self.pip_opacity_var.get(),
             "source": self.pip_source_var.get(),

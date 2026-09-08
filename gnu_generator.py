@@ -3919,7 +3919,20 @@ class GnuplotGenerator:
             # 4.5(gap 7px) -> 5.5(gap 3px, 약 40%로 축소, 겹침 없이 안전하게
             # 확인된 범위 안에서 "절반 정도"에 가장 가까운 값).
             _lbl_ofs_y = (5.5 if _pip_round_shape else 3.8) * _ofs_fs  # ylabel을 tic 쪽(오른쪽)으로
-            _xlabel_txt = (plotdef.xlabel or "").strip()
+            # [추가 - 요청] "PIP 표시옵션에서 Plot Title/X/Y1/Y2 title을
+            # default를 제시하고 수정 가능하게 - 불러오는 in-plot의 원본
+            # 파일에 title 등이 없을 경우나 수정할 경우를 생각해서" - 지금까지
+            # 이 인셋의 title/axis title 텍스트는 항상 메인 plot 자신의
+            # plotdef.xlabel/ylabel/y2label을 그대로 썼는데, PIP 소스가
+            # "다른(이미 그려진) plot"/".plt 파일"이면 그 원본은 title이
+            # 없거나 메인과 다를 수 있어 항상 메인 것만 강제로 보여주는 게
+            # 부적절할 수 있었음 - pip 딕셔너리에 인셋 전용 텍스트가 지정돼
+            # 있으면(cathplot_gui의 pip_xlabel_text_var 등) 그걸 우선 쓰고,
+            # 비어있으면(기존 Template과의 호환 포함) 지금까지처럼 메인의
+            # 값을 그대로 물려받는다. 표시 여부 자체는 기존과 동일하게
+            # title_on/axis_title_on 체크박스가 결정 - 이 텍스트는 "켰을 때
+            # 어떤 글자를 보여줄지"만 바꾼다.
+            _xlabel_txt = str(pip.get("xlabel_text") or plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
                 # [수정 - 사용자 보고] "font 크기나 marker 크기는 최소 제한치가
@@ -3933,14 +3946,14 @@ class GnuplotGenerator:
                 lines.append(f'set xlabel "{_xl_text}" font "{plotdef.xlabel_font},{_xl_size:.1f}" offset 0,{_lbl_ofs_x:.2f} {_xl_enh}')
             else:
                 lines.append("unset xlabel")
-            _ylabel_txt = (plotdef.ylabel or "").strip()
+            _ylabel_txt = str(pip.get("ylabel_text") or plotdef.ylabel or "").strip()
             if _ylabel_txt:
                 _yl_text, _yl_enh = self._render_text(_ylabel_txt)
                 _yl_size = max(float(plotdef.ylabel_size or 11) * font_scale, 5.0)  # 하한 이유는 위 _xl_size 참고
                 lines.append(f'set ylabel "{_yl_text}" font "{plotdef.ylabel_font},{_yl_size:.1f}" offset {_lbl_ofs_y:.2f},0 {_yl_enh}')
             else:
                 lines.append("unset ylabel")
-            _y2label_txt = (plotdef.y2label or "").strip() if _uses_y2 else ""
+            _y2label_txt = str(pip.get("y2label_text") or plotdef.y2label or "").strip() if _uses_y2 else ""
             if _y2label_txt:
                 _y2l_text, _y2l_enh = self._render_text(_y2label_txt)
                 _y2l_size = max(float(plotdef.y2label_size or 11) * font_scale, 5.0)  # 하한 이유는 위 _xl_size 참고
@@ -3968,8 +3981,13 @@ class GnuplotGenerator:
             lines.append("set xtics auto")
             lines.append("set ytics auto")
 
-        if pip.get("title_on") and (plotdef.title or "").strip():
-            _title_txt = plotdef.title.replace('"', '\\"')
+        # [추가 - 요청] "PIP 표시옵션에서 Plot Title도 default 제시하고
+        # 수정 가능하게" - 위 xlabel/ylabel/y2label과 같은 이유로 인셋 전용
+        # 텍스트(pip.get("title_text"))가 있으면 우선 쓰고, 없으면(기존
+        # Template 호환 포함) 지금까지처럼 메인 plot의 title을 그대로 쓴다.
+        _pip_title_src = str(pip.get("title_text") or plotdef.title or "").strip()
+        if pip.get("title_on") and _pip_title_src:
+            _title_txt = _pip_title_src.replace('"', '\\"')
             # 하한 이유는 아래 _xl_size와 동일(font_scale/_size_shrink가
             # 작을 때 Plot Title도 같이 뭉개질 정도로 작아지지 않게 방지).
             # title은 axis title/legend보다 한 단계 커야 위계가 유지되므로
