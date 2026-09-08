@@ -1822,10 +1822,17 @@ class GnuplotGenerator:
                 # 같은 font_pt로 찍어도 시각적 크기가 들쭥날쭥해 보이는 문제 -
                 # 기호별 배율을 둬서 시각적 크기를 서로 맞춘다.
                 symbol_pt = _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0)
+                # [수정 - 사용자 보고 버그] "in-plot legend에 marker가 안
+                # 보임" - 텍스트 라벨(바로 아래)은 너무 작아지지 않도록
+                # 최소 5pt 하한을 이미 두고 있는데, 마커 기호(유니코드 글자
+                # 로 찍음)에는 이 하한이 빠져 있었음 - PIP 인셋(compact)
+                # legend처럼 font_pt 자체가 많이 줄어드는 상황에서 symbol_pt
+                # 가 0~1pt까지 내려가 사실상 안 보이게 됨. 같은 최소 하한을
+                # 적용한다.
                 lines.append(
                     f'set label {id_offset + 5000 + row_i + 1} "{MARKER_SYMBOL_MAP[marker_shape]}" '
                     f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front '
-                    f'font "{font_name},{int(round(symbol_pt))}" textcolor rgb "{color}"'
+                    f'font "{font_name},{max(int(round(symbol_pt)), 5)}" textcolor rgb "{color}"'
                 )
             lbl_text, lbl_enh = self._render_text(curve.title)
             lines.append(
