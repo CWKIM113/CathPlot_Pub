@@ -2631,6 +2631,60 @@ class CathPlotGUI:
                 continue  # X/Y 컬럼이 같은 경우 등은 건너뜀(CurveDefinition.__post_init__ 참고)
         return curves
 
+    def _parse_plt_titles(self, plt_path):
+        """[추가 - 요청] "in-plot x/y1/y2의 default를 main-plot(또는 읽어온
+        plot)의 축 title을 넣어줘요" - PIP source가 ".plt 파일"일 때는 그
+        파일 자신의 title/xlabel/ylabel/y2label을 기본값 후보로 쓰기 위해,
+        _parse_plt_curves와 같은 방식(우리 자신의 생성 포맷 전용, 범용
+        파서 아님)으로 "set title/xlabel/ylabel/y2label "..."" 줄을 찾는다.
+        그 .plt 파일 자체에 PIP 인셋이 포함돼 있으면 인셋 구간(주석
+        "# --- PIP (부분 확대) inset ---" 이후)은 그 인셋 자신의 title 재선언
+        이라 메인 것과 섞이면 안 되므로, 그 앞부분만 본다. 같은 줄이 여러 번
+        나오면(예: 조건별 재설정) 마지막 것을 실제 적용된 값으로 본다.
+        읽기 실패 시 None."""
+        try:
+            with open(plt_path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            return None
+        marker = "# --- PIP (부분 확대) inset ---"
+        idx = text.find(marker)
+        main_text = text[:idx] if idx >= 0 else text
+
+        def _last(pattern):
+            matches = re.findall(pattern, main_text)
+            return matches[-1] if matches else ""
+
+        _q = r'((?:[^"\\]|\\.)*)'
+        return (
+            _last(r'set title "' + _q + '"'),
+            _last(r'set xlabel "' + _q + '"'),
+            _last(r'set ylabel "' + _q + '"'),
+            _last(r'set y2label "' + _q + '"'),
+        )
+
+    def _pip_default_titles(self):
+        """[추가 - 요청] PIP 팝업을 열 때 Plot Title/X/Y1/Y2 Title 입력칸에
+        미리 채워줄 기본값을, source에 맞는 원본에서 가져온다 - "현재
+        화면"(current)이면 지금까지처럼 이 탭 자신의 title_var 등을 그대로
+        쓰지만, "저장된 plot"(cached)이나 ".plt 파일"(pltfile)이면 그
+        원본(다른 plot)이 있을 수 있는데도 항상 이 탭 자신의 값만 보여주는
+        건 부적절함 - 실제로 인셋에 그려질 그 원본 자신의 title을 기본값
+        으로 삼는다. cached plotdef를 못 찾거나(다른 세션 Template 등) .plt
+        파일에서 못 읽으면 안전하게 이 탭 자신의 값으로 폴백한다."""
+        source = self.pip_source_var.get()
+        if source == "cached":
+            cached = self.active_plots_cache.get(self.pip_cached_name_var.get())
+            if cached is not None:
+                return (cached.title or "", cached.xlabel or "", cached.ylabel or "", cached.y2label or "")
+        elif source == "pltfile":
+            path = self.pip_pltfile_path_var.get()
+            if path and os.path.exists(path):
+                parsed = self._parse_plt_titles(path)
+                if parsed is not None:
+                    return parsed
+        return (self.title_var.get(), self.xlabel_var.get(), self.ylabel_var.get(), self.y2label_var.get())
+
     def open_pip_dialog(self):
         """[추가 - 요청] PIP(Picture-in-Picture, 부분 확대) 설정 팝업 - 3D
         Plot과 같은 방식으로 메인 창엔 버튼 하나만 두고 나머지 설정은 여기서.
@@ -2649,7 +2703,12 @@ class CathPlotGUI:
         self._pip_dialog = dlg
         dlg.title("PIP - 작은 plot을 부분 확대해서 겹쳐 그리기")
         dlg.transient(self.root)
-        dlg.geometry("760x540")
+        # [수정 - 사용자 보고] "PIP 입력창의 세로 길이를 늘려줘요 - 3줄 정도
+        # 잘림(4줄 정도 키울 것)" - Plot Title/X/Y1/Y2 Title 텍스트 입력칸
+        # (2줄) + 안내 문구(1줄)를 표시 옵션에 새로 추가하면서 늘어난 내용
+        # 만큼 창 높이는 그대로였던 것이 원인 - 540 -> 650(약 4줄 분량,
+        # 110px)로 키움.
+        dlg.geometry("760x650")
 
         # [수정 - 요청] "팝업 안의 PIP 사용 체크박스는 없애고, 메인 창 PIP
         # 버튼 앞 체크박스 하나로 통일" - 여기 있던 중복 체크박스 제거
@@ -2828,14 +2887,18 @@ class CathPlotGUI:
         # (또는 빈) title을 쓸 수 있다. 한 번이라도 값이 들어간 뒤에는(빈
         # 문자열로 일부러 지운 경우 포함) 그 값을 그대로 유지하고 더 이상
         # 메인 값으로 덮어쓰지 않는다.
+        # [수정 - 사용자 요청] "default를 main-plot(또는 읽어온 plot)의 축
+        # title을 넣어줘요" - source가 "저장된 plot"/".plt 파일"이면 그
+        # 원본 자신의 title을 기본값으로 삼는다(_pip_default_titles 참고).
+        _def_title, _def_xlabel, _def_ylabel, _def_y2label = self._pip_default_titles()
         if not self.pip_title_text_var.get().strip():
-            self.pip_title_text_var.set(self.title_var.get())
+            self.pip_title_text_var.set(_def_title)
         if not self.pip_xlabel_text_var.get().strip():
-            self.pip_xlabel_text_var.set(self.xlabel_var.get())
+            self.pip_xlabel_text_var.set(_def_xlabel)
         if not self.pip_ylabel_text_var.get().strip():
-            self.pip_ylabel_text_var.set(self.ylabel_var.get())
+            self.pip_ylabel_text_var.set(_def_ylabel)
         if not self.pip_y2label_text_var.get().strip():
-            self.pip_y2label_text_var.set(self.y2label_var.get())
+            self.pip_y2label_text_var.set(_def_y2label)
 
         title_txt_row1 = ttk.Frame(opt_frame)
         title_txt_row1.pack(fill="x", padx=5, pady=(4, 2))

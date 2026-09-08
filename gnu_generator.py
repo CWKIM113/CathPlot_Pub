@@ -1301,6 +1301,14 @@ class GnuplotGenerator:
         _legend_tuning = ({"row_mult": 1.2, "box_chars": -2.0, "sample_mult": 1.0, "text_corr": 2 / 3}
                           if (not is_print_mode or _fmt_l == "interactive")
                           else _FORMAT_TUNING.get(_fmt_l, {"row_mult": 1.2, "box_chars": 2.0, "sample_mult": 1.0, "text_corr": 1.0}))
+        # [수정 - 사용자 보고] "in-plot legend box 내 curve 간 틈이 너무 큼 -
+        # curve간 세로폭을 좀 줄여줘요" - row_mult(줄 높이 배수)가 지금까지
+        # main legend와 PIP 인셋(compact) legend에 완전히 같은 값을 썼는데,
+        # 작은 인셋 안에서는 상대적으로 더 넓어 보였음(위 _row_margin_ratio를
+        # compact 전용으로 이미 좁혀둔 것과 같은 이유) - 인셋 전용으로 추가
+        # 0.75배 축소(포맷 무관하게 항상 적용 - 화면/이미지/인쇄 공통).
+        if compact:
+            _legend_tuning = dict(_legend_tuning, row_mult=_legend_tuning["row_mult"] * 0.75)
         ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * _legend_tuning["row_mult"]
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
@@ -4320,6 +4328,56 @@ class GnuplotGenerator:
             return re.sub(r" ps ([\d.]+)", _repl, cmd)
         _inset_cmd_list = [_scale_marker_ps(c) for c in _inset_cmd_list]
 
+        # [수정 - 사용자 보고] "PIP in-plot에서의 marker 개수를 크기 대비해서
+        # 줄일 수 없나요? marker가 너무 붙어 나와요" - main_cmd_list를 그대로
+        # 재사용하는 구조라, marker 점 개수(main 기준 목표 25개, main_cmd_
+        # list의 $MarkerN 데이터블록에 이미 고정된 값)는 인셋 크기와 무관
+        # 하게 항상 그대로였음 - 인셋은 화면에서 훨씬 좁은 면적에 같은
+        # 개수를 욱여넣으니 점끼리 겹쳐 붙어 보였음.
+        # [수정 - 재검토] 처음엔 기존 $MarkerN 데이터블록(main 전체 X범위
+        # 기준으로 이미 뽑힌 25개)에 gnuplot "every N"(N개마다 하나만)을
+        # 적용하려 했으나, PIP가 X 확대 구간(부분 확대)까지 함께 쓰는
+        # 경우 그 25개 중 애초에 인셋 구간 안에 드는 점 자체가 몇 개
+        # 안 될 수 있어(예: 25개가 전체 0~1000 구간에 고르게 퍼져 있는데
+        # 인셋은 50~100 구간만 봄) 거기에 또 "every N"을 걸면 최소 2개
+        # 보장이 오히려 깨질 위험이 있었음(이미 적은 후보를 한 번 더 거름).
+        # 대신 인셋 "자신의" X 범위(_xr_for_tics, 위에서 이미 concrete
+        # 여부까지 파싱해둠) 기준으로 curve마다 _select_marker_points를
+        # 다시 호출해 그 구간 안에서 목표 개수만큼 새로 고른다(메인 legend
+        # 용 25개 선정과 완전히 같은 함수 - 데이터가 목표 개수보다 적으면
+        # 있는 만큼 전부 반환하므로 "최소 2개"는 그 구간에 실제 데이터가
+        # 2개 이상 있는 한 항상 만족됨). 목표 개수는 인셋 가로 크기
+        # (size_w, main 축 대비 비율)에 비례(최소 2, 기준 25).
+        # X범위가 구체적 숫자가 아니거나(autoscale) source가 "현재 화면"이
+        # 아니면(다른 plot의 marker 인덱스가 이 curve 목록과 안 맞을 수
+        # 있어 안전하게) 재생성하지 않고 원래 개수 그대로 둔다(회귀 없음).
+        if _xr_for_tics and _override_curves is None:
+            _pip_marker_target = max(2, round(25 * min(max(size_w, 0.0), 1.0)))
+            _default_x_col_mk = getattr(plotdef, "x_output_no", 0)
+            _is_log_x_mk = getattr(plotdef, "xlog", False)
+            for _mi, _curve in enumerate(_inset_curves):
+                _mshape = getattr(_curve, "marker_shape", None)
+                if _mshape is None:
+                    continue
+                _dbname_old = f"$Marker{_mi}"
+                _match_idx = next((_li for _li, _ln in enumerate(_inset_cmd_list)
+                                    if _ln.startswith(_dbname_old + " ")), None)
+                if _match_idx is None:
+                    continue
+                _x_col_idx_mk = _curve.x_output_no if getattr(_curve, "x_output_no", None) is not None else _default_x_col_mk
+                _new_pts = self._select_marker_points(
+                    _curve, _x_col_idx_mk, _curve.output_no, _pip_marker_target, _is_log_x_mk,
+                    shared_x_range=_xr_for_tics,
+                )
+                if not _new_pts:
+                    continue
+                _dbname_new = f"$MarkerPip{_mi}"
+                _block = [f"{_dbname_new} << EOD"]
+                _block.extend(f"{_px:.10g} {_py:.10g}" for _px, _py in _new_pts)
+                _block.append("EOD")
+                lines.extend(_block)
+                _inset_cmd_list[_match_idx] = _inset_cmd_list[_match_idx].replace(_dbname_old, _dbname_new, 1)
+
         if _ellipse_native_ok:
             # [수정 - 요청] "PIP in-plot(원/타원)에서 spline 되는 방안이
             # 없을까요? - rect는 되는데 원/타원은 왜 안 되나" - 근본 원인은:
@@ -5462,6 +5520,25 @@ class GnuplotGenerator:
         _pip_on = bool(_pip_cfg.get("enabled"))
         if _pip_on:
             lines.append("set multiplot")
+            # [수정 - 사용자 보고, 중요 버그, 근본 원인] "화면(Interactive)에서
+            # 커서가 main-plot 위에 있을 때는 좌표값이 안 나오고 in-plot
+            # (PIP 인셋)에서만 나타남 - 마우스 우클릭도 in-plot에서만 동작함"
+            # - main plot의 plot 명령(바로 아래 _build_plot_commands)은
+            # is_multiplot=False라 지금까지 자기 origin/size를 한 번도 명시
+            # 하지 않고(항상 암묵적 기본값 0,0/1,1에만 의존) 그렸는데, PIP
+            # 인셋은 항상 자기 origin/size를 명시적으로 선언(_render_pip_
+            # inset의 "set origin/set size")한 뒤 그림 - gnuplot의 멀티플롯
+            # 마우스 추적(하단 좌표 readout, 우클릭 등)은 "plot 실행 시점에
+            # 명시적으로 선언된 origin/size 영역"만 별도의 추적 가능한
+            # 패널로 등록하는 것으로 실측 확인됨(이 파일 다른 곳(4550/4537
+            # 근처)에 이미 있던 "set 상태만 원복" 시도가 실제로는 효과가
+            # 없었던 것도 같은 이유 - 상태만 되돌리는 것으론 부족하고, main
+            # plot 자신이 애초에 "명시적으로 선언된 패널"이었어야 함). main
+            # plot도 명시적으로 선언해 인셋과 동등하게 추적 가능한 패널로
+            # 등록시킨다(0,0/1,1은 원래도 기본값이라 실제 렌더링 결과는
+            # 전혀 달라지지 않음 - 마우스 추적 등록 여부만 바뀜).
+            lines.append("set origin 0,0")
+            lines.append("set size 1,1")
 
         _main_cmd_list = self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, circles=circles, panel_scale=_size_scale, fmt=fmt)
 
