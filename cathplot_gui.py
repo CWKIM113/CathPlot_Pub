@@ -2590,6 +2590,7 @@ class CathPlotGUI:
                 curves = self._parse_plt_curves(path)
                 if curves:
                     pip_data["curves"] = curves
+        self._pip_autofill_range(pip_data)
         return pip_data
 
     def _parse_plt_curves(self, plt_path):
@@ -2687,6 +2688,38 @@ class CathPlotGUI:
             _last(r'set xlabel "' + _q + '"'),
             _last(r'set ylabel "' + _q + '"'),
             _last(r'set y2label "' + _q + '"'),
+        )
+
+    def _parse_plt_ranges(self, plt_path):
+        """[추가 - 요청] "당연히 .plt 파일 자체에서 Y 범위도 같이 읽어와서
+        자동으로 채우기 해야지요" - PIP 소스가 ".plt 파일"이면 원/타원
+        클리핑에 X뿐 아니라 Y1(및 Y2 곡선이 있으면 Y2)까지 "구체적인 숫자"
+        범위가 필요한데(_ellipse_native_ok), 그동안 사용자가 PIP 팝업에
+        Y1/Y2 min/max를 직접 입력해야만 했음 - 이미 그 .plt 파일 자신이
+        메인 plot을 그릴 때 쓴 set yrange/y2range를 그대로 갖고 있으므로
+        (_parse_plt_titles와 같은 방식 - PIP 인셋 구간 이전만, CathPlot
+        자신의 생성 포맷 전용) 그 값을 그대로 읽어와서 기본값으로 쓸 수
+        있다. 반환: (ymin, ymax, y2min, y2max) - 각각 못 찾으면 None."""
+        try:
+            with open(plt_path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            return (None, None, None, None)
+        marker = "# --- PIP (부분 확대) inset ---"
+        idx = text.find(marker)
+        main_text = text[:idx] if idx >= 0 else text
+
+        def _last_range(prefix):
+            matches = re.findall(
+                prefix + r'\s*\[\s*([^:\]]+)\s*:\s*([^:\]]+)\s*\]', main_text
+            )
+            return matches[-1] if matches else None
+
+        yr = _last_range(r'set\s+yrange')
+        y2r = _last_range(r'set\s+y2range')
+        return (
+            yr[0].strip() if yr else None, yr[1].strip() if yr else None,
+            y2r[0].strip() if y2r else None, y2r[1].strip() if y2r else None,
         )
 
     def _pip_default_titles(self):
@@ -3014,6 +3047,45 @@ class CathPlotGUI:
         btn_row.pack(fill="x", padx=10, pady=15, side="bottom")
         self._mk_btn(btn_row, "닫기", dlg.destroy, color="accent", side="right", padx=5)
 
+    def _pip_autofill_range(self, pip):
+        """[추가 - 요청] "당연히 .plt 파일 자체에서 Y 범위도 같이 읽어와서
+        자동으로 채우기 해야지요" - PIP 소스가 "저장된 plot"/".plt 파일"
+        이면 원/타원 클리핑에 Y1(Y2 곡선이 있으면 Y2도) "구체적인 숫자"
+        범위가 필요한데(_ellipse_native_ok), 지금까지는 사용자가 PIP
+        팝업에 Y1/Y2 min/max를 직접 입력해야만 했음 - 사용자가 이미 채운
+        값이 있으면 그대로 두고(우선), 비어있을 때만 원본에서 자동으로
+        채운다("user 입력 없으면 전체 구간에서 읽어와야지" - 그 원본이
+        원래 그렸던 전체 Y 범위 그대로).
+        - ".plt 파일": 그 파일 자신의 main plot이 쓴 set yrange/y2range를
+          그대로 읽어옴(_parse_plt_ranges - auto/수동 여부와 무관하게 항상
+          그 파일에 구체적 숫자로 이미 박혀 있음).
+        - "저장된 plot": 그 plotdef가 Y를 수동으로 지정해뒀으면(yauto=False)
+          그 값을 그대로 씀. auto(yauto=True)면 아직 구체적 숫자로 확정된
+          값이 그 객체 안에 없어(실제 렌더링 시점에 비로소 데이터에서
+          계산됨) 여기서는 자동으로 못 채움 - 이 경우는 여전히 사용자가
+          직접 입력해야 함(추후 개선 여지로 남김).
+        pip dict를 그 자리에서 수정한다(GUI 경로 _resolve_pip_config와
+        Batch 경로 _resolve_pip_dict_for_batch가 공통으로 재사용)."""
+        source = pip.get("source")
+        ymin = ymax = y2min = y2max = None
+        if source == "cached":
+            cached_plotdef = self.active_plots_cache.get(pip.get("cached_name", ""))
+            if cached_plotdef is not None:
+                if not getattr(cached_plotdef, "yauto", True) and cached_plotdef.ymin and cached_plotdef.ymax:
+                    ymin, ymax = cached_plotdef.ymin, cached_plotdef.ymax
+                if not getattr(cached_plotdef, "y2auto", True) and cached_plotdef.y2min and cached_plotdef.y2max:
+                    y2min, y2max = cached_plotdef.y2min, cached_plotdef.y2max
+        elif source == "pltfile":
+            path = pip.get("pltfile_path", "")
+            if path and os.path.exists(path):
+                ymin, ymax, y2min, y2max = self._parse_plt_ranges(path)
+        if ymin is not None and ymax is not None and not (
+                str(pip.get("ymin", "")).strip() and str(pip.get("ymax", "")).strip()):
+            pip["ymin"], pip["ymax"] = ymin, ymax
+        if y2min is not None and y2max is not None and not (
+                str(pip.get("y2min", "")).strip() and str(pip.get("y2max", "")).strip()):
+            pip["y2min"], pip["y2max"] = y2min, y2max
+
     def _resolve_pip_config(self):
         """[추가 - 요청] PIP 팝업(open_pip_dialog)에서 고른 tk 변수들을,
         gnu_generator.PlotDefinition.pip이 기대하는 dict로 변환한다. source가
@@ -3060,6 +3132,7 @@ class CathPlotGUI:
             curves = self._parse_plt_curves(pip["pltfile_path"])
             if curves:
                 pip["curves"] = curves
+        self._pip_autofill_range(pip)
         return pip
 
     def _normalize_pip_for_animation(self, plotdef):
