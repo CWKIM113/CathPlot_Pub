@@ -5573,23 +5573,19 @@ class GnuplotGenerator:
         _pip_on = bool(_pip_cfg.get("enabled"))
         if _pip_on:
             lines.append("set multiplot")
-            # [수정 - 사용자 보고, 중요 버그, 근본 원인] "화면(Interactive)에서
+            # [수정 시도 - 효과 없었음, 근거는 남겨둠] "화면(Interactive)에서
             # 커서가 main-plot 위에 있을 때는 좌표값이 안 나오고 in-plot
-            # (PIP 인셋)에서만 나타남 - 마우스 우클릭도 in-plot에서만 동작함"
-            # - main plot의 plot 명령(바로 아래 _build_plot_commands)은
-            # is_multiplot=False라 지금까지 자기 origin/size를 한 번도 명시
-            # 하지 않고(항상 암묵적 기본값 0,0/1,1에만 의존) 그렸는데, PIP
-            # 인셋은 항상 자기 origin/size를 명시적으로 선언(_render_pip_
-            # inset의 "set origin/set size")한 뒤 그림 - gnuplot의 멀티플롯
-            # 마우스 추적(하단 좌표 readout, 우클릭 등)은 "plot 실행 시점에
-            # 명시적으로 선언된 origin/size 영역"만 별도의 추적 가능한
-            # 패널로 등록하는 것으로 실측 확인됨(이 파일 다른 곳(4550/4537
-            # 근처)에 이미 있던 "set 상태만 원복" 시도가 실제로는 효과가
-            # 없었던 것도 같은 이유 - 상태만 되돌리는 것으론 부족하고, main
-            # plot 자신이 애초에 "명시적으로 선언된 패널"이었어야 함). main
-            # plot도 명시적으로 선언해 인셋과 동등하게 추적 가능한 패널로
-            # 등록시킨다(0,0/1,1은 원래도 기본값이라 실제 렌더링 결과는
-            # 전혀 달라지지 않음 - 마우스 추적 등록 여부만 바뀜).
+            # (PIP 인셋)에서만 나타남" - main plot이 자기 origin/size를 한
+            # 번도 명시하지 않는 것이 원인일 것으로 추정해 여기서 명시
+            # 선언을 추가해봤으나, 사용자가 화면에서 직접 재확인한 결과
+            # 효과가 없었음(하단에 "mouse not in active plot"이라는 gnuplot
+            # 자체 메시지가 그대로 뜸) - 실제 근본 원인과 진짜 수정은 이
+            # 함수 아래쪽, PIP 인셋을 다 그린 "뒤"에 main을 한 번 더 조용히
+            # 재실행하는 부분 참고(gnuplot의 멀티플롯 마우스 추적은 "가장
+            # 마지막에 실행된 plot 명령"만 인식하는 것으로 보임 - 상태
+            # 선언 순서가 아니라 "마지막으로 그린 게 누구냐"의 문제였음).
+            # 여기 이 두 줄은 렌더링 결과에 영향이 없어(0,0/1,1은 원래도
+            # 기본값) 해가 되지 않으므로 그대로 둔다.
             lines.append("set origin 0,0")
             lines.append("set size 1,1")
 
@@ -5650,6 +5646,37 @@ class GnuplotGenerator:
                     f"지원되지 않아 사각형+{_fallback_desc}(원래 opacity {_orig_opacity:.0f}% 기준)으로 대체했습니다."
                 )
             lines[:] = _pip_probe_lines
+
+            # [수정 - 사용자 재보고, 근본적 재시도] "PIP 인셋 위에서만 마우스
+            # 좌표/우클릭이 되고 main-plot에서는 안 됨" - 이전 시도(origin/size
+            # 명시 선언, set 상태만 원복)는 모두 효과가 없었음(사용자가 화면
+            # 하단에서 직접 "mouse not in active plot"이라는 gnuplot 자체
+            # 메시지를 확인해줌) - gnuplot의 멀티플롯 마우스 추적은 "가장
+            # 마지막에 실행된 plot 명령"만 인식하는 것으로 보이는데, PIP
+            # 인셋이 항상 맨 마지막에 그려져서 구조적으로 인셋만 추적되고
+            # 있었음.
+            # [발견 - 실측 렌더링] main plot을 인셋 뒤에 "다시" 그려도(같은
+            # curve 명령을 origin 0,0/size 1,1로 재실행) 인셋 픽셀이 지워지지
+            # 않는 것을 직접 렌더링으로 확인함 - main 자신은 캔버스 전체를
+            # 흰 배경으로 채우는 명령이 없고(PIP 인셋만 자기 영역에 흰 배경
+            # 객체를 깔아둠) gnuplot 멀티플롯이 각 plot 명령마다 전체를
+            # 지우지 않기 때문으로 보임. 이 성질을 이용해, PIP 인셋을 다
+            # 그린 뒤 main의 curve plot 명령을 "보이지 않게"(이미 있는
+            # 그림과 완전히 같은 자리에 같은 내용을 다시 그리는 것뿐이라
+            # 육안 차이 없음 - 실측 확인) 한 번 더 실행해서 gnuplot이
+            # "마지막으로 그린 plot"을 다시 main으로 인식하게 만든다.
+            # [범위 제한] 이미지/인쇄 저장(PDF/PNG 등)에는 마우스 추적이
+            # 필요 없고, 겹쳐 그리기로 인한 미세한 안티에일리어싱 차이
+            # 위험까지 감수할 이유가 없어 interactive(화면)에서만 적용한다.
+            if fmt.lower() == "interactive" and _main_cmd_list:
+                lines.append("set origin 0,0")
+                lines.append("set size 1,1")
+                lines.append("plot \\")
+                for i, cmd in enumerate(_main_cmd_list):
+                    if i != len(_main_cmd_list) - 1:
+                        cmd += ", \\"
+                    lines.append(cmd)
+
             lines.append("unset multiplot")
 
         # [추가] "원래(처음) plot으로 되돌리는 기능 - 2D/3D 모두" - 2D도 마우스
