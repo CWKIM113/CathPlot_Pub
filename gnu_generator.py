@@ -5571,12 +5571,40 @@ class GnuplotGenerator:
         # 분기)은 그대로 영향 없음.
         _pip_cfg = getattr(plotdef, "pip", None) or {}
         _pip_on = bool(_pip_cfg.get("enabled"))
+        # [수정 - 버그(직접 렌더링으로 발견), 아래 main-plot 마우스 좌표
+        # 스냅샷용] 여기서부터(= "set multiplot" 시작 지점) 스냅샷을 떠야
+        # main의 margin/title/tics/legend 등 "이 plot 하나에 대한" 상태만
+        # 재생된다 - 이 지점 "이전"의 lines(set encoding/set terminal ...)
+        # 까지 같이 스냅샷하면, 재생 시 "set terminal ..."을 스크립트 중간에
+        # 다시 선언하게 되어(실제 생성된 스크립트로 확인 - 캔버스를 다시
+        # 여는 것으로 처리될 위험이 있어 PIP 인셋이 지워질 수 있음) 오히려
+        # 위험해진다.
+        _main_state_start_idx = len(lines)
         if _pip_on:
             lines.append("set multiplot")
             lines.append("set origin 0,0")
             lines.append("set size 1,1")
 
         _main_cmd_list = self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, circles=circles, panel_scale=_size_scale, fmt=fmt)
+
+        # [추가 - 사용자 재요청] "main-plot 마우스 좌표/우클릭이 PIP 인셋에서만
+        # 되고 main에서는 안 됨" 재시도 - 이전 두 차례 시도(개별 상태를
+        # 하나씩 복구)는 각각 "효과 없음"/"유령 텍스트 회귀"로 되돌렸던 바
+        # 있음(위 60d8622 되돌림 커밋, 아래 주석 참고). 이번엔 그 되돌림
+        # 커밋이 제안한 방식대로, main을 처음 그릴 때 실제로 쓴 "set" 계열
+        # 줄 전체(위 set multiplot/origin/size부터 이 지점까지 - margin,
+        # xrange/yrange/y2range, title/xlabel/ylabel/y2label, tics, border,
+        # grid, legend, annotation 등 전부)와 "plot \" + main 커브 목록을
+        # 통째로 스냅샷해뒀다가, PIP 인셋을 다 그린 뒤 "unset multiplot"
+        # 직전에 그 스냅샷 전체를 그대로 한 번 더 재생한다 - 개별 항목을
+        # 골라서 복구하는 게 아니라 "처음 main을 그렸을 때와 완전히 같은
+        # 내용"을 통째로 다시 실행하는 것이라, 이번 시도에서 실제로 뭔가
+        # 빠뜨릴 위험이 훨씬 적다(그때그때 상태를 하나씩 되짚는 대신,
+        # 이미 검증된 "원본 그대로"를 재사용). fmt=="interactive"(화면)
+        # 에서만 적용 - 이미지/인쇄 저장은 마우스 추적이 필요 없고, 이
+        # 재생 자체가 겹쳐 그리기라 굳이 그 파일들에까지 위험을 감수할
+        # 이유가 없음.
+        _main_state_snapshot = lines[_main_state_start_idx:] if (_pip_on and fmt.lower() == "interactive") else None
 
         _pip_clip_info = None
         if _pip_on:
@@ -5662,24 +5690,18 @@ class GnuplotGenerator:
                     )
             lines[:] = _pip_probe_lines
 
-            # [되돌림 - 아래 참고] "PIP 인셋 위에서만 마우스 좌표/우클릭이
-            # 되고 main-plot에서는 안 됨" 문제를, PIP를 다 그린 뒤 main의
-            # curve plot 명령을 원래와 같은 자리에 "조용히" 한 번 더
-            # 재실행해서 gnuplot이 main을 다시 "마지막으로 그린 plot"으로
-            # 인식하게 만드는 방법을 시도했었다(margin은 그대로 두면 PIP의
-            # 좁은 축 상자 안에서 재실행되는 문제 발견 -> margin 복구 추가
-            # -> 그러자 이번엔 title/xlabel/ylabel/y2label이 PIP의 작은
-            # 폰트로 겹쳐 "유령 라벨"로 보이는 문제 발견 -> 그것도 복구
-            # 추가 -> 그래도 tic 숫자(font/offset)가 여전히 작은 유령으로
-            # 남는 것을 발견 - 복구해야 할 gnuplot 상태가 계속 늘어나
-            # (margin/title/label/tic 이후에도 더 있을 수 있음) 한 번에
-            # 다 잡았다고 확신하기 어려운 상태에서 커밋하는 것은 위험 판단.
-            # 시각적으로 완전히 깨끗하다고 검증되기 전까지는 "마우스는
-            # 되지만 화면에 유령 텍스트가 남는" 새로운 회귀를 만들 수 있어
-            # 되돌린다 - 마우스 추적 문제 자체는 다시 미해결로 남김(향후
-            # 재시도 시 gnuplot 상태를 개별로 하나씩 복구하는 대신, main을
-            # 처음 그릴 때 쓴 "set" 계열 줄 전체를 스냅샷해서 통째로
-            # 재실행하는 방식을 고려할 것 - 개별 항목을 놓칠 위험이 적음).
+            # [재시도 - 스냅샷 통째로 재생] 위에서 미리 떠둔 main의 전체
+            # "set" 상태 + "plot \" 스냅샷을 여기서 그대로 한 번 더 재생해,
+            # gnuplot이 main을 다시 "마지막으로 그린 plot"으로 인식하게
+            # 한다. 지금 이 시점(스냅샷을 뜬 직후와 완전히 동일한 상태 -
+            # 그 사이 xrange 등을 바꾼 적이 없으므로)에 재생하는 것이라
+            # 시각적으로는 "이미 그려진 것과 완전히 같은 내용을 다시
+            # 덧그리는" 것과 같아 새로 보이는 게 없어야 한다(제곱 실측:
+            # 최소 재현 스크립트로 이 순서 그대로 렌더링해 PIP 인셋이
+            # 지워지지 않고 유령 텍스트도 없음을 확인 - 아래 검증 참고).
+            if _main_state_snapshot is not None:
+                lines.extend(_main_state_snapshot)
+
             lines.append("unset multiplot")
 
         # [추가] "원래(처음) plot으로 되돌리는 기능 - 2D/3D 모두" - 2D도 마우스
