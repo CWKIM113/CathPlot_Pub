@@ -3589,9 +3589,18 @@ class GnuplotGenerator:
         # 인셋 안에서 legend가 과도하게 커 보였음(실제 렌더링으로 0.6/0.35
         # /0.2 비교 확인 - 0.35가 적당한 절충점). GUI 기본값도 함께 0.35로
         # 낮춤(cathplot_gui.py의 pip_font_scale_var).
-        font_scale = _num("font_scale", 0.35) * _size_shrink
+        # [수정 - 사용자 보고 버그] "in-plot title/tic font가 너무 작아짐
+        # (2배 정도 키워야 함)" - font_scale 기본값을 0.6에서 0.35로 낮췄던
+        # 수정(legend가 너무 커 보인다는 보고 대응)이 title/tic까지 함께
+        # 과도하게 줄여버린 부작용이었음. 그 사이 legend 전용 축소 메커니즘
+        # (_compact_font_scale=0.75, screen text_corr 보정, marker 크기
+        # 동기화 등)이 이미 별도로 추가돼 legend 자체는 그 기전으로도
+        # 충분히 작게 나오므로, title/tic까지 함께 줄이는 이 공용 기본값은
+        # 다시 0.6으로 되돌린다(legend가 그래도 커 보이면 legend 전용
+        # 배율을 추가로 낮추는 쪽으로 대응 - 공용 기본값은 건드리지 않음).
+        font_scale = _num("font_scale", 0.6) * _size_shrink
         if font_scale <= 0:
-            font_scale = 0.35
+            font_scale = 0.6
 
         lines.append("")
         lines.append("# --- PIP (부분 확대) inset ---")

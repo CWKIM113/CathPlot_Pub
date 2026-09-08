@@ -780,7 +780,10 @@ class CathPlotGUI:
         # get() 기본값으로 꺼짐(기존 동작과 동일)이라 안전함.
         self.pip_axis_title_on_var = tk.BooleanVar(value=False)
         self.pip_legend_on_var = tk.BooleanVar(value=False)
-        self.pip_font_scale_var = tk.StringVar(value="0.35")
+        # [수정 - 사용자 보고 버그] "in-plot title/tic font가 너무 작아짐" -
+        # 0.35로 낮췄던 기본값을 0.6으로 되돌림(gnu_generator.py의 동일
+        # 기본값과 함께 - legend 전용 축소는 별도 메커니즘이 담당).
+        self.pip_font_scale_var = tk.StringVar(value="0.6")
         # [수정 - 요청] "불투명 켬/끔" 체크박스 -> "배경 불투명도(%) 슬라이더"
         # (0~100, 기본 100=완전 불투명 - 기존 opaque=True 체크와 동일한 기본
         # 모습). Template Save/Load는 구 "opaque"(bool) 키도 그대로 읽어
@@ -2837,13 +2840,15 @@ class CathPlotGUI:
         # 표시한다. 단, Template/Batch Set에서 이미 기본값이 아닌 값을
         # 불러온 경우는 처음부터 검정(그 값 자체가 의미 있는 사용자
         # 값이므로).
-        # [수정 - 사용자 보고 버그] "PIP in-plot legend font/box가
-        # 상대적으로 너무 큼 - 기본은 적절하게 보여야 함" - 기본값 0.6은
-        # 작은 인셋 안에서 legend가 과도하게 커 보였음(실제 렌더링 비교로
-        # 확인). 기본값을 0.35로 낮춤(0.2~0.6 범위 모두 그대로 입력 가능 -
-        # 이 배율에 상한/하한을 두는 코드는 없음, 텍스트만 가독성을 위한
-        # 최소 크기(5pt) 하한이 항상 보장됨).
-        if self.pip_font_scale_var.get().strip() == "0.35":
+        # [수정 - 사용자 보고 버그, 재조정] "PIP in-plot legend font/box가
+        # 상대적으로 너무 큼"이라는 보고로 한때 기본값을 0.35로 낮췄었으나,
+        # 그 뒤 legend 전용 축소 메커니즘(compact 배율, text_corr 보정,
+        # marker 동기화 등)이 따로 추가된 상태에서 다시 확인해보니 이번엔
+        # "title/tic font가 너무 작아짐(2배 정도 키워야)"는 반대 방향
+        # 보고를 받음 - title/tic까지 함께 줄이는 이 공용 배율은 0.6으로
+        # 되돌리고, legend만 더 작게 하고 싶으면 legend 전용 메커니즘 쪽을
+        # 조정하는 방향으로 정리.
+        if self.pip_font_scale_var.get().strip() == "0.6":
             font_scale_entry.configure(foreground="grey")
 
         def _font_scale_first_edit(event=None):
