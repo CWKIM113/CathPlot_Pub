@@ -3635,16 +3635,73 @@ class GnuplotGenerator:
                 # Ry%를 다시 계산한다(단순 % 그대로 쓰면 어긋남). 화면
                 # (Interactive)은 frame_width/height와 무관하게 항상 고정된
                 # 1000x700px 캔버스(≈5.95x4.17in)로 뜬다.
+                # [수정 - 사용자 보고 버그, 근본 원인] "PIP 이미지(PNG/Print)를
+                # 그려보면 in-plot 경계가 완전한 원이 아님" - 아래(Manual이
+                # 아닌, 즉 frame_auto=True/기본값) 분기가 plotdef.frame_width/
+                # frame_height를 무조건 "축 크기"로 읽어서 페이지 크기를
+                # 역산했는데, frame_auto=True일 때는 frame_width/height
+                # 자체가 애초에 안 쓰인다(_compute_f_scale도 frame_auto=True면
+                # 그냥 1.0 반환 - frame_width/height를 아예 안 봄). 그 결과
+                # 실제 페이지 크기(_get_terminal_cmd의 pdf/png 공통 기본값인
+                # 11.7in x 8.3in)와 전혀 다른, frame_width/height 입력값
+                # (또는 그 기본값 "5"/"4")으로 역산한 엉뚱한 페이지 비율을
+                # 써서 Ry가 잘못 계산됐음(실측: frame_width=8,height=5인데
+                # frame_auto를 안 껐더니 실제 페이지는 11.7x8.3인데도 8x5
+                # 기준으로 계산해 원이 타원으로 나옴 - 직접 렌더링해 재현
+                # 확인). Manual(frame_auto=False)일 때만 frame_width/height를
+                # 쓰고, 그 외(기본값)에는 실제 쓰이는 기본 페이지 크기를
+                # 그대로 쓴다. Manual일 때 frame_unit="cm"도 그동안 놓치고
+                # 있었어서(다른 곳의 _to_in과 동일하게) 같이 처리한다.
                 try:
                     if (fmt or "").lower() == "interactive":
                         _page_w_in, _page_h_in = 5.95, 4.17
-                    else:
-                        _axis_w_in = float((plotdef.frame_width or "5").strip() or 5.0)
-                        _axis_h_in = float((plotdef.frame_height or "4").strip() or 4.0)
+                    elif not getattr(plotdef, "frame_auto", True):
+                        _funit = (getattr(plotdef, "frame_unit", "in") or "in")
+                        def _fr_to_in(v, default):
+                            v = (v or "").strip()
+                            if not v:
+                                return default
+                            try:
+                                f = float(v)
+                            except ValueError:
+                                return default
+                            return f / 2.54 if _funit == "cm" else f
+                        _axis_w_in = _fr_to_in(plotdef.frame_width, 5.0)
+                        _axis_h_in = _fr_to_in(plotdef.frame_height, 4.0)
                         _page_w_in = _axis_w_in / max(ab_w, 1e-6)
                         _page_h_in = _axis_h_in / max(ab_h, 1e-6)
+                    else:
+                        # frame_auto(기본값) - _get_terminal_cmd가 pdf/png
+                        # 공통으로 실제 쓰는 기본 페이지 크기와 반드시 같은
+                        # 값이어야 한다(직접 참조는 안 되므로 같은 상수를
+                        # 그대로 맞춰 씀 - 그쪽이 바뀌면 여기도 같이 바꿔야 함).
+                        _page_w_in, _page_h_in = 11.7, 8.3
                     _rx_phys_in = (_clip_rx / 100.0) * size_w * _page_w_in
                     _clip_ry = _rx_phys_in / max(size_h * _page_h_in, 1e-9) * 100.0
+                    # [수정 - 사용자 보고 버그] "in-plot 경계가 완전한 원이
+                    # 아님 + clipping도 안 됨" - 위 보정은 "Rx%(박스 폭
+                    # 기준)와 같은 물리 반지름이 되도록 Ry%(박스 높이 기준)
+                    # 를 다시 계산"할 뿐이라, 박스가 정사각형이 아니면(특히
+                    # 가로가 세로보다 훨씬 넓은 경우, PIP 박스는 W/H를 축
+                    # 프레임 대비 "같은 %"로 넣어도 축 프레임 자체가
+                    # 정사각형이 아니라 실제로는 가로로 넓은 경우가 흔함)
+                    # 물리적으로 올바른 원이 박스의 세로 폭보다 커져서 위/
+                    # 아래로 넘쳐버림(clip_ry가 50%를 넘으면 반지름이 박스
+                    # 높이의 절반보다 커진다는 뜻) - 실측(box 1153x745px,
+                    # clip_rx=50%)으로 정확히 재현·확인함(_ey가 745px
+                    # 박스의 절반(372.5)보다 훨씬 큰 576px로 나와 원이 박스
+                    # 위아래로 크게 삐져나감 - "경계가 원이 아니다"는 사실은
+                    # clipping이 이 삐져나온 큰 원의 "가운데 띠"만 박스
+                    # 안쪽에 보여줘서 옆으로 퍼진 타원처럼 보이는 것이었지,
+                    # clipping 자체가 안 걸린 게 아니었음). Ry가 50%를
+                    # 넘으면(=반지름이 박스 세로 절반을 넘으면) 박스에 꼭
+                    # 맞도록 Rx/Ry를 같은 비율로 축소해 "박스 세로에 꼭
+                    # 맞는 원"으로 만든다(물리적으로 항상 원 모양은 유지,
+                    # 크기만 박스에 맞게 줄어듦).
+                    if _clip_ry > 50.0:
+                        _fit_scale = 50.0 / _clip_ry
+                        _clip_rx *= _fit_scale
+                        _clip_ry = 50.0
                 except (TypeError, ValueError, ZeroDivisionError):
                     pass
 
