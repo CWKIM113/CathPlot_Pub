@@ -3870,21 +3870,28 @@ class GnuplotGenerator:
             _xlabel_txt = (plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
-                _xl_size = float(plotdef.xlabel_size or 11) * font_scale
+                # [수정 - 사용자 보고] "font 크기나 marker 크기는 최소 제한치가
+                # 필요할 듯" - tic(하한 3.5)/legend 텍스트·기호(하한 5pt)에는
+                # 이미 하한이 있었는데 axis title(xlabel/ylabel/y2label)에는
+                # 없어서, font_scale이 작아지거나(사용자 지정) PIP 박스가
+                # 축 프레임보다 커서 자동으로 줄어들 때(_size_shrink, 위
+                # font_scale 계산에 곱해짐) 글자가 뭉개질 정도로 작아질 수
+                # 있었음. tic과 비슷한 눈높이가 되도록 5pt 하한을 둔다.
+                _xl_size = max(float(plotdef.xlabel_size or 11) * font_scale, 5.0)
                 lines.append(f'set xlabel "{_xl_text}" font "{plotdef.xlabel_font},{_xl_size:.1f}" offset 0,{_lbl_ofs_x:.2f} {_xl_enh}')
             else:
                 lines.append("unset xlabel")
             _ylabel_txt = (plotdef.ylabel or "").strip()
             if _ylabel_txt:
                 _yl_text, _yl_enh = self._render_text(_ylabel_txt)
-                _yl_size = float(plotdef.ylabel_size or 11) * font_scale
+                _yl_size = max(float(plotdef.ylabel_size or 11) * font_scale, 5.0)  # 하한 이유는 위 _xl_size 참고
                 lines.append(f'set ylabel "{_yl_text}" font "{plotdef.ylabel_font},{_yl_size:.1f}" offset {_lbl_ofs_y:.2f},0 {_yl_enh}')
             else:
                 lines.append("unset ylabel")
             _y2label_txt = (plotdef.y2label or "").strip() if _uses_y2 else ""
             if _y2label_txt:
                 _y2l_text, _y2l_enh = self._render_text(_y2label_txt)
-                _y2l_size = float(plotdef.y2label_size or 11) * font_scale
+                _y2l_size = max(float(plotdef.y2label_size or 11) * font_scale, 5.0)  # 하한 이유는 위 _xl_size 참고
                 lines.append(f'set y2label "{_y2l_text}" font "{plotdef.y2label_font},{_y2l_size:.1f}" offset -{_lbl_ofs_y:.2f},0 {_y2l_enh}')
             else:
                 lines.append("unset y2label")
@@ -3911,7 +3918,11 @@ class GnuplotGenerator:
 
         if pip.get("title_on") and (plotdef.title or "").strip():
             _title_txt = plotdef.title.replace('"', '\\"')
-            _title_size = float(plotdef.title_size or 14) * font_scale
+            # 하한 이유는 아래 _xl_size와 동일(font_scale/_size_shrink가
+            # 작을 때 Plot Title도 같이 뭉개질 정도로 작아지지 않게 방지).
+            # title은 axis title/legend보다 한 단계 커야 위계가 유지되므로
+            # 하한을 6pt로 살짝 더 높게 둔다.
+            _title_size = max(float(plotdef.title_size or 14) * font_scale, 6.0)
             # [수정 - 버그(사용자 보고)] "타원에서는 title이 원 밖으로 나가서
             # 잘리지 않음" - 이 title에는 offset이 아예 없어서 gnuplot
             # 기본 위치(작은 origin/size 박스 크기에 비례해서 안 줄어드는
@@ -4188,7 +4199,15 @@ class GnuplotGenerator:
         # 서로 줄어드는 비율이 달랐음 - legend와 같은 기준이 되도록 같은
         # 0.75를 여기도 곱한다(legend가 compact=True로 항상 이 배율을
         # 쓰므로 여기서도 조건 없이 곱함).
-        _marker_ps_scale = font_scale * 0.75
+        # [수정 - 사용자 보고] "marker 크기도 최소 제한치가 필요할 듯" -
+        # 위 title/axis title과 같은 이유로, font_scale이 작아지면(사용자
+        # 지정 또는 _size_shrink) 이 배율에 하한이 없어 마커가 점 하나로
+        # 뭉개지거나 사실상 안 보이게 될 수 있었음(legend 쪽 마커 기호는
+        # 이미 5pt 절대 하한이 있음 - _render_legend_box의 symbol_pt 참고).
+        # curve marker는 pt가 아닌 ps(점 크기 배수)라 절대 pt 하한을 그대로
+        # 쓸 수 없어, 원래 크기(marker_size로 사용자가 지정한 ps)의 35%
+        # 밑으로는 더 줄지 않게 배율 자체에 하한을 둔다.
+        _marker_ps_scale = max(font_scale * 0.75, 0.35)
         def _scale_marker_ps(cmd):
             if " with points " not in cmd:
                 return cmd
