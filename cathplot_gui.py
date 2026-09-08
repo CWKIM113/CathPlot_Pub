@@ -3060,10 +3060,14 @@ class CathPlotGUI:
           그대로 읽어옴(_parse_plt_ranges - auto/수동 여부와 무관하게 항상
           그 파일에 구체적 숫자로 이미 박혀 있음).
         - "저장된 plot": 그 plotdef가 Y를 수동으로 지정해뒀으면(yauto=False)
-          그 값을 그대로 씀. auto(yauto=True)면 아직 구체적 숫자로 확정된
-          값이 그 객체 안에 없어(실제 렌더링 시점에 비로소 데이터에서
-          계산됨) 여기서는 자동으로 못 채움 - 이 경우는 여전히 사용자가
-          직접 입력해야 함(추후 개선 여지로 남김).
+          그 값을 그대로 씀. auto(yauto=True)면 그 객체 자체엔 확정된 숫자가
+          없지만("실제 렌더링 시점에야 데이터에서 계산되는 값") - "일단
+          dummy 숫자를 넣고 나중에 대체"할 필요 없이, 그 plotdef가 이미
+          들고 있는 실제 curve/dat 참조를 그대로 써서 지금 이 자리에서
+          바로 진짜 값을 계산한다(_nice_axis_range - CathPlot이 화면에
+          실제로 auto Y범위를 표시할 때 쓰는 것과 완전히 같은 계산, 결과도
+          그때와 동일함 - "임시 추정치"가 아니라 "그 데이터의 실제 nice
+          범위").
         pip dict를 그 자리에서 수정한다(GUI 경로 _resolve_pip_config와
         Batch 경로 _resolve_pip_dict_for_batch가 공통으로 재사용)."""
         source = pip.get("source")
@@ -3075,6 +3079,27 @@ class CathPlotGUI:
                     ymin, ymax = cached_plotdef.ymin, cached_plotdef.ymax
                 if not getattr(cached_plotdef, "y2auto", True) and cached_plotdef.y2min and cached_plotdef.y2max:
                     y2min, y2max = cached_plotdef.y2min, cached_plotdef.y2max
+                # [추가 - 요청] "auto로 뒀던 경우는... dummy 숫자를 가정하고
+                # 나서 알게 되면 대체하는 방안은?" - dummy가 아니라 그
+                # plotdef의 실제 curve 데이터로 지금 바로 진짜 값을 계산해서
+                # 채운다(수동 지정이 없을 때만 - 위에서 이미 못 채웠으면).
+                _uses_y2_cached = any(getattr(c, "axis", "y1") == "y2" for c in cached_plotdef.curves)
+                if ymin is None or ymax is None:
+                    try:
+                        _nice = GnuplotGenerator(plot_dir=self.plot_dir)._nice_axis_range(
+                            cached_plotdef, "y1", is_log=getattr(cached_plotdef, "y1log", False))
+                        if _nice:
+                            ymin, ymax = f"{_nice[0]:g}", f"{_nice[1]:g}"
+                    except Exception:
+                        pass
+                if _uses_y2_cached and (y2min is None or y2max is None):
+                    try:
+                        _nice2 = GnuplotGenerator(plot_dir=self.plot_dir)._nice_axis_range(
+                            cached_plotdef, "y2", is_log=getattr(cached_plotdef, "y2log", False))
+                        if _nice2:
+                            y2min, y2max = f"{_nice2[0]:g}", f"{_nice2[1]:g}"
+                    except Exception:
+                        pass
         elif source == "pltfile":
             path = pip.get("pltfile_path", "")
             if path and os.path.exists(path):
