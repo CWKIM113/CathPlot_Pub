@@ -1143,6 +1143,22 @@ class GnuplotGenerator:
         # 줄인다(margin만 좁힌 이전 수정으로는 부족했음).
         _compact_font_scale = 0.75 if compact else 1.0
         font_pt = (legend_size if legend_size else 9) * f_scale * _legend_font_extra * _axis_shape_scale * _compact_font_scale
+        # [수정 - 사용자 보고 버그, 근본 원인] "curve title이 길어도 legend
+        # box 가로크기는 안 바뀌고, title이 box 왼쪽 테두리 밖으로 삐져나옴
+        # (5~6자짜리 짧은 title도 잘림)" - 원인 확정: 아래 box_w는 이 시점의
+        # font_pt로 잰 글자 폭을 기준으로 계산되는데, PIP 인셋(compact)처럼
+        # font_pt 자체가 이미 5pt 밑으로 내려가는 설정(기본 font_scale=0.6
+        # 조합에서도 발생)에서는, 실제 라벨을 그릴 때만(아래 row 루프의
+        # max(int(_label_font_pt), 5)) 5pt로 다시 끌어올려 렌더링했음 -
+        # box는 "실제보다 작은(floor 적용 전) 글자 폭" 기준으로 좁게
+        # 잡혔는데, 정작 화면엔 그보다 큰(5pt) 글자가 그려지니 항상
+        # box 밖으로 삐져나왔던 것(제목 길이와 무관하게 거의 항상 발생 -
+        # "길어도 안 바뀜"으로 보인 이유이기도 함). box_w 계산에 쓰이는
+        # font_pt 자체를 여기서 미리 같은 5pt로 하한을 둬서, box 폭과 실제
+        # 렌더링 글자 크기가 항상 서로 일치하게 한다(아래 row 루프의 5pt
+        # 하한은 이후 box가 자리 부족으로 다시 축소되는 극단적인 경우를
+        # 위한 마지막 안전장치로 그대로 둔다).
+        font_pt = max(font_pt, 5.0)
         # [주의] pngcairo가 pdfcairo보다 legend 글자를 아주 약간 더 크게 그리는
         # 경향이 실측됐지만(동일 스크립트, 터미널만 다르게 비교), 보정 계수가
         # panel_scale/legend_size에 따라 비선형으로 달라져 신뢰할 수 있는 고정
@@ -3829,6 +3845,16 @@ class GnuplotGenerator:
             _inset_left_frac = _left_frac_rect
             _inset_right_frac = _right_frac_rect
 
+        # [수정 - 근본 원인 확정] xlabel/ylabel offset 계산용 배율 - 아래
+        # axis_title_on 블록 안에서만 정의되던 것을, tic offset(_tic_ofs,
+        # 더 아래)도 같은 "font_scale에 비례시키면 절대 간격이 오히려
+        # 벌어짐" 문제를 그대로 갖고 있어서(사용자 재보고: font_scale=0.3에서
+        # x-tic 숫자가 frame과 너무 멀어져 오히려 x title과 겹침 - tic는 이
+        # 배율 없이 먼저 멀어지는데 label만 이 배율로 세게 당겨져 서로
+        # 충돌) 여기로 끌어올려 axis_title_on 여부와 무관하게 항상 쓸 수
+        # 있게 한다.
+        _ofs_fs = max(font_scale, 0.6)
+
         if pip.get("axis_title_on"):
             # [추가 - 요청] "tic 숫자와 축 title 사이 간격이 너무 넓음(최소,
             # 거의 0이 되게)" - gnuplot 6.0으로 직접 렌더링해 offset 부호를
@@ -3881,10 +3907,18 @@ class GnuplotGenerator:
             # 검증된 font_scale=0.6 시점의 pull 세기 아래로는 더 줄지
             # 않게(0.6에서 고정) 한다 - font_scale>=0.6(더 큰 인셋)에서는
             # 기존과 완전히 동일(회귀 없음), font_scale<0.6에서만 pull이
-            # 더 세져(정확히는 "덜 약해져") 절대 간격이 유지된다.
-            _ofs_fs = max(font_scale, 0.6)
+            # 더 세져(정확히는 "덜 약해져") 절대 간격이 유지된다(_ofs_fs
+            # 자체는 위 axis_title_on 블록 앞으로 옮겨져 tic offset과
+            # 공유됨).
             _lbl_ofs_x = 2.6 * _ofs_fs  # xlabel을 tic 쪽(위)으로
-            _lbl_ofs_y = (4.5 if _pip_round_shape else 3.8) * _ofs_fs  # ylabel을 tic 쪽(오른쪽)으로
+            # [수정 - 사용자 재보고] "원(circle) in-plot 기준으로 Y1/Y2
+            # title이 아직도 frame과 간격이 큼(지금의 절반 정도로)" - 위
+            # _ofs_fs 도입으로 font_scale이 낮을 때의 "추가로 벌어지는" 문제는
+            # 고쳤지만, font_scale=0.6(기본)에서의 원래 pull 세기(4.5) 자체가
+            # round shape엔 부족했다는 재보고. 격리 렌더+픽셀 측정으로 재조정:
+            # 4.5(gap 7px) -> 5.5(gap 3px, 약 40%로 축소, 겹침 없이 안전하게
+            # 확인된 범위 안에서 "절반 정도"에 가장 가까운 값).
+            _lbl_ofs_y = (5.5 if _pip_round_shape else 3.8) * _ofs_fs  # ylabel을 tic 쪽(오른쪽)으로
             _xlabel_txt = (plotdef.xlabel or "").strip()
             if _xlabel_txt:
                 _xl_text, _xl_enh = self._render_text(_xlabel_txt)
@@ -3956,7 +3990,11 @@ class GnuplotGenerator:
             # 밑으로는 이 "당기는 힘 계산용" 크기가 더 줄지 않게 한다(실제
             # 렌더 font 크기 _title_size 자체는 위 6.0 하한을 그대로 유지 -
             # 여기선 pull 세기 계산에만 별도 하한을 둠).
-            _title_gap = -0.4 * (max(_title_size, 14.0 * 0.6) / 14.0)
+            # [수정 - 사용자 재보고] "Plot Title과 축 간격도 지금 기준으로
+            # 절반 정도로 줄여야" - 위 ylabel/ylabel과 같은 방식으로 격리
+            # 렌더+픽셀 측정 재조정: 0.4(gap 12px) -> 1.0(gap 7px, 약 58%,
+            # 겹침 없이 확인된 범위에서 "절반 정도"에 가장 가까운 값).
+            _title_gap = -1.0 * (max(_title_size, 14.0 * 0.6) / 14.0)
             lines.append(f'set title "{_title_txt}" font "{plotdef.title_font},{_title_size:.1f}" offset 0,{_title_gap:.3f}')
         else:
             lines.append("unset title")
@@ -3970,7 +4008,16 @@ class GnuplotGenerator:
         # 정말 읽기 힘들어지는 극단적으로 작은 경우에만(그 밑으로는 어차피
         # 글자 자체가 뭉개짐) 최후 안전장치로만 작동하게 한다.
         _tic_size = max(9 * font_scale, 3.5)
-        _tic_ofs = 0.9 * font_scale  # tic 숫자도 축 쪽으로 살짝 당겨 여백 최소화(위 xlabel/ylabel과 같은 부호 규칙)
+        # [수정 - 사용자 보고 버그] "font_scale을 0.3으로 줄이면 x-tic 숫자가
+        # frame에서 너무 떨어져서 title에 겹침" - 원인: 이 offset(tic를
+        # 축 쪽으로 당기는 힘)만 위 xlabel/ylabel과 달리 여전히 font_scale에
+        # 그대로 비례해서(_ofs_fs 없이) 줄고 있었음 - font_scale이
+        # 작아지면 xlabel/ylabel은 이미 위에서 _ofs_fs로 pull이 유지되는데
+        # tic만 계속 약해져 축에서 멀어지고, 동시에 (멀어진 tic 쪽으로 더
+        # 세게 당겨진) xlabel/ylabel과의 간격은 좁아져 결국 서로 겹쳐
+        # 보였던 것 - 같은 _ofs_fs를 여기도 적용해 tic도 font_scale=0.6
+        # 기준 pull 세기 밑으로는 약해지지 않게 한다.
+        _tic_ofs = 0.9 * _ofs_fs  # tic 숫자도 축 쪽으로 살짝 당겨 여백 최소화(위 xlabel/ylabel과 같은 부호 규칙)
         # [수정 - 버그(사용자 보고)] "원/타원 밖으로 in-plot 사각형의 가장자리가
         # 삐져나옴(border는 unset했는데도)" - "unset border"는 네 변을 잇는
         # 테두리 "선"만 지울 뿐, gnuplot이 기본으로 반대쪽 변에도 그리는
