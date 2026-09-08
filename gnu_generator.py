@@ -3558,6 +3558,28 @@ class GnuplotGenerator:
         else:
             y2range_cmd = _find_range_line("set y2range") or "set autoscale y2"
 
+        # [수정 - 사용자 보고 버그] "in-plot의 X/Y tic 숫자가 2~3개 정도면
+        # 됨" - 인셋은 지금까지 tic "간격"은 지정하지 않고 font/offset만
+        # 다시 선언해서(nomirror 등), 결과적으로 main-plot이 정해둔 tic
+        # 간격을 그대로 물려받거나 gnuplot 기본 auto 배치를 따랐음 - 작은
+        # 인셋 박스에는 그 개수가 대체로 너무 많아 촘촘해 보였음. 인셋
+        # 자신의 X/Y1/Y2 범위(위에서 이미 구한 xrange_cmd 등)를 기준으로
+        # "약 2~3개"가 되도록 간격을 직접 계산해서 지정한다(_nice_axis_range
+        # 의 "4개 목표" 간격 계산과 같은 방식이되 목표 개수만 2.5로 낮춤).
+        # 범위가 구체적 숫자로 안 잡히는 경우(autoscale 등)는 계산할 기준이
+        # 없으므로 안전하게 기존 동작(간격 미지정)으로 둔다.
+        def _nice_tic_step(lo, hi, target_n=2.5):
+            span = abs(hi - lo)
+            if span <= 0:
+                return None
+            raw_step = span / target_n
+            magnitude = 10 ** math.floor(math.log10(raw_step))
+            normalized = raw_step / magnitude
+            for candidate in (1, 2, 2.5, 5, 10):
+                if normalized <= candidate:
+                    return candidate * magnitude
+            return raw_step
+
         # [수정 - 요청] "박스만 줄이고 폰트(legend 포함)는 그대로면, 줄어든
         # 만큼 글자가 박스에 비해 과도하게 커 보임" - 칸에 맞추려고 박스를
         # 줄인(_size_shrink < 1.0) 만큼 폰트도 같이 줄여서, 박스:글자 비율이
@@ -3627,6 +3649,13 @@ class GnuplotGenerator:
                 return float(_m.group(1)), float(_m.group(2))
             except ValueError:
                 return None
+
+        _xr_for_tics = _parse_range(xrange_cmd)
+        _x_tic_step = _nice_tic_step(*_xr_for_tics) if _xr_for_tics else None
+        _yr_for_tics = _parse_range(yrange_cmd)
+        _y_tic_step = _nice_tic_step(*_yr_for_tics) if _yr_for_tics else None
+        _y2r_for_tics = _parse_range(y2range_cmd)
+        _y2_tic_step = _nice_tic_step(*_y2r_for_tics) if _y2r_for_tics else None
 
         _clip_rx = _clip_ry = None
         if _clip_shape in ("circle", "ellipse"):
@@ -3816,6 +3845,17 @@ class GnuplotGenerator:
             # R에 맞게 적응하므로, pull-in량은 R과 무관하게 다시 고정값으로
             # 되돌린다(실제 렌더링으로 R=30%/50%/75% 모두 재확인 - 겹침도
             # 원 밖으로 나감도 없음).
+            # [수정 시도 - 되돌림] "in-plot의 y1/y2/x title이 좌표축과 너무
+            # 떨어짐(font_scale이 낮을수록 더 심함)" 보고를 받고 offset을
+            # font_scale의 제곱근 비례로 바꿔봤으나(sqrt(s) > s for 0<s<1
+            # 이라 모든 font_scale<1에서 당기는 힘이 오히려 더 세짐),
+            # 기존에 이미 실측 검증됐던 font_scale=0.6 기준 smoke_test에서
+            # xlabel이 tic 숫자와 겹치는 회귀가 실제 렌더링으로 확인됨 -
+            # 검증 없이 더 진행하면 위험해 일단 원래(선형 비례) 공식으로
+            # 되돌린다. 낮은 font_scale에서 title이 멀어져 보이는 문제
+            # 자체는 남아있어 별도로 다시 봐야 함(예: 0.6 부근은 그대로
+            # 유지하고 그보다 낮을 때만 추가 보정하는 방식 등 - 실제 화면
+            # 재확인 필요).
             _lbl_ofs_x = 2.6 * font_scale  # xlabel을 tic 쪽(위)으로
             _lbl_ofs_y = (4.5 if _pip_round_shape else 3.8) * font_scale  # ylabel을 tic 쪽(오른쪽)으로
             _xlabel_txt = (plotdef.xlabel or "").strip()
@@ -3895,10 +3935,13 @@ class GnuplotGenerator:
         # 렌더)으로 top/right 쪽에 mirror tic이 원 밖으로 튀어나온 것 확인.
         # 인셋은 항상 자기 쪽(왼쪽 Y1/아래 X, y2 쓰면 오른쪽 Y2) tic만
         # 필요하므로 nomirror를 명시한다.
-        lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}" offset 0,{_tic_ofs:.2f} nomirror')
-        lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}" offset {_tic_ofs:.2f},0 nomirror')
+        _x_tic_clause = f" {_x_tic_step:.6g}" if _x_tic_step else ""
+        _y_tic_clause = f" {_y_tic_step:.6g}" if _y_tic_step else ""
+        lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}" offset 0,{_tic_ofs:.2f} nomirror{_x_tic_clause}')
+        lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}" offset {_tic_ofs:.2f},0 nomirror{_y_tic_clause}')
         if _uses_y2:
-            lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}" offset -{_tic_ofs:.2f},0 nomirror')
+            _y2_tic_clause = f" {_y2_tic_step:.6g}" if _y2_tic_step else ""
+            lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}" offset -{_tic_ofs:.2f},0 nomirror{_y2_tic_clause}')
         else:
             lines.append("unset y2tics")
 
