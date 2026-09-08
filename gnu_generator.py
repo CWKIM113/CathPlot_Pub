@@ -3919,6 +3919,17 @@ class GnuplotGenerator:
             # 4.5(gap 7px) -> 5.5(gap 3px, 약 40%로 축소, 겹침 없이 안전하게
             # 확인된 범위 안에서 "절반 정도"에 가장 가까운 값).
             _lbl_ofs_y = (5.5 if _pip_round_shape else 3.8) * _ofs_fs  # ylabel을 tic 쪽(오른쪽)으로
+            # [수정 - 사용자 재보고] "in-plot y2 title은 아직도 간격이
+            # 크네요" - 격리 렌더+픽셀 측정으로 확인: Y1과 Y2에 완전히 같은
+            # pull 세기(_lbl_ofs_y)를 좌우 대칭으로만 적용했는데도, gnuplot이
+            # y2label 기본 위치를 ylabel보다 살짝 더 멀리 잡아서 같은 세기로
+            # 당겨도 Y2 쪽 간격이 더 크게 남음(실측: 같은 5.5 기준 Y1
+            # gap=3px, Y2 gap=5px). Y2 전용으로 조금 더 세게 당겨 Y1과 같은
+            # 간격이 되도록(round: 5.5->6.0, gap 5px->2px, Y1의 3px과 비슷한
+            # 수준으로 확인) 별도 배율을 둔다. ellipse/rect는 같은 비율
+            # (6.0/5.5)로 추정 환산(실측 없이 - Y1/round 재조정 때와 같은
+            # 비율 논리를 그대로 적용, 필요시 재조정).
+            _lbl_ofs_y2 = (6.0 if _pip_round_shape else 4.15) * _ofs_fs
             # [추가 - 요청] "PIP 표시옵션에서 Plot Title/X/Y1/Y2 title을
             # default를 제시하고 수정 가능하게 - 불러오는 in-plot의 원본
             # 파일에 title 등이 없을 경우나 수정할 경우를 생각해서" - 지금까지
@@ -3957,7 +3968,7 @@ class GnuplotGenerator:
             if _y2label_txt:
                 _y2l_text, _y2l_enh = self._render_text(_y2label_txt)
                 _y2l_size = max(float(plotdef.y2label_size or 11) * font_scale, 5.0)  # 하한 이유는 위 _xl_size 참고
-                lines.append(f'set y2label "{_y2l_text}" font "{plotdef.y2label_font},{_y2l_size:.1f}" offset -{_lbl_ofs_y:.2f},0 {_y2l_enh}')
+                lines.append(f'set y2label "{_y2l_text}" font "{plotdef.y2label_font},{_y2l_size:.1f}" offset -{_lbl_ofs_y2:.2f},0 {_y2l_enh}')
             else:
                 lines.append("unset y2label")
         else:
