@@ -5999,65 +5999,38 @@ class GnuplotGenerator:
 
         _main_cmd_list = self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, circles=circles, panel_scale=_size_scale, fmt=fmt)
 
-        # [추가 - 사용자 재요청] "main-plot 마우스 좌표/우클릭이 PIP 인셋에서만
-        # 되고 main에서는 안 됨" 재시도 - 이전 두 차례 시도(개별 상태를
-        # 하나씩 복구)는 각각 "효과 없음"/"유령 텍스트 회귀"로 되돌렸던 바
-        # 있음(위 60d8622 되돌림 커밋, 아래 주석 참고). 이번엔 그 되돌림
-        # 커밋이 제안한 방식대로, main을 처음 그릴 때 실제로 쓴 "set" 계열
-        # 줄 전체(위 set multiplot/origin/size부터 이 지점까지 - margin,
-        # xrange/yrange/y2range, title/xlabel/ylabel/y2label, tics, border,
-        # grid, legend, annotation 등 전부)와 "plot \" + main 커브 목록을
-        # 통째로 스냅샷해뒀다가, PIP 인셋을 다 그린 뒤 "unset multiplot"
-        # 직전에 그 스냅샷 전체를 그대로 한 번 더 재생한다 - 개별 항목을
-        # 골라서 복구하는 게 아니라 "처음 main을 그렸을 때와 완전히 같은
-        # 내용"을 통째로 다시 실행하는 것이라, 이번 시도에서 실제로 뭔가
-        # 빠뜨릴 위험이 훨씬 적다(그때그때 상태를 하나씩 되짚는 대신,
-        # 이미 검증된 "원본 그대로"를 재사용). fmt=="interactive"(화면)
-        # 에서만 적용 - 이미지/인쇄 저장은 마우스 추적이 필요 없고, 이
-        # 재생 자체가 겹쳐 그리기라 굳이 그 파일들에까지 위험을 감수할
-        # 이유가 없음.
-        _main_state_snapshot = lines[_main_state_start_idx:] if (_pip_on and fmt.lower() == "interactive") else None
-
-        # [수정 - 사용자 제안, 실측으로 근본 원인 확인된 tic 숫자 이중 렌더링
-        # 해결] "PIP를 main보다 나중에 그려서 main 마우스 좌표를 되살리는"
-        # 위 스냅샷 재생 방식은, main을 통째로 두 번(PIP 전/후) 그리는
-        # 셈이라 - 실제 Windows 터미널로 확인한 결과 겹치는 solid 도형
-        # (테두리·곡선)은 문제없지만, tic 숫자 같은 작은 텍스트는 두 번째
-        # 렌더링이 아주 미세하게 어긋나 이중으로 겹쳐 보임(사용자 실측
-        # 스크린샷으로 확인). 사용자 제안("frame만 먼저 그리고 PIP -> main
-        # 순서로 하면 안될까? frame은 겹쳐도 되지만 처음 그릴 땐 투명
-        # 실선으로") 그대로 채택: 전체 구조(main 먼저 그린 뒤 PIP, 그 뒤
-        # 스냅샷으로 main 재생)는 그대로 두되, 이 "첫 번째" main 그리기에서
-        # 텍스트를 그리는 요소(title/xlabel/ylabel/y2label/xtics/ytics/
-        # y2tics - 전부 작은 글자라 이중 렌더링이 눈에 띔)만 "plot \" 직전에
-        # unset해서 이번 한 번은 안 보이게 한다 - 테두리(border)·곡선·grid는
-        # solid 도형이라 그대로 둬도 이중 렌더링이 안 보이므로 손대지 않음
-        # (사용자도 "frame은 겹쳐도 된다"고 확인). PIP 인셋은 이 지점 이후
-        # _find_last_margin으로 margin만 읽어가므로 title/tics를 unset해도
-        # 전혀 영향 없다. 재생(스냅샷, 이미 위에서 안 건드리고 그대로
-        # 캡처해둠)은 원래 값 그대로 title/tics를 다시 set하므로, 최종적으로
-        # 화면에 실제로 "보이는" title/tic 텍스트는 이 재생 한 번뿐이 된다.
-        # [수정 - 재검토로 발견된 버그] 위와 완전히 같은 원리가 legend
-        # 텍스트(curve title, marker 기호 - 둘 다 _render_legend_box가
-        # "set label"로 그림)에도 그대로 적용돼야 하는데 이 목록에서 빠져
-        # 있었음: legend의 "set label"도 title/tic과 마찬가지로 이 "plot \"
-        # 이전에 이미 선언돼 있어(1차 그리기에서 그대로 보임) 재생(2차
-        # 그리기)에서 또 한 번 그려지는 이중 렌더링 대상이었음(legend
-        # 샘플선 "set arrow"/박스 "set object"는 테두리·곡선과 같은 solid
-        # 도형이라 원래 원칙대로 그대로 둠 - 텍스트만 문제). "unset label"을
-        # 추가해 legend/주석(Comment 등, 이들도 "set label"로 그림) 텍스트도
-        # title/tic과 동일하게 1차 그리기에서는 숨기고 재생(2차)에서만
-        # 보이게 한다.
-        if _main_state_snapshot is not None:
-            _main_plot_line_idx = next(
-                (i for i in range(_main_state_start_idx, len(lines)) if lines[i].strip() == "plot \\"),
-                None
-            )
-            if _main_plot_line_idx is not None:
-                lines[_main_plot_line_idx:_main_plot_line_idx] = [
-                    "unset title", "unset xlabel", "unset ylabel", "unset y2label",
-                    "unset xtics", "unset ytics", "unset y2tics", "unset label",
-                ]
+        # [수정 - 사용자 제안 채택, 근본적으로 재설계] "main-plot 마우스 좌표/
+        # 우클릭이 PIP 인셋에서만 되고 main에서는 안 됨" - 예전 두 차례
+        # 시도는 "PIP를 그린 뒤 main 전체(제목/축/legend/curve 전부)를
+        # 통째로 한 번 더 그려서 gnuplot이 main을 '마지막으로 그린 plot'
+        # 으로 인식하게" 하는 방식이었음 - tic 숫자 이중 렌더링(수정함),
+        # legend 이중 렌더링(수정함)까지는 pngcairo로 재현·확인해 고쳤지만,
+        # 그 뒤로도 "PIP가 불투명인데 main이 그 위에 겹쳐 보임" 문제가
+        # 실제 Windows 터미널에서 계속 재현됨(사용자 재보고, pngcairo로는
+        # 재현 안 됨) - 사용자 제안("main을 다시 그릴 때 그림을 다시 안
+        # 그리고 해결하는 방안? gnuplot에게 최종 plot이 main-plot이라고
+        # 속이는 방안은?") 그대로 채택: main의 실제 곡선을 "다시 그리는"
+        # 대신, main의 margin/title/axis label(=PIP가 자기 것으로 덮어쓴
+        # 상태 그대로 남아있던 값들 - 위 border/tics/grid/xrange 복구와
+        # 같은 방식으로 여기서 추가로 캡처)만 "set"으로 조용히 복구한 뒤,
+        # 아무것도 그리지 않는(색이 배경과 같아 설사 뭔가 그려져도 안
+        # 보이는) 극도로 단순한 "활성화용" plot 한 줄만 실행해 gnuplot의
+        # "마지막 plot" 인식만 main으로 되돌린다 - 눈에 보이는 새 그림
+        # 자체가 없으니 PIP 위에 무엇이 덮일 위험이 구조적으로 없다.
+        if _pip_on and fmt.lower() == "interactive":
+            def _find_last_line(prefixes):
+                return next((_l for _l in reversed(lines) if _l.startswith(prefixes)), None)
+            _main_lmargin_line = _find_last_line("set lmargin at screen")
+            _main_rmargin_line = _find_last_line("set rmargin at screen")
+            _main_tmargin_line = _find_last_line("set tmargin at screen")
+            _main_bmargin_line = _find_last_line("set bmargin at screen")
+            _main_title_line = _find_last_line(("set title", "unset title"))
+            _main_xlabel_line = _find_last_line(("set xlabel", "unset xlabel"))
+            _main_ylabel_line = _find_last_line(("set ylabel", "unset ylabel"))
+            _main_y2label_line = _find_last_line(("set y2label", "unset y2label"))
+        else:
+            _main_lmargin_line = _main_rmargin_line = _main_tmargin_line = _main_bmargin_line = None
+            _main_title_line = _main_xlabel_line = _main_ylabel_line = _main_y2label_line = None
 
         _pip_clip_info = None
         if _pip_on:
@@ -6172,17 +6145,40 @@ class GnuplotGenerator:
                     )
             lines[:] = _pip_probe_lines
 
-            # [재시도 - 스냅샷 통째로 재생] 위에서 미리 떠둔 main의 전체
-            # "set" 상태 + "plot \" 스냅샷을 여기서 그대로 한 번 더 재생해,
-            # gnuplot이 main을 다시 "마지막으로 그린 plot"으로 인식하게
-            # 한다. 지금 이 시점(스냅샷을 뜬 직후와 완전히 동일한 상태 -
-            # 그 사이 xrange 등을 바꾼 적이 없으므로)에 재생하는 것이라
-            # 시각적으로는 "이미 그려진 것과 완전히 같은 내용을 다시
-            # 덧그리는" 것과 같아 새로 보이는 게 없어야 한다(제곱 실측:
-            # 최소 재현 스크립트로 이 순서 그대로 렌더링해 PIP 인셋이
-            # 지워지지 않고 유령 텍스트도 없음을 확인 - 아래 검증 참고).
-            if _main_state_snapshot is not None:
-                lines.extend(_main_state_snapshot)
+            # [재설계 - 사용자 제안 채택] "main을 다시 그리지 않고 gnuplot이
+            # main을 최종 plot으로 인식하게 속이는 방안" - PIP가 자기
+            # 그리는 동안 margin/title/xlabel/ylabel/y2label을 자기(작은
+            # 인셋) 값으로 덮어썼으므로, 위에서 미리 캡처해둔 main의 원래
+            # 값을 "set"으로 조용히 되돌린다(margin/xrange/yrange/y2range/
+            # border/tics/grid는 이미 _render_pip_inset이 복구해둠 - 여기선
+            # 그게 놓치고 있던 margin/title/label만 추가). 그 뒤, 실제
+            # 곡선을 다시 그리는 대신 아무것도 안 보이는 극도로 단순한 plot
+            # 한 줄("plot 0 with lines lc rgb white notitle" - 배경과 같은
+            # 흰색이라 어차피 안 보이고, 현재 xrange 밖일 수도 있음)만
+            # 실행해서 gnuplot의 "마지막 plot" 인식만 main으로 되돌린다 -
+            # 눈에 보이는 새 그림이 없으니 PIP 위에 무엇이 덮일 위험 자체가
+            # 구조적으로 없다(이전 두 차례 "통째로 재생" 시도가 겪은 tic/
+            # legend 이중 렌더링, 그리고 재보고된 "PIP가 여전히 main에
+            # 덮임" 문제 모두 "무언가를 다시 그린다"는 전제에서 비롯됐던
+            # 것이므로, 그 전제 자체를 없앤다).
+            if _main_lmargin_line:
+                lines.append(_main_lmargin_line)
+            if _main_rmargin_line:
+                lines.append(_main_rmargin_line)
+            if _main_tmargin_line:
+                lines.append(_main_tmargin_line)
+            if _main_bmargin_line:
+                lines.append(_main_bmargin_line)
+            if _main_title_line:
+                lines.append(_main_title_line)
+            if _main_xlabel_line:
+                lines.append(_main_xlabel_line)
+            if _main_ylabel_line:
+                lines.append(_main_ylabel_line)
+            if _main_y2label_line:
+                lines.append(_main_y2label_line)
+            if _pip_on and fmt.lower() == "interactive":
+                lines.append('plot 0 notitle with lines lc rgb "white"')
 
             lines.append("unset multiplot")
 
