@@ -44,7 +44,8 @@ from pathlib import Path
 # win32gui는 실제로는 주석 처리된 죽은 코드에서만 참조돼 아예 삭제).
 
 from data_parser import CathenaDatParser, save_json, is_comment_or_blank, strip_inline_comment
-from gnu_generator import PlotDefinition, CurveDefinition, FunctionCurveDefinition, GnuplotGenerator, PIP_OVERLAY_CHROMA_KEY
+from gnu_generator import (PlotDefinition, CurveDefinition, FunctionCurveDefinition, GnuplotGenerator,
+                            PIP_OVERLAY_CHROMA_KEY, DASH_PATTERNS)
 
 # [추가] Batch Set/Queue - 항목마다 독립적인 gnuplot 프로세스를 순차로 하나씩
 # 기다리던 것을 병렬로 처리해 속도를 높인다. "무제한 동시 실행"은 gnuplot
@@ -2638,19 +2639,69 @@ class CathPlotGUI:
             r'"([^"]+)"\s+using\s+\(\$(\d+)\+([^)]*)\):(\d+)(?:\s+smooth\s+csplines)?\s+notitle\s+axes\s+(x1y1|x1y2)'
             r'\s+with\s+lines\s+lw\s+([\d.]+)(?:\s+lc\s+rgb\s+"([^"]+)")?'
         )
+        # [수정 - 사용자 재지적] "curve title이 전부 파일명으로 나오는 게
+        # 말이 안 됨 - *.plt를 직접 그리면 제대로 나오는데" - 맞는 지적이었음:
+        # "plot \" 명령 자체는 항상 notitle이라 거기엔 원래 title이 없는 게
+        # 맞지만, 그 원래 title은 이 파일 안에 이미 따로(_render_legend_box가
+        # main legend를 그리려고 남겨둔) "set label 800N/900N "실제 제목""
+        # 으로 그대로 남아있음(같은 curve의 "set arrow 800N/900N ... lc rgb
+        # "색"... dashtype (...)"에는 원래 색/점선 스타일까지 같이 남아있음) -
+        # .plt를 직접 실행하면 이 label들이 그대로 화면에 그려지니 제대로
+        # 보였던 것. 이 legend arrow/label 쌍을 curve와 같은 순서로 추가
+        # 파싱해서, 파일명 대신 이 실제 title(+dashtype)을 쓴다.
+        _legend_pair_re = re.compile(
+            r'set arrow \d+ from graph [^\n]*?'
+            r'lc rgb "([^"]+)" lw [\d.]+(?:\s+dashtype \(([^)]+)\))?\s*\n'
+            r'set label \d+ "((?:[^"\\]|\\.)*)" at graph'
+        )
+        _legend_entries = [
+            (m.group(1), m.group(3), m.group(2))  # (color, title, dashtype_raw)
+            for m in _legend_pair_re.finditer(text)
+        ]
+        _dash_to_style = {v.replace(" ", ""): k for k, v in DASH_PATTERNS.items()}
+
+        def _style_for_dashtype(raw):
+            if not raw:
+                return None
+            return _dash_to_style.get(raw.replace(" ", ""))
+
         base_dir = os.path.dirname(os.path.abspath(plt_path))
         curves = []
-        for m in pattern.finditer(text):
+        _matches = list(pattern.finditer(text))
+        # 개수가 정확히 같으면(가장 흔한 경우 - legend에서 빠진 curve가 없음)
+        # 순서 그대로 1:1 대응시킨다 - plot \ 절과 legend 블록 둘 다
+        # _build_plot_commands가 같은 curves 리스트를 같은 순서로 훑어
+        # 만들므로 순서가 항상 일치함(색이 우연히 같은 curve가 있어도
+        # 순서 매칭은 영향받지 않음).
+        _use_positional = len(_legend_entries) == len(_matches)
+        # 개수가 다르면(예: 일부 curve가 Legend에서 제외됨) 색상 기준으로
+        # 대응시킨다 - 이 경우 같은 색을 쓰는 curve가 여럿이면 그 중 하나만
+        # 골라지는 한계가 있지만, 파일명보다는 항상 낫다.
+        _color_lookup = {}
+        if not _use_positional:
+            for color, title, dash_raw in _legend_entries:
+                _color_lookup.setdefault(color, (title, dash_raw))
+
+        for i, m in enumerate(_matches):
             path, x_col, x_shift, y_col, axis, lw, color = m.groups()
             dat_file = path if os.path.isabs(path) else os.path.normpath(os.path.join(base_dir, path))
+            _title = None
+            _dash_raw = None
+            if _use_positional:
+                _entry_color, _title, _dash_raw = _legend_entries[i]
+            elif color and color in _color_lookup:
+                _title, _dash_raw = _color_lookup[color]
+            if not _title:
+                _title = os.path.splitext(os.path.basename(dat_file))[0]
             try:
                 curves.append(CurveDefinition(
                     dat_file=dat_file,
                     output_no=int(y_col) - 1,
-                    title=os.path.splitext(os.path.basename(dat_file))[0],
+                    title=_title,
                     axis="y2" if axis == "x1y2" else "y1",
                     x_shift=float(x_shift or 0.0),
                     color=color or None,
+                    linestyle=_style_for_dashtype(_dash_raw),
                     linewidth=float(lw or 1.5),
                     x_output_no=int(x_col) - 1,
                 ))

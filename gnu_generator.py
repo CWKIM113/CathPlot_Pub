@@ -1830,6 +1830,28 @@ class GnuplotGenerator:
             linestyle = curve.linestyle or DEFAULT_LINESTYLES[idx % len(DEFAULT_LINESTYLES)]
             lw2 = curve.linewidth * line_scale
             _dash_pat = _dash_pattern_for_fmt(linestyle, fmt)
+            # [수정 - 사용자 보고 버그] "점선(dash/dot 등)이 legend 샘플선에서
+            # 실선처럼 보임 - 빈 부분도 크기에 비례해서 줄여야 하는 거
+            # 아닌가"(기본 사항이라는 지적) - 맞는 지적이었음: dashtype
+            # 숫자(예: "dash"=14, 3.5)는 폰트 크기와 무관한 "절대" 길이(선
+            # 굵기 기준 단위)인데, PIP 인셋(compact)처럼 font_pt가 작아지면
+            # 샘플선 길이(SAMPLE_W, font_pt에 비례)만 같이 짧아져서, 짧은
+            # 샘플선 안에 dash 세그먼트 하나(예: 14단위)조차 다 못 담아
+            # "off" 구간(간격)까지 못 가고 항상 "on" 상태로만 그려짐(=실선
+            # 처럼 보임). 기준 폰트(9pt, main legend 기본 크기)보다 작아진
+            # 비율만큼 dashtype 숫자도 같이 줄여서, 샘플선 길이 대비 dash
+            # 패턴의 "비율"이 항상 일정하게 유지되게 한다(9pt 이상이면 원래
+            # 값 그대로 - main legend는 지금까지와 동일).
+            if _dash_pat:
+                _dash_shrink = min(1.0, font_pt / 9.0)
+                if _dash_shrink < 1.0:
+                    try:
+                        _dash_pat = ", ".join(
+                            f"{max(float(v.strip()) * _dash_shrink, 0.5):.3g}"
+                            for v in _dash_pat.split(",")
+                        )
+                    except ValueError:
+                        pass
             dt_clause = f" dashtype ({_dash_pat})" if _dash_pat else ""
             lines.append(
                 f"set arrow {id_offset + row_i + 1} from graph {sample_x1:.4f},{row_y:.4f} "
