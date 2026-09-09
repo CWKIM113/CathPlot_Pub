@@ -3457,6 +3457,38 @@ class GnuplotGenerator:
             return
 
         _override_curves = pip.get("curves")
+        # [수정 - 사용자 보고 버그, 실제 렌더링으로 재현·확인한 근본 원인]
+        # "PIP를 원으로 그렸는데 창에는 안 나타남(네모든 원이든) - 좌표는
+        # 나타남" - _override_curves(다른 plot/.plt 파일에서 가져온 curve
+        # 목록) 중 하나라도 dat_file이 실제로 없으면(가장 흔한 경우: .plt
+        # 파일이 참조하는 plot_dir/temp_sorted/*.dat는 CathPlot 자신이
+        # "일회성 캐시"로 명시하는 폴더라 - 창 닫을 때 "temp_sorted 캐시도
+        # 함께 비우기"로 지워질 수 있음 - 그 .plt를 나중에 다시 PIP 소스로
+        # 쓰면 파일이 이미 사라진 뒤일 수 있음), 그 dat_file을 참조하는
+        # "plot \" 명령 자체가 gnuplot에서 "Cannot find or open file" +
+        # "No data in plot" 오류로 죽는데, 실측 확인 결과 이 오류는 단순
+        # 경고가 아니라 그 지점에서 스크립트 전체 실행이 완전히 멈춰버림
+        # (아래 main state snapshot 재생, border/margin 복구, R키 바인딩
+        # 등 이 지점 "이후"의 모든 코드가 통째로 실행이 안 됨 - pngcairo로
+        # 직접 렌더링해 exit code/이후 print 마커 도달 여부로 확인). 이미
+        # 그려둔 PIP의 배경/테두리(set object)조차 이 실패한 plot 문이
+        # 맡은 "실제 화면에 칠하기" 단계까지 못 가서 하나도 안 보이고,
+        # main-plot 마우스 좌표가 "우연히" 살아있는 것처럼 보이는 것도 실은
+        # 이 수정 전 main-state-snapshot 재생 로직이 정상 작동해서가 아니라
+        # 스크립트가 죽기 전 마지막으로 성공한 게 main의 첫 plot이었을
+        # 뿐임(재현 실측으로 확인) - PIP 전체가 이렇게 스크립트를 함께
+        # 죽이는 것보다는, 파일이 없는 걸 미리 걸러내 안전하게 "현재
+        # plot"으로 대체하고 경고만 남기는 게 낫다.
+        if _override_curves and any(
+            not os.path.exists(getattr(_c, "dat_file", "")) for _c in _override_curves
+        ):
+            _pip_name = (plotdef.title or "plot").strip() or "plot"
+            self.warnings.append(
+                f"'{_pip_name}'의 PIP가 참조하는 데이터 파일을 찾을 수 없어(예: 원본 plot의 "
+                f"임시 정렬 캐시가 이미 삭제됨) 현재 plot 자신의 곡선을 대신 보여줍니다 - "
+                f".plt 파일/저장된 plot이 아직 유효한지, 그 원본을 다시 그려서 새로 저장했는지 확인해 주세요."
+            )
+            _override_curves = None
         if _override_curves:
             main_cmd_list = self._curve_cmd_list_for(_override_curves, fmt)
         elif pip.get("source") == "pltfile" and str(pip.get("pltfile_path", "")).strip():
