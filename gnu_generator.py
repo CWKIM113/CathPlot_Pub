@@ -1308,7 +1308,10 @@ class GnuplotGenerator:
         # compact 전용으로 이미 좁혀둔 것과 같은 이유) - 인셋 전용으로 추가
         # 0.75배 축소(포맷 무관하게 항상 적용 - 화면/이미지/인쇄 공통).
         if compact:
-            _legend_tuning = dict(_legend_tuning, row_mult=_legend_tuning["row_mult"] * 0.75)
+            # [수정 - 사용자 보고 버그] "curve간의 세로 간격을 줄여야" - 이전
+            # 0.75배로는 여전히 넓어 보인다는 재확인 - 추가로 0.6배 더 줄임
+            # (결과 0.75*0.6=0.45배).
+            _legend_tuning = dict(_legend_tuning, row_mult=_legend_tuning["row_mult"] * 0.75 * 0.6)
         ROW_LINE_HEIGHT_IN = (font_pt / 72.0) * _legend_tuning["row_mult"]
         ROW_H = ROW_LINE_HEIGHT_IN / max(axis_h_in, 0.3)
         # [수정] 박스 위/아래 내부 여백이 너무 얇아서(0.06) 맨 아래 줄 글자가
@@ -1363,6 +1366,13 @@ class GnuplotGenerator:
         _tic_len_fmt_mult = {"png": 2 / 3, "pdf": 2 / 3, "svg": 0.8 * 0.8}.get((fmt or "").lower(), 1.0)
         TIC_LEN_IN = 1.5 * 0.00615 * font_pt * _tic_len_fmt_mult
         FRAME_GAP_IN = 1.5 * TIC_LEN_IN
+        # [수정 - 사용자 보고 버그] "PIP 인셋 legend가 plot 반 이상을 가림 -
+        # 좌표축 frame과의 간격도 반으로 줄여야" - 위 FRAME_GAP_IN은 main
+        # legend 기준으로 잡힌 값이라, 작은 인셋 안에서는 상대적으로 훨씬
+        # 크게 보임(row_mult/row_margin은 이미 compact 전용으로 좁혀뒀지만
+        # 이 frame-gap은 그때 놓쳤음) - 인셋 전용으로 절반만 쓴다.
+        if compact:
+            FRAME_GAP_IN *= 0.5
         FRAME_MARGIN_X = FRAME_GAP_IN / max(axis_w_in, 0.5)  # plot 테두리(frame)와 박스 사이 가로 간격
         FRAME_MARGIN_Y = FRAME_GAP_IN / max(axis_h_in, 0.3)  # 세로 간격(동일한 물리 거리)
 
@@ -1592,6 +1602,12 @@ class GnuplotGenerator:
             # 여전히 max_label_len을 포함해 체크된 curve/surface 중 가장 긴
             # 라벨 글자 수에 맞춰 자동으로 넓어짐.
             _box_w_extra_chars = _legend_tuning["box_chars"]
+        # [수정 - 사용자 보고 버그] "PIP 인셋 legend의 border와 title 간격도
+        # 줄여야" - main legend 기준 여백이 작은 인셋에서는 상대적으로 크게
+        # 보임 - 인셋 전용으로 대문자 1자만큼 더 좁힌다(box_w는 여전히
+        # 실제 라벨 폭 하한(_box_w_floor 등)으로 잘림 방지가 보장됨).
+        if compact:
+            _box_w_extra_chars -= 1.0
         # [수정] "screen에서도 box line과 title 사이 간격이 너무 큼 - style
         # 길이만큼 줄여야 함" - 실제 화면(windows 터미널) 창을 캡처해서
         # 직접 확인한 결과 여전히 간격이 넓었음. 사용자가 준 정확한 기준대로
