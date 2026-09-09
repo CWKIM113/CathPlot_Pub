@@ -6672,6 +6672,54 @@ class GnuplotGenerator:
                 _main_state_lines += [ln for ln in lines[:plot_idx] if _restorable_id_re.match(ln)]
                 _pip_inset_lines += _main_state_lines
 
+        # [수정 - 사용자 보고 버그, 근본 원인] "PIP(원/타원, 완전불투명)+
+        # Animation에서 'gnuplot이 그래프를 그리지 못하고 바로 종료됨 -
+        # block definition line must end with << EODmarker'로 그림이 아예
+        # 안 그려짐(반짝 그려졌다 사라짐)" - 최소 재현으로 gnuplot 자체의
+        # 제약을 확인함: "$name << EOD ... EOD" 데이터블록 선언은 gnuplot의
+        # do-for/while "{ }" 루프 블록 "안"에서는 아예 지원되지 않는다(단순
+        # 재현 스크립트로도 즉시 같은 에러 발생 - CathPlot 로직과 무관한
+        # gnuplot 자체의 파서 한계). 그런데 위 _pip_inset_lines(=인셋의
+        # $MarkerPipN 데이터블록 선언 + _pip_ellip_ok_y1/y2 함수 정의 포함)
+        # 는 아래에서 _emit_frame()을 통해 do-for 루프 "안"에 그대로
+        # extend되므로, marker가 있는 curve로 원/타원 PIP를 Animation과
+        # 같이 쓰면 항상 이 제약에 걸림(예전엔 인셋이 main의 $MarkerN을
+        # 그대로 재사용해 문제가 없었는데, 이후 인셋 전용 $MarkerPipN을
+        # 새로 만드는 방식으로 바뀌면서 처음 이 제약에 걸리게 됨). 이
+        # 데이터블록/함수 정의는 프레임마다 내용이 달라지지 않는 정적
+        # 값이므로(진행률(thresh) 게이팅은 "using" 절의 조건식으로 이미
+        # 따로 처리됨 - 데이터 자체는 고정), 루프 "밖"(스크립트 최상단,
+        # 아래 while/do-for 시작 전)에서 딱 한 번만 선언하고, 루프 안에서
+        # 반복되는 _pip_inset_lines에서는 이 선언 부분만 제거해 참조("using"
+        # 절에서 이름으로 부르는 것)만 남긴다 - gnuplot 데이터블록/함수는
+        # 한 번 선언하면 이후 전역으로 계속 쓸 수 있으므로 문제없다.
+        if _pip_inset_lines:
+            _pip_static_decl_lines = []
+            _pip_loop_body_lines = []
+            _di = 0
+            while _di < len(_pip_inset_lines):
+                _dln = _pip_inset_lines[_di]
+                _dstripped = _dln.strip()
+                if _dstripped.startswith("$") and " << EOD" in _dstripped:
+                    _block = [_dln]
+                    _di += 1
+                    while _di < len(_pip_inset_lines) and _pip_inset_lines[_di].strip() != "EOD":
+                        _block.append(_pip_inset_lines[_di])
+                        _di += 1
+                    if _di < len(_pip_inset_lines):
+                        _block.append(_pip_inset_lines[_di])
+                        _di += 1
+                    _pip_static_decl_lines.extend(_block)
+                elif _dstripped.startswith(("_pip_ellip_ok_y1(x,y) =", "_pip_ellip_ok_y2(x,y) =")):
+                    _pip_static_decl_lines.append(_dln)
+                    _di += 1
+                else:
+                    _pip_loop_body_lines.append(_dln)
+                    _di += 1
+            if _pip_static_decl_lines:
+                lines.extend(_pip_static_decl_lines)
+            _pip_inset_lines = _pip_loop_body_lines
+
         lines.append("xmin_anim = GPVAL_X_MIN")
         lines.append("xmax_anim = GPVAL_X_MAX")
 
