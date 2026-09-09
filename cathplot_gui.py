@@ -135,7 +135,20 @@ class CathPlotGUI:
         self.root.title("CathPlot V1.0      by C.W.Kim @2026.09.01.")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움
-        self.root.geometry("1200x1030")
+        # [수정 - 사용자 요청] "가로 길이도 flexible하게(노트북에선 가로를
+        # 매번 늘려야 해서 불편함), 상한선은 둬야죠" - 세로(위 required_height)
+        # 와 같은 방식으로 화면 실제 가로 해상도(winfo_screenwidth) 기준으로
+        # 계산한다. [주의] 아래 required_height 옆 "되돌림" 주석 참고 -
+        # winfo_reqwidth()(위젯이 "필요하다"고 보고하는 폭)로 자동 계산했다가
+        # file/var 목록의 가로 스크롤 캔버스가 실제보다 훨씬 작은 값을
+        # 보고해서 우측이 잘리는 심각한 문제가 있었던 전례가 있음 - 이번엔
+        # 그것과 다르게 위젯이 아니라 "실제 모니터 해상도"를 기준으로 삼아서
+        # 그 문제를 그대로 재현하지 않는다(화면이 원래 넓은 PC는 그대로
+        # 1200 상한 그대로 유지 - 요청하신 "상한선"). self.root/self.win_w를
+        # 아래 필요한 곳(재계산되는 두 번째 geometry 호출)에서도 재사용해야
+        # 하므로 인스턴스 속성으로 저장해둔다.
+        self._win_w = max(900, min(1200, self.root.winfo_screenwidth() - 80))
+        self.root.geometry(f"{self._win_w}x1030")
         self.root.tk.call('tk', 'windowingsystem')
 
         # [수정 - 사용자 보고 버그] "맨 마지막 PLOT 버튼 줄이 노트북에선
@@ -147,7 +160,7 @@ class CathPlotGUI:
         # 다 차지해버리면, 정작 이 버튼 줄이 창 높이 밖으로 밀려날 수 있음
         # (화면이 작아 전체 내용이 다 안 들어가는 노트북에서 특히 그럼 -
         # PIP 팝업의 "닫기 버튼 항상 보이게" 수정과 완전히 같은 원인/해법).
-        # Frame 객체 자체와 pack(側="bottom")만 여기서 미리 해두고(공간을
+        # Frame 객체 자체와 pack(side="bottom")만 여기서 미리 해두고(공간을
         # 먼저 예약), 실제 버튼들을 채워 넣는 코드는 원래 위치에 그대로
         # 둔다(이미 pack된 Frame에 나중에 자식 위젯을 추가하는 것은 아무
         # 문제 없음).
@@ -1397,9 +1410,9 @@ class CathPlotGUI:
         # 통째로 잘리는 심각한 문제가 발생함(실측 확인) - file/var 목록이
         # 가로 스크롤 가능한 캔버스라 reqwidth가 실제 필요한 편안한 너비보다
         # 훨씬 작게 잡히는 것으로 추정됨(세로는 이런 스크롤 캔버스가 없어
-        # winfo_reqheight가 문제없이 동작했던 것과 대조적). 자동 계산 대신
-        # 검증된 고정값을 쓰되, "노트북 화면에 맞게 넓혀달라"는 요청으로
-        # 1150 -> 1200으로 조정(초기 self.root.geometry 호출과 동일한 값으로 유지).
+        # winfo_reqheight가 문제없이 동작했던 것과 대조적). 자동 계산(위젯
+        # 기준) 대신 검증된 고정값을 쓰되, "노트북 화면에 맞게 넓혀달라"는
+        # 요청으로 1150 -> 1200으로 조정.
         # [수정 - 사용자 보고 버그] "맨 마지막 PLOT 버튼 줄이 노트북에선
         # 잘려서 나옴(PC 큰 화면은 문제없음)" - required_height는 이 창의
         # "필요한" 높이일 뿐 화면에 실제로 들어가는지는 전혀 고려하지 않아서,
@@ -1411,9 +1424,15 @@ class CathPlotGUI:
         # 실제 화면 높이(winfo_screenheight, 작업표시줄/제목줄 여유로 100px
         # 뺌)를 넘지 않게 상한을 둔다 - 필요한 높이가 이미 화면보다 작으면
         # (PC의 큰 화면) 그대로 그 값을 쓰므로 기존 동작에 영향 없음.
+        # [수정 - 사용자 요청] "가로 길이도 flexible하게, 상한선은 둬야죠"
+        # - 가로는 위 winfo_reqwidth() 대신(그 방식이 실패했던 이유는 이미
+        # 위에서 설명한 대로) __init__ 맨 위에서 실제 화면 가로 해상도 기준
+        # 으로 미리 계산해 저장해 둔 self._win_w(900~1200 사이, PC 큰 화면은
+        # 1200 상한 그대로)를 여기서도 그대로 재사용한다 - 위젯 reqwidth를
+        # 다시 재는 게 아니므로 그 실패를 반복하지 않는다.
         _screen_h = self.root.winfo_screenheight()
         required_height = min(required_height, max(500, _screen_h - 100))
-        self.root.geometry(f"1200x{required_height}")
+        self.root.geometry(f"{self._win_w}x{required_height}")
 
     def _disable_combobox_wheel(self, combo):
         """콤보박스(Color/Style 등) 위에서 마우스 휠을 굴리면 그 콤보박스의 값이
