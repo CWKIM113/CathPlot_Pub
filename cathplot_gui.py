@@ -584,8 +584,20 @@ class CathPlotGUI:
         self.file_canvas.configure(yscrollcommand=self.file_scrollbar.set, xscrollcommand=self.file_hscrollbar.set)
 
         self.file_canvas_frame.pack(side="left", fill="both", expand=True, padx=5, pady=0)
-        self.file_canvas.pack(side="top", fill="both", expand=True)
+        # [수정 - 사용자 재보고] "본래는 가로 scroll이 있었는데.... 아마도
+        # PLOT 버튼 고정하면서부터인지?" - 세로 공간이 부족해질 때, pack은
+        # "먼저 pack된 쪽이 자기 몫을 먼저 차지"하는 방식이라 - 여기서는
+        # expand=True인 canvas가 먼저 pack돼 있어서 남는 공간을 전부 먼저
+        # 가져가고, 그 뒤에 pack되는(=우선순위가 낮은) 가로 스크롤바가
+        # 세로 공간이 부족해지면 화면 밖으로 밀려날 수 있었음(PLOT 버튼을
+        # 고정한 방식과 같은 원인 - 이번엔 그 반대쪽, "가로 스크롤바"가
+        # 희생되고 있었던 것으로 보임). PIP 팝업 닫기 버튼/메인 창 PLOT
+        # 버튼과 같은 방식으로, 가로 스크롤바를 canvas보다 먼저 pack해서
+        # 그 몫을 먼저 확보해둔다(canvas가 나머지를 그만큼 덜 차지하게 됨 -
+        # 시각적으로는 스크롤바가 항상 보이는 대신 canvas 높이가 아주 약간
+        # 줄어들 수 있음, 무시할 수준).
         self.file_hscrollbar.pack(side="bottom", fill="x")
+        self.file_canvas.pack(side="top", fill="both", expand=True)
         self.file_scrollbar.pack(side="right", fill="y")
         self._bind_hscroll_wheel(self.file_canvas)
 
@@ -694,8 +706,12 @@ class CathPlotGUI:
         )
         self.canvas.configure(yscrollcommand=self.scrollbar.set, xscrollcommand=self.hscrollbar.set)
         self.canvas_hframe.pack(side="left", fill="both", expand=True)
-        self.canvas.pack(side="top", fill="both", expand=True)
+        # [수정 - 사용자 재보고] 위 file_hscrollbar와 같은 이유 - 가로
+        # 스크롤바를 canvas보다 먼저 pack해서 세로 공간이 부족해도 항상
+        # 자기 몫을 먼저 확보하게 한다(자세한 설명은 file_hscrollbar 쪽
+        # 주석 참고).
         self.hscrollbar.pack(side="bottom", fill="x")
+        self.canvas.pack(side="top", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
         self._bind_hscroll_wheel(self.canvas)
 
@@ -718,8 +734,16 @@ class CathPlotGUI:
         self.plot_canvas.configure(yscrollcommand=self.plot_scrollbar.set, xscrollcommand=self.plot_hscrollbar.set)
 
         self.plot_canvas_hframe.pack(side="left", fill="both", expand=True)
-        self.plot_canvas.pack(side="top", fill="both", expand=True)
+        # [수정 - 사용자 재보고] "본래는 가로 scroll이 있었는데.... 아마도
+        # PLOT 버튼 고정하면서부터인지?" - 위 file_hscrollbar와 같은 이유 -
+        # 가로 스크롤바를 canvas보다 먼저 pack해서 세로 공간이 부족해도
+        # 항상 자기 몫을 먼저 확보하게 한다(자세한 설명은 file_hscrollbar
+        # 쪽 주석 참고 - "Plot Setting" 섹션 자체는 raw gnuplot/Comment/
+        # Arrow/Circle 입력까지 전부 포함해 다른 두 목록보다 세로로 훨씬
+        # 길어서, 창 높이가 부족해질 때 이 스크롤바가 가장 먼저 밀려날
+        # 위험이 컸던 곳).
         self.plot_hscrollbar.pack(side="bottom", fill="x")
+        self.plot_canvas.pack(side="top", fill="both", expand=True)
         self.plot_scrollbar.pack(side="right", fill="y")
         self._bind_hscroll_wheel(self.plot_canvas)
 
