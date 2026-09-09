@@ -5717,6 +5717,36 @@ class GnuplotGenerator:
         # 이유가 없음.
         _main_state_snapshot = lines[_main_state_start_idx:] if (_pip_on and fmt.lower() == "interactive") else None
 
+        # [수정 - 사용자 제안, 실측으로 근본 원인 확인된 tic 숫자 이중 렌더링
+        # 해결] "PIP를 main보다 나중에 그려서 main 마우스 좌표를 되살리는"
+        # 위 스냅샷 재생 방식은, main을 통째로 두 번(PIP 전/후) 그리는
+        # 셈이라 - 실제 Windows 터미널로 확인한 결과 겹치는 solid 도형
+        # (테두리·곡선)은 문제없지만, tic 숫자 같은 작은 텍스트는 두 번째
+        # 렌더링이 아주 미세하게 어긋나 이중으로 겹쳐 보임(사용자 실측
+        # 스크린샷으로 확인). 사용자 제안("frame만 먼저 그리고 PIP -> main
+        # 순서로 하면 안될까? frame은 겹쳐도 되지만 처음 그릴 땐 투명
+        # 실선으로") 그대로 채택: 전체 구조(main 먼저 그린 뒤 PIP, 그 뒤
+        # 스냅샷으로 main 재생)는 그대로 두되, 이 "첫 번째" main 그리기에서
+        # 텍스트를 그리는 요소(title/xlabel/ylabel/y2label/xtics/ytics/
+        # y2tics - 전부 작은 글자라 이중 렌더링이 눈에 띔)만 "plot \" 직전에
+        # unset해서 이번 한 번은 안 보이게 한다 - 테두리(border)·곡선·grid는
+        # solid 도형이라 그대로 둬도 이중 렌더링이 안 보이므로 손대지 않음
+        # (사용자도 "frame은 겹쳐도 된다"고 확인). PIP 인셋은 이 지점 이후
+        # _find_last_margin으로 margin만 읽어가므로 title/tics를 unset해도
+        # 전혀 영향 없다. 재생(스냅샷, 이미 위에서 안 건드리고 그대로
+        # 캡처해둠)은 원래 값 그대로 title/tics를 다시 set하므로, 최종적으로
+        # 화면에 실제로 "보이는" title/tic 텍스트는 이 재생 한 번뿐이 된다.
+        if _main_state_snapshot is not None:
+            _main_plot_line_idx = next(
+                (i for i in range(_main_state_start_idx, len(lines)) if lines[i].strip() == "plot \\"),
+                None
+            )
+            if _main_plot_line_idx is not None:
+                lines[_main_plot_line_idx:_main_plot_line_idx] = [
+                    "unset title", "unset xlabel", "unset ylabel", "unset y2label",
+                    "unset xtics", "unset ytics", "unset y2tics",
+                ]
+
         _pip_clip_info = None
         if _pip_on:
             # [수정 - 버그(사용자 보고)] "PIP 원/타원(또는 사각형)+부분 반투명
