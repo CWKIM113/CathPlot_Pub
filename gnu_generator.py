@@ -6117,6 +6117,54 @@ class GnuplotGenerator:
             if _pip_blank_line:
                 _insert_before_first_plot(_pip_probe_lines, _pip_blank_line, _main_state_start_idx)
                 self._pip_main_blank_line = None
+                # [추가 - 사용자 재보고 반영] "우클릭 확대는 안 되지만 좌표는
+                # 움직임" - 재생(스냅샷)의 "plot \"을 안 보이는 더미로
+                # 바꿨더니(직전 시도) gnuplot 네이티브 우클릭-드래그 확대가
+                # "마지막 plot 명령"을 그 더미로 다시 실행해 아무것도 안
+                # 바뀌는 회귀가 생겨 되돌림 - 우클릭 확대가 실제 곡선을
+                # 다시 그리려면 "마지막 plot"이 진짜 main 곡선이어야 함.
+                # 대신 이 재생(2차 그리기)의 실제 곡선 "using" 식에, PIP
+                # 자신이 쓰는 것과 같은 _pip_ellip_ok_y1/y2(x,y) 판정
+                # 함수(이미 전역으로 정의돼 있어 재사용 가능)를 반대 조건
+                # (원/타원 "안"이면 NaN, "밖"이면 원래 값)으로 감싸서, 이
+                # 재생이 PIP가 차지한 자리 안쪽은 아예 그리지 않게 한다 -
+                # 진짜 곡선이 그대로 "마지막 plot"이 되어 우클릭 확대도
+                # 정상 동작하면서, 그 곡선이 PIP 위를 덮어버리는 것도 막는다.
+                if _main_state_snapshot is not None:
+                    _snap_plot_idx = next(
+                        (i for i in range(len(_main_state_snapshot)) if _main_state_snapshot[i].strip() == "plot \\"),
+                        None
+                    )
+                    if _snap_plot_idx is not None:
+                        def _ellip_exclude_fn_for(cmd):
+                            return "_pip_ellip_ok_y2" if "axes x1y2" in cmd else "_pip_ellip_ok_y1"
+
+                        def _exclude_ellipse_line(cmd):
+                            _fn = _ellip_exclude_fn_for(cmd)
+
+                            def _wrap(m):
+                                expr, col = m.group(1), m.group(2)
+                                return (
+                                    f"using ({_fn}(({expr}),(${col})) ? (0/0) : ({expr}))"
+                                    f":({_fn}(({expr}),(${col})) ? (0/0) : (${col}))"
+                                )
+                            return re.sub(r"using \(([^)]+)\):(\d+)", _wrap, cmd)
+
+                        def _exclude_ellipse_marker(cmd):
+                            _fn = _ellip_exclude_fn_for(cmd)
+
+                            def _wrap(m):
+                                xcol, ycol = m.group(1), m.group(2)
+                                return (
+                                    f"using ({_fn}((${xcol}),(${ycol})) ? (0/0) : (${xcol}))"
+                                    f":({_fn}((${xcol}),(${ycol})) ? (0/0) : (${ycol}))"
+                                )
+                            return re.sub(r"using (\d+):(\d+)\b", _wrap, cmd)
+
+                        for _i in range(_snap_plot_idx + 1, len(_main_state_snapshot)):
+                            _ln = _exclude_ellipse_line(_main_state_snapshot[_i])
+                            _ln = _exclude_ellipse_marker(_ln)
+                            _main_state_snapshot[_i] = _ln
             if _pip_clip_info is not None and fmt.lower() in ("emf", "eps", "interactive"):
                 # [수정 - 요청] "반투명이 EMF에 불가능하면 50%를 기준으로
                 # 투명/불투명으로 구분" - 항상 완전불투명으로 대체하면, 사용자가
