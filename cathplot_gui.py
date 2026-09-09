@@ -138,6 +138,22 @@ class CathPlotGUI:
         self.root.geometry("1200x1030")
         self.root.tk.call('tk', 'windowingsystem')
 
+        # [수정 - 사용자 보고 버그] "맨 마지막 PLOT 버튼 줄이 노트북에선
+        # 잘려서 나옴(PC 큰 화면은 문제없음)" - 이 버튼 줄(self.button_frame)
+        # 은 원래 아래쪽(__init__ 끝부분, PLOT/SAVE/PRINT 버튼을 채워 넣는
+        # 자리)에서야 비로소 만들고 pack(side="bottom")했는데, Tk의 pack은
+        # "먼저 pack된 쪽이 공간을 먼저 차지"하는 방식이라 - file/var 목록,
+        # Plot Setting 등 그 앞에 먼저 pack되는 훨씬 큰 섹션들이 이미 공간을
+        # 다 차지해버리면, 정작 이 버튼 줄이 창 높이 밖으로 밀려날 수 있음
+        # (화면이 작아 전체 내용이 다 안 들어가는 노트북에서 특히 그럼 -
+        # PIP 팝업의 "닫기 버튼 항상 보이게" 수정과 완전히 같은 원인/해법).
+        # Frame 객체 자체와 pack(側="bottom")만 여기서 미리 해두고(공간을
+        # 먼저 예약), 실제 버튼들을 채워 넣는 코드는 원래 위치에 그대로
+        # 둔다(이미 pack된 Frame에 나중에 자식 위젯을 추가하는 것은 아무
+        # 문제 없음).
+        self.button_frame = ttk.Frame(self.root)
+        self.button_frame.pack(side="bottom", fill="x", padx=10, pady=4)
+
         self.parser = CathenaDatParser()
         self.file_rows = []
         self.comment_list = []
@@ -1268,8 +1284,10 @@ class CathPlotGUI:
         )
         self.raw_gnuplot_text.pack(fill="x", padx=5, pady=3)
 
-        self.button_frame = ttk.Frame(self.root)
-        self.button_frame.pack(side="bottom", fill="x", padx=10, pady=4)
+        # [이동됨] self.button_frame 생성+pack(side="bottom")은 이제 __init__
+        # 맨 위로 옮겨서 다른 섹션보다 먼저 공간을 예약해둠(위 "PLOT 버튼 줄이
+        # 노트북에서 잘림" 수정 참고) - 여기서는 이미 존재하는 그 Frame에
+        # 버튼들만 채워 넣는다.
 
         # [수정 - 재조정] "화면이 눈에 띄게 안 바뀌었다" - ttk.Style의
         # Accent 스타일들은 Windows 기본 테마/일부 환경에서 배경색이 실제로
@@ -1382,6 +1400,19 @@ class CathPlotGUI:
         # winfo_reqheight가 문제없이 동작했던 것과 대조적). 자동 계산 대신
         # 검증된 고정값을 쓰되, "노트북 화면에 맞게 넓혀달라"는 요청으로
         # 1150 -> 1200으로 조정(초기 self.root.geometry 호출과 동일한 값으로 유지).
+        # [수정 - 사용자 보고 버그] "맨 마지막 PLOT 버튼 줄이 노트북에선
+        # 잘려서 나옴(PC 큰 화면은 문제없음)" - required_height는 이 창의
+        # "필요한" 높이일 뿐 화면에 실제로 들어가는지는 전혀 고려하지 않아서,
+        # 노트북처럼 화면이 작으면 이 높이가 화면 세로 해상도보다 커져 창
+        # 아래쪽(PLOT 버튼 줄)이 화면 밖으로 밀려났음(위 button_frame을
+        # 다른 섹션보다 먼저 pack해 공간을 예약해둔 것과 별개로, "창 자체"가
+        # 화면보다 크면 그 예약도 소용없음 - 창이 화면 밖으로 넘쳐버리므로).
+        # PIP 팝업 높이를 화면 해상도에 비례하게 고친 것과 같은 방식으로,
+        # 실제 화면 높이(winfo_screenheight, 작업표시줄/제목줄 여유로 100px
+        # 뺌)를 넘지 않게 상한을 둔다 - 필요한 높이가 이미 화면보다 작으면
+        # (PC의 큰 화면) 그대로 그 값을 쓰므로 기존 동작에 영향 없음.
+        _screen_h = self.root.winfo_screenheight()
+        required_height = min(required_height, max(500, _screen_h - 100))
         self.root.geometry(f"1200x{required_height}")
 
     def _disable_combobox_wheel(self, combo):
