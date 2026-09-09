@@ -6803,9 +6803,14 @@ class CathPlotGUI:
                         _err_detail = generator.last_process.stderr.read().decode("utf-8", errors="ignore").strip()
                 except Exception:
                     _err_detail = ""
-                _msg = "gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n축 설정이나 데이터 범위를 확인해주세요."
+                # [수정 - 사용자 보고, 2D PLOT 메시지와 동일하게 개선] 실제
+                # 오류 내용을 잡았으면 그 사실 그대로만 보여주고(축 설정/
+                # 데이터 범위와 무관한 원인일 때 오해를 줄 수 있음), 못
+                # 잡았을 때만 기존 추정 문구를 대신 보여준다.
                 if _err_detail:
-                    _msg += f"\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
+                    _msg = f"gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
+                else:
+                    _msg = "gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n축 설정이나 데이터 범위를 확인해주세요."
                 messagebox.showwarning("3D Plot", _msg)
                 generator.last_process = None
             elif getattr(generator, "last_anim_ctrl_path", None):
@@ -8442,9 +8447,17 @@ class CathPlotGUI:
                             _err_detail = generator.last_process.stderr.read().decode("utf-8", errors="ignore").strip()
                     except Exception:
                         _err_detail = ""
-                    _msg = "gnuplot이 그래프를 그리지 못하고 바로 종료됐습니다.\n축 설정(특히 Log Scale)이나 데이터 범위를 확인해주세요."
+                    # [수정 - 사용자 보고] "메시지 중 축설정(log scale, data
+                    # 범위) 등은 유효하지 않는 메시지로 보임" - PIP+Animation
+                    # EOD 크래시처럼 실제 원인이 축 설정/데이터 범위와 전혀
+                    # 무관한 경우에도 이 문구가 항상 붙어서 오해를 줬음 -
+                    # gnuplot의 실제 오류 내용(_err_detail)을 잡았으면 그
+                    # 사실 그대로만 보여주고, 못 잡았을 때만(추측할 단서가
+                    # 그것뿐이므로) 기존의 일반적인 추정 문구를 대신 보여준다.
                     if _err_detail:
-                        _msg += f"\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
+                        _msg = f"gnuplot이 그래프를 그리지 못하고 바로 종료됐습니다.\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
+                    else:
+                        _msg = "gnuplot이 그래프를 그리지 못하고 바로 종료됐습니다.\n축 설정(특히 Log Scale)이나 데이터 범위를 확인해주세요."
                     messagebox.showwarning("PLOT", _msg)
                     generator.last_process = None
                 elif getattr(generator, "last_anim_ctrl_path", None):
