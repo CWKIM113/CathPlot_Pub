@@ -2996,17 +2996,64 @@ class CathPlotGUI:
         _opac_trace_id = self.pip_opacity_var.trace_add("write", _on_opacity_change)
         _on_opacity_change()
 
+        # [수정 - 사용자 보고 버그] "PIP 옵션(데이터 소스)을 바꿔도 Plot/X/Y1/
+        # Y2 Title 입력칸이 안 바뀌고 맨 처음 고른 소스의 값 그대로 남음 -
+        # 심지어 '현재 plot'으로 되돌려도 그대로임" - 위 title 기본값 채우기
+        # (_pip_default_titles)는 이 팝업을 "여는 시점"에 한 번만 실행되고,
+        # 그마저도 "비어있을 때만" 채워서, 이미 한 번 채워진 뒤에는 팝업을
+        # 닫지 않고 소스(라디오버튼/이미 그려진 plot 콤보/plt 파일)만 바꾸면
+        # 전혀 갱신이 안 됐음 - source/cached_name/pltfile_path 중 하나라도
+        # 바뀔 때마다 title을 그 새 소스 기준으로 다시(무조건) 채운다.
+        # [수정 - 사용자 보고 버그, 근본 원인] "PIP를 원/사각형 어느 쪽으로
+        # 그려도 창에 안 나타남(좌표는 나타남 - 그림이 하나뿐이라는 뜻)" -
+        # Y1/Y2 확대 구간(pip_ymin_var 등)도 같은 문제를 갖고 있었음: 한 번
+        # 다른 소스(.plt 파일/이미 그려진 plot)에서 자동으로 채워지면
+        # (_pip_autofill_range) 그 뒤 소스를 바꿔도 "이미 값이 있으니"
+        # 그대로 안 지워졌음 - 예를 들어 .plt 파일 소스에서 Y2가 -252~128로
+        # 자동 채워진 뒤 소스를 "현재 plot"(실제 Y2 범위가 0~30대)으로
+        # 바꾸면, 그 낡은(-252~128) 범위가 그대로 남아있어 원/타원 클리핑이
+        # 그 범위를 기준으로 계산되면서 실제 곡선이 전부 그 범위 밖으로
+        # 밀려나 인셋 안이 사실상 텅 비어 보였던 것(그림이 없으니 클리핑
+        # 경계도 못 그려 완전히 안 보임) - source가 바뀔 때마다 Y1/Y2
+        # min/max를 일단 비운 뒤 새 소스 기준으로 다시 자동 채움.
+        def _pip_source_changed(*_args):
+            _t, _xl, _yl, _y2l = self._pip_default_titles()
+            self.pip_title_text_var.set(_t)
+            self.pip_xlabel_text_var.set(_xl)
+            self.pip_ylabel_text_var.set(_yl)
+            self.pip_y2label_text_var.set(_y2l)
+            _tmp_pip = {
+                "source": self.pip_source_var.get(),
+                "cached_name": self.pip_cached_name_var.get(),
+                "pltfile_path": self.pip_pltfile_path_var.get(),
+                "ymin": "", "ymax": "", "y2min": "", "y2max": "",
+            }
+            self._pip_autofill_range(_tmp_pip)
+            self.pip_ymin_var.set(_tmp_pip.get("ymin") or "")
+            self.pip_ymax_var.set(_tmp_pip.get("ymax") or "")
+            self.pip_y2min_var.set(_tmp_pip.get("y2min") or "")
+            self.pip_y2max_var.set(_tmp_pip.get("y2max") or "")
+
+        _src_trace_id = self.pip_source_var.trace_add("write", _pip_source_changed)
+        _cached_trace_id = self.pip_cached_name_var.trace_add("write", _pip_source_changed)
+        _pltfile_trace_id = self.pip_pltfile_path_var.trace_add("write", _pip_source_changed)
+
         # [수정 - 버그] "PIP 팝업을 열었다 닫았다 반복하면 trace 콜백이 계속
-        # 쌓임" - 위 두 trace_add(clip_shape/opacity)는 dlg가 닫혀도 tk 변수
-        # 쪽에 그대로 남아있어서, 팝업을 닫은 뒤 이 tk 변수가 다시 바뀌면
-        # (Template Load, 팝업 재실행 등) 이미 파괴된 위젯(clip_rx_entry/
-        # opac_value_lbl)을 건드리려다 TclError가 나고, 팝업을 열 때마다
-        # 죽은 콜백이 계속 누적됨(실측으로 재현·확인) - 팝업이 닫힐 때 이
-        # 세션의 trace만 제거한다.
+        # 쌓임" - 위 trace_add들은 dlg가 닫혀도 tk 변수 쪽에 그대로 남아있어서,
+        # 팝업을 닫은 뒤 이 tk 변수가 다시 바뀌면(Template Load, 팝업 재실행
+        # 등) 이미 파괴된 위젯(clip_rx_entry/opac_value_lbl)을 건드리려다
+        # TclError가 나고, 팝업을 열 때마다 죽은 콜백이 계속 누적됨(실측으로
+        # 재현·확인) - 팝업이 닫힐 때 이 세션의 trace만 제거한다.
         def _cleanup_pip_dialog_traces(event):
             if event.widget is not dlg:
                 return
-            for _var, _tid in ((self.pip_clip_shape_var, _clip_trace_id), (self.pip_opacity_var, _opac_trace_id)):
+            for _var, _tid in (
+                (self.pip_clip_shape_var, _clip_trace_id),
+                (self.pip_opacity_var, _opac_trace_id),
+                (self.pip_source_var, _src_trace_id),
+                (self.pip_cached_name_var, _cached_trace_id),
+                (self.pip_pltfile_path_var, _pltfile_trace_id),
+            ):
                 try:
                     _var.trace_remove("write", _tid)
                 except tk.TclError:
