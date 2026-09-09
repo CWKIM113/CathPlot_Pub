@@ -382,25 +382,31 @@ MARKER_SIZE_SCALE = {1: 1.8}
 # 처럼 여러 도형을 작게 축소해서 나란히 볼 때 특히 두드러짐) - 원 기준
 # (23/29 ≈ 0.79)으로 세모류 pointtype만 ps를 줄여 시각적 크기를 맞춘다.
 MARKER_NATIVE_PS_SCALE = {8: 23 / 29, 9: 23 / 29, 10: 23 / 29, 11: 23 / 29}
-# [추가 - 사용자 보고 버그] "마커를 보면(in-plot, main-plot 모두) legend와
-# 커브 상에서도 중심보다 약간 위에 있는데 이를 중심에 맞게 보정해줘요" -
-# 실제 gnuplot으로 원/네모/세모를 기준선 위에 같은 ps로 그려 픽셀로 직접
-# 측정한 결과: 원(pt6)·네모(pt4)는 기준선에 정확히 맞았지만 위세모(pt8/9)
-# 만 시각적 중심(bounding box 중심)이 기준선보다 위로 보였음 - 기하학적
-# 원인: 세모는 무게중심(gnuplot이 점을 "찍는" 기준)이 밑변에서 전체
-# 높이의 1/3 지점에 있어 bbox 중심(1/2 지점)보다 낮은데, 그 결과 bbox
-# 중심(눈에 보이는 "중심")은 항상 무게중심(=실제 데이터 좌표)보다 위에
-# 위치하게 됨(아래세모는 반대로 무게중심이 위쪽에 있어 bbox 중심이
-# 항상 아래에 위치) - 좌우 세모(◁▷)는 이 어긋남이 가로 방향이라 세로
-# 중심에는 영향 없음(실측: 기준선에 정확히 맞았음). "with points"는
-# 폰트 offset 같은 보정 수단이 없어, 표시할 Y값 자체를 이 어긋남만큼
-# 미리 살짝 이동시켜 찍는 것으로 보정한다(실제 데이터/곡선 값은 그대로,
-# $Marker 전용 보조 데이터블록에만 적용되므로 곡선 자체나 마우스 좌표
-# 등에는 영향 없음) - 위세모(8,9)는 아래로, 아래세모(10,11)는 위로.
-# 축의 실제 범위(ymax-ymin)에 비례한 비율로 둬서 확대/축소와 무관하게
-# 항상 비슷한 픽셀 크기의 보정이 되게 한다(Auto Range라 범위를 미리 알
-# 수 없는 경우는 안전하게 보정을 생략함).
-MARKER_Y_SHIFT_FRAC = {8: -0.012, 9: -0.012, 10: 0.012, 11: 0.012}
+# [추가 - 사용자 보고 버그, 재보고로 재보정] "마커를 보면(in-plot,
+# main-plot 모두) legend와 커브 상에서도 중심보다 약간 위에 있는데 이를
+# 중심에 맞게 보정해줘요" - 실제 gnuplot으로 원/네모/세모를 기준선 위에
+# 같은 ps로 그려 픽셀로 직접 측정한 결과: 원(pt6)·네모(pt4)는 기준선에
+# 정확히 맞았지만 위세모(pt8/9)만 bbox 중심이 기준선보다 위로, 아래세모
+# (pt10/11)는 반대로 아래로 보였음 - 기하학적 원인: 세모는 무게중심
+# (gnuplot이 점을 "찍는" 기준)이 밑변에서 전체 높이의 1/3 지점에 있어
+# bbox 중심(1/2 지점)과 어긋남(그 차이는 항상 "높이의 1/6" - 삼각형
+# 기하의 고정 비율) - 좌우 세모(◁▷)는 이 어긋남이 가로 방향이라 세로
+# 중심에는 영향 없음(실측 확인).
+# [수정 - 사용자 재보고] "세모 상하가 중심선과 서로 다름" - 처음 보정
+# (ps와 무관한 고정 축 비율)은 우연히 맞았던 한 ps 값에서만 맞고 다른
+# ps(marker 크기)에서는 어긋남이 재현됨 - 실제 원인은 위 "높이의 1/6"
+# 어긋남이 marker 크기(ps)에 비례하는데, 축 비율만으로는 이 비례관계를
+# 전혀 반영 못 했던 것(같은 축 범위에서도 ps가 커지면 필요한 보정량도
+# 커져야 함). ps=10으로 크게 그려 실측(픽셀로 직접 측정)한 결과 세모
+# 높이는 ps당 약 6px, bbox중심<->무게중심 어긋남은 그 1/6인 ps당 약
+# 1.075px로 확인 - 화면(1000x700 고정 캔버스)의 전형적인 main-plot axis
+# 높이(약 524px, tmargin/bmargin 기본값 기준)로 나눠 "ps와 축 범위 모두에
+# 비례"하는 최종 계수를 얻음(1.075/524 ≈ 0.00205). PIP 인셋처럼 axis
+# 높이가 다른 경우엔 정확도가 다소 떨어질 수 있으나(그래도 인셋 자신의
+# ps도 같이 작아지므로 어느 정도 상쇄됨), 화면 출력(fmt=="interactive")
+# 에만 적용하고 이미지/인쇄 출력에는 적용하지 않는다(그쪽은 캔버스
+# 크기/DPI 가정 자체가 달라 이 계수가 안 맞음 - 별도 검증 필요).
+MARKER_Y_SHIFT_PER_PS = {8: -0.00205, 9: -0.00205, 10: 0.00205, 11: 0.00205}
 
 #----------------------------------------------------------
 # Interactive
@@ -894,17 +900,22 @@ class GnuplotGenerator:
         selected.sort(key=lambda p: p[0])
         return selected
 
-    def _marker_y_shift_for_curve(self, plotdef, marker_shape, is_y2):
-        """[추가 - 사용자 보고 버그] 위 MARKER_Y_SHIFT_FRAC 참고 - 세모류
-        marker(8/9/10/11)를 실제 데이터 좌표보다 살짝 위/아래로 옮겨 찍어서
-        bbox 중심이 눈에 보이는 "중심"이 되게 보정한다. 이 curve가 속한
-        축(Y1/Y2)의 "구체적인 숫자" 범위를 알아야 비율을 계산할 수 있는데
+    def _marker_y_shift_for_curve(self, plotdef, marker_shape, is_y2, ps, fmt):
+        """[추가 - 사용자 보고 버그, 재보고로 재보정] 위 MARKER_Y_SHIFT_PER_PS
+        참고 - 세모류 marker(8/9/10/11)를 실제 데이터 좌표보다 살짝 위/아래로
+        옮겨 찍어서 bbox 중심이 눈에 보이는 "중심"이 되게 보정한다. 어긋남은
+        실제 렌더링되는 marker 크기(ps)에 비례하므로 ps를 반드시 받아 곱해야
+        하고(안 그러면 "한 ps에서만 우연히 맞는" 재현된 버그가 다시 생김),
+        이 curve가 속한 축(Y1/Y2)의 "구체적인 숫자" 범위도 알아야 하는데
         (Auto Range면 이 시점엔 아직 확정되지 않음) - plotdef가 수동으로
         지정해둔 범위(yauto/y2auto=False일 때의 ymin/ymax)가 있을 때만
         보정하고, Auto면 안전하게 보정을 생략한다(잘못된 추정치로 마커가
-        더 어긋나는 것보다 "보정 없음"이 항상 더 안전함)."""
-        frac = MARKER_Y_SHIFT_FRAC.get(marker_shape)
-        if not frac:
+        더 어긋나는 것보다 "보정 없음"이 항상 더 안전함). 화면(interactive)
+        전용 계수라 그 외 포맷은 보정을 생략한다."""
+        if (fmt or "").lower() != "interactive":
+            return 0.0
+        per_ps = MARKER_Y_SHIFT_PER_PS.get(marker_shape)
+        if not per_ps:
             return 0.0
         if is_y2:
             auto, lo, hi = getattr(plotdef, "y2auto", True), getattr(plotdef, "y2min", ""), getattr(plotdef, "y2max", "")
@@ -913,7 +924,7 @@ class GnuplotGenerator:
         if auto or not str(lo).strip() or not str(hi).strip():
             return 0.0
         try:
-            return frac * (float(hi) - float(lo))
+            return per_ps * ps * (float(hi) - float(lo))
         except (TypeError, ValueError):
             return 0.0
 
@@ -3314,7 +3325,8 @@ class GnuplotGenerator:
                 effective_shared_range = None if is_manual_count else shared_x_range
                 marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, is_log_x, shared_x_range=effective_shared_range)
                 if marker_pts:
-                    _y_shift = self._marker_y_shift_for_curve(plotdef, marker_shape, is_y2)
+                    marker_size = getattr(curve, "marker_size", 1.0) * line_scale * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
+                    _y_shift = self._marker_y_shift_for_curve(plotdef, marker_shape, is_y2, marker_size, fmt)
                     if _y_shift:
                         marker_pts = [(px, py + _y_shift) for px, py in marker_pts]
                     dbname = f"$Marker{i}"
@@ -3323,7 +3335,6 @@ class GnuplotGenerator:
                     block.append("EOD")
                     marker_datablocks.append(block)
 
-                    marker_size = getattr(curve, "marker_size", 1.0) * line_scale * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
                     marker_cmd = f'{dbname} using 1:2 notitle axes {axis} with points pt {_fmt_pointtype(marker_shape)} ps {marker_size}'
                     if color: marker_cmd += f' lc rgb "{color}"'
                     cmd_list.append(marker_cmd)
@@ -3444,16 +3455,19 @@ class GnuplotGenerator:
                 target = curve.marker_max_count if is_manual_count else 25
                 marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, False)
                 if marker_pts:
-                    # [추가 - 사용자 보고 버그] 위 MARKER_Y_SHIFT_FRAC/
-                    # _marker_y_shift_for_curve 참고 - override curve(PIP
-                    # 인셋 등)에도 main과 동일한 세모 marker 중심 보정을
-                    # 적용한다(y_range/y2_range로 넘겨받은 구체적 범위가
-                    # 있을 때만 - 없으면 안전하게 생략).
+                    marker_size = getattr(curve, "marker_size", 1.0) * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
+                    # [추가 - 사용자 보고 버그, 재보고로 재보정] 위
+                    # MARKER_Y_SHIFT_PER_PS/_marker_y_shift_for_curve 참고 -
+                    # override curve(PIP 인셋 등)에도 main과 동일한 세모
+                    # marker 중심 보정을 적용한다(y_range/y2_range로
+                    # 넘겨받은 구체적 범위가 있을 때만, 실제 렌더링되는
+                    # ps에 비례해서 - 없으면/생략되면 안전하게 보정 없음).
                     _rng = y2_range if is_y2 else y_range
-                    _shift_frac = MARKER_Y_SHIFT_FRAC.get(marker_shape)
-                    if _shift_frac and _rng and _rng[0] not in (None, "") and _rng[1] not in (None, ""):
+                    _per_ps = MARKER_Y_SHIFT_PER_PS.get(marker_shape)
+                    if (_per_ps and fmt and fmt.lower() == "interactive"
+                            and _rng and _rng[0] not in (None, "") and _rng[1] not in (None, "")):
                         try:
-                            _y_shift = _shift_frac * (float(_rng[1]) - float(_rng[0]))
+                            _y_shift = _per_ps * marker_size * (float(_rng[1]) - float(_rng[0]))
                         except (TypeError, ValueError):
                             _y_shift = 0.0
                         if _y_shift:
@@ -3463,7 +3477,6 @@ class GnuplotGenerator:
                     block.extend(f"{px:.10g} {py:.10g}" for px, py in marker_pts)
                     block.append("EOD")
                     lines.extend(block)
-                    marker_size = getattr(curve, "marker_size", 1.0) * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
                     marker_cmd = f'{dbname} using 1:2 notitle axes {axis} with points pt {_fmt_pointtype(marker_shape)} ps {marker_size}'
                     if color:
                         marker_cmd += f' lc rgb "{color}"'
