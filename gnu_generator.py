@@ -365,8 +365,23 @@ MARKER_Y_OFFSET = {8: 0.08, 9: 0.08, 10: 0.10, 11: 0.18}
 MARKER_Y_OFFSET_SCREEN = {8: 0.05, 9: 0.00, 10: -0.15, 11: -0.10}  # 위쪽 세모(8,9) 추가로 더 내림(동일 폭만큼 재조정)
 # 위와 같은 이유로, 기호별 em-box 잉크 크기 차이를 보정하는 폰트 크기 배율
 # (1.0=그대로). "+"(pointtype 1)는 원/사각형/별표보다 훨씬 얇고 작게 그려져서
-# 눈에 띄게 작아 보인다는 피드백으로 확대.
+# 눈에 띄게 작아 보인다는 피드백으로 확대. [주의] 이 dict는 legend 안
+# 유니코드 글자 기호(MARKER_SYMBOL_MAP, "with points"가 아니라 폰트로
+# 그리는 별개 경로)에만 쓰인다 - 실제 curve 위 marker(gnuplot 네이티브
+# "with points pt N ps ...")의 크기 보정은 아래 MARKER_NATIVE_PS_SCALE로
+# 완전히 분리돼 있다(두 렌더링 경로 자체가 다르므로 보정값도 서로 다름).
 MARKER_SIZE_SCALE = {1: 1.8}
+# [추가 - 사용자 보고 버그, 실측으로 확인] "PIP 붉은 세모 marker 크기가
+# main-plot과 거의 동일한데(PIP legend 안에서는 작게 나옴), 검은 원
+# marker는 줄어든 듯" - 실제 gnuplot 네이티브 pointtype을 같은 ps=3으로
+# 나란히 그려 픽셀로 직접 측정한 결과: 원(pt 6/7)은 23x23px인데 세모
+# (pt 8/9/10/11)는 29x20px로 폭이 약 26% 더 넓게 그려짐(정사각형 pt4/
+# 사다리꼴 pt12는 23x21px로 원과 거의 같음 - 세모만 유독 넓음). curve
+# marker_size 계산은 지금까지 이 도형별 차이를 전혀 보정하지 않아서,
+# 같은 marker_size를 줘도 세모가 원보다 시각적으로 더 크게 보였음(PIP
+# 처럼 여러 도형을 작게 축소해서 나란히 볼 때 특히 두드러짐) - 원 기준
+# (23/29 ≈ 0.79)으로 세모류 pointtype만 ps를 줄여 시각적 크기를 맞춘다.
+MARKER_NATIVE_PS_SCALE = {8: 23 / 29, 9: 23 / 29, 10: 23 / 29, 11: 23 / 29}
 
 #----------------------------------------------------------
 # Interactive
@@ -3246,7 +3261,7 @@ class GnuplotGenerator:
                     block.append("EOD")
                     marker_datablocks.append(block)
 
-                    marker_size = getattr(curve, "marker_size", 1.0) * line_scale
+                    marker_size = getattr(curve, "marker_size", 1.0) * line_scale * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
                     marker_cmd = f'{dbname} using 1:2 notitle axes {axis} with points pt {_fmt_pointtype(marker_shape)} ps {marker_size}'
                     if color: marker_cmd += f' lc rgb "{color}"'
                     cmd_list.append(marker_cmd)
