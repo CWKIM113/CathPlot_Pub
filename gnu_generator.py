@@ -923,10 +923,53 @@ class GnuplotGenerator:
                 if best_d is None or d < best_d:
                     best_i, best_d = i, d
             if best_i is not None and best_i not in used_idx:
+                # [추가 - 사용자 보고 버그] "노이즈가 심한 curve에서 marker가
+                # curve 선에서 떨어져 보임(spline은 확인했으니 문제 아님) -
+                # 1~2개 정도 앞뒤로 이동해 가급적 선에 붙게" - "target x에
+                # 가장 가까운 실제 데이터 점"만 보고 고르다 보니, 노이즈가
+                # 심한 구간에서는 그 점이 우연히 바로 앞뒤 이웃과 크게
+                # 동떨어진 국소 튐(spike)일 수 있음 - smooth csplines는
+                # 그 점을 수학적으로는 정확히 지나가지만, 그 주변 구간
+                # 전체가 그 튐 때문에 요동쳐서 "선에서 떨어져 보이는" 시각
+                # 효과가 남음. target x와 가장 가까운 점 대신, 그 앞뒤
+                # window(최대 2칸) 안에서 "바로 옆 이웃 두 점의 평균값과
+                # 가장 비슷한(덜 튀는)" 점으로 살짝 옮겨서 눈에 보이는 선
+                # 흐름에 더 잘 붙게 한다.
+                best_i = self._refine_marker_index(pts, best_i, used_idx)
                 used_idx.add(best_i)
                 selected.append(pts[best_i])
         selected.sort(key=lambda p: p[0])
         return selected
+
+    def _refine_marker_index(self, pts, idx, used_idx, window=2):
+        """[추가 - 사용자 요청] 위 _select_marker_points 참고 - target x에
+        가장 가까운 점(idx) 앞뒤 최대 window칸 안에서, 바로 옆 이웃 두 점의
+        평균값과 가장 비슷한(=국소적으로 덜 튀는) 점을 찾아 그쪽으로 대신
+        선택한다. idx 자신도 그 평균과 비교해 기준으로 삼으므로, 이미
+        충분히 "안 튀는" 점이면 그대로 유지된다(불필요하게 옮기지 않음).
+        "Data가 적은 경우는 예외"(요청) - 이웃 두 점을 볼 수 있을 만큼
+        데이터가 충분하지 않으면(전체 점 개수가 window 기준 최소치 미만)
+        원래 idx를 그대로 반환한다."""
+        n = len(pts)
+        if n < 2 * window + 3:
+            return idx
+        lo = max(1, idx - window)
+        hi = min(n - 2, idx + window)
+        if lo > hi:
+            return idx
+
+        def _local_deviation(j):
+            return abs(pts[j][1] - (pts[j - 1][1] + pts[j + 1][1]) / 2.0)
+
+        best_j = idx if (lo <= idx <= hi and idx not in used_idx) else None
+        best_dev = _local_deviation(idx) if best_j is not None else None
+        for j in range(lo, hi + 1):
+            if j == idx or j in used_idx:
+                continue
+            dev = _local_deviation(j)
+            if best_dev is None or dev < best_dev:
+                best_j, best_dev = j, dev
+        return best_j if best_j is not None else idx
 
     def _marker_y_shift_for_curve(self, plotdef, marker_shape, is_y2, ps, fmt):
         """[추가 - 사용자 보고 버그, 재보고로 재보정] 위 MARKER_Y_SHIFT_PER_PS
@@ -2004,18 +2047,27 @@ class GnuplotGenerator:
                 # 보일 수 있어(이전에 이미 한 번 고쳤던 "legend와 curve
                 # marker 크기가 다르다" 문제 재발 방지) 같은 배율을 곱한다
                 # (텍스트 자체 크기(font_pt)는 안 건드림 - 가독성 유지).
-                symbol_pt = _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0) * marker_size_factor
-                # [수정 - 사용자 보고 버그] "in-plot legend에 marker가 안
-                # 보임" - 텍스트 라벨(바로 아래)은 너무 작아지지 않도록
-                # 최소 5pt 하한을 이미 두고 있는데, 마커 기호(유니코드 글자
-                # 로 찍음)에는 이 하한이 빠져 있었음 - PIP 인셋(compact)
-                # legend처럼 font_pt 자체가 많이 줄어드는 상황에서 symbol_pt
-                # 가 0~1pt까지 내려가 사실상 안 보이게 됨. 같은 최소 하한을
-                # 적용한다.
+                # [수정 - 사용자 보고 버그, 전체 재검토] "in-plot curve의
+                # 마커 크기가 shape마다 legend 대비 제각각임(원은 legend보다
+                # 작게, 세모는 legend보다 크게)" - 근본 원인: 이 기호는
+                # marker_size_factor를 곱한 뒤 아래에서 "절대 pt 하한(5)"으로
+                # 눌렀는데, curve 쪽 marker(ps, _render_pip_inset의
+                # _marker_ps_scale)는 "원래 크기 대비 최소 30% 비율" 하한을
+                # 쓴다 - 서로 다른 종류의 하한(절대값 vs 비율)이라, 작은
+                # 인셋에서 어느 한쪽만 먼저 하한에 걸리면(도형마다 원래
+                # 크기가 달라 하한에 걸리는 시점도 달라짐) 도형별로 legend
+                # 대비 curve 크기가 서로 다른 방향/정도로 어긋났음. curve와
+                # 같은 "최소 30% 비율" 하한으로 통일한다(marker_size_factor
+                # 자체를 0.3 밑으로는 안 내려가게) - 그래도 극단적으로 작은
+                # 경우를 대비해 최후 판독 안전장치로 3pt 절대 하한만 남긴다
+                # (이전 5pt보다 낮춤 - 5pt 자체가 비율 하한과 어긋나는 또
+                # 다른 기준점이 되지 않도록).
+                symbol_pt = _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0) * max(marker_size_factor, 0.3)
+                symbol_pt = max(symbol_pt, 3.0)
                 lines.append(
                     f'set label {id_offset + 5000 + row_i + 1} "{MARKER_SYMBOL_MAP[marker_shape]}" '
                     f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front '
-                    f'font "{font_name},{max(int(round(symbol_pt)), 5)}" textcolor rgb "{color}"'
+                    f'font "{font_name},{max(int(round(symbol_pt)), 3)}" textcolor rgb "{color}"'
                 )
             lbl_text, lbl_enh = self._render_text(curve.title)
             lines.append(
