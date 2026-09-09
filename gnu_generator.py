@@ -4874,6 +4874,31 @@ class GnuplotGenerator:
             _grid_lw = max(_border_lw0 * font_scale * 0.7, 0.3)
             lines.append(f'{_grid_axes} lw {_grid_lw:.3f} dashtype "." , lw {_grid_lw:.3f} dashtype "."')
 
+        # [추가 - 사용자 보고 버그, 실측(pngcairo)으로 근본 원인 확인] "원/타원
+        # PIP가 불투명인데 화면엔 투명하게(경계선만) 보임 - main 곡선이
+        # 그대로 비쳐 보임" - 재현·isolate 결과: 위에서 선언한 "behind" 흰색
+        # 배경 오브젝트(id 7100) 자체는 정상이지만(단순한 curve로 바로 아래에
+        # 이 인셋 자신의 "plot \" 하나만 있으면 정상적으로 main을 가림),
+        # 이 인셋의 실제 곡선이 원/타원 클리핑을 위해 "값 ? 값 : (0/0)"
+        # 식으로 NaN을 끼워 넣는 조건부 using 식(_wrap_ellipse_line/_func/
+        # _marker, 아래)을 쓰는 게 문제였음 - 그 "plot \" 안의 데이터에 NaN이
+        # 섞여 있으면(정상 구간과 NaN 구간이 번갈아 나오는 형태), cairo가
+        # 그 호출에서는 "behind" 오브젝트를 캔버스에 합성하지 않고 건너뛰어
+        # 버림(NaN이 전혀 없는 동일 곡선으로 바꾸면 문제가 사라지는 것으로
+        # 직접 재현·확인 - gnuplot/cairo의 렌더링 특성으로 보임, CathPlot
+        # 코드 자체의 논리 오류는 아님). 해결: NaN이 전혀 없는 아주 단순한
+        # "준비운동" plot(전체 y1 구간 안의 상수값 하나, 배경과 같은 흰색이라
+        # 어차피 안 보임)을 이 인셋의 진짜 "plot \" 바로 앞에 별도 명령으로
+        # 한 번 먼저 실행해서, "behind" 배경이 확실히 캔버스에 합성되게 한
+        # 뒤에 진짜(NaN 섞인) 곡선을 그 위에 겹쳐 그린다(이 인셋의 origin/
+        # size가 이미 작은 박스로 좁혀져 있어 이 준비운동 plot도 그 박스
+        # 안에서만 그려짐 - 박스 네 꼭짓점은 항상 타원 안쪽이라 밖으로 삐져
+        # 나올 일도 없다). rect 클리핑은 이 NaN 감싸기 자체를 안 쓰므로
+        # (축 박스 자체가 클리핑 역할) 이 문제와 무관해 대상에서 제외.
+        if _ellipse_fully_opaque:
+            _warmup_y = sum(_yr) / 2.0 if _yr else 0.0
+            lines.append(f'plot {_warmup_y:.6g} notitle with lines lc rgb "white"')
+
         lines.append("plot \\")
         for i, cmd in enumerate(_inset_cmd_list):
             if i != len(_inset_cmd_list) - 1:

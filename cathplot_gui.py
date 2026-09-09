@@ -2841,15 +2841,65 @@ class CathPlotGUI:
         # [수정 - 사용자 요청] "PIP 입력창 세로길이를 2줄 정도 줄여줘요" -
         # 위에서 키운 뒤로 아래쪽에 여백이 남아 보인다는 피드백 - 한 줄을
         # 위와 같은 기준(약 27px)으로 잡아 2줄분(약 55px) 줄임(650 -> 595).
-        dlg.geometry("760x595")
+        # [수정 - 사용자 재요청] "PIP 입력화면을 3줄 더 키워줘요. 닫기 버튼은
+        # 맨 아래에 항상 보이게" - 세로 길이를 계속 조금씩 늘렸다 줄였다 해온
+        # 이력(540->650->595) 자체가, 화면(특히 사용자의 노트북처럼 작은
+        # 화면)마다 실제로 필요한 높이가 달라 고정 숫자로는 근본적으로 못
+        # 맞춘다는 뜻 - 이번엔 숫자만 또 조정하는 대신 구조를 바꾼다: 닫기
+        # 버튼(btn_row)을 본문보다 먼저, dlg에 직접 side="bottom"으로 pack해
+        # 공간을 먼저 확보하고(그래야 본문이 넘쳐도 밀려나지 않고 항상 보임),
+        # 나머지 본문 전체를 Canvas+Scrollbar로 감싸 화면이 작아 다 안
+        # 들어가도 마우스 휠로 스크롤해서 볼 수 있게 한다(이러면 높이 숫자
+        # 자체는 더 이상 "잘림"의 원인이 아니게 됨 - 초기 크기 기준으로 3줄
+        # (~83px)만 더 키워 스크롤이 거의 필요 없게 함: 595 -> 680).
+        dlg.geometry("760x680")
 
         # [수정 - 요청] "팝업 안의 PIP 사용 체크박스는 없애고, 메인 창 PIP
         # 버튼 앞 체크박스 하나로 통일" - 여기 있던 중복 체크박스 제거
         # (self.pip_enabled_var는 메인 창에서 이미 켜져 있는 상태로 이 팝업이
         # 열림 - _open_pip_dialog_and_enable 참고).
 
+        # [추가 - 사용자 요청] "닫기 버튼은 맨 아래에 항상 보이게" - 본문
+        # (스크롤 영역)보다 먼저 dlg에 직접 pack(side="bottom")해서 세로
+        # 공간을 먼저 확보한다(Tk pack은 나중에 pack되는 쪽이 남은 공간을
+        # 쓰므로, 순서를 바꿔 이 버튼이 항상 우선권을 갖게 함 - 본문이
+        # 넘치면 밀려나는 쪽은 이제 스크롤 영역이지 이 버튼이 아니다).
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(fill="x", padx=10, pady=15, side="bottom")
+        self._mk_btn(btn_row, "닫기", dlg.destroy, color="accent", side="right", padx=5)
+
+        # [추가 - 사용자 요청] 본문을 스크롤 가능하게 감싸는 Canvas -
+        # 화면이 작아 위 680px 높이로도 다 안 들어가면 마우스 휠로 스크롤.
+        _body_canvas = tk.Canvas(dlg, highlightthickness=0)
+        _body_vsb = ttk.Scrollbar(dlg, orient="vertical", command=_body_canvas.yview)
+        _body_canvas.configure(yscrollcommand=_body_vsb.set)
+        _body_vsb.pack(side="right", fill="y")
+        _body_canvas.pack(side="left", fill="both", expand=True)
+        body = ttk.Frame(_body_canvas)
+        _body_window_id = _body_canvas.create_window((0, 0), window=body, anchor="nw")
+
+        def _on_body_configure(event=None):
+            _body_canvas.configure(scrollregion=_body_canvas.bbox("all"))
+        body.bind("<Configure>", _on_body_configure)
+
+        def _on_canvas_configure(event):
+            # 본문 안의 LabelFrame들이 fill="x"로 캔버스 폭을 그대로 따라가게
+            _body_canvas.itemconfigure(_body_window_id, width=event.width)
+        _body_canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            _body_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        # [주의] 이 바인딩은 dlg가 열려있는 동안만 전역으로 걸리고 <Destroy>
+        # 시 자동 해제됨(bind_all은 위젯 파괴와 무관하게 유지되므로, 이 팝업이
+        # 닫힌 뒤에도 남아 다른 창의 휠 스크롤에 영향 주지 않도록 <Destroy>에서
+        # 명시적으로 unbind).
+        _body_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        dlg.bind("<Destroy>", lambda e: (
+            _body_canvas.unbind_all("<MouseWheel>") if e.widget is dlg else None
+        ), add="+")
+
         # --- 데이터 소스 ---
-        src_frame = ttk.LabelFrame(dlg, text="작은 plot에 표시할 데이터")
+        src_frame = ttk.LabelFrame(body, text="작은 plot에 표시할 데이터")
         src_frame.pack(fill="x", padx=10, pady=5)
 
         cached_combo_ref = {}
@@ -2909,7 +2959,7 @@ class CathPlotGUI:
         # [수정 - 요청] "기준이 좌상단/캔버스 전체인데 legend/annotation은
         # 좌하단/축 프레임 기준" - 라벨도 실제 동작(축 프레임 기준, 좌측
         # 하단 모서리)에 맞게 수정.
-        geo_frame = ttk.LabelFrame(dlg, text="위치(축 프레임 대비 %) / 크기")
+        geo_frame = ttk.LabelFrame(body, text="위치(축 프레임 대비 %) / 크기")
         geo_frame.pack(fill="x", padx=10, pady=5)
         pos_row = ttk.Frame(geo_frame)
         pos_row.pack(fill="x", padx=5, pady=3)
@@ -2967,7 +3017,7 @@ class CathPlotGUI:
         # 물려받음(gnu_generator._render_pip_inset의 xrange_cmd/yrange_cmd
         # 참고) - 실제 조건 그대로 문구를 고침.
         zoom_frame = ttk.LabelFrame(
-            dlg,
+            body,
             text="확대 구간 (비우면: X는 항상 메인과 동일 / Y는 '현재 plot' 소스면 메인과 동일, 다른 소스면 자동)"
         )
         zoom_frame.pack(fill="x", padx=10, pady=5)
@@ -2994,7 +3044,7 @@ class CathPlotGUI:
         # gnu_generator._render_pip_inset의 y2range_cmd 참고).
 
         # --- 표시 옵션 ---
-        opt_frame = ttk.LabelFrame(dlg, text="표시 옵션")
+        opt_frame = ttk.LabelFrame(body, text="표시 옵션")
         opt_frame.pack(fill="x", padx=10, pady=5)
         # [수정 - 요청] "Plot Title과 Axis Title check box 분리" - 기존엔
         # Plot Title(plotdef.title)만 켜고 끌 수 있었고 X/Y1/Y2 축 제목은
@@ -3165,10 +3215,6 @@ class CathPlotGUI:
             font_scale_entry.unbind("<KeyPress>")
 
         font_scale_entry.bind("<KeyPress>", _font_scale_first_edit)
-
-        btn_row = ttk.Frame(dlg)
-        btn_row.pack(fill="x", padx=10, pady=15, side="bottom")
-        self._mk_btn(btn_row, "닫기", dlg.destroy, color="accent", side="right", padx=5)
 
     def _pip_autofill_range(self, pip):
         """[추가 - 요청] "당연히 .plt 파일 자체에서 Y 범위도 같이 읽어와서
