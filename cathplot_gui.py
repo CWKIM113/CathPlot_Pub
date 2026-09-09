@@ -146,14 +146,17 @@ class CathPlotGUI:
         # 그 문제를 그대로 재현하지 않는다. self.root/self.win_w를 아래
         # 필요한 곳(재계산되는 두 번째 geometry 호출)에서도 재사용해야 하므로
         # 인스턴스 속성으로 저장해둔다.
-        # [수정 - 사용자 재보고] "메인 화면이 우측으로 더 길게 나오게 하고
-        # (Plot Setting 등 아래에 있던 가로 스크롤이 안 보임 - 필요함)" -
-        # 1200 상한이 실제로는 Plot Setting 등 내용 폭보다 좁아서(원래도
-        # 가로 스크롤로 나머지를 봐야 했는데, 그 스크롤바 자체가 화면
-        # 아래쪽에서 잘려 안 보였던 것으로 보임) 상한을 1500으로 올려
-        # 가로 스크롤이 필요한 상황 자체를 줄인다(요청하신 "상한선"은
-        # 그대로 유지 - 무제한으로 늘리지는 않음).
-        self._win_w = max(900, min(1500, self.root.winfo_screenwidth() - 80))
+        # [되돌림 - 사용자 재보고] "PC에서는 다 보였는데 1500으로 올렸더니
+        # 노트북에서도 너무 넓어져서 남는 여백이 생김(Box에서 curves 끝까지
+        # 정도 폭) - 줄일 필요 있음. flexible이 좋고 아래에 좌우 scroll
+        # 있으면 좋겠음" - 1200이 PC에서는 원래 "다 보임"(=충분했음) 이었던
+        # 걸로 봐서, 위 1500행 상향이 과했음 - 1200으로 되돌린다. 가로
+        # 스크롤이 안 보였던 원인은 폭 부족이 아니라 다른 문제(각 섹션
+        # 자체의 가로 스크롤바 - file_hscrollbar/hscrollbar/plot_hscrollbar
+        # - 가 세로 공간 부족으로 화면 밖에 밀려났을 가능성)로 보이므로,
+        # 폭을 다시 올리는 대신 세로 required_height 클램프(아래)가 그
+        # 스크롤바들 자리까지 확실히 포함하도록 두고 지켜본다.
+        self._win_w = max(900, min(1200, self.root.winfo_screenwidth() - 80))
         self.root.geometry(f"{self._win_w}x1030")
         self.root.tk.call('tk', 'windowingsystem')
 
