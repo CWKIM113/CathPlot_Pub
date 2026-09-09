@@ -2947,16 +2947,23 @@ class CathPlotGUI:
             _body_canvas.itemconfigure(_body_window_id, width=event.width)
         _body_canvas.bind("<Configure>", _on_canvas_configure)
 
-        def _on_mousewheel(event):
-            _body_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        # [주의] 이 바인딩은 dlg가 열려있는 동안만 전역으로 걸리고 <Destroy>
-        # 시 자동 해제됨(bind_all은 위젯 파괴와 무관하게 유지되므로, 이 팝업이
-        # 닫힌 뒤에도 남아 다른 창의 휠 스크롤에 영향 주지 않도록 <Destroy>에서
-        # 명시적으로 unbind).
-        _body_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        dlg.bind("<Destroy>", lambda e: (
-            _body_canvas.unbind_all("<MouseWheel>") if e.widget is dlg else None
-        ), add="+")
+        # [수정 - 코드 재검토로 발견된 버그, 더 심각한 재수정] 처음엔 여기서
+        # 직접 bind_all로 마우스 휠을 잡았는데, "이 팝업 위가 아니어도(메인
+        # 창 file/var 목록 위에서도) 이 본문이 같이 스크롤됨"뿐 아니라 -
+        # bind_all은 위젯이 아니라 애플리케이션 전체의 "all" 태그 하나를
+        # 공유해서, add="+" 없이 다시 bind_all을 걸면 이미 걸려있던 메인
+        # 창의 전역 휠 핸들러(_on_global_mousewheel, 아래 참고)를 통째로
+        # "덮어써서" 이 팝업이 열려있는 동안 메인 창 file/var/Plot Setting
+        # 목록의 휠 스크롤이 전혀 안 먹게 되고, 팝업을 닫을 때 하던
+        # unbind_all은 그 자리를 원래 핸들러로 복구하는 게 아니라 아예
+        # 아무 것도 없는 상태로 지워버려서 그 뒤로는 메인 창 스크롤 자체가
+        # 영구히 먹통이 되는 훨씬 심각한 문제였음. 새로 만드는 대신, 메인
+        # 창 file/var/Plot Setting 목록이 이미 쓰고 있는 공용 메커니즘
+        # (_bind_mousewheel/_on_global_mousewheel - bind_all을 앱 전체에
+        # 딱 한 번만 걸어두고, event.widget에서 조상 방향으로 올라가며 어느
+        # 영역에 속하는지 찾아 그 영역의 캔버스만 스크롤) 그대로 재사용한다
+        # - 새로 bind_all을 걸지 않으므로 위 덮어쓰기 문제 자체가 없다.
+        self._bind_mousewheel(body, _body_canvas)
 
         # --- 데이터 소스 ---
         src_frame = ttk.LabelFrame(body, text="작은 plot에 표시할 데이터")
