@@ -5902,6 +5902,17 @@ class GnuplotGenerator:
         # 전혀 영향 없다. 재생(스냅샷, 이미 위에서 안 건드리고 그대로
         # 캡처해둠)은 원래 값 그대로 title/tics를 다시 set하므로, 최종적으로
         # 화면에 실제로 "보이는" title/tic 텍스트는 이 재생 한 번뿐이 된다.
+        # [수정 - 재검토로 발견된 버그] 위와 완전히 같은 원리가 legend
+        # 텍스트(curve title, marker 기호 - 둘 다 _render_legend_box가
+        # "set label"로 그림)에도 그대로 적용돼야 하는데 이 목록에서 빠져
+        # 있었음: legend의 "set label"도 title/tic과 마찬가지로 이 "plot \"
+        # 이전에 이미 선언돼 있어(1차 그리기에서 그대로 보임) 재생(2차
+        # 그리기)에서 또 한 번 그려지는 이중 렌더링 대상이었음(legend
+        # 샘플선 "set arrow"/박스 "set object"는 테두리·곡선과 같은 solid
+        # 도형이라 원래 원칙대로 그대로 둠 - 텍스트만 문제). "unset label"을
+        # 추가해 legend/주석(Comment 등, 이들도 "set label"로 그림) 텍스트도
+        # title/tic과 동일하게 1차 그리기에서는 숨기고 재생(2차)에서만
+        # 보이게 한다.
         if _main_state_snapshot is not None:
             _main_plot_line_idx = next(
                 (i for i in range(_main_state_start_idx, len(lines)) if lines[i].strip() == "plot \\"),
@@ -5910,7 +5921,7 @@ class GnuplotGenerator:
             if _main_plot_line_idx is not None:
                 lines[_main_plot_line_idx:_main_plot_line_idx] = [
                     "unset title", "unset xlabel", "unset ylabel", "unset y2label",
-                    "unset xtics", "unset ytics", "unset y2tics",
+                    "unset xtics", "unset ytics", "unset y2tics", "unset label",
                 ]
 
         _pip_clip_info = None

@@ -2649,13 +2649,26 @@ class CathPlotGUI:
         # .plt를 직접 실행하면 이 label들이 그대로 화면에 그려지니 제대로
         # 보였던 것. 이 legend arrow/label 쌍을 curve와 같은 순서로 추가
         # 파싱해서, 파일명 대신 이 실제 title(+dashtype)을 쓴다.
+        # [수정 - 재검토로 발견된 버그] "PIP .plt 소스 curve에 marker가
+        # 설정돼 있으면 legend title이 marker 기호(예: "○"/"△") 한 글자로
+        # 나옴" - _render_legend_box는 marker가 있는 curve일 때 "set arrow"
+        # 와 진짜 title "set label" 사이에 marker 기호용 "set label
+        # (ID+5000) "○" ..."을 하나 더 끼워 넣는데(legend에 기호도 같이
+        # 보여주려는 것), 위 정규식은 "set arrow 바로 다음 줄의 set label"을
+        # 무조건 title로 가정해서 marker가 있으면 그 끼워진 기호 label을
+        # 잘못 집었음. 실제로는 title의 "set label ID"가 "set arrow ID"와
+        # 항상 같은 번호(마커 기호는 ID+5000)이므로, arrow의 번호를
+        # 캡처해뒀다가 그 "같은 번호"를 가진 label만 title로 매치한다
+        # (중간에 끼는 marker 기호 label은 번호가 다르므로 있어도 없어도
+        # 건너뛰도록 선택 그룹으로 허용).
         _legend_pair_re = re.compile(
-            r'set arrow \d+ from graph [^\n]*?'
+            r'set arrow (\d+) from graph [^\n]*?'
             r'lc rgb "([^"]+)" lw [\d.]+(?:\s+dashtype \(([^)]+)\))?\s*\n'
-            r'set label \d+ "((?:[^"\\]|\\.)*)" at graph'
+            r'(?:set label \d+ "(?:[^"\\]|\\.)*" at graph[^\n]*\n)?'
+            r'set label \1 "((?:[^"\\]|\\.)*)" at graph'
         )
         _legend_entries = [
-            (m.group(1), m.group(3), m.group(2))  # (color, title, dashtype_raw)
+            (m.group(2), m.group(4), m.group(3))  # (color, title, dashtype_raw)
             for m in _legend_pair_re.finditer(text)
         ]
         _dash_to_style = {v.replace(" ", ""): k for k, v in DASH_PATTERNS.items()}
