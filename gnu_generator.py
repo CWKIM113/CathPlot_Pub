@@ -1342,7 +1342,13 @@ class GnuplotGenerator:
         # 상대적으로 과하게 크게 보임 - 인셋 legend 호출(compact=True)은
         # is_print_mode/fmt와 무관하게 항상 좁은 값(print과 동일한 0.08)
         # 을 쓴다.
-        _row_margin_ratio = 0.08 if (is_print_mode or compact) else 0.3
+        # [수정 - 사용자 재보고] "in-plot legend box의 title과 상하 border
+        # 사이 간격을 약간 더 줘요(너무 붙음)" - compact 전용 0.08은 위
+        # "너무 크다"는 이전 보고 기준으로 print와 같이 맞춘 값이었는데,
+        # 실측(줄 간격 row_mult를 그 뒤 추가로 0.45배까지 줄인 상태) 기준
+        # 으로는 오히려 첫/끝 줄 글자가 테두리에 너무 붙어 보인다는 재보고 -
+        # compact만 살짝(0.08->0.16, 2배) 늘림(print는 그대로 0.08 유지).
+        _row_margin_ratio = 0.08 if is_print_mode else (0.16 if compact else 0.3)
         ROW_MARGIN = _row_margin_ratio * ROW_H
         # [수정] "문자 하나당 대략적인 폭(인치)"을 legend 라벨 폭 추정뿐 아니라
         # legend box와 axis frame 사이 간격(1자 정도)에도 재사용한다 - font_pt에
@@ -1475,6 +1481,17 @@ class GnuplotGenerator:
         # (Anim 없는 경우가 기준) - 위에서 이미 여러 차례 조정된 최종
         # 길이에 추가로 한 번 더 0.7배.
         SAMPLE_W *= 0.7
+        # [수정 - 사용자 보고 버그] "legend border와 title 간격이 1자가
+        # 아니고 너무 많음" - box_w_extra_chars를 줄여도(이미 적용) 라벨이
+        # 길면 box_w가 그 폭 하한(_box_w_floor = SAMPLE_W + 라벨폭 + 고정
+        # 여백들)에 그대로 걸려 변화가 없었음(실측으로 확인: 이 하한이
+        # 사실상 항상 box_w를 결정) - 이 하한 자체에 들어가는 SAMPLE_W(색상/
+        # 스타일 샘플선 길이)를 인셋(compact) 전용으로 추가 축소해 "border
+        # ~ 실제 title" 사이의 물리적 거리를 줄인다(샘플선 자체는 짧아져도
+        # 색/스타일 구분에는 지장 없음 - 이미 main legend 대비 여러 번
+        # 축소된 상태에서 한 단계 더).
+        if compact:
+            SAMPLE_W *= 0.6
         # [수정] char_width_in은 대문자(가장 넓은 경우) 실측 기준인데, 글자수를
         # 그냥 len()으로 세면 숫자/콜론/대시처럼 대문자보다 좁은 문자가 많은
         # 라벨(CATHENA 변수명 특성상 흔함, 예: "MFLO:R-SDRT1>L-STLF1")은 실제
@@ -3314,13 +3331,23 @@ class GnuplotGenerator:
         # 버려짐) 아무 영향 없음.
         return cmd_list
 
-    def _curve_cmd_list_for(self, curves, fmt):
+    def _curve_cmd_list_for(self, curves, fmt, lines=None):
         """[추가 - 요청] "PIP inset이 메인 plot이 아니라 다른(이미 그려진) plot의
         곡선을 보여줄 수 있게" - _build_plot_commands의 curve 루프(경로 계산,
-        using 표현식, 색상/dashtype)를 마커 없이 단순화해서 재사용. main_cmd_list
-        (메인과 같은 곡선을 그대로 재사용하는 기본 경로)와 별개로, 이 함수는
-        임의의 curves 리스트(다른 plot에서 가져온 것)로부터 새로 cmd_list를
-        만든다."""
+        using 표현식, 색상/dashtype)를 재사용. main_cmd_list(메인과 같은
+        곡선을 그대로 재사용하는 기본 경로)와 별개로, 이 함수는 임의의
+        curves 리스트(다른 plot에서 가져온 것)로부터 새로 cmd_list를 만든다.
+        [수정 - 사용자 보고 버그] "in-plot의 curve에 마커가 안 보임(legend
+        box에는 있는데)" - 이 함수는 원래 "마커 없이 단순화"가 의도였는데,
+        legend(_render_legend_box)는 override curve의 curve.marker_shape를
+        그대로 읽어 기호를 보여주고 있어서 "legend엔 있는데 실제 곡선엔
+        없는" 불일치가 났음 - main curve 루프(_build_plot_commands)와 같은
+        방식으로 마커 데이터블록+포인트 plot 명령을 추가한다(log-x/공통
+        X범위 보정은 이 함수엔 그 문맥(plotdef)이 없어 생략 - 어차피 PIP
+        인셋은 이후 별도로 인셋 크기에 맞게 마커를 다시 골라 재생성하므로
+        여기서는 "일단 있게" 만드는 것으로 충분함). lines를 주면 마커
+        데이터블록을 그 lines 끝에 덧붙인다(안 주면 마커 자체를 생략 -
+        기존 호출부 보호)."""
         cmd_list = []
         for i, curve in enumerate(curves):
             color = curve.color or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
@@ -3340,13 +3367,48 @@ class GnuplotGenerator:
             using_expr = f"({x_col_expr}+{curve.x_shift}):{col_y}"
             lw = curve.linewidth
 
-            cmd = f'"{path}" using {using_expr} notitle axes {axis} with lines lw {lw}'
+            # [수정 - 사용자 재보고 버그] "어제, 아까는 in-plot에 spline이
+            # 그려졌는데(source가 '저장된 plot'/.plt 파일일 때는 항상
+            # 실패)" - 원인 확인: 이 함수(override curve 전용, main과 달리
+            # marker 등을 뺀 "단순화" 버전)는 애초에 curve.smooth_csplines가
+            # True여도 "smooth csplines" 절 자체를 절대 안 붙이고 있었음
+            # (_build_plot_commands의 원래 curve 루프만 이걸 붙였음) - PIP의
+            # 원/타원 spline 사전계산(_presmooth_spline_curve 호출부)은 이
+            # cmd_list 문자열 안에서 "{컬럼} smooth csplines"를 찾아 매칭
+            # 하는데, override curve는 애초에 이 텍스트가 없으니 매번 못
+            # 찾고 "데이터가 3점 미만이라 실패"라는 엉뚱한 경고와 함께
+            # 무조건 직선으로 대체되고 있었음(실측 확인: source="current"는
+            # 정상, source="cached"로 바꾸면 매번 100% 실패). "smooth
+            # csplines"를 여기도 붙여서 main과 동일하게 매칭되게 한다.
+            _smooth_clause = " smooth csplines" if getattr(curve, "smooth_csplines", False) else ""
+            cmd = f'"{path}" using {using_expr}{_smooth_clause} notitle axes {axis} with lines lw {lw}'
             if color:
                 cmd += f' lc rgb "{color}"'
             _dash_pat = _dash_pattern_for_fmt(linestyle, fmt)
             if _dash_pat:
                 cmd += f" dashtype ({_dash_pat})"
             cmd_list.append(cmd)
+
+            # [추가 - 사용자 보고 버그 수정, 위 docstring 참고] marker_shape가
+            # 있으면 main curve 루프와 같은 방식으로 $MarkerN 데이터블록 +
+            # points plot 명령을 추가한다 - lines가 없으면(기존 호출부 호환)
+            # 그냥 건너뛴다.
+            marker_shape = getattr(curve, "marker_shape", None)
+            if marker_shape is not None and lines is not None:
+                is_manual_count = bool(getattr(curve, "marker_max_count", None))
+                target = curve.marker_max_count if is_manual_count else 25
+                marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, False)
+                if marker_pts:
+                    dbname = f"$Marker{i}"
+                    block = [f"{dbname} << EOD"]
+                    block.extend(f"{px:.10g} {py:.10g}" for px, py in marker_pts)
+                    block.append("EOD")
+                    lines.extend(block)
+                    marker_size = getattr(curve, "marker_size", 1.0) * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
+                    marker_cmd = f'{dbname} using 1:2 notitle axes {axis} with points pt {_fmt_pointtype(marker_shape)} ps {marker_size}'
+                    if color:
+                        marker_cmd += f' lc rgb "{color}"'
+                    cmd_list.append(marker_cmd)
         return cmd_list
 
     def _eval_function_curve_range(self, expr, x_lo, x_hi, plot_dir_):
@@ -3543,7 +3605,7 @@ class GnuplotGenerator:
             )
             _override_curves = None
         if _override_curves:
-            main_cmd_list = self._curve_cmd_list_for(_override_curves, fmt)
+            main_cmd_list = self._curve_cmd_list_for(_override_curves, fmt, lines=lines)
         elif pip.get("source") == "pltfile" and str(pip.get("pltfile_path", "")).strip():
             # [수정 - 사용자 보고 버그] "in-plot으로 .plt를 지정하면 그 파일이
             # 아니라 현재 main-plot을 불러옴" - source가 ".plt 파일"인데

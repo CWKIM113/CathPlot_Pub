@@ -2750,12 +2750,17 @@ class CathPlotGUI:
         메인 plot을 그릴 때 쓴 set yrange/y2range를 그대로 갖고 있으므로
         (_parse_plt_titles와 같은 방식 - PIP 인셋 구간 이전만, CathPlot
         자신의 생성 포맷 전용) 그 값을 그대로 읽어와서 기본값으로 쓸 수
-        있다. 반환: (ymin, ymax, y2min, y2max) - 각각 못 찾으면 None."""
+        있다.
+        [수정 - 사용자 재보고] "PIP에 있던 *.plt에 X-range도 있는데 기본값
+        으로 안 읽어 오네?" - Y1/Y2만 읽고 X는 빠져 있었음(같은 파일에
+        "set xrange [...]"도 항상 같이 있으므로 안 읽을 이유가 없음) -
+        Y1/Y2와 완전히 같은 방식으로 xrange도 같이 읽어온다.
+        반환: (xmin, xmax, ymin, ymax, y2min, y2max) - 각각 못 찾으면 None."""
         try:
             with open(plt_path, "r", encoding="utf-8", errors="replace") as f:
                 text = f.read()
         except OSError:
-            return (None, None, None, None)
+            return (None, None, None, None, None, None)
         marker = "# --- PIP (부분 확대) inset ---"
         idx = text.find(marker)
         main_text = text[:idx] if idx >= 0 else text
@@ -2766,9 +2771,11 @@ class CathPlotGUI:
             )
             return matches[-1] if matches else None
 
+        xr = _last_range(r'set\s+xrange')
         yr = _last_range(r'set\s+yrange')
         y2r = _last_range(r'set\s+y2range')
         return (
+            xr[0].strip() if xr else None, xr[1].strip() if xr else None,
             yr[0].strip() if yr else None, yr[1].strip() if yr else None,
             y2r[0].strip() if y2r else None, y2r[1].strip() if y2r else None,
         )
@@ -3080,9 +3087,11 @@ class CathPlotGUI:
                 "source": self.pip_source_var.get(),
                 "cached_name": self.pip_cached_name_var.get(),
                 "pltfile_path": self.pip_pltfile_path_var.get(),
-                "ymin": "", "ymax": "", "y2min": "", "y2max": "",
+                "xmin": "", "xmax": "", "ymin": "", "ymax": "", "y2min": "", "y2max": "",
             }
             self._pip_autofill_range(_tmp_pip)
+            self.pip_xmin_var.set(_tmp_pip.get("xmin") or "")
+            self.pip_xmax_var.set(_tmp_pip.get("xmax") or "")
             self.pip_ymin_var.set(_tmp_pip.get("ymin") or "")
             self.pip_ymax_var.set(_tmp_pip.get("ymax") or "")
             self.pip_y2min_var.set(_tmp_pip.get("y2min") or "")
@@ -3172,10 +3181,16 @@ class CathPlotGUI:
         pip dict를 그 자리에서 수정한다(GUI 경로 _resolve_pip_config와
         Batch 경로 _resolve_pip_dict_for_batch가 공통으로 재사용)."""
         source = pip.get("source")
-        ymin = ymax = y2min = y2max = None
+        xmin = xmax = ymin = ymax = y2min = y2max = None
         if source == "cached":
             cached_plotdef = self.active_plots_cache.get(pip.get("cached_name", ""))
             if cached_plotdef is not None:
+                # [추가 - 사용자 재보고] "PIP에 있던 *.plt에 X-range도 있는데
+                # 기본값으로 안 읽어 오네?" - Y1/Y2와 완전히 같은 방식으로
+                # "저장된 plot" 소스도 X 범위를 같이 채운다(수동 지정이면
+                # 그 값, auto면 실제 데이터로 지금 계산).
+                if not getattr(cached_plotdef, "xauto", True) and cached_plotdef.xmin and cached_plotdef.xmax:
+                    xmin, xmax = cached_plotdef.xmin, cached_plotdef.xmax
                 if not getattr(cached_plotdef, "yauto", True) and cached_plotdef.ymin and cached_plotdef.ymax:
                     ymin, ymax = cached_plotdef.ymin, cached_plotdef.ymax
                 if not getattr(cached_plotdef, "y2auto", True) and cached_plotdef.y2min and cached_plotdef.y2max:
@@ -3185,6 +3200,14 @@ class CathPlotGUI:
                 # plotdef의 실제 curve 데이터로 지금 바로 진짜 값을 계산해서
                 # 채운다(수동 지정이 없을 때만 - 위에서 이미 못 채웠으면).
                 _uses_y2_cached = any(getattr(c, "axis", "y1") == "y2" for c in cached_plotdef.curves)
+                if xmin is None or xmax is None:
+                    try:
+                        _nicex = GnuplotGenerator(plot_dir=self.plot_dir)._nice_axis_range(
+                            cached_plotdef, "x", is_log=getattr(cached_plotdef, "xlog", False))
+                        if _nicex:
+                            xmin, xmax = f"{_nicex[0]:g}", f"{_nicex[1]:g}"
+                    except Exception:
+                        pass
                 if ymin is None or ymax is None:
                     try:
                         _nice = GnuplotGenerator(plot_dir=self.plot_dir)._nice_axis_range(
@@ -3204,7 +3227,10 @@ class CathPlotGUI:
         elif source == "pltfile":
             path = pip.get("pltfile_path", "")
             if path and os.path.exists(path):
-                ymin, ymax, y2min, y2max = self._parse_plt_ranges(path)
+                xmin, xmax, ymin, ymax, y2min, y2max = self._parse_plt_ranges(path)
+        if xmin is not None and xmax is not None and not (
+                str(pip.get("xmin", "")).strip() and str(pip.get("xmax", "")).strip()):
+            pip["xmin"], pip["xmax"] = xmin, xmax
         if ymin is not None and ymax is not None and not (
                 str(pip.get("ymin", "")).strip() and str(pip.get("ymax", "")).strip()):
             pip["ymin"], pip["ymax"] = ymin, ymax
