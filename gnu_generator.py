@@ -5603,19 +5603,45 @@ class GnuplotGenerator:
         # 분기)은 그대로 영향 없음.
         _pip_cfg = getattr(plotdef, "pip", None) or {}
         _pip_on = bool(_pip_cfg.get("enabled"))
-        # [수정 - 버그(직접 렌더링으로 발견), 아래 main-plot 마우스 좌표
-        # 스냅샷용] 여기서부터(= "set multiplot" 시작 지점) 스냅샷을 떠야
-        # main의 margin/title/tics/legend 등 "이 plot 하나에 대한" 상태만
-        # 재생된다 - 이 지점 "이전"의 lines(set encoding/set terminal ...)
-        # 까지 같이 스냅샷하면, 재생 시 "set terminal ..."을 스크립트 중간에
-        # 다시 선언하게 되어(실제 생성된 스크립트로 확인 - 캔버스를 다시
-        # 여는 것으로 처리될 위험이 있어 PIP 인셋이 지워질 수 있음) 오히려
-        # 위험해진다.
-        _main_state_start_idx = len(lines)
+        # [수정 - 사용자 재지적, 실제 Windows 터미널 실기 테스트로 근본 원인
+        # 확인] "PIP를 원/사각형 어느 것으로 그려도 창에 전혀 안 나타남" -
+        # 이전 주석(아래, 유지)은 스냅샷이 "set encoding/set terminal"까지
+        # 포함하는 위험만 지적했는데, 그건 반만 맞았음 - 실제로는 스냅샷의
+        # "시작 지점"을 "set multiplot" 선언 "직후"(단, "set origin 0,0"/
+        # "set size 1,1"보다는 앞)에서 끊었어야 했는데 그보다도 앞(= "set
+        # multiplot" 자신 포함)에서 끊고 있었다. pngcairo 렌더링으로는 이
+        # 세션 내내 여러 번 재현을 시도했지만 전혀 재현이 안 됐지만, 실제
+        # gnuplot.exe를 -persist로 띄워 Windows 네이티브 terminal에서 직접
+        # 화면을 캡처(PrintWindow)해 비교한 결과: main을 재생(replay)할 때
+        # "set multiplot"이 스냅샷에 함께 포함돼 있으면, 이미 활성화된
+        # 멀티플롯 세션 안에서(그 사이 unset multiplot을 부른 적이 없으므로)
+        # "set multiplot"을 또 한 번 선언하는 꼴이 되고, pngcairo와 달리
+        # Windows 터미널은 이 "이미 켜진 멀티플롯을 또 켜는" 중복 선언을
+        # 캔버스 전체를 지우는 신호로 처리해(실측: 최소 재현 스크립트에서 이
+        # "set multiplot" 한 줄만 지우면 사라졌던 PIP 인셋이 다시 나타남)
+        # 직전에 그려둔 PIP 인셋이 통째로 지워지고 이후 재생되는 main만
+        # 남았음(마우스 좌표가 main에서 "우연히" 살아있어 보인 것도 실은 이
+        # 재생 로직이 정상 작동해서가 아니라 스크립트가 이 지점 이전엔 정상
+        # 진행됐기 때문일 뿐 - 별개로 계속 조사 필요). "set origin 0,0"/
+        # "set size 1,1"은(캔버스 전체로 되돌리는 역할이라) 계속 스냅샷에
+        # 포함시켜야 하므로(실측: 이 둘만 남기고 "set multiplot"만 빼면
+        # 정상 - 아래 검증 참고) "set multiplot" 바로 다음, 그 두 줄 이전
+        # 에서 스냅샷을 시작한다.
+        #
+        # [기존 - 유지] 여기서부터(= "set multiplot" 시작 지점 "이전"은 안
+        # 됨) 스냅샷을 떠야 main의 margin/title/tics/legend 등 "이 plot
+        # 하나에 대한" 상태만 재생된다 - 이 지점보다도 더 "이전"의 lines(set
+        # encoding/set terminal ...)까지 같이 스냅샷하면, 재생 시 "set
+        # terminal ..."을 스크립트 중간에 다시 선언하게 되어(실제 생성된
+        # 스크립트로 확인 - 캔버스를 다시 여는 것으로 처리될 위험이 있어
+        # PIP 인셋이 지워질 수 있음) 오히려 위험해진다.
         if _pip_on:
             lines.append("set multiplot")
+            _main_state_start_idx = len(lines)
             lines.append("set origin 0,0")
             lines.append("set size 1,1")
+        else:
+            _main_state_start_idx = len(lines)
 
         _main_cmd_list = self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations, arrows=arrows, circles=circles, panel_scale=_size_scale, fmt=fmt)
 
