@@ -382,6 +382,25 @@ MARKER_SIZE_SCALE = {1: 1.8}
 # 처럼 여러 도형을 작게 축소해서 나란히 볼 때 특히 두드러짐) - 원 기준
 # (23/29 ≈ 0.79)으로 세모류 pointtype만 ps를 줄여 시각적 크기를 맞춘다.
 MARKER_NATIVE_PS_SCALE = {8: 23 / 29, 9: 23 / 29, 10: 23 / 29, 11: 23 / 29}
+# [추가 - 사용자 보고 버그] "마커를 보면(in-plot, main-plot 모두) legend와
+# 커브 상에서도 중심보다 약간 위에 있는데 이를 중심에 맞게 보정해줘요" -
+# 실제 gnuplot으로 원/네모/세모를 기준선 위에 같은 ps로 그려 픽셀로 직접
+# 측정한 결과: 원(pt6)·네모(pt4)는 기준선에 정확히 맞았지만 위세모(pt8/9)
+# 만 시각적 중심(bounding box 중심)이 기준선보다 위로 보였음 - 기하학적
+# 원인: 세모는 무게중심(gnuplot이 점을 "찍는" 기준)이 밑변에서 전체
+# 높이의 1/3 지점에 있어 bbox 중심(1/2 지점)보다 낮은데, 그 결과 bbox
+# 중심(눈에 보이는 "중심")은 항상 무게중심(=실제 데이터 좌표)보다 위에
+# 위치하게 됨(아래세모는 반대로 무게중심이 위쪽에 있어 bbox 중심이
+# 항상 아래에 위치) - 좌우 세모(◁▷)는 이 어긋남이 가로 방향이라 세로
+# 중심에는 영향 없음(실측: 기준선에 정확히 맞았음). "with points"는
+# 폰트 offset 같은 보정 수단이 없어, 표시할 Y값 자체를 이 어긋남만큼
+# 미리 살짝 이동시켜 찍는 것으로 보정한다(실제 데이터/곡선 값은 그대로,
+# $Marker 전용 보조 데이터블록에만 적용되므로 곡선 자체나 마우스 좌표
+# 등에는 영향 없음) - 위세모(8,9)는 아래로, 아래세모(10,11)는 위로.
+# 축의 실제 범위(ymax-ymin)에 비례한 비율로 둬서 확대/축소와 무관하게
+# 항상 비슷한 픽셀 크기의 보정이 되게 한다(Auto Range라 범위를 미리 알
+# 수 없는 경우는 안전하게 보정을 생략함).
+MARKER_Y_SHIFT_FRAC = {8: -0.012, 9: -0.012, 10: 0.012, 11: 0.012}
 
 #----------------------------------------------------------
 # Interactive
@@ -874,6 +893,29 @@ class GnuplotGenerator:
                 selected.append(pts[best_i])
         selected.sort(key=lambda p: p[0])
         return selected
+
+    def _marker_y_shift_for_curve(self, plotdef, marker_shape, is_y2):
+        """[추가 - 사용자 보고 버그] 위 MARKER_Y_SHIFT_FRAC 참고 - 세모류
+        marker(8/9/10/11)를 실제 데이터 좌표보다 살짝 위/아래로 옮겨 찍어서
+        bbox 중심이 눈에 보이는 "중심"이 되게 보정한다. 이 curve가 속한
+        축(Y1/Y2)의 "구체적인 숫자" 범위를 알아야 비율을 계산할 수 있는데
+        (Auto Range면 이 시점엔 아직 확정되지 않음) - plotdef가 수동으로
+        지정해둔 범위(yauto/y2auto=False일 때의 ymin/ymax)가 있을 때만
+        보정하고, Auto면 안전하게 보정을 생략한다(잘못된 추정치로 마커가
+        더 어긋나는 것보다 "보정 없음"이 항상 더 안전함)."""
+        frac = MARKER_Y_SHIFT_FRAC.get(marker_shape)
+        if not frac:
+            return 0.0
+        if is_y2:
+            auto, lo, hi = getattr(plotdef, "y2auto", True), getattr(plotdef, "y2min", ""), getattr(plotdef, "y2max", "")
+        else:
+            auto, lo, hi = getattr(plotdef, "yauto", True), getattr(plotdef, "ymin", ""), getattr(plotdef, "ymax", "")
+        if auto or not str(lo).strip() or not str(hi).strip():
+            return 0.0
+        try:
+            return frac * (float(hi) - float(lo))
+        except (TypeError, ValueError):
+            return 0.0
 
     def _nice_axis_range(self, plotdef, axis, is_log=False, extra_values=None):
         parser = CathenaDatParser()
@@ -3272,6 +3314,9 @@ class GnuplotGenerator:
                 effective_shared_range = None if is_manual_count else shared_x_range
                 marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, is_log_x, shared_x_range=effective_shared_range)
                 if marker_pts:
+                    _y_shift = self._marker_y_shift_for_curve(plotdef, marker_shape, is_y2)
+                    if _y_shift:
+                        marker_pts = [(px, py + _y_shift) for px, py in marker_pts]
                     dbname = f"$Marker{i}"
                     block = [f"{dbname} << EOD"]
                     block.extend(f"{px:.10g} {py:.10g}" for px, py in marker_pts)
@@ -3331,7 +3376,7 @@ class GnuplotGenerator:
         # 버려짐) 아무 영향 없음.
         return cmd_list
 
-    def _curve_cmd_list_for(self, curves, fmt, lines=None):
+    def _curve_cmd_list_for(self, curves, fmt, lines=None, y_range=None, y2_range=None):
         """[추가 - 요청] "PIP inset이 메인 plot이 아니라 다른(이미 그려진) plot의
         곡선을 보여줄 수 있게" - _build_plot_commands의 curve 루프(경로 계산,
         using 표현식, 색상/dashtype)를 재사용. main_cmd_list(메인과 같은
@@ -3399,6 +3444,20 @@ class GnuplotGenerator:
                 target = curve.marker_max_count if is_manual_count else 25
                 marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, False)
                 if marker_pts:
+                    # [추가 - 사용자 보고 버그] 위 MARKER_Y_SHIFT_FRAC/
+                    # _marker_y_shift_for_curve 참고 - override curve(PIP
+                    # 인셋 등)에도 main과 동일한 세모 marker 중심 보정을
+                    # 적용한다(y_range/y2_range로 넘겨받은 구체적 범위가
+                    # 있을 때만 - 없으면 안전하게 생략).
+                    _rng = y2_range if is_y2 else y_range
+                    _shift_frac = MARKER_Y_SHIFT_FRAC.get(marker_shape)
+                    if _shift_frac and _rng and _rng[0] not in (None, "") and _rng[1] not in (None, ""):
+                        try:
+                            _y_shift = _shift_frac * (float(_rng[1]) - float(_rng[0]))
+                        except (TypeError, ValueError):
+                            _y_shift = 0.0
+                        if _y_shift:
+                            marker_pts = [(px, py + _y_shift) for px, py in marker_pts]
                     dbname = f"$Marker{i}"
                     block = [f"{dbname} << EOD"]
                     block.extend(f"{px:.10g} {py:.10g}" for px, py in marker_pts)
@@ -3605,7 +3664,11 @@ class GnuplotGenerator:
             )
             _override_curves = None
         if _override_curves:
-            main_cmd_list = self._curve_cmd_list_for(_override_curves, fmt, lines=lines)
+            main_cmd_list = self._curve_cmd_list_for(
+                _override_curves, fmt, lines=lines,
+                y_range=(pip.get("ymin"), pip.get("ymax")),
+                y2_range=(pip.get("y2min"), pip.get("y2max")),
+            )
         elif pip.get("source") == "pltfile" and str(pip.get("pltfile_path", "")).strip():
             # [수정 - 사용자 보고 버그] "in-plot으로 .plt를 지정하면 그 파일이
             # 아니라 현재 main-plot을 불러옴" - source가 ".plt 파일"인데
