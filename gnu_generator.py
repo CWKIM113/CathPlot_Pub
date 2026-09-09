@@ -3719,6 +3719,16 @@ class GnuplotGenerator:
         - inset 안 곡선은 선(line)만 그림, 마커는 생략(작은 박스 안에서는
           가독성이 떨어지고, main_cmd_list 자체가 이미 마커 없이 넘어옴).
         """
+        # [추가 - 사용자 보고 버그, 사용자 제안 채택] "불투명인데 투명하게
+        # 보임(근본적인 문제로 보임 - 다시 그린 그림이 위에 나타나니까) -
+        # in-plot 위치만큼 비워두고 그리는 방안은?" - 아래 _ellipse_fully_
+        # opaque 계산부에서 이 인스턴스 속성에 "메인 자신의 plot 직전에
+        # 끼워 넣을 흰색 블랭킹 오브젝트 선언"을 채워 넣는다(create_script가
+        # 이 함수 호출 뒤 값을 읽어 메인의 첫 'plot \' 바로 앞에 끼워
+        # 넣음 - 아래 자세한 설명 참고). 매 호출마다 항상 먼저 리셋해서,
+        # 이번 호출이 해당 안 되는 경우(PIP 꺼짐, 완전불투명 아님 등) 이전
+        # 호출의 값이 남아 잘못 쓰이는 일이 없게 한다.
+        self._pip_main_blank_line = None
         pip = getattr(plotdef, "pip", None) or {}
         if not pip.get("enabled"):
             return
@@ -4555,6 +4565,31 @@ class GnuplotGenerator:
                 f"size screen {_erx*2:.4f},{_ery*2:.4f} front fc rgb \"black\" fillstyle empty "
                 f"border lc rgb \"black\" lw {_deco_lw:.2f} {_boundary_dash}"
             )
+            # [추가 - 사용자 제안 채택] "불투명일 때 in-plot 위치만큼 비워두고
+            # 그리는 방안" - 위 id 7100(behind, 흰 배경)이 실제 Windows
+            # 터미널에서는(pngcairo 재현으로 이미 한 번 고친 "NaN 섞인 곡선과
+            # 같은 plot 안에 있으면 behind가 합성 안 됨" 문제와는 별개로,
+            # 재현이 안 되는 다른 경로로) 여전히 메인이 그대로 비쳐 보인다는
+            # 재보고를 받음 - "behind" 오브젝트가 그 시점 이전에 이미 그려진
+            # 메인 자신의 곡선을 확실히 덮는지 자체가 근본적으로 불확실하니
+            # (Windows 터미널별 렌더링 특성까지는 이 환경에서 직접 검증 불가),
+            # 아예 메인이 자기 자신을 그리는 "1차" 단계에서부터 이 자리를
+            # 흰색으로 비워두면(=메인 자신의 첫 'plot \' 바로 앞에 같은 위치/
+            # 크기의 흰색 "front" 오브젝트를 끼워 넣어, 메인의 곡선 데이터
+            # 자체가 NaN 섞임 없는 "깨끗한" 상태에서 그 위에 흰색이 확실히
+            # 덮이게 함) PIP가 나중에 무엇을 하든(그 자체가 실패하더라도)
+            # 그 아래에 남아있을 게 없어 안전하다. 이 문자열은 create_script가
+            # (메인의 margin은 알아도 이 PIP의 위치/모양은 이 함수가 끝나야
+            # 알 수 있으므로) 이 함수 호출이 끝난 뒤 읽어가서 메인 자신의
+            # 'plot \' 바로 앞에 끼워 넣는다(원/타원 네이티브 완전불투명일
+            # 때만 - rect는 NaN 감싸기 자체를 안 써서 이 문제와 원래
+            # 무관했고, 완전투명(_ellipse_no_bg)은 메인이 그대로 비쳐
+            # 보여야 하므로 당연히 비워두면 안 됨).
+            if _ellipse_fully_opaque:
+                self._pip_main_blank_line = (
+                    f"set object 7050 ellipse at screen {_ecx:.4f},{_ecy:.4f} "
+                    f"size screen {_erx*2:.4f},{_ery*2:.4f} front fc rgb \"white\" fillstyle solid 1.0 noborder"
+                )
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
             # 있도록 항상 흰 배경만(테두리 없이) 깐다 - 최종 배경 불투명도/
@@ -6030,6 +6065,35 @@ class GnuplotGenerator:
             # 살짝 삐져나올 수 있는 것은 이 사용성 이득에 비해 감수함).
             _pip_probe_lines = list(lines)
             _pip_clip_info = self._render_pip_inset(plotdef, _pip_probe_lines, _main_cmd_list, fmt, force_postprocess=(fmt.lower() != "interactive"))
+            # [추가 - 사용자 제안 채택, 재수정] "불투명일 때 in-plot 위치만큼
+            # 비워두고 그리는 방안" - 위 _render_pip_inset이 원/타원 네이티브
+            # 완전불투명일 때 self._pip_main_blank_line에 "메인 자신의 첫
+            # 'plot \' 바로 앞에 끼워 넣을 흰색 블랭킹 오브젝트" 선언을
+            # 남겨뒀으면 그 자리(1차 그리기)에 끼워 넣는다.
+            # [주의 - 실제 렌더로 확인, 되돌림] 처음엔 아래 재생되는 스냅샷
+            # (_main_state_snapshot, 마우스 좌표 추적용)에도 똑같이 끼워
+            # 넣었는데, "set object"는 한 번 declare되면 unset 전까지 그
+            # 뒤에 오는 모든 plot에 계속 "front"로 다시 칠해지는 게 아니라
+            # (unset은 PIP 자신의 시작부에서 이미 정상적으로 지움 - 1차
+            # 그리기와 PIP 사이엔 문제없음), 이 스냅샷 자체가 PIP보다 훨씬
+            # 뒤(맨 마지막, "unset multiplot" 직전)에 재생되므로, 거기서
+            # 다시 그린 흰색 블랭킹이 PIP가 이미 그려둔 내용 위에 그대로
+            # 덮여 PIP의 실제 그림이 통째로 안 보이게 되는 심각한 회귀가
+            # 실제 렌더로 확인됨(재생이 "가장 나중"이라는 것 자체가
+            # 문제였음 - 1차 그리기는 PIP보다 먼저라 안전했지만 재생은
+            # PIP보다 나중이라 위험). 스냅샷 쪽 삽입은 되돌리고 1차
+            # 그리기에만 남긴다.
+            def _insert_before_first_plot(_target_list, _blank_line, _start=0):
+                _idx = next(
+                    (i for i in range(_start, len(_target_list)) if _target_list[i].strip() == "plot \\"),
+                    None
+                )
+                if _idx is not None:
+                    _target_list.insert(_idx, _blank_line)
+            _pip_blank_line = getattr(self, "_pip_main_blank_line", None)
+            if _pip_blank_line:
+                _insert_before_first_plot(_pip_probe_lines, _pip_blank_line, _main_state_start_idx)
+                self._pip_main_blank_line = None
             if _pip_clip_info is not None and fmt.lower() in ("emf", "eps", "interactive"):
                 # [수정 - 요청] "반투명이 EMF에 불가능하면 50%를 기준으로
                 # 투명/불투명으로 구분" - 항상 완전불투명으로 대체하면, 사용자가
