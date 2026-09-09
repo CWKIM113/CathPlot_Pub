@@ -6366,6 +6366,31 @@ class GnuplotGenerator:
             # "루프 안에서 한 프레임을 그리는 것과 완전히 동일한 절차"를
             # 함수로 만들어 정지 화면에도 그대로 재사용한다(항상 안전 -
             # multiplot 유무와 무관하게 항상 옳음).
+            # [추가 - 사용자 요청] "정적(non-Animation) 화면에 적용한 main-plot
+            # 마우스 좌표 수정을, 실행시간 차이도 크지 않으니 PIP+Animation
+            # 에도 똑같이 적용" - create_script의 static 경로와 완전히 같은
+            # 원리: gnuplot은 멀티플롯 안에서 "가장 마지막에 실행된 plot"
+            # 기준으로만 마우스 좌표/줌을 추적하는데, 지금까지는 매 프레임
+            # PIP 인셋의 plot이 항상 main보다 나중에 실행돼(_pip_inset_lines가
+            # animated_curve_lines 뒤에 오므로) main의 마우스 좌표가 전혀
+            # 안 잡혔음(실측 확인 - 실제 마우스를 움직여봐도 "mouse not in
+            # active plot"). PIP 인셋(+ 그 뒤에 이미 붙어있는 _main_state_lines
+            # 복구 - margin/xrange/title/border/tics/grid를 main 값으로
+            # 되돌려둠) 다음에 main의 animated_curve_lines를 "그대로 한 번 더"
+            # 실행해 main을 다시 "마지막 plot"으로 만든다 - _main_state_lines가
+            # 이미 margin/xrange 등을 main 값으로 되돌려놨으므로(원래 그
+            # 목적은 "다음 프레임"의 main plot이 인셋의 좁은 마진을 물려받지
+            # 않게 하려는 것이었지만, 그 복구가 "이번 프레임 안"에서 먼저
+            # 일어나므로 이 재생에도 그대로 유효함) 같은 화면 위치에 완전히
+            # 동일한 내용이 겹쳐 그려질 뿐이라 시각적으로 새로 보이는 게
+            # 없어야 한다(static 경로 수정 때와 동일한 안전 논리).
+            # [주의 - static 경로에서 실측으로 확인된 함정] 이 재생 앞에
+            # "set multiplot"을 또 넣으면 절대 안 됨 - 이미 이번 프레임 안에서
+            # 켜진 멀티플롯을 또 켜는 중복 선언이 되어(그 사이 unset multiplot을
+            # 부른 적이 없으므로) 실제 Windows 터미널이 이를 캔버스 전체를
+            # 지우는 신호로 처리해 PIP 인셋이 지워지는 버그가 재현됨(위 정적
+            # 경로 커밋에서 실제 화면 캡처로 확인한 바로 그 버그) - 여기서는
+            # "set multiplot" 없이 animated_curve_lines만 한 번 더 이어 붙인다.
             def _emit_frame(label_text_expr):
                 if _pip_inset_lines:
                     lines.append("    set multiplot")
@@ -6373,6 +6398,7 @@ class GnuplotGenerator:
                 lines.extend(animated_curve_lines)
                 if _pip_inset_lines:
                     lines.extend(_pip_inset_lines)
+                    lines.extend(animated_curve_lines)
                     lines.append("    unset multiplot")
 
             lines.append("click_seq = 0")
