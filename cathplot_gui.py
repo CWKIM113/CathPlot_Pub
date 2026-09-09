@@ -1497,6 +1497,18 @@ class CathPlotGUI:
             self.root.bind_all("<MouseWheel>", self._on_global_mousewheel)
         self._wheel_regions.append((region_widget, target_canvas))
 
+    def _unbind_mousewheel(self, region_widget):
+        """[추가 - 코드 재검토로 발견된 버그] PIP 팝업처럼 열고 닫기를 반복하는
+        창이 _bind_mousewheel로 등록만 하고 닫을 때 등록을 안 지워서,
+        팝업을 열 때마다 이미 destroy된(죽은) 위젯 참조가 self._wheel_regions에
+        계속 쌓이던 문제(메인 창처럼 앱 생애주기 동안 한 번만 만드는 위젯은
+        문제없음 - 반복해서 열고 닫는 팝업만 해당). 팝업이 실제로 닫힐 때
+        (dlg의 <Destroy> 이벤트) 그 팝업이 등록해둔 항목만 골라서 지운다."""
+        if hasattr(self, "_wheel_regions"):
+            self._wheel_regions = [
+                (rw, tc) for rw, tc in self._wheel_regions if rw is not region_widget
+            ]
+
     def _on_global_mousewheel(self, event):
         w = event.widget
         while w is not None:
@@ -2997,6 +3009,11 @@ class CathPlotGUI:
         # 영역에 속하는지 찾아 그 영역의 캔버스만 스크롤) 그대로 재사용한다
         # - 새로 bind_all을 걸지 않으므로 위 덮어쓰기 문제 자체가 없다.
         self._bind_mousewheel(body, _body_canvas)
+        # [추가 - 코드 재검토로 발견된 버그] 위 등록을 팝업이 닫힐 때(다시
+        # 열 때마다 body가 매번 새 위젯이라 등록도 매번 새로 쌓임) 지우지
+        # 않으면 self._wheel_regions가 죽은 위젯 참조로 계속 늘어남 - 팝업을
+        # 열고 닫기를 반복하는 세션에서 누적됨(_unbind_mousewheel 참고).
+        dlg.bind("<Destroy>", lambda e: self._unbind_mousewheel(body))
 
         # --- 데이터 소스 ---
         src_frame = ttk.LabelFrame(body, text="작은 plot에 표시할 데이터")

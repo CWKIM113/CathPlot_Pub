@@ -1,0 +1,48 @@
+{
+    "filename": "splot.txt",
+    "date_line": "09-Nov-2009 14:17 MOD-3.5d/Rev3 edbldexp.inp",
+    "title_lines": [
+        "ACCEPTANCE TEST #11(edbldexp.inp): CATHENA Simulation of CRW4449",
+        "Edwards Blowdown Experiments"
+    ],
+    "format_line": "",
+    "n_outputs": 10,
+    "variables": [
+        {
+            "output_no": 0,
+            "data_column": 1,
+            "signals": [
+                {
+                    "name": "Time",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 1,
+            "data_column": 2,
+            "signals": [
+                {
+                    "name": "VOID:HTSECT(1)",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        },
+        {
+            "output_no": 2,
+            "data_column": 3,
+            "signals": [
+                {
+                    "name": "VOID:HTSECT(2)",
+                    "multiplier": 1.0
+                }
+            ],
+            "alias": ""
+        }
+    ],
+    "data_start_line": 18,
+    "is_surface": true,
+    "surface_base_name": "VOID:HTSECT"
+}
