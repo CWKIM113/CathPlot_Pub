@@ -402,9 +402,9 @@ MARKER_Y_OFFSET = {
 # (마름모/+/★/좌우세모)는 아직 화면 확인 전이라 이전 비례값 유지.
 MARKER_Y_OFFSET_SCREEN = {
     8: 0.10, 9: 0.08,       # Triangle(정세모) - "아주 약간 처짐" 정도만 소폭 상향
-    10: 0.13, 11: 0.17,     # Tri-Down(역세모) - 재재보고("아주 약간 뜸")로 0.15/0.20에서 한 번 더 소폭 하향
+    10: 0.11, 11: 0.15,     # Tri-Down(역세모) - 재재재보고("중심에 맞게 아주 조금만 낮출 것")로 0.13/0.17에서 한 번 더 소폭 하향
     6: 0.12, 7: 0.12,       # Circle - 화면에서 확인된 기준점(문제 없음 보고)
-    4: 0.13, 5: 0.13,       # Square - 재보고("약간 위로 뜸")로 0.15에서 소폭 하향
+    4: 0.11, 5: 0.11,       # Square - 재재보고("중심에 맞게 아주 조금만 낮출 것")로 0.13에서 한 번 더 소폭 하향
     12: 0.11, 13: 0.11,     # Diamond - 아직 화면 미확인, 이전 비례값 유지
     1: 0.06,                 # Cross(+) - 아직 화면 미확인
     3: 0.02,                 # Star - 아직 화면 미확인
@@ -1705,7 +1705,13 @@ class GnuplotGenerator:
         # Animation 여부와 무관한 공용 값(compact/is_print_mode 분기만
         # 그대로 유지 - PIP는 별도 compact 분기로 이미 분리돼 있어 이
         # 변경의 영향을 안 받음).
-        LABEL_GAP_FRAC = (0.6 if (is_print_mode or compact) else 1.0) * char_width_frac   # 샘플선 <-> curve title 간격
+        # [수정 - 사용자 보고 버그] "PIP inset legend내 curve title 마진이
+        # 너무 큼(1글자로 줄일 것)" - 지금까지 compact(PIP 인셋)는 print와
+        # 같은 값(0.6자)을 그대로 썼는데, 인셋 자체가 작아 이 간격이
+        # 상대적으로 훨씬 커 보였음 - compact 전용으로 더 좁힌 계수를 따로
+        # 둔다(print/main-legend는 기존 값 그대로 영향 없음).
+        _label_gap_mult = 0.3 if compact else (0.6 if is_print_mode else 1.0)
+        LABEL_GAP_FRAC = _label_gap_mult * char_width_frac   # 샘플선 <-> curve title 간격
         # [수정] "screen에서 박스 테두리와 샘플선이 붙어 보인다"는 재확인 피드백.
         # 계산해보면 print/screen 공통 계수(0.3)는 기본 legend_size(9pt) 기준
         # 물리 간격이 0.013in 안팎(≈2px)에 불과해, 샘플선 자체의 굵기(lw)나
@@ -4634,6 +4640,16 @@ class GnuplotGenerator:
         # 어긋나지 않으므로, legend 켜짐 여부를 타는 if 블록 밖(여기)에서
         # 한 번만 계산해 둔다.
         _size_factor = min(1.0, max(size_w, size_h))
+        # [수정 - 사용자 요청] "inset plot의 커브선과 legend의 style 선이
+        # 너무 두꺼움(plot 배율로 가늘게 해 줘요)" - 아래 marker(ps)와 같은
+        # 이유로, 인셋 curve/legend 샘플선의 굵기(lw)도 지금까지는 인셋
+        # 크기와 무관하게 항상 main-plot과 같은 굵기였음(예전엔 "curve는
+        # 의도적으로 main과 같은 굵기 유지"였는데, 이번 요청으로 그 방침을
+        # 뒤집음). marker와 완전히 같은 배율(_marker_ps_scale)을 curve
+        # line/legend 샘플선에도 그대로 써서 서로 어긋나지 않게 한다(marker
+        # 계산에 필요한 font_scale이 이 시점에 이미 인자로 들어와 있으므로
+        # 원래 marker 전용이던 이 계산을 legend 호출보다 앞으로 옮김).
+        _marker_ps_scale = max(font_scale * 0.75 * _size_factor, 0.3)
 
         if pip.get("legend_on"):
             # id 7500대(Legend1 8000대/Legend2 9000대와 안 겹치는 번호)로 inset
@@ -4669,9 +4685,13 @@ class GnuplotGenerator:
             # 반영해야" - 위(legend_on 여부와 무관하게 계산해 둔) _size_factor를
             # legend 쪽 marker 기호에도 그대로 써서, curve 위 marker와
             # legend 안 marker 기호 크기가 서로 어긋나지 않게 한다.
+            # [수정 - 사용자 요청] "legend의 style 선이 너무 두꺼움" - line_scale을
+            # 더 이상 1.0(항상 main과 같은 굵기)으로 고정하지 않고, 위 curve
+            # line/marker와 같은 배율(_marker_ps_scale)을 써서 인셋 크기에
+            # 비례해 얇아지게 한다.
             self._render_legend_box(
                 lines, _inset_curves, "right top", True, 1.0, 7500,
-                font_scale, 1.0, 1.0, getattr(plotdef, "is_print_mode", False),
+                font_scale, _marker_ps_scale, 1.0, getattr(plotdef, "is_print_mode", False),
                 curve_index_map, plotdef.legend_font,
                 axis_w_in=_pip_legend_axis_w_in, legend_size=float(plotdef.legend_size or 9),
                 axis_h_in=_pip_legend_axis_h_in, fmt=fmt, compact=True,
@@ -4689,9 +4709,7 @@ class GnuplotGenerator:
 
         # [수정 - 사용자 보고 버그] "in-plot에 marker를 지정하면 marker
         # 크기가 줄지 않음" - 이 인셋은 main_cmd_list를 그대로 재사용해서
-        # curve line은 의도적으로 main-plot과 같은 굵기를 유지하지만(위
-        # border 관련 주석 참고 - "curve와 같은 굵기"가 기준), marker(점
-        # 데이터, "with points ... ps N")는 그 자체가 덩어리진 도형이라
+        # marker(점 데이터, "with points ... ps N")는 그 자체가 덩어리진 도형이라
         # 작은 인셋 박스 안에서는 원래 크기 그대로면 상대적으로 훨씬 커
         # 보임(tic/border/grid 등 다른 "인셋 전용 축 장식"은 이미 font_scale
         # 로 줄이고 있는데 marker만 빠져 있었음) - "with points"가 있는
@@ -4730,7 +4748,8 @@ class GnuplotGenerator:
         # 기존 0.75(compact legend 배율)와 font_scale은 그대로 곱하되,
         # 결과가 너무 작아지면(작은 인셋에서 사실상 안 보이는 것을 막기
         # 위해) 하한을 0.35 -> 0.3으로 살짝 낮춰서 크기 반영에 더 여유를 준다.
-        _marker_ps_scale = max(font_scale * 0.75 * _size_factor, 0.3)
+        # (_marker_ps_scale은 legend 샘플선 굵기와 공유하기 위해 위(legend_on
+        # 블록보다 앞)에서 이미 계산해 둔 것을 그대로 재사용한다.)
         def _scale_marker_ps(cmd):
             if " with points " not in cmd:
                 return cmd
@@ -4741,6 +4760,22 @@ class GnuplotGenerator:
                     return m.group(0)
             return re.sub(r" ps ([\d.]+)", _repl, cmd)
         _inset_cmd_list = [_scale_marker_ps(c) for c in _inset_cmd_list]
+        # [수정 - 사용자 요청] "inset plot의 커브선과 legend의 style 선이
+        # 너무 두꺼움(plot 배율로 가늘게 해 줘요)" - 지금까지 curve의 lw는
+        # main_cmd_list를 그대로 재사용해 인셋 크기와 무관하게 항상
+        # main-plot과 같은 굵기였음(의도적 설계였으나 이번 요청으로 방침
+        # 전환) - marker와 같은 배율(_marker_ps_scale)을 curve/border 등
+        # 모든 "with lines"류 명령의 lw에도 곱해 인셋이 작을수록 선도
+        # 비례해서 가늘어지게 한다("with points" 쪽 ps는 위에서 이미 별도
+        # 처리했으므로 lw만 대상으로 함 - 두 치환이 서로 겹치지 않음).
+        def _scale_line_width(cmd):
+            def _repl(m):
+                try:
+                    return f" lw {max(float(m.group(1)) * _marker_ps_scale, 0.3):.3f}"
+                except ValueError:
+                    return m.group(0)
+            return re.sub(r" lw ([\d.]+)", _repl, cmd)
+        _inset_cmd_list = [_scale_line_width(c) for c in _inset_cmd_list]
 
         # [수정 - 사용자 보고] "PIP in-plot에서의 marker 개수를 크기 대비해서
         # 줄일 수 없나요? marker가 너무 붙어 나와요" - main_cmd_list를 그대로
