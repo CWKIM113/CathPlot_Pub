@@ -6085,6 +6085,11 @@ class GnuplotGenerator:
                 _total_w_in = _axis_w_in + _nl + _nr
                 _total_h_in = _axis_h_in + _nt + _nb
                 _manual_size_override = f"{_total_w_in:.4f}in,{_total_h_in:.4f}in"
+        # [추가] "R키로 PIP까지 포함해 완전히 처음 상태로 되돌리기"용 - PIP가
+        # 켜진 경우에만 아래에서 채워짐(매 호출마다 리셋해 PIP 없는 plot에
+        # 이전 호출의 값이 잘못 남지 않게 함 - 다른 self._pip_* 상태와 동일한
+        # 관례).
+        self._pip_reset_fragment_lines = None
         lines = [
             "set encoding utf8",
             self._get_terminal_cmd(fmt, outfile, plotdef, size_override=_manual_size_override, panel_scale=_size_scale),
@@ -6135,6 +6140,13 @@ class GnuplotGenerator:
         # 스크립트로 확인 - 캔버스를 다시 여는 것으로 처리될 위험이 있어
         # PIP 인셋이 지워질 수 있음) 오히려 위험해진다.
         if _pip_on:
+            # [추가] "R키로 완전히 처음(PIP까지 포함) 상태로 되돌리기" 구현을
+            # 위해, 이 "set multiplot" 시작 지점을 기억해둔다 - 아래 interactive
+            # 블록에서 여기부터 "unset multiplot"까지 통째로 별도 파일에 다시
+            # 써서 "load"로 재실행하면(자세한 이유는 아래 'R' bind 부분 주석
+            # 참고) PIP를 포함한 전체 장면이 최초 렌더와 동일하게 깨끗이
+            # 다시 그려진다.
+            _pip_reset_fragment_start_idx = len(lines)
             lines.append("set multiplot")
             _main_state_start_idx = len(lines)
             lines.append("set origin 0,0")
@@ -6423,6 +6435,24 @@ class GnuplotGenerator:
                 lines.extend(_main_state_snapshot)
 
             lines.append("unset multiplot")
+            # [추가 - 사용자 요청] "불투명도 확대는 되어야지?" - 재생(replay)의
+            # 곡선은 이제 확대가 항상 동작하도록 마스킹 없이(또는 자리가 안
+            # 겹치는 한도 내에서만 마스킹) 그리지만, 확대 "도중"에는 그
+            # 곡선이 PIP 자리를 다시 덮을 수 있다는 한계가 남는다(투명
+            # 모드의 "잔상"과 같은 성격의, 이미 알려진 한계). 이를 사용자가
+            # 원할 때 완전히 해소할 방법으로: 위에서 기억해둔 "set multiplot"
+            # ~ "unset multiplot" 구간(=PIP를 포함한 장면 전체를 그리는
+            # 코드) 그대로를 별도 파일에 한 번 더 써 두고, 'R' 키가 그 파일을
+            # gnuplot의 "load"로 다시 실행하게 한다 - 이러면 지금 화면이
+            # 확대/스크롤로 무엇이 겹쳐 있든 상관없이, 최초 렌더와 똑같은
+            # 순서(메인 1차 그리기+블랭킹 → PIP 인셋 → 메인 재생)가 그대로
+            # 다시 실행되어 PIP까지 포함해 완전히 깨끗한 최초 상태로 되돌아간다
+            # (현재 멀티플롯 세션 "밖"(unset multiplot 이후)에서 새로
+            # "set multiplot"을 선언하는 것이므로, 위쪽 주석에서 실측으로
+            # 확인한 "이미 켜진 멀티플롯을 중복 선언하면 캔버스가 지워지는"
+            # Windows 터미널 동작과는 다른 경우 - 여기서는 오히려 그 "지우고
+            # 다시 그리는" 성질을 "완전 초기화"에 그대로 이용한다).
+            self._pip_reset_fragment_lines = list(lines[_pip_reset_fragment_start_idx:len(lines)])
 
         # [추가] "원래(처음) plot으로 되돌리는 기능 - 2D/3D 모두" - 2D도 마우스
         # 휠/드래그로 확대·이동한 뒤 처음 축 범위로 되돌릴 방법이 없었음. 위에서
@@ -6434,6 +6464,7 @@ class GnuplotGenerator:
         # [유지] "중복이더라도 2-D의 R키도 살려둬요" - gnuplot 기본 'u'가
         # 실질적으로 같은 결과를 내긴 하지만, 사용자 요청대로 R도 그대로
         # 남겨둔다(같은 동작을 하는 키가 두 개(u/R) 있는 셈).
+        _pip_reset_path = None
         if fmt.lower() == "interactive":
             def _find_range_cmd(prefix, autoscale_name):
                 for _l in lines:
@@ -6446,7 +6477,24 @@ class GnuplotGenerator:
                 _find_range_cmd("set y2range", "y2"),
                 "replot",
             ]
-            lines.append("bind 'R' '" + "; ".join(_reset_cmds) + "'")
+            # [수정 - 사용자 요청] "불투명도 확대는 되어야지?" - PIP가 켜진
+            # 경우, 기존의 "set xrange/yrange/y2range 그대로 재실행 + replot"
+            # 만으로는 확대/스크롤로 이미 겹쳐진 PIP 자리를 되살릴 수 없다
+            # (replot은 "마지막 plot 명령"만 다시 그릴 뿐, 1차 그리기의
+            # 블랭킹이나 PIP 인셋 자체를 다시 그리진 않음). 대신 위에서 미리
+            # 저장해둔 self._pip_reset_fragment_lines("set multiplot" ~
+            # "unset multiplot" 구간 전체 - 메인 1차 그리기+블랭킹 → PIP
+            # 인셋 → 메인 재생까지 최초 렌더와 동일한 순서)를 별도 파일로
+            # 저장해두고, 'R'을 그 파일을 "load"하는 것으로 바꾼다 - 지금
+            # 화면 상태가 무엇이든 상관없이 PIP까지 포함해 완전히 깨끗한
+            # 최초 상태로 되돌아간다(PIP가 꺼져 있으면 이 파일 자체가 없으므로
+            # 기존 방식 그대로 유지 - 동작 변화 없음).
+            if getattr(self, "_pip_reset_fragment_lines", None):
+                _pip_reset_path = outfile.rsplit(".", 1)[0] + "_pip_reset.plt"
+                _pip_reset_path_gp = _pip_reset_path.replace("\\", "/")
+                lines.append(f'bind "R" \'load "{_pip_reset_path_gp}"\'')
+            else:
+                lines.append("bind 'R' '" + "; ".join(_reset_cmds) + "'")
             # [되돌림 - 사용자 요청] "R, u키 원래대로 복구해요" - 'u'를 'R'과
             # 같은 명시적 재실행으로 덮어쓰는 실험(바로 위 삭제된 주석 참고)이
             # 오히려 더 나쁜 결과를 냄: 재보고 결과 확대/스크롤 시 좌표값만
@@ -6470,6 +6518,9 @@ class GnuplotGenerator:
             script_path = outfile.rsplit(".", 1)[0] + ".plt"
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(script_text)
+            if _pip_reset_path is not None:
+                with open(_pip_reset_path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(self._pip_reset_fragment_lines))
             # [추가] gnuplot이 스크립트 에러로 죽을 때 실제 에러 메시지를 잡아서
             # 사용자에게 보여줄 수 있도록 stderr를 파이프로 캡처
             self.last_process = subprocess.Popen(
