@@ -3707,7 +3707,8 @@ class GnuplotGenerator:
         return f'"{_tmp_name}" using ($1):2{_suffix}', _tmp_path
 
     def _build_pip_folded_overlay(self, plotdef, pip_xmin, pip_xmax, pip_y1min, pip_y1max,
-                                   pip_y2min, pip_y2max, box, plot_dir_):
+                                   pip_y2min, pip_y2max, box, plot_dir_,
+                                   clip_shape="rect", clip_rx=50.0, clip_ry=50.0):
         """[추가 - PIP 렌더링 재설계] "R/u 직후 기본 화면은 깨끗해야 하는데
         확대(replot)는 그걸 위한 NaN 마스킹 때문에 막힌다"는 근본 충돌을
         피하기 위해, PIP(배경+테두리+자기 커브)를 별도 멀티플롯 패널이
@@ -3777,7 +3778,27 @@ class GnuplotGenerator:
         # 정상 - 1의 차이로 갈리는 것으로 보아 cairo의 색상 비교/캐싱
         # 관련 off-by-one성 버그로 추정). 육안으로는 순백과 구별 안 되는
         # "#FDFDFD"를 대신 써서 이 버그를 피해간다.
-        _corners = [(x_lo, y1_lo), (x_hi, y1_lo), (x_hi, y1_hi), (x_lo, y1_hi), (x_lo, y1_lo)]
+        # [추가 - 사용자 보고] "원인데 4각으로 나옴" - clip_shape가 원/타원
+        # 이면 배경/테두리를 사각형 대신 그 사각형에 내접하는 타원(원 둘레를
+        # 60개 점으로 잘게 쪼갠 다각형 - 육안상 매끄러운 원/타원으로 보임)
+        # 으로 그린다. clip_rx/clip_ry(%, annotation의 원/타원과 같은 관례 -
+        # 박스 절반 크기 대비 반지름)로 중심/반지름을 정한다.
+        _is_ellipse = clip_shape in ("circle", "ellipse")
+        _cx, _cy = (x_lo + x_hi) / 2.0, (y1_lo + y1_hi) / 2.0
+        # [주의] clip_rx/ry(%)는 "annotation Circle과 같은 관례"로, 50%가
+        # 박스 절반 크기(=반지름이 딱 박스 가장자리에 닿는 내접 크기)를
+        # 뜻한다(네이티브 _ellip_ok_body의 erx_box=clip_rx/100, box_frac이
+        # [-0.5,0.5] 범위인 것과 대조해 확인) - 그래서 반지름 = 박스 절반
+        # 크기 * (clip_rx/50), 100이 아니라 50으로 나눠야 한다.
+        _rx, _ry = (x_hi - x_lo) / 2.0 * (clip_rx / 50.0), (y1_hi - y1_lo) / 2.0 * (clip_ry / 50.0)
+        if _is_ellipse and _rx > 0 and _ry > 0:
+            _n = 60
+            _corners = [
+                (_cx + _rx * math.cos(2 * math.pi * _i / _n), _cy + _ry * math.sin(2 * math.pi * _i / _n))
+                for _i in range(_n + 1)
+            ]
+        else:
+            _corners = [(x_lo, y1_lo), (x_hi, y1_lo), (x_hi, y1_hi), (x_lo, y1_hi), (x_lo, y1_lo)]
         _bg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _corners)
         fragments.append(f"$PipFoldBox << EOD\n{_bg_rows}\nEOD")
         fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 noborder')
@@ -3799,13 +3820,32 @@ class GnuplotGenerator:
             x_col_idx = curve.x_output_no if getattr(curve, "x_output_no", None) is not None else getattr(plotdef, "x_output_no", 0)
             x_expr = f"(${x_col_idx + 1}+{curve.x_shift})"
             y_expr = f"(${curve.output_no + 1})"
+            # [추가 - 사용자 보고 버그] "inset은 spline 안 됨(main은 됨)" -
+            # 원본 데이터 파일을 그대로 "set table"로 훑으면 Cubic Spline
+            # 옵션이 켜진 커브라도 매끄럽게 안 나온다(smooth csplines는
+            # x가 정렬돼 있어야 하는데 원본은 그렇지 않을 수 있고, 여기서
+            # 새로 추가하지도 않았음). main/기존 PIP 패널이 이미 쓰는 것과
+            # 같은 사전계산 기법(_presmooth_spline_curve - x 정렬 + 2000
+            # 샘플로 미리 매끄러운 좌표를 뽑아둠)을 그대로 재사용해, 있으면
+            # 그 결과 파일을, 실패하면(3점 미만 등) 원본 파일을 그대로
+            # 대상으로 삼는다.
+            _fold_src_path, _fold_src_using = rel_path, f"{x_expr}:{y_expr}"
+            if getattr(curve, "smooth_csplines", False):
+                _match_using = f"{x_expr}:{curve.output_no + 1}"
+                _orig_line_for_match = f'"{rel_path}" using {_match_using} smooth csplines notitle with lines'
+                _pre = self._presmooth_spline_curve(_orig_line_for_match, rel_path, _match_using, plot_dir_)
+                if _pre:
+                    _presmoothed_line, _presmoothed_path = _pre
+                    _m = re.match(r'"([^"]+)" using', _presmoothed_line)
+                    if _m:
+                        _fold_src_path, _fold_src_using = _m.group(1), "($1):($2)"
             _tmp_name = f".cathplot_pipfold_{uuid.uuid4().hex}.dat"
             _tmp_path = os.path.join(plot_dir_, _tmp_name)
             _mini_script = (
                 f"set xrange [{pxmin}:{pxmax}]\n"
                 f"set yrange [{src_ymin}:{src_ymax}]\n"
                 f'set table "{_tmp_name}"\n'
-                f'plot "{rel_path}" using {x_expr}:{y_expr} notitle with lines\n'
+                f'plot "{_fold_src_path}" using {_fold_src_using} notitle with lines\n'
                 f"unset table\n"
             )
             try:
@@ -3825,6 +3865,26 @@ class GnuplotGenerator:
                 # 확인). 여기서는 "i"로 표시된, 확실히 PIP 구간 안인 점만
                 # 남긴 "순수 x y" 파일로 다시 쓴다(최종 스크립트에서는
                 # 조건문 없는 단순 선형변환 산술식만 남게 하기 위함).
+                # [추가 - 사용자 보고] "원/타원인데 안의 커브도 사각형
+                # 범위로만 잘림" - 사각형 range 필터("i")는 그대로 두고,
+                # 원/타원 모양이면 추가로 타원 방정식을 만족하는 점만 한 번
+                # 더 거른다. [수정 - 실측으로 발견된 버그] 처음엔 이 판정을
+                # "PIP 자신의 구간" data 단위로 직접 했는데(_e_rx/_e_ry를
+                # pxmax-pxmin, src_ymax-src_ymin에서 바로 구함), clip_rx/ry(%)
+                # 는 원래 "박스의 화면상 절반 크기 대비" 비율이지 "데이터
+                # 값 범위 대비" 비율이 아니라서 완전히 틀린 반지름이 나왔음
+                # (y1은 전체 range가 넓어 타원이 너무 납작해져 커브가 하나도
+                # 안 걸리는 경우까지 발생 - 실측으로 확인). 대신 각 점을
+                # 먼저 (배경과 같은 선형변환으로) 목적지 박스 좌표로 옮긴
+                # 뒤, 그 박스를 [-1,1] 정규화 공간으로 바꿔 거기서 타원
+                # 방정식을 적용한다 - Y1/Y2 어느 쪽이든, 어떤 data 단위든
+                # 항상 "박스 절반 크기 대비 몇 %"로 일관되게 판정된다.
+                _e_hw = (x_hi - x_lo) / 2.0
+                _e_hh = (dest_hi - dest_lo) / 2.0
+                _e_cx_dest = (x_lo + x_hi) / 2.0
+                _e_cy_dest = (dest_lo + dest_hi) / 2.0
+                _e_rxf = clip_rx / 50.0
+                _e_ryf = clip_ry / 50.0
                 _kept_rows = []
                 with open(_tmp_path, encoding="utf-8", errors="replace") as f:
                     for ln in f:
@@ -3832,8 +3892,18 @@ class GnuplotGenerator:
                         if not ln or ln.startswith("#"):
                             continue
                         _parts = ln.split()
-                        if len(_parts) >= 3 and _parts[2] == "i":
-                            _kept_rows.append(f"{_parts[0]} {_parts[1]}")
+                        if len(_parts) < 3 or _parts[2] != "i":
+                            continue
+                        if _is_ellipse and _e_hw > 0 and _e_hh > 0 and _e_rxf > 0 and _e_ryf > 0:
+                            try:
+                                _px, _py = float(_parts[0]), float(_parts[1])
+                            except ValueError:
+                                continue
+                            _tx_norm = ((x_lo + (_px - pxmin) / (pxmax - pxmin) * (x_hi - x_lo)) - _e_cx_dest) / _e_hw
+                            _ty_norm = ((dest_lo + (_py - src_ymin) / (src_ymax - src_ymin) * (dest_hi - dest_lo)) - _e_cy_dest) / _e_hh
+                            if (_tx_norm / _e_rxf) ** 2 + (_ty_norm / _e_ryf) ** 2 > 1.0:
+                                continue
+                        _kept_rows.append(f"{_parts[0]} {_parts[1]}")
                 os.remove(_tmp_path)
                 if not _kept_rows:
                     continue
@@ -4825,7 +4895,10 @@ class GnuplotGenerator:
                 )
                 if _mbx is not None and _mby1 is not None:
                     self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
-                    self._pip_fold_ranges = {"x": _rxr, "y1": _ryr, "y2": _ry2r if _uses_y2 else None}
+                    self._pip_fold_ranges = {
+                        "x": _rxr, "y1": _ryr, "y2": _ry2r if _uses_y2 else None,
+                        "clip_shape": "rect", "clip_rx": 50.0, "clip_ry": 50.0,
+                    }
         elif _rect_no_bg:
             # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
             # 통일 필요(가는 외곽선은 다 있는 게 낫다)" - 배경(채우기)은
@@ -4911,7 +4984,10 @@ class GnuplotGenerator:
                     )
                     if _mbx is not None and _mby1 is not None:
                         self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
-                        self._pip_fold_ranges = {"x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None}
+                        self._pip_fold_ranges = {
+                            "x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None,
+                            "clip_shape": _clip_shape, "clip_rx": _clip_rx, "clip_ry": _clip_ry,
+                        }
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
             # 있도록 항상 흰 배경만(테두리 없이) 깐다 - 최종 배경 불투명도/
@@ -6533,6 +6609,9 @@ class GnuplotGenerator:
                             _fold_y1[0] if _fold_y1 else None, _fold_y1[1] if _fold_y1 else None,
                             _fold_y2[0] if _fold_y2 else None, _fold_y2[1] if _fold_y2 else None,
                             _mask_box, self.plot_dir,
+                            clip_shape=_fold_ranges.get("clip_shape", "rect"),
+                            clip_rx=_fold_ranges.get("clip_rx", 50.0),
+                            clip_ry=_fold_ranges.get("clip_ry", 50.0),
                         )
                         self._last_pip_fold_tempfiles = (getattr(self, "_last_pip_fold_tempfiles", None) or []) + _fold_tempfiles
                         _decls = [f for f in _fold_fragments if f.startswith("$") and "<< EOD" in f]
