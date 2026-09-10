@@ -6292,6 +6292,25 @@ class GnuplotGenerator:
                     _target_list.insert(_idx, _blank_line)
             _pip_blank_line = getattr(self, "_pip_main_blank_line", None)
             if _pip_blank_line:
+                # [추가 - 사용자 재재재보고 대응 실험] "불투명 확대는 curve
+                # 변화 없음(좌표축만) / 투명은 확대 가능함" - 재생의 using식
+                # 자체는 이제 둘이 완전히 같은데(마스킹 없음), 유일하게 남은
+                # 구조적 차이는 PIP 자신의 배경 오브젝트(불투명: id 7100을
+                # "behind ... fillstyle solid"로 채워 넣고 이후 unset 없이
+                # 세션 끝까지 계속 선언된 채로 둠 / 투명: "front ... fillstyle
+                # empty"만 - 채움 없음). 완전불투명 배경처럼 큰 "behind
+                # solid fill" 오브젝트가 세션 내내 계속 활성 선언 상태로
+                # 남아 있는 것이, gnuplot 네이티브 확대(내부적으로 replot을
+                # 쓰는 부분 재렌더 경로)가 곡선 데이터를 다시 그리지 못하게
+                # 막는 원인일 가능성이 있어(재현 격리는 이 세션의 자동화
+                # 도구 한계로 직접 확인은 못 했음 - 아래 실험적 수정, 재확인
+                # 필요) PIP 자신의 "plot \" 실행(이 오브젝트가 배경으로
+                # 필요한 유일한 시점) 직후, 재생 전에 이 오브젝트를 지워
+                # 세션 나머지 구간 동안은 활성 선언 상태로 안 남게 한다 -
+                # 이미 그려진 PIP 화면 픽셀 자체는 지워지지 않으므로(unset은
+                # "이후 다시 그릴 때 포함 여부"만 바꿈) PIP가 고정된 채로
+                # 보이는 모습에는 영향 없다.
+                _pip_probe_lines.append("unset object 7100")
                 _insert_before_first_plot(_pip_probe_lines, _pip_blank_line, _main_state_start_idx)
                 self._pip_main_blank_line = None
                 # [수정 - 사용자 재재재보고 반영] "불투명 확대에서는 좌표축
