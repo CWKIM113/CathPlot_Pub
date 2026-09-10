@@ -2428,6 +2428,78 @@ class CathPlotGUI:
                 for fc in data.get("function_curves", []):
                     self.add_function_curve_row(initial=fc)
 
+            # [추가 - 사용자 보고 크리티컬 버그] "template 저장 후 불러오면
+            # 현재 창의 선택된 커브에 겹침 - 선택 안 한 파일의 변수도 선택되고
+            # X(time) 변수에 check 없이 뜸" - load_template이 지금까지
+            # file_assignments(파일별 X/Y1/Y2 지정)를 아예 안 읽고 있었음
+            # (curve_styles는 "이미 선택된" 변수의 색상/굵기 등 스타일만
+            # 바꿀 뿐, 무엇을 선택할지는 전혀 건드리지 않음 - _build_plotdef_
+            # from_template_data가 이 파일을 읽긴 하지만 그건 Batch Set 전용
+            # 무-화면 경로라 Template Load 버튼과는 무관) - 그 결과 템플릿을
+            # 불러와도 "현재 화면에 이미 체크돼 있던 것"이 그대로 남아 템플릿의
+            # 선택과 뒤섞여 겹쳐 보였음. 요청대로 "모든 선택을 먼저 초기화한
+            # 뒤 저장된 내용대로만 다시 선택"하도록 고친다 - 파일은 이미
+            # 열려있으면 그대로 재사용(색상 등 스타일 dict가 파일 경로 문자열로
+            # 키가 잡혀 있어 재사용해야 기존 상태와 안 어긋남), 안 열려있으면
+            # 빈 행을 찾아 쓰거나 새 행을 만들어 추가로 연다.
+            _file_assignments = data.get("file_assignments", [])
+            if _file_assignments:
+                for _v in self.selected_y1_vars.values():
+                    _v.set(False)
+                for _v in self.selected_y2_vars.values():
+                    _v.set(False)
+                for _info in self.file_rows:
+                    _info["x_var"].set("")
+
+                for _fa in _file_assignments:
+                    _rel_path = _fa.get("filename", "")
+                    if not _rel_path:
+                        continue
+                    _abs_path = _rel_path if os.path.isabs(_rel_path) else os.path.join(self.cwd, _rel_path)
+                    if not os.path.exists(_abs_path):
+                        continue  # 템플릿 저장 이후 파일이 옮겨지거나 지워졌으면 조용히 건너뜀
+
+                    _target_info = next((i for i in self.file_rows if i.get("filename") == _abs_path), None)
+                    if _target_info is None:
+                        _target_info = next((i for i in self.file_rows if not i.get("filename")), None)
+                        if _target_info is None:
+                            self.add_file_row()
+                            _target_info = self.file_rows[-1]
+                        try:
+                            _meta = self.parser.parse(_abs_path)
+                        except Exception:
+                            continue
+                        _target_info["var"].set(_abs_path)
+                        _target_info["filename"] = _abs_path
+                        _target_info["meta"] = _meta
+                        try:
+                            save_json(_meta, Path(_abs_path).with_suffix(".json"))
+                        except Exception:
+                            pass
+
+                    _datfile = _target_info["filename"]
+                    _x_no = _fa.get("x_output_no")
+                    if _x_no is not None:
+                        _target_info["x_var"].set(f"{_datfile}||{_x_no}")
+                    for _no in _fa.get("y1_output_nos") or []:
+                        _key_str = f"{_datfile}||{_no}"
+                        if _key_str not in self.selected_y1_vars:
+                            self.selected_y1_vars[_key_str] = tk.BooleanVar(value=False)
+                        self.selected_y1_vars[_key_str].set(True)
+                    for _no in _fa.get("y2_output_nos") or []:
+                        _key_str = f"{_datfile}||{_no}"
+                        if _key_str not in self.selected_y2_vars:
+                            self.selected_y2_vars[_key_str] = tk.BooleanVar(value=False)
+                        self.selected_y2_vars[_key_str].set(True)
+                    if "x_shift" in _fa:
+                        if _datfile not in self.file_xshift_vars:
+                            self.file_xshift_vars[_datfile] = tk.StringVar(value="0")
+                        self.file_xshift_vars[_datfile].set(str(_fa.get("x_shift") or "0"))
+
+                self.update_title_from_first_file()
+                self.show_variables()
+                self.sync_axis_labels()
+
             # var_no(output_no) 기준 curve 스타일(Color/Linestyle/Linewidth/Shift + 축)을
             # 현재 로드된 파일들 중 output_no가 일치하는 변수에 적용 (Batch Queue의
             # 레시피와 동일한 개념 - 어떤 dat 파일인지와 무관하게 output_no로 매칭)
@@ -2469,15 +2541,30 @@ class CathPlotGUI:
                         if key_str not in self.smooth_csplines_vars:
                             self.smooth_csplines_vars[key_str] = tk.BooleanVar(value=False)
                         self.smooth_csplines_vars[key_str].set(style.get("smooth_csplines", False))
-                        axis = style.get("axis")
-                        if axis == "y1" and key_str in self.selected_y1_vars:
-                            self.selected_y1_vars[key_str].set(True)
-                            if key_str in self.selected_y2_vars:
-                                self.selected_y2_vars[key_str].set(False)
-                        elif axis == "y2" and key_str in self.selected_y2_vars:
-                            self.selected_y2_vars[key_str].set(True)
-                            if key_str in self.selected_y1_vars:
-                                self.selected_y1_vars[key_str].set(False)
+                        # [수정 - 사용자 보고 크리티컬 버그] "선택 안 한 파일의
+                        # 변수도 선택됨" - 이 axis 선택 코드는 output_no만
+                        # 보고 "현재 열려있는 모든 파일" 중 일치하는 변수를
+                        # 죄다 선택 처리해버림(Batch Set이 다른 dat 파일에
+                        # 이 레시피를 재현할 때 필요해서 원래 이렇게 설계됨 -
+                        # _capture_curve_recipe 참고, "특정 파일명과 무관").
+                        # 그런데 Template Load는 위에서 이미 file_assignments
+                        # (어떤 파일의 어떤 변수인지 정확히 지정)로 선택을
+                        # 정확하게 복원해뒀으므로, 여기서 또 output_no만 보고
+                        # 다른(템플릿에 없는) 파일까지 같이 선택해버리면 그
+                        # 선택이 다시 겹쳐 버림 - file_assignments가 있으면(=
+                        # 위에서 이미 정확히 복원했으면) 이 재선택은 생략하고
+                        # 스타일만 적용한다(file_assignments가 없는 구버전
+                        # 템플릿은 지금까지처럼 레시피 방식 그대로 유지).
+                        if not _file_assignments:
+                            axis = style.get("axis")
+                            if axis == "y1" and key_str in self.selected_y1_vars:
+                                self.selected_y1_vars[key_str].set(True)
+                                if key_str in self.selected_y2_vars:
+                                    self.selected_y2_vars[key_str].set(False)
+                            elif axis == "y2" and key_str in self.selected_y2_vars:
+                                self.selected_y2_vars[key_str].set(True)
+                                if key_str in self.selected_y1_vars:
+                                    self.selected_y1_vars[key_str].set(False)
                 self.sync_axis_labels()
 
             # [추가 - 요청] "선택한 순서대로 curve 그리기"를 Template Load에도
