@@ -2771,7 +2771,13 @@ class GnuplotGenerator:
             tic_major_scale, tic_minor_scale = SCREEN_TIC_MAJOR_SCALE, SCREEN_TIC_MINOR_SCALE
         lines.append(f"set tics scale {tic_major_scale}, {tic_minor_scale}")
 
-        lines.append(f"set xtics font '{plotdef.xlabel_font},{tic_size}'")
+        # [수정 - 사용자 보고 버그] "main plot 상단 x축에 tic이 안 그려짐" -
+        # PIP 인셋이 자기 축에 "nomirror"를 쓰는데(작은 박스에 위아래로 tic
+        # 숫자가 겹치는 걸 막기 위함, _render_pip_inset 참고), main이 나중에
+        # (재생 등에서) 이 줄을 다시 실행할 때 "mirror"를 명시하지 않아서
+        # gnuplot이 직전 상태(PIP의 nomirror)를 그대로 물려받아 상단 tic이
+        # 계속 안 보이는 것으로 보임 - 매번 명시적으로 mirror를 켠다.
+        lines.append(f"set xtics font '{plotdef.xlabel_font},{tic_size}' mirror")
         lines.append(f"set ytics font '{plotdef.ylabel_font},{tic_size}'")
         lines.append(f"set y2tics font '{plotdef.y2label_font},{tic_size}'")
 
@@ -3803,6 +3809,37 @@ class GnuplotGenerator:
         fragments.append(f"$PipFoldBox << EOD\n{_bg_rows}\nEOD")
         fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 noborder')
         fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 1.2')
+
+        # [추가 - 사용자 보고] "inset에 축 frame이 안 나타남, grid도 없음" -
+        # 기존 별도 패널 방식의 실제 tic/grid만큼 정교하진 않지만, 박스
+        # 내부를 가로/세로 3등분하는 옅은 점선(격자)을 데이터로 그려
+        # "안이 텅 빈 배경"처럼 보이지 않게 한다(숫자 tic 라벨은 이 방식
+        # (재생에 얹는 정적 데이터)으로는 아직 안 넣음 - 다음 과제).
+        # 원/타원이면 격자선이 박스 테두리를 넘지 않도록 그 위치에서의
+        # 타원 현(chord) 길이로 잘라 그린다.
+        _grid_fracs = (0.25, 0.5, 0.75)
+        _grid_segs = []
+        for _f in _grid_fracs:
+            _gx = x_lo + _f * (x_hi - x_lo)
+            if _is_ellipse and _rx > 0:
+                _t = 1.0 - ((_gx - _cx) / _rx) ** 2
+                if _t > 0:
+                    _half = _ry * math.sqrt(_t)
+                    _grid_segs.append(((_gx, _cy - _half), (_gx, _cy + _half)))
+            else:
+                _grid_segs.append(((_gx, y1_lo), (_gx, y1_hi)))
+        for _f in _grid_fracs:
+            _gy = y1_lo + _f * (y1_hi - y1_lo)
+            if _is_ellipse and _ry > 0:
+                _t = 1.0 - ((_gy - _cy) / _ry) ** 2
+                if _t > 0:
+                    _half = _rx * math.sqrt(_t)
+                    _grid_segs.append(((_cx - _half, _gy), (_cx + _half, _gy)))
+            else:
+                _grid_segs.append(((x_lo, _gy), (x_hi, _gy)))
+        for _gi, (_p0, _p1) in enumerate(_grid_segs):
+            fragments.append(f"$PipFoldGrid{_gi} << EOD\n{_p0[0]:.6g} {_p0[1]:.6g}\n{_p1[0]:.6g} {_p1[1]:.6g}\nEOD")
+            fragments.append(f'$PipFoldGrid{_gi} using 1:2 notitle axes x1y1 with lines lc rgb "gray70" lw 0.6 dashtype "."')
 
         for curve in plotdef.curves:
             is_y2 = getattr(curve, "axis", "y1") == "y2"
