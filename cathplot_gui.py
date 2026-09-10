@@ -2443,6 +2443,7 @@ class CathPlotGUI:
             # 키가 잡혀 있어 재사용해야 기존 상태와 안 어긋남), 안 열려있으면
             # 빈 행을 찾아 쓰거나 새 행을 만들어 추가로 연다.
             _file_assignments = data.get("file_assignments", [])
+            _fa_scope_keys = set()  # 아래 curve_styles 블록에서 "템플릿이 실제로 지정한 (파일,번호)"만 스타일을 적용하도록 범위를 좁히는 데 재사용
             if _file_assignments:
                 for _v in self.selected_y1_vars.values():
                     _v.set(False)
@@ -2486,11 +2487,13 @@ class CathPlotGUI:
                         if _key_str not in self.selected_y1_vars:
                             self.selected_y1_vars[_key_str] = tk.BooleanVar(value=False)
                         self.selected_y1_vars[_key_str].set(True)
+                        _fa_scope_keys.add(_key_str)
                     for _no in _fa.get("y2_output_nos") or []:
                         _key_str = f"{_datfile}||{_no}"
                         if _key_str not in self.selected_y2_vars:
                             self.selected_y2_vars[_key_str] = tk.BooleanVar(value=False)
                         self.selected_y2_vars[_key_str].set(True)
+                        _fa_scope_keys.add(_key_str)
                     if "x_shift" in _fa:
                         if _datfile not in self.file_xshift_vars:
                             self.file_xshift_vars[_datfile] = tk.StringVar(value="0")
@@ -2515,6 +2518,17 @@ class CathPlotGUI:
                         if not style:
                             continue
                         key_str = f"{datfile}||{pv.output_no}"
+                        # [수정 - 사용자 재보고 크리티컬 버그] "같은 변수명(=보통
+                        # 같은 output_no)의 다른 파일도 선택되는 문제가 있네요" -
+                        # 위 axis 선택뿐 아니라 색상/스타일 자체도 output_no만
+                        # 보고 "현재 열려있는 모든 파일"에 다 적용되고 있었음
+                        # (이 파일이 템플릿에 없어도 마찬가지) - file_assignments가
+                        # 있으면(=위에서 정확히 어떤 파일의 어떤 번호인지 이미
+                        # 알고 있으면) 그 범위(_fa_scope_keys) 밖의 (파일,번호)는
+                        # 스타일 적용도 건너뛴다(범위 밖 파일은 색상/마커 등도
+                        # 템플릿과 무관하게 원래 값 그대로 유지돼야 함).
+                        if _file_assignments and key_str not in _fa_scope_keys:
+                            continue
                         if key_str in self.color_vars:
                             self.color_vars[key_str].set(style.get("color", self.color_vars[key_str].get()))
                         if key_str in self.linestyle_vars:
