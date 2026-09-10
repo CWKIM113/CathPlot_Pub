@@ -3758,11 +3758,36 @@ class GnuplotGenerator:
         # 이번 호출이 해당 안 되는 경우(PIP 꺼짐, 완전불투명 아님 등) 이전
         # 호출의 값이 남아 잘못 쓰이는 일이 없게 한다.
         self._pip_main_blank_line = None
-        # [추가] rect/ellipse 완전불투명 각각 서로 다른 이름의 재생(replay)
-        # 제외 판정 함수를 쓰므로(_pip_rect_ok_y1/y2 vs _pip_ellip_ok_y1/y2),
-        # create_script가 어느 쪽을 골라 써야 할지 알 수 있게 접두어를
-        # 남긴다 - _pip_main_blank_line과 마찬가지로 매 호출마다 리셋.
-        self._pip_exclude_fn_prefix = None
+        # [수정 - 사용자 재보고 + 근본원인 확정] "확대,scroll 안되면 원래대로
+        # plot 고정에서라도 확대/scroll 되게 해요" 대응으로 재생(replay)의
+        # NaN 마스킹을 한 번 통째로 뺐더니(직전 커밋) 이번엔 "사각형
+        # 불투명에서 main-plot이 다시 겹친다"는 재보고를 받음 - 원인을 다시
+        # 파봄: 재생은 PIP가 켜져 있으면 매 렌더마다(사용자가 확대를 전혀
+        # 안 해도) 항상 한 번 더 실행되므로, 마스킹을 아예 빼면 "항상" 겹친다
+        # (확대할 때만의 문제가 아니었음). 반대로 기존 마스킹(화면비율 기반
+        # _pip_ellip_ok/_pip_rect_ok 함수, x/yrange 리터럴을 식에 그대로
+        # 박아 씀)은 gnuplot이 replot으로 x/yrange를 바꾸면 그 판정 함수
+        # 자체가 "생성 시점 range 기준 화면비율"을 계속 쓰는 채로 새 범위의
+        # 점에 적용되어, 확대한 뷰가 우연히 그 판정 함수가 "박스 안"이라고
+        # (틀리게) 여기는 영역과 겹치면 보이는 점 전부가 NaN이 되어 뷰 전체가
+        # 텅 비는 것으로 재현/확인함(격리 재현: replot_complex_test.plt 등).
+        # 결론: "화면비율 기반 함수로 매 점을 실시간 판정"하는 방식 자체가
+        # replot과 근본적으로 안 맞음 - 대신 생성 시점(원래 range)에 PIP
+        # 박스가 차지하는 데이터 범위를 딱 한 번 "고정 숫자"로 미리 계산해
+        # self._pip_replay_mask_box에 남겨두고, 재생에서는 그 고정 범위를
+        # 벗어났는지만 보는 단순 비교(리터럴 상수와의 직접 비교 - 위 재현
+        # 테스트에서 replot 이후에도 정상 동작 확인됨, 산술 변환 후 비교나
+        # 화면비율 함수 호출과 달리 이 형태는 안전함)로 바꾼다. 이러면
+        # (a) 무보정 상태(줌 전)는 기존과 동일하게 정확히 PIP 박스 자리만
+        # 제외되고, (b) 확대해도 제외 영역이 "그 시점 데이터 범위 기준 고정
+        # 사각형"으로 남아 절대 화면 전체를 삼키지 않음(최악의 경우도 PIP가
+        # 원래 차지했던 그 데이터 구간만 비어 보임 - 이전처럼 뷰 전체가
+        # 텅 비는 일은 없음). rect/ellipse 모두 이 고정 사각형 하나로
+        # 충분해(타원은 사각형보다 약간 보수적으로 더 넓게 제외 - 모서리
+        # 쪽만 살짝 손해, 안전 우선) 도형별로 다른 함수를 따로 쓸 필요가
+        # 없어져 _pip_exclude_fn_prefix(도형별 함수 이름 구분)도 더 이상
+        # 필요 없다.
+        self._pip_replay_mask_box = None
         pip = getattr(plotdef, "pip", None) or {}
         if not pip.get("enabled"):
             return
@@ -4054,6 +4079,23 @@ class GnuplotGenerator:
                 return float(_m.group(1)), float(_m.group(2))
             except ValueError:
                 return None
+
+        # [추가] "화면비율 기반 판정 함수" 대신 "생성 시점에 딱 한 번 계산한
+        # 고정 데이터 범위"로 PIP 박스의 재생-제외 영역을 표현하기 위한 역산
+        # - _ellip_ok_body/_rect_ok_body가 쓰는 것과 완전히 같은 선형 변환
+        # (data -> [0,1] axis비율 -> box비율)을 box 경계(-0.5/+0.5)에 대해
+        # 거꾸로 풀어 "이 박스가 실제로 덮는 data 범위[lo,hi]"를 구한다(위
+        # self._pip_replay_mask_box 도입 배경 주석 참고). frac_lo+frac_hi가
+        # 1에 가까우면(박스가 축 프레임을 거의 다 채움) 분모가 0에 가까워져
+        # 범위가 발산할 수 있으나, 그런 극단적 크기의 PIP는 애초에 "제외"할
+        # 실익이 없으므로 None을 돌려줘 마스킹 자체를 생략하게 한다.
+        def _box_bounds(dmin, dmax, frac_lo, frac_hi):
+            _denom = 1.0 - frac_lo - frac_hi
+            if abs(_denom) < 1e-6 or dmax == dmin:
+                return None
+            _lo = dmin + (dmax - dmin) * (-frac_lo / _denom)
+            _hi = dmin + (dmax - dmin) * ((1.0 - frac_lo) / _denom)
+            return (min(_lo, _hi), max(_lo, _hi))
 
         _xr_for_tics = _parse_range(xrange_cmd)
         _x_tic_step = _nice_tic_step(*_xr_for_tics) if _xr_for_tics else None
@@ -4586,31 +4628,31 @@ class GnuplotGenerator:
             # [추가 - 위와 같은 이유] 1차 그리기 방어(블랭킹)만으로는 부족함 -
             # 원/타원처럼 "재생(2차 그리기)의 곡선이 이 자리를 다시 덮어버리는"
             # 문제도 rect에 그대로 있었음(둘 다 곡선은 "behind" 배경 위,
-            # default z-order라 재생 곡선이 배경을 덮음). 원/타원의
-            # _pip_ellip_ok_y1/y2와 완전히 같은 관용구를 rect 전용으로 하나 더
-            # 만든다(원/타원처럼 반경(radius) 개념이 없어 박스 전체를 그대로
-            # 제외 영역으로 씀 - 타원 방정식 대신 단순 사각형 판정).
+            # default z-order라 재생 곡선이 배경을 덮음). [수정 - 근본원인
+            # 확정, self._pip_replay_mask_box 도입 배경 주석 참고] 예전엔
+            # 여기서 원/타원과 같은 화면비율 판정 함수(_pip_rect_ok_y1/y2)를
+            # 만들어 재생 쪽에서 매 점마다 실시간 판정했는데, 이는 gnuplot의
+            # replot과 근본적으로 안 맞아(판정 함수가 "생성 시점 range 기준"
+            # 이라 range가 바뀌면 결과가 틀어짐) 확대 시 전체가 안 그려지는
+            # 회귀로 이어졌음 - 대신 생성 시점 range 기준으로 이 박스가 차지
+            # 하는 data 범위를 지금 딱 한 번 계산해 고정 숫자로 남긴다.
             # [주의] xrange/yrange가 "set autoscale ..."(구체적 숫자 아님)면
-            # 판정식을 만들 수 없으므로(원/타원의 _ellipse_native_ok 조건과
+            # 범위를 계산할 수 없으므로(원/타원의 _ellipse_native_ok 조건과
             # 동일한 이유), 그 경우는 블랭킹만 적용하고 이 마스킹은 생략한다
             # (재생 시 다시 겹칠 위험은 남지만, 기존보다 나빠지진 않음).
-            self._pip_exclude_fn_prefix = None
             _rxr = _parse_range(xrange_cmd)
             _ryr = _parse_range(yrange_cmd)
             _ry2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
             if (_rxr is not None and _ryr is not None and _rxr[1] != _rxr[0] and _ryr[1] != _ryr[0]
                     and _ry2r is not None and _ry2r[1] != _ry2r[0]):
-                def _rect_ok_body(y0, y1):
-                    return (
-                        f"(abs((((x-({_rxr[0]}))/(({_rxr[1]})-({_rxr[0]})))*(1-{_inset_left_frac}-{_inset_right_frac})"
-                        f"+{_inset_left_frac}-0.5)) <= 0.5) && "
-                        f"(abs((((y-({y0}))/(({y1})-({y0})))*(1-{_inset_bottom_frac}-{_inset_top_frac})"
-                        f"+{_inset_bottom_frac}-0.5)) <= 0.5)"
-                    )
-                lines.append(f"_pip_rect_ok_y1(x,y) = {_rect_ok_body(_ryr[0], _ryr[1])}")
-                if _uses_y2:
-                    lines.append(f"_pip_rect_ok_y2(x,y) = {_rect_ok_body(_ry2r[0], _ry2r[1])}")
-                self._pip_exclude_fn_prefix = "_pip_rect_ok"
+                _mbx = _box_bounds(_rxr[0], _rxr[1], _inset_left_frac, _inset_right_frac)
+                _mby1 = _box_bounds(_ryr[0], _ryr[1], _inset_bottom_frac, _inset_top_frac)
+                _mby2 = (
+                    _box_bounds(_ry2r[0], _ry2r[1], _inset_bottom_frac, _inset_top_frac)
+                    if _uses_y2 else None
+                )
+                if _mbx is not None and _mby1 is not None:
+                    self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
         elif _rect_no_bg:
             # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
             # 통일 필요(가는 외곽선은 다 있는 게 낫다)" - 배경(채우기)은
@@ -4667,7 +4709,26 @@ class GnuplotGenerator:
                     f"set object 7050 ellipse at screen {_ecx:.4f},{_ecy:.4f} "
                     f"size screen {_erx*2:.4f},{_ery*2:.4f} front fc rgb \"white\" fillstyle solid 1.0 noborder"
                 )
-                self._pip_exclude_fn_prefix = "_pip_ellip_ok"
+                # [수정 - 근본원인 확정, self._pip_replay_mask_box 도입 배경
+                # 주석 참고] rect와 동일한 이유로, 화면비율 기반 실시간 판정
+                # 함수(_pip_ellip_ok_y1/y2, 아래에서 PIP 자신의 곡선을 타원
+                # 모양으로 자르는 용도로는 계속 그대로 씀) 대신 생성 시점
+                # range 기준 고정 data 범위를 계산해 재생 제외에는 이것만
+                # 쓴다(타원을 감싸는 사각형이라 모서리 쪽만 약간 더 넓게
+                # 제외 - 안전 우선으로 감수).
+                _erxr = _parse_range(xrange_cmd)
+                _eryr = _parse_range(yrange_cmd)
+                _ery2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
+                if (_erxr is not None and _eryr is not None and _erxr[1] != _erxr[0] and _eryr[1] != _eryr[0]
+                        and _ery2r is not None and _ery2r[1] != _ery2r[0]):
+                    _mbx = _box_bounds(_erxr[0], _erxr[1], _inset_left_frac, _inset_right_frac)
+                    _mby1 = _box_bounds(_eryr[0], _eryr[1], _inset_bottom_frac, _inset_top_frac)
+                    _mby2 = (
+                        _box_bounds(_ery2r[0], _ery2r[1], _inset_bottom_frac, _inset_top_frac)
+                        if _uses_y2 else None
+                    )
+                    if _mbx is not None and _mby1 is not None:
+                        self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
             # 있도록 항상 흰 배경만(테두리 없이) 깐다 - 최종 배경 불투명도/
@@ -6221,27 +6282,79 @@ class GnuplotGenerator:
             if _pip_blank_line:
                 _insert_before_first_plot(_pip_probe_lines, _pip_blank_line, _main_state_start_idx)
                 self._pip_main_blank_line = None
-                self._pip_exclude_fn_prefix = None
-                # [되돌림 - 사용자 요청] "확대,scroll 안되면 원래대로 plot
-                # 고정에서라도 확대/scroll 되게 해요" - 아래(삭제된) 재생-제외
-                # 마스킹은 재생의 실제 곡선 "using" 식을 복잡한 중첩 삼항
-                # NaN 조건식으로 감싸는 방식이었는데, 최소 재현
-                # (replot_complex_test.plt: pngcairo로 직접 확인 - 동일한
-                # 복잡한 using 식으로 최초 plot은 정상 그려지지만, xrange/
-                # yrange를 좁혀 replot하면 완전히 빈 그림이 나옴 - gnuplot이
-                # 이런 복잡한 NaN 삼항 using 식에 대해서는 replot 시 데이터를
-                # 아예 재평가하지 못하는 것으로 보임)을 통해, 이 마스킹이
-                # gnuplot 우클릭 드래그 확대/휠 확대/스크롤(모두 내부적으로
-                # replot을 호출)이 완전히 먹통(모양 변화 없이 좌표값만 바뀜,
-                # 'u'/'R'도 안 먹고 'p'/'n'만 동작)이 되는 실제 회귀의
-                # 원인으로 강하게 의심됨 - 사용자의 실제 수동 테스트 결과와도
-                # 정확히 일치. 사용자가 "PIP 정확성보다 확대/scroll 동작을
-                # 우선"하라고 명시적으로 요청해, 재생 쪽의 이 마스킹은
-                # 제거하고 실제 곡선을 그대로(가공 없이) 재생한다 - zoom 시
-                # PIP 영역 위로 main 곡선이 다시 덮일 수 있다는(마스킹 도입
-                # 이전부터 존재했던) 한계는 감수하되, 그 대신 gnuplot 네이티브
-                # 확대/스크롤/'u'/'R' 키가 다시 정상 동작한다.
-                pass
+                # [수정 - 재재보고 반영, 근본원인 재확정] "사각형 불투명에서
+                # main-plot이 겹치네.. 되던건데" - 직전 커밋에서 재생-제외
+                # 마스킹을 통째로 뺀 원인은 격리 재현(replot_complex_test.plt)
+                # 에서 "복잡한 NaN 삼항 using식은 replot 후 완전히 빈 그림"을
+                # 본 것이었는데, 추가 재현으로 그 결론 자체가 틀렸음을 확인함:
+                # 같은 복잡한 식이라도 확대 대상 영역이 제외 영역과 안 겹치면
+                # replot 후에도 정상적으로 그려짐(재현: 격리 스크립트로 확인 -
+                # gnuplot의 replot 자체엔 결함이 없고, 단지 "제외 영역과 확대
+                # 대상이 겹치면 그 영역엔 원래 아무것도 없는 게 맞음"이라는
+                # 당연한 결과를 "버그"로 오판했던 것). 재생을 아예 무마스킹
+                # (unmask)으로 두면 PIP가 켜져 있는 한 사용자가 확대를 전혀
+                # 안 해도 재생이 매 렌더 끝에 한 번 더 실행되어 "항상" main이
+                # PIP 위를 덮는 심각한 회귀였음 - 매 렌더 즉시 재현됨.
+                # 대신 위에서 미리 계산해둔 self._pip_replay_mask_box(생성
+                # 시점 range 기준 PIP 박스의 고정 data 범위 - 위 도입 배경
+                # 주석 참고)로, "using" 식의 X/Y 컬럼이 그 고정 범위 안이면
+                # NaN"이라는 단순 직접비교(산술 변환 없음 - 격리 재현으로
+                # replot 후에도 정상 재평가됨을 확인)를 재생의 실제 곡선에
+                # 적용한다. 화면비율 함수 방식과 달리 range가 바뀌어도 식
+                # 자체가 변하지 않는 고정 상수 비교라 결과가 항상 일관됨:
+                # 확대 대상이 이 고정 범위와 안 겹치면 항상 정상적으로 그려지고,
+                # 겹치는 부분만(PIP가 원래 그 자리를 대신 보여주는 것과
+                # 똑같은 의미로) 비어 보인다 - 뷰 전체가 통째로 비는 이전의
+                # 심각한 증상과는 다른, PIP의 원래 목적에 맞는 정상 동작.
+                _mask_box = getattr(self, "_pip_replay_mask_box", None)
+                self._pip_replay_mask_box = None
+                if _main_state_snapshot is not None and _mask_box:
+                    _snap_plot_idx = next(
+                        (i for i in range(len(_main_state_snapshot)) if _main_state_snapshot[i].strip() == "plot \\"),
+                        None
+                    )
+                    if _snap_plot_idx is not None:
+                        _mbx_lo, _mbx_hi = _mask_box["x"]
+                        _mby1_bounds = _mask_box.get("y1")
+                        _mby2_bounds = _mask_box.get("y2")
+
+                        def _ybounds_for(cmd):
+                            if "axes x1y2" in cmd and _mby2_bounds:
+                                return _mby2_bounds
+                            return _mby1_bounds
+
+                        def _mask_ellipse_line(cmd):
+                            _yb = _ybounds_for(cmd)
+                            if _yb is None:
+                                return cmd
+
+                            def _wrap(m):
+                                expr, col = m.group(1), m.group(2)
+                                _cond = (
+                                    f"(({_mbx_lo})<=({expr}) && ({expr})<=({_mbx_hi}) && "
+                                    f"({_yb[0]})<=(${col}) && (${col})<=({_yb[1]}))"
+                                )
+                                return f"using ({_cond} ? (0/0) : ({expr})):({_cond} ? (0/0) : (${col}))"
+                            return re.sub(r"using \(([^)]+)\):(\d+)", _wrap, cmd)
+
+                        def _mask_ellipse_marker(cmd):
+                            _yb = _ybounds_for(cmd)
+                            if _yb is None:
+                                return cmd
+
+                            def _wrap(m):
+                                xcol, ycol = m.group(1), m.group(2)
+                                _cond = (
+                                    f"(({_mbx_lo})<=(${xcol}) && (${xcol})<=({_mbx_hi}) && "
+                                    f"({_yb[0]})<=(${ycol}) && (${ycol})<=({_yb[1]}))"
+                                )
+                                return f"using ({_cond} ? (0/0) : (${xcol})):({_cond} ? (0/0) : (${ycol}))"
+                            return re.sub(r"using (\d+):(\d+)\b", _wrap, cmd)
+
+                        for _i in range(_snap_plot_idx + 1, len(_main_state_snapshot)):
+                            _ln = _mask_ellipse_line(_main_state_snapshot[_i])
+                            _ln = _mask_ellipse_marker(_ln)
+                            _main_state_snapshot[_i] = _ln
             if _pip_clip_info is not None and fmt.lower() in ("emf", "eps", "interactive"):
                 # [수정 - 요청] "반투명이 EMF에 불가능하면 50%를 기준으로
                 # 투명/불투명으로 구분" - 항상 완전불투명으로 대체하면, 사용자가
