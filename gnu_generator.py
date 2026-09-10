@@ -6132,6 +6132,25 @@ class GnuplotGenerator:
         # 추가해 legend/주석(Comment 등, 이들도 "set label"로 그림) 텍스트도
         # title/tic과 동일하게 1차 그리기에서는 숨기고 재생(2차)에서만
         # 보이게 한다.
+        # [수정 - 사용자 재보고로 발견된 버그] "우클릭 확대/휠 이동은 되는데
+        # 맨 처음 그림이 잔상으로 남음 - Comment는 따라 움직이는데 화살표/
+        # 원은 초기 위치에 남아 있음(u키로 원래 범위 돌아가면 안 보이는
+        # 걸 보니 겹쳐서 안 보였던 것)" - 정확한 지적이었음. 위 legend의
+        # "set arrow"/"set object"는 graph(비율) 좌표라 xrange/yrange가
+        # 바뀌어도 화면 위치가 안 바뀌어서(1차/재생 둘 다 같은 자리) 겹쳐도
+        # 안 보였던 것인데, 사용자가 추가한 Multi Annotation(Comment/Arrow/
+        # Circle)의 화살표("set arrow")/원("set object ellipse/circle")은
+        # 데이터 좌표로 찍혀서 xrange/yrange가 바뀌면(확대/이동) 화면 위치도
+        # 같이 바뀜 - 그런데 1차 그리기의 화살표/원은 그 시점(확대 전) 좌표
+        # 그대로 화면에 이미 래스터화돼 남아있고(재생 전까지는 지워질 일이
+        # 없음), 재생(2차, 실제로 보여야 할 것)만 새 범위에 맞게 다시
+        # 그려지니 - 확대/이동한 뒤에는 이 둘이 서로 다른 화면 위치에 남아
+        # "1차 그리기의 화살표/원이 유령처럼 남아있는" 것으로 보였던 것.
+        # title/tic/label과 완전히 같은 원리로 "unset arrow"/"unset object"를
+        # 추가해 1차 그리기에서는 안 보이게 하고 재생에서만 보이게 한다
+        # (legend 자신의 arrow/object도 이 시점엔 이미 선언된 뒤라 같이
+        # 가려지지만, 재생이 원래 값 그대로 다시 그리므로 최종 결과는
+        # 동일 - 위 label과 같은 논리).
         if _main_state_snapshot is not None:
             _main_plot_line_idx = next(
                 (i for i in range(_main_state_start_idx, len(lines)) if lines[i].strip() == "plot \\"),
@@ -6141,6 +6160,7 @@ class GnuplotGenerator:
                 lines[_main_plot_line_idx:_main_plot_line_idx] = [
                     "unset title", "unset xlabel", "unset ylabel", "unset y2label",
                     "unset xtics", "unset ytics", "unset y2tics", "unset label",
+                    "unset arrow", "unset object",
                 ]
 
         _pip_clip_info = None
