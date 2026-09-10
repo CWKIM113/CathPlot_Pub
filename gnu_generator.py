@@ -3841,27 +3841,48 @@ class GnuplotGenerator:
             fragments.append(f"$PipFoldGrid{_gi} << EOD\n{_p0[0]:.6g} {_p0[1]:.6g}\n{_p1[0]:.6g} {_p1[1]:.6g}\nEOD")
             fragments.append(f'$PipFoldGrid{_gi} using 1:2 notitle axes x1y1 with lines lc rgb "gray70" lw 0.6 dashtype "."')
 
-        # [추가 - 사용자 요청] "숫자 tic 라벨" - "set label"(선언식, 재생마다
-        # 다시 쌓여 상태가 꼬일 위험 - 이 세션에서 겪은 object 관련 문제와
-        # 같은 종류) 대신, 다른 요소들과 같은 원칙으로 "with labels" plot
-        # 스타일(데이터의 일부로 취급돼 이 명령 안에서만 산다)을 써서 박스
-        # 아래(X)/왼쪽(Y)에 격자 위치에 대응하는 실제 data 값을 찍는다.
+        # [수정 - 사용자 지적] "원 안에 있어야 하지 않는지?" - 인셋 박스가
+        # 작고 main plot 위에 겹쳐 있어서, 기존 별도 패널 방식도 tic
+        # 숫자를 박스 "안쪽" 가장자리에 붙여 그렸음(밖에 두면 main 곡선과
+        # 겹쳐 헷갈림) - 같은 관례로 박스 안쪽으로 들여서 찍는다("set
+        # label" 대신 "with labels" plot 스타일을 쓰는 이유는 위 주석
+        # 그대로 - 재생 간 상태 잔류 위험 없음). [수정 - 실측으로 발견]
+        # 처음엔 사각형 박스 기준 고정 offset을 그대로 썼는데, 원/타원은
+        # 가장자리 쪽(격자 fraction 0.25/0.75)에서 세로/가로 폭이 훨씬
+        # 좁아서 그 offset이 오히려 원 "밖"으로 나가버렸음 - 격자선과 같은
+        # 현(chord) 계산으로 그 위치의 실제 원 안쪽 여유를 구해 그 비율
+        # (70%)만큼만 들여서 확실히 원 안에 들어오게 한다.
         _fmt = lambda v: f"{v:.4g}"
         _lbl_rows = []
         for _f in _grid_fracs:
             _gx = x_lo + _f * (x_hi - x_lo)
-            _ly = y1_lo - (y1_hi - y1_lo) * 0.08
+            if _is_ellipse and _rx > 0:
+                _t = 1.0 - ((_gx - _cx) / _rx) ** 2
+                _half = _ry * math.sqrt(_t) if _t > 0 else 0.0
+            else:
+                _half = (y1_hi - y1_lo) / 2.0
+            _ly = _cy - _half * 0.92
             _val = pxmin + _f * (pxmax - pxmin)
             _lbl_rows.append(f'{_gx:.6g} {_ly:.6g} "{_fmt(_val)}"')
         for _f in _grid_fracs:
             _gy = y1_lo + _f * (y1_hi - y1_lo)
-            _lx = x_lo - (x_hi - x_lo) * 0.03
+            if _is_ellipse and _ry > 0:
+                _t = 1.0 - ((_gy - _cy) / _ry) ** 2
+                _half = _rx * math.sqrt(_t) if _t > 0 else 0.0
+            else:
+                _half = (x_hi - x_lo) / 2.0
+            _lx = _cx - _half * 0.92
             _val = py1min + _f * (py1max - py1min)
             _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
         if _have_y2:
             for _f in _grid_fracs:
                 _gy = y1_lo + _f * (y1_hi - y1_lo)
-                _lx = x_hi + (x_hi - x_lo) * 0.03
+                if _is_ellipse and _ry > 0:
+                    _t = 1.0 - ((_gy - _cy) / _ry) ** 2
+                    _half = _rx * math.sqrt(_t) if _t > 0 else 0.0
+                else:
+                    _half = (x_hi - x_lo) / 2.0
+                _lx = _cx + _half * 0.92
                 _val = py2min + _f * (py2max - py2min)
                 _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
         _lbl_body = "\n".join(_lbl_rows)
