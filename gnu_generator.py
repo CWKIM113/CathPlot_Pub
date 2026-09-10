@@ -6218,68 +6218,30 @@ class GnuplotGenerator:
                 if _idx is not None:
                     _target_list.insert(_idx, _blank_line)
             _pip_blank_line = getattr(self, "_pip_main_blank_line", None)
-            # [수정 - 사용자 보고 버그] "PIP 불투명, 사각형인데 왜 그림이
-            # 겹치지?" - 아래 재생-제외 마스킹은 이전엔 원/타원 전용
-            # _pip_ellip_ok_y1/y2 함수 이름을 그대로 하드코딩해서 썼는데,
-            # rect도 이제 같은 이유로 이 마스킹이 필요해져(_render_pip_inset
-            # 참고) rect 전용 _pip_rect_ok_y1/y2를 대신 정의해두는 경우가
-            # 생김 - 어느 쪽 함수가 실제로 정의됐는지(_pip_exclude_fn_prefix)
-            # 에 맞춰 접두어를 골라 쓴다(shape 무관하게 동일한 관용구 재사용).
-            _pip_exclude_prefix = getattr(self, "_pip_exclude_fn_prefix", None)
             if _pip_blank_line:
                 _insert_before_first_plot(_pip_probe_lines, _pip_blank_line, _main_state_start_idx)
                 self._pip_main_blank_line = None
                 self._pip_exclude_fn_prefix = None
-                # [추가 - 사용자 재보고 반영] "우클릭 확대는 안 되지만 좌표는
-                # 움직임" - 재생(스냅샷)의 "plot \"을 안 보이는 더미로
-                # 바꿨더니(직전 시도) gnuplot 네이티브 우클릭-드래그 확대가
-                # "마지막 plot 명령"을 그 더미로 다시 실행해 아무것도 안
-                # 바뀌는 회귀가 생겨 되돌림 - 우클릭 확대가 실제 곡선을
-                # 다시 그리려면 "마지막 plot"이 진짜 main 곡선이어야 함.
-                # 대신 이 재생(2차 그리기)의 실제 곡선 "using" 식에, PIP
-                # 자신이 쓰는 것과 같은 판정 함수(이미 전역으로 정의돼 있어
-                # 재사용 가능)를 반대 조건(원/타원/사각형 "안"이면 NaN,
-                # "밖"이면 원래 값)으로 감싸서, 이 재생이 PIP가 차지한 자리
-                # 안쪽은 아예 그리지 않게 한다 - 진짜 곡선이 그대로 "마지막
-                # plot"이 되어 우클릭 확대도 정상 동작하면서, 그 곡선이 PIP
-                # 위를 덮어버리는 것도 막는다. (_pip_exclude_prefix가 None이면
-                # -rect가 autoscale이라 판정식 자체를 못 만든 경우 - 이
-                # 마스킹은 생략하고 블랭킹만 적용된 채로 넘어간다.)
-                if _main_state_snapshot is not None and _pip_exclude_prefix:
-                    _snap_plot_idx = next(
-                        (i for i in range(len(_main_state_snapshot)) if _main_state_snapshot[i].strip() == "plot \\"),
-                        None
-                    )
-                    if _snap_plot_idx is not None:
-                        def _ellip_exclude_fn_for(cmd):
-                            return f"{_pip_exclude_prefix}_y2" if "axes x1y2" in cmd else f"{_pip_exclude_prefix}_y1"
-
-                        def _exclude_ellipse_line(cmd):
-                            _fn = _ellip_exclude_fn_for(cmd)
-
-                            def _wrap(m):
-                                expr, col = m.group(1), m.group(2)
-                                return (
-                                    f"using ({_fn}(({expr}),(${col})) ? (0/0) : ({expr}))"
-                                    f":({_fn}(({expr}),(${col})) ? (0/0) : (${col}))"
-                                )
-                            return re.sub(r"using \(([^)]+)\):(\d+)", _wrap, cmd)
-
-                        def _exclude_ellipse_marker(cmd):
-                            _fn = _ellip_exclude_fn_for(cmd)
-
-                            def _wrap(m):
-                                xcol, ycol = m.group(1), m.group(2)
-                                return (
-                                    f"using ({_fn}((${xcol}),(${ycol})) ? (0/0) : (${xcol}))"
-                                    f":({_fn}((${xcol}),(${ycol})) ? (0/0) : (${ycol}))"
-                                )
-                            return re.sub(r"using (\d+):(\d+)\b", _wrap, cmd)
-
-                        for _i in range(_snap_plot_idx + 1, len(_main_state_snapshot)):
-                            _ln = _exclude_ellipse_line(_main_state_snapshot[_i])
-                            _ln = _exclude_ellipse_marker(_ln)
-                            _main_state_snapshot[_i] = _ln
+                # [되돌림 - 사용자 요청] "확대,scroll 안되면 원래대로 plot
+                # 고정에서라도 확대/scroll 되게 해요" - 아래(삭제된) 재생-제외
+                # 마스킹은 재생의 실제 곡선 "using" 식을 복잡한 중첩 삼항
+                # NaN 조건식으로 감싸는 방식이었는데, 최소 재현
+                # (replot_complex_test.plt: pngcairo로 직접 확인 - 동일한
+                # 복잡한 using 식으로 최초 plot은 정상 그려지지만, xrange/
+                # yrange를 좁혀 replot하면 완전히 빈 그림이 나옴 - gnuplot이
+                # 이런 복잡한 NaN 삼항 using 식에 대해서는 replot 시 데이터를
+                # 아예 재평가하지 못하는 것으로 보임)을 통해, 이 마스킹이
+                # gnuplot 우클릭 드래그 확대/휠 확대/스크롤(모두 내부적으로
+                # replot을 호출)이 완전히 먹통(모양 변화 없이 좌표값만 바뀜,
+                # 'u'/'R'도 안 먹고 'p'/'n'만 동작)이 되는 실제 회귀의
+                # 원인으로 강하게 의심됨 - 사용자의 실제 수동 테스트 결과와도
+                # 정확히 일치. 사용자가 "PIP 정확성보다 확대/scroll 동작을
+                # 우선"하라고 명시적으로 요청해, 재생 쪽의 이 마스킹은
+                # 제거하고 실제 곡선을 그대로(가공 없이) 재생한다 - zoom 시
+                # PIP 영역 위로 main 곡선이 다시 덮일 수 있다는(마스킹 도입
+                # 이전부터 존재했던) 한계는 감수하되, 그 대신 gnuplot 네이티브
+                # 확대/스크롤/'u'/'R' 키가 다시 정상 동작한다.
+                pass
             if _pip_clip_info is not None and fmt.lower() in ("emf", "eps", "interactive"):
                 # [수정 - 요청] "반투명이 EMF에 불가능하면 50%를 기준으로
                 # 투명/불투명으로 구분" - 항상 완전불투명으로 대체하면, 사용자가
@@ -6372,17 +6334,16 @@ class GnuplotGenerator:
                 "replot",
             ]
             lines.append("bind 'R' '" + "; ".join(_reset_cmds) + "'")
-            # [수정 - 사용자 재보고 반영] "우클릭 확대/축소, 스크롤 이동은
-            # 되는데, 맨처음 plot 그림 잔상이 남음(계속 확대해도 잔상 자체는
-            # 더 나빠지지 않고, u 키로 원위치 범위 복귀는 되지만 잔상은 안
-            # 지워짐) - 이를 지우고 u 키에서 다시 그리면 안 되나?" - gnuplot
-            # 기본 'u'(내부적으로 "확대 이력 전부 해제하고 원래 범위로"
-            # 되돌리는 C 레벨 처리)는 위 'R'과 의미상 완전히 같은 동작인데도
-            # 서로 다른 경로로 구현돼 있어(내부 처리 vs 스크립트의 명시적
-            # "replot" 재실행), 화면에 남은 잔상을 지우는 효과가 다를 수
-            # 있음 - 'u'도 'R'과 똑같이 명시적 재실행으로 덮어써서, 이참에
-            # 이 경로로 잔상이 지워지는지 실제 화면에서 확인해달라고 요청.
-            lines.append("bind 'u' '" + "; ".join(_reset_cmds) + "'")
+            # [되돌림 - 사용자 요청] "R, u키 원래대로 복구해요" - 'u'를 'R'과
+            # 같은 명시적 재실행으로 덮어쓰는 실험(바로 위 삭제된 주석 참고)이
+            # 오히려 더 나쁜 결과를 냄: 재보고 결과 확대/스크롤 시 좌표값만
+            # 바뀌고 모양 변화가 전혀 없어졌고(예전엔 잔상이라도 있었는데
+            # 지금은 그것보다도 못함), 'u'/'R' 키 자체도 안 먹고 gnuplot
+            # 기본 'p'/'n'(확대 이력 이전/다음)만 동작한다는 보고 - 이 실험이
+            # 오히려 gnuplot 자체의 확대 이력 추적(replot이 그 이력과 맞물려
+            # 있는 것으로 보임)을 깨뜨린 것으로 판단됨. 'u' 재바인딩을 제거해
+            # gnuplot 기본 동작(내부적으로 확대 이력을 전부 해제하고 원래
+            # 범위로 되돌리는 C 레벨 처리)으로 되돌린다.
 
         if fmt.lower() == "interactive": lines.append("pause mouse close")
         else: lines.append("set output")
