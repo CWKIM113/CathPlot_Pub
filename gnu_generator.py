@@ -3714,7 +3714,7 @@ class GnuplotGenerator:
 
     def _build_pip_folded_overlay(self, plotdef, pip_xmin, pip_xmax, pip_y1min, pip_y1max,
                                    pip_y2min, pip_y2max, box, plot_dir_,
-                                   clip_shape="rect", clip_rx=50.0, clip_ry=50.0):
+                                   clip_shape="rect", clip_rx=50.0, clip_ry=50.0, minimal=False):
         """[추가 - PIP 렌더링 재설계] "R/u 직후 기본 화면은 깨끗해야 하는데
         확대(replot)는 그걸 위한 NaN 마스킹 때문에 막힌다"는 근본 충돌을
         피하기 위해, PIP(배경+테두리+자기 커브)를 별도 멀티플롯 패널이
@@ -3808,73 +3808,66 @@ class GnuplotGenerator:
         _bg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _corners)
         fragments.append(f"$PipFoldBox << EOD\n{_bg_rows}\nEOD")
         fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 noborder')
-        fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 1.2')
+        # [추가 - 사용자 요청] "돋보기 형태로 위치/반지름만 주고 그 안엔
+        # curve만 - title/축 frame/tic 숫자 다 무시" - minimal이 켜지면
+        # 테두리 선/격자/tic 숫자를 전부 건너뛰고 배경(위, 불투명 보호용
+        # 기능이라 유지)+curve만 남긴다.
+        if not minimal:
+            fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 1.2')
+            # [추가 - 사용자 보고] "inset에 축 frame이 안 나타남, grid도 없음" -
+            # 기존 별도 패널 방식의 실제 tic/grid만큼 정교하진 않지만, 박스
+            # 내부를 가로/세로 3등분하는 옅은 점선(격자)을 데이터로 그려
+            # "안이 텅 빈 배경"처럼 보이지 않게 한다(숫자 tic 라벨은 이 방식
+            # (재생에 얹는 정적 데이터)으로는 아직 안 넣음 - 다음 과제).
+            # 원/타원이면 격자선이 박스 테두리를 넘지 않도록 그 위치에서의
+            # 타원 현(chord) 길이로 잘라 그린다.
+            _grid_fracs = (0.25, 0.5, 0.75)
+            _grid_segs = []
+            for _f in _grid_fracs:
+                _gx = x_lo + _f * (x_hi - x_lo)
+                if _is_ellipse and _rx > 0:
+                    _t = 1.0 - ((_gx - _cx) / _rx) ** 2
+                    if _t > 0:
+                        _half = _ry * math.sqrt(_t)
+                        _grid_segs.append(((_gx, _cy - _half), (_gx, _cy + _half)))
+                else:
+                    _grid_segs.append(((_gx, y1_lo), (_gx, y1_hi)))
+            for _f in _grid_fracs:
+                _gy = y1_lo + _f * (y1_hi - y1_lo)
+                if _is_ellipse and _ry > 0:
+                    _t = 1.0 - ((_gy - _cy) / _ry) ** 2
+                    if _t > 0:
+                        _half = _rx * math.sqrt(_t)
+                        _grid_segs.append(((_cx - _half, _gy), (_cx + _half, _gy)))
+                else:
+                    _grid_segs.append(((x_lo, _gy), (x_hi, _gy)))
+            for _gi, (_p0, _p1) in enumerate(_grid_segs):
+                fragments.append(f"$PipFoldGrid{_gi} << EOD\n{_p0[0]:.6g} {_p0[1]:.6g}\n{_p1[0]:.6g} {_p1[1]:.6g}\nEOD")
+                fragments.append(f'$PipFoldGrid{_gi} using 1:2 notitle axes x1y1 with lines lc rgb "gray70" lw 0.6 dashtype "."')
 
-        # [추가 - 사용자 보고] "inset에 축 frame이 안 나타남, grid도 없음" -
-        # 기존 별도 패널 방식의 실제 tic/grid만큼 정교하진 않지만, 박스
-        # 내부를 가로/세로 3등분하는 옅은 점선(격자)을 데이터로 그려
-        # "안이 텅 빈 배경"처럼 보이지 않게 한다(숫자 tic 라벨은 이 방식
-        # (재생에 얹는 정적 데이터)으로는 아직 안 넣음 - 다음 과제).
-        # 원/타원이면 격자선이 박스 테두리를 넘지 않도록 그 위치에서의
-        # 타원 현(chord) 길이로 잘라 그린다.
-        _grid_fracs = (0.25, 0.5, 0.75)
-        _grid_segs = []
-        for _f in _grid_fracs:
-            _gx = x_lo + _f * (x_hi - x_lo)
-            if _is_ellipse and _rx > 0:
-                _t = 1.0 - ((_gx - _cx) / _rx) ** 2
-                if _t > 0:
-                    _half = _ry * math.sqrt(_t)
-                    _grid_segs.append(((_gx, _cy - _half), (_gx, _cy + _half)))
-            else:
-                _grid_segs.append(((_gx, y1_lo), (_gx, y1_hi)))
-        for _f in _grid_fracs:
-            _gy = y1_lo + _f * (y1_hi - y1_lo)
-            if _is_ellipse and _ry > 0:
-                _t = 1.0 - ((_gy - _cy) / _ry) ** 2
-                if _t > 0:
-                    _half = _rx * math.sqrt(_t)
-                    _grid_segs.append(((_cx - _half, _gy), (_cx + _half, _gy)))
-            else:
-                _grid_segs.append(((x_lo, _gy), (x_hi, _gy)))
-        for _gi, (_p0, _p1) in enumerate(_grid_segs):
-            fragments.append(f"$PipFoldGrid{_gi} << EOD\n{_p0[0]:.6g} {_p0[1]:.6g}\n{_p1[0]:.6g} {_p1[1]:.6g}\nEOD")
-            fragments.append(f'$PipFoldGrid{_gi} using 1:2 notitle axes x1y1 with lines lc rgb "gray70" lw 0.6 dashtype "."')
-
-        # [수정 - 사용자 지적] "원 안에 있어야 하지 않는지?" - 인셋 박스가
-        # 작고 main plot 위에 겹쳐 있어서, 기존 별도 패널 방식도 tic
-        # 숫자를 박스 "안쪽" 가장자리에 붙여 그렸음(밖에 두면 main 곡선과
-        # 겹쳐 헷갈림) - 같은 관례로 박스 안쪽으로 들여서 찍는다("set
-        # label" 대신 "with labels" plot 스타일을 쓰는 이유는 위 주석
-        # 그대로 - 재생 간 상태 잔류 위험 없음). [수정 - 실측으로 발견]
-        # 처음엔 사각형 박스 기준 고정 offset을 그대로 썼는데, 원/타원은
-        # 가장자리 쪽(격자 fraction 0.25/0.75)에서 세로/가로 폭이 훨씬
-        # 좁아서 그 offset이 오히려 원 "밖"으로 나가버렸음 - 격자선과 같은
-        # 현(chord) 계산으로 그 위치의 실제 원 안쪽 여유를 구해 그 비율
-        # (70%)만큼만 들여서 확실히 원 안에 들어오게 한다.
-        _fmt = lambda v: f"{v:.4g}"
-        _lbl_rows = []
-        for _f in _grid_fracs:
-            _gx = x_lo + _f * (x_hi - x_lo)
-            if _is_ellipse and _rx > 0:
-                _t = 1.0 - ((_gx - _cx) / _rx) ** 2
-                _half = _ry * math.sqrt(_t) if _t > 0 else 0.0
-            else:
-                _half = (y1_hi - y1_lo) / 2.0
-            _ly = _cy - _half * 0.92
-            _val = pxmin + _f * (pxmax - pxmin)
-            _lbl_rows.append(f'{_gx:.6g} {_ly:.6g} "{_fmt(_val)}"')
-        for _f in _grid_fracs:
-            _gy = y1_lo + _f * (y1_hi - y1_lo)
-            if _is_ellipse and _ry > 0:
-                _t = 1.0 - ((_gy - _cy) / _ry) ** 2
-                _half = _rx * math.sqrt(_t) if _t > 0 else 0.0
-            else:
-                _half = (x_hi - x_lo) / 2.0
-            _lx = _cx - _half * 0.92
-            _val = py1min + _f * (py1max - py1min)
-            _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
-        if _have_y2:
+            # [수정 - 사용자 지적] "원 안에 있어야 하지 않는지?" - 인셋 박스가
+            # 작고 main plot 위에 겹쳐 있어서, 기존 별도 패널 방식도 tic
+            # 숫자를 박스 "안쪽" 가장자리에 붙여 그렸음(밖에 두면 main 곡선과
+            # 겹쳐 헷갈림) - 같은 관례로 박스 안쪽으로 들여서 찍는다("set
+            # label" 대신 "with labels" plot 스타일을 쓰는 이유는 위 주석
+            # 그대로 - 재생 간 상태 잔류 위험 없음). [수정 - 실측으로 발견]
+            # 처음엔 사각형 박스 기준 고정 offset을 그대로 썼는데, 원/타원은
+            # 가장자리 쪽(격자 fraction 0.25/0.75)에서 세로/가로 폭이 훨씬
+            # 좁아서 그 offset이 오히려 원 "밖"으로 나가버렸음 - 격자선과 같은
+            # 현(chord) 계산으로 그 위치의 실제 원 안쪽 여유를 구해 그 비율
+            # (70%)만큼만 들여서 확실히 원 안에 들어오게 한다.
+            _fmt = lambda v: f"{v:.4g}"
+            _lbl_rows = []
+            for _f in _grid_fracs:
+                _gx = x_lo + _f * (x_hi - x_lo)
+                if _is_ellipse and _rx > 0:
+                    _t = 1.0 - ((_gx - _cx) / _rx) ** 2
+                    _half = _ry * math.sqrt(_t) if _t > 0 else 0.0
+                else:
+                    _half = (y1_hi - y1_lo) / 2.0
+                _ly = _cy - _half * 0.92
+                _val = pxmin + _f * (pxmax - pxmin)
+                _lbl_rows.append(f'{_gx:.6g} {_ly:.6g} "{_fmt(_val)}"')
             for _f in _grid_fracs:
                 _gy = y1_lo + _f * (y1_hi - y1_lo)
                 if _is_ellipse and _ry > 0:
@@ -3882,12 +3875,23 @@ class GnuplotGenerator:
                     _half = _rx * math.sqrt(_t) if _t > 0 else 0.0
                 else:
                     _half = (x_hi - x_lo) / 2.0
-                _lx = _cx + _half * 0.92
-                _val = py2min + _f * (py2max - py2min)
+                _lx = _cx - _half * 0.92
+                _val = py1min + _f * (py1max - py1min)
                 _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
-        _lbl_body = "\n".join(_lbl_rows)
-        fragments.append(f"$PipFoldTics << EOD\n{_lbl_body}\nEOD")
-        fragments.append('$PipFoldTics using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,6" textcolor rgb "gray30"')
+            if _have_y2:
+                for _f in _grid_fracs:
+                    _gy = y1_lo + _f * (y1_hi - y1_lo)
+                    if _is_ellipse and _ry > 0:
+                        _t = 1.0 - ((_gy - _cy) / _ry) ** 2
+                        _half = _rx * math.sqrt(_t) if _t > 0 else 0.0
+                    else:
+                        _half = (x_hi - x_lo) / 2.0
+                    _lx = _cx + _half * 0.92
+                    _val = py2min + _f * (py2max - py2min)
+                    _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
+            _lbl_body = "\n".join(_lbl_rows)
+            fragments.append(f"$PipFoldTics << EOD\n{_lbl_body}\nEOD")
+            fragments.append('$PipFoldTics using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,6" textcolor rgb "gray30"')
 
         for curve in plotdef.curves:
             is_y2 = getattr(curve, "axis", "y1") == "y2"
@@ -4983,6 +4987,7 @@ class GnuplotGenerator:
                     self._pip_fold_ranges = {
                         "x": _rxr, "y1": _ryr, "y2": _ry2r if _uses_y2 else None,
                         "clip_shape": "rect", "clip_rx": 50.0, "clip_ry": 50.0,
+                        "minimal": bool(pip.get("minimal")),
                     }
         elif _rect_no_bg:
             # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
@@ -5072,6 +5077,7 @@ class GnuplotGenerator:
                         self._pip_fold_ranges = {
                             "x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None,
                             "clip_shape": _clip_shape, "clip_rx": _clip_rx, "clip_ry": _clip_ry,
+                            "minimal": bool(pip.get("minimal")),
                         }
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
@@ -6697,6 +6703,7 @@ class GnuplotGenerator:
                             clip_shape=_fold_ranges.get("clip_shape", "rect"),
                             clip_rx=_fold_ranges.get("clip_rx", 50.0),
                             clip_ry=_fold_ranges.get("clip_ry", 50.0),
+                            minimal=_fold_ranges.get("minimal", False),
                         )
                         self._last_pip_fold_tempfiles = (getattr(self, "_last_pip_fold_tempfiles", None) or []) + _fold_tempfiles
                         _decls = [f for f in _fold_fragments if f.startswith("$") and "<< EOD" in f]

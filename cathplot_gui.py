@@ -843,6 +843,9 @@ class CathPlotGUI:
         # get() 기본값으로 꺼짐(기존 동작과 동일)이라 안전함.
         self.pip_axis_title_on_var = tk.BooleanVar(value=False)
         self.pip_legend_on_var = tk.BooleanVar(value=False)
+        # [추가 - 요청] "돋보기 형태로 위치/반지름만 주고, 그 안엔 curve만" -
+        # 켜면 title/axis frame(테두리)/격자/tic 숫자를 전부 무시.
+        self.pip_minimal_var = tk.BooleanVar(value=False)
         # [수정 - 사용자 보고 버그] "in-plot title/tic font가 너무 작아짐" -
         # 0.35로 낮췄던 기본값을 0.6으로 되돌림(gnu_generator.py의 동일
         # 기본값과 함께 - legend 전용 축소는 별도 메커니즘이 담당).
@@ -2092,7 +2095,7 @@ class CathPlotGUI:
                 "ymin": self.pip_ymin_var.get(), "ymax": self.pip_ymax_var.get(),
                 "y2min": self.pip_y2min_var.get(), "y2max": self.pip_y2max_var.get(),
                 "title_on": self.pip_title_on_var.get(), "axis_title_on": self.pip_axis_title_on_var.get(),
-                "legend_on": self.pip_legend_on_var.get(),
+                "legend_on": self.pip_legend_on_var.get(), "minimal": self.pip_minimal_var.get(),
                 "title_text": self.pip_title_text_var.get(), "xlabel_text": self.pip_xlabel_text_var.get(),
                 "ylabel_text": self.pip_ylabel_text_var.get(), "y2label_text": self.pip_y2label_text_var.get(),
                 "font_scale": self.pip_font_scale_var.get(), "opacity": self.pip_opacity_var.get(),
@@ -2329,6 +2332,7 @@ class CathPlotGUI:
             self.pip_title_on_var.set(_pip_data.get("title_on", self.pip_title_on_var.get()))
             self.pip_axis_title_on_var.set(_pip_data.get("axis_title_on", self.pip_axis_title_on_var.get()))
             self.pip_legend_on_var.set(_pip_data.get("legend_on", self.pip_legend_on_var.get()))
+            self.pip_minimal_var.set(_pip_data.get("minimal", self.pip_minimal_var.get()))
             self.pip_title_text_var.set(_pip_data.get("title_text", self.pip_title_text_var.get()))
             self.pip_xlabel_text_var.set(_pip_data.get("xlabel_text", self.pip_xlabel_text_var.get()))
             self.pip_ylabel_text_var.set(_pip_data.get("ylabel_text", self.pip_ylabel_text_var.get()))
@@ -3272,6 +3276,12 @@ class CathPlotGUI:
         self._mk_check(opt_frame, "Plot Title 표시", self.pip_title_on_var, size=19, anchor="w", padx=5, pady=2)
         self._mk_check(opt_frame, "Axis Title 표시", self.pip_axis_title_on_var, size=19, anchor="w", padx=5, pady=2)
         self._mk_check(opt_frame, "Legend 표시", self.pip_legend_on_var, size=19, anchor="w", padx=5, pady=2)
+        # [추가 - 요청] "원 안에 아무것도 없이 curve만 넣는 경우도 옵션으로" -
+        # 켜면 title/axis frame(테두리)/격자/tic 숫자를 전부 무시하고 배경+
+        # curve만 보이게 한다(원으로 확대할 때는 축 좌표 등이 오히려 방해가
+        # 될 수 있다는 요청 - _build_pip_folded_overlay가 이 값을 읽어
+        # 테두리/격자/tic 생성을 건너뜀).
+        self._mk_check(opt_frame, "간단히 표시 (Curve만, 테두리/tic 생략)", self.pip_minimal_var, size=19, anchor="w", padx=5, pady=2)
 
         # [추가 - 요청] "PIP 표시옵션에서 Plot Title/X/Y1/Y2 title을 default를
         # 제시하고 수정 가능하게 - 불러오는 in-plot의 원본 파일에 title 등이
@@ -3541,6 +3551,7 @@ class CathPlotGUI:
             "title_on": self.pip_title_on_var.get(),
             "axis_title_on": self.pip_axis_title_on_var.get(),
             "legend_on": self.pip_legend_on_var.get(),
+            "minimal": self.pip_minimal_var.get(),
             "title_text": self.pip_title_text_var.get(),
             "xlabel_text": self.pip_xlabel_text_var.get(),
             "ylabel_text": self.pip_ylabel_text_var.get(),
