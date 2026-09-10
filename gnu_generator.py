@@ -3758,6 +3758,11 @@ class GnuplotGenerator:
         # 이번 호출이 해당 안 되는 경우(PIP 꺼짐, 완전불투명 아님 등) 이전
         # 호출의 값이 남아 잘못 쓰이는 일이 없게 한다.
         self._pip_main_blank_line = None
+        # [추가] rect/ellipse 완전불투명 각각 서로 다른 이름의 재생(replay)
+        # 제외 판정 함수를 쓰므로(_pip_rect_ok_y1/y2 vs _pip_ellip_ok_y1/y2),
+        # create_script가 어느 쪽을 골라 써야 할지 알 수 있게 접두어를
+        # 남긴다 - _pip_main_blank_line과 마찬가지로 매 호출마다 리셋.
+        self._pip_exclude_fn_prefix = None
         pip = getattr(plotdef, "pip", None) or {}
         if not pip.get("enabled"):
             return
@@ -4563,6 +4568,49 @@ class GnuplotGenerator:
                 f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
                 f'behind fc rgb "white" fillstyle solid 1.0 border lc rgb "black" lw {_deco_lw:.2f}'
             )
+            # [수정 - 사용자 보고 버그] "PIP 불투명, 사각형인데 왜 그림이
+            # 겹치지?" - 원/타원 완전불투명은 이미 겪은 문제(behind 오브젝트가
+            # 그 시점 이전에 그려진 메인 자신의 곡선/그리드를 실제 Windows
+            # 터미널에서 확실히 덮는지 근본적으로 불확실해, 메인 자신의 1차
+            # 그리기 단계에서부터 이 자리를 흰색으로 미리 비워두는 방어 계층을
+            # 추가했었음 - "rect는 NaN 감싸기(마스킹)를 안 쓰니 이 문제와
+            # 무관하다"고 당시 판단했던 것이 오류였음: "behind가 확실히
+            # 덮는지" 문제는 마스킹 여부와 무관하게 rect의 흰 배경 오브젝트
+            # 에도 똑같이 해당하는 별개의 문제였음. 원/타원과 동일하게 rect
+            # 모양의 흰색 블랭킹을 메인 자신의 첫 'plot \' 앞에 끼워 넣는다.
+            self._pip_main_blank_line = (
+                f"set object 7050 rectangle from screen {origin_x:.4f},{origin_y:.4f} "
+                f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
+                f'front fc rgb "white" fillstyle solid 1.0 noborder'
+            )
+            # [추가 - 위와 같은 이유] 1차 그리기 방어(블랭킹)만으로는 부족함 -
+            # 원/타원처럼 "재생(2차 그리기)의 곡선이 이 자리를 다시 덮어버리는"
+            # 문제도 rect에 그대로 있었음(둘 다 곡선은 "behind" 배경 위,
+            # default z-order라 재생 곡선이 배경을 덮음). 원/타원의
+            # _pip_ellip_ok_y1/y2와 완전히 같은 관용구를 rect 전용으로 하나 더
+            # 만든다(원/타원처럼 반경(radius) 개념이 없어 박스 전체를 그대로
+            # 제외 영역으로 씀 - 타원 방정식 대신 단순 사각형 판정).
+            # [주의] xrange/yrange가 "set autoscale ..."(구체적 숫자 아님)면
+            # 판정식을 만들 수 없으므로(원/타원의 _ellipse_native_ok 조건과
+            # 동일한 이유), 그 경우는 블랭킹만 적용하고 이 마스킹은 생략한다
+            # (재생 시 다시 겹칠 위험은 남지만, 기존보다 나빠지진 않음).
+            self._pip_exclude_fn_prefix = None
+            _rxr = _parse_range(xrange_cmd)
+            _ryr = _parse_range(yrange_cmd)
+            _ry2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
+            if (_rxr is not None and _ryr is not None and _rxr[1] != _rxr[0] and _ryr[1] != _ryr[0]
+                    and _ry2r is not None and _ry2r[1] != _ry2r[0]):
+                def _rect_ok_body(y0, y1):
+                    return (
+                        f"(abs((((x-({_rxr[0]}))/(({_rxr[1]})-({_rxr[0]})))*(1-{_inset_left_frac}-{_inset_right_frac})"
+                        f"+{_inset_left_frac}-0.5)) <= 0.5) && "
+                        f"(abs((((y-({y0}))/(({y1})-({y0})))*(1-{_inset_bottom_frac}-{_inset_top_frac})"
+                        f"+{_inset_bottom_frac}-0.5)) <= 0.5)"
+                    )
+                lines.append(f"_pip_rect_ok_y1(x,y) = {_rect_ok_body(_ryr[0], _ryr[1])}")
+                if _uses_y2:
+                    lines.append(f"_pip_rect_ok_y2(x,y) = {_rect_ok_body(_ry2r[0], _ry2r[1])}")
+                self._pip_exclude_fn_prefix = "_pip_rect_ok"
         elif _rect_no_bg:
             # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
             # 통일 필요(가는 외곽선은 다 있는 게 낫다)" - 배경(채우기)은
@@ -4619,6 +4667,7 @@ class GnuplotGenerator:
                     f"set object 7050 ellipse at screen {_ecx:.4f},{_ecy:.4f} "
                     f"size screen {_erx*2:.4f},{_ery*2:.4f} front fc rgb \"white\" fillstyle solid 1.0 noborder"
                 )
+                self._pip_exclude_fn_prefix = "_pip_ellip_ok"
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
             # 있도록 항상 흰 배경만(테두리 없이) 깐다 - 최종 배경 불투명도/
@@ -6149,9 +6198,18 @@ class GnuplotGenerator:
                 if _idx is not None:
                     _target_list.insert(_idx, _blank_line)
             _pip_blank_line = getattr(self, "_pip_main_blank_line", None)
+            # [수정 - 사용자 보고 버그] "PIP 불투명, 사각형인데 왜 그림이
+            # 겹치지?" - 아래 재생-제외 마스킹은 이전엔 원/타원 전용
+            # _pip_ellip_ok_y1/y2 함수 이름을 그대로 하드코딩해서 썼는데,
+            # rect도 이제 같은 이유로 이 마스킹이 필요해져(_render_pip_inset
+            # 참고) rect 전용 _pip_rect_ok_y1/y2를 대신 정의해두는 경우가
+            # 생김 - 어느 쪽 함수가 실제로 정의됐는지(_pip_exclude_fn_prefix)
+            # 에 맞춰 접두어를 골라 쓴다(shape 무관하게 동일한 관용구 재사용).
+            _pip_exclude_prefix = getattr(self, "_pip_exclude_fn_prefix", None)
             if _pip_blank_line:
                 _insert_before_first_plot(_pip_probe_lines, _pip_blank_line, _main_state_start_idx)
                 self._pip_main_blank_line = None
+                self._pip_exclude_fn_prefix = None
                 # [추가 - 사용자 재보고 반영] "우클릭 확대는 안 되지만 좌표는
                 # 움직임" - 재생(스냅샷)의 "plot \"을 안 보이는 더미로
                 # 바꿨더니(직전 시도) gnuplot 네이티브 우클릭-드래그 확대가
@@ -6159,20 +6217,22 @@ class GnuplotGenerator:
                 # 바뀌는 회귀가 생겨 되돌림 - 우클릭 확대가 실제 곡선을
                 # 다시 그리려면 "마지막 plot"이 진짜 main 곡선이어야 함.
                 # 대신 이 재생(2차 그리기)의 실제 곡선 "using" 식에, PIP
-                # 자신이 쓰는 것과 같은 _pip_ellip_ok_y1/y2(x,y) 판정
-                # 함수(이미 전역으로 정의돼 있어 재사용 가능)를 반대 조건
-                # (원/타원 "안"이면 NaN, "밖"이면 원래 값)으로 감싸서, 이
-                # 재생이 PIP가 차지한 자리 안쪽은 아예 그리지 않게 한다 -
-                # 진짜 곡선이 그대로 "마지막 plot"이 되어 우클릭 확대도
-                # 정상 동작하면서, 그 곡선이 PIP 위를 덮어버리는 것도 막는다.
-                if _main_state_snapshot is not None:
+                # 자신이 쓰는 것과 같은 판정 함수(이미 전역으로 정의돼 있어
+                # 재사용 가능)를 반대 조건(원/타원/사각형 "안"이면 NaN,
+                # "밖"이면 원래 값)으로 감싸서, 이 재생이 PIP가 차지한 자리
+                # 안쪽은 아예 그리지 않게 한다 - 진짜 곡선이 그대로 "마지막
+                # plot"이 되어 우클릭 확대도 정상 동작하면서, 그 곡선이 PIP
+                # 위를 덮어버리는 것도 막는다. (_pip_exclude_prefix가 None이면
+                # -rect가 autoscale이라 판정식 자체를 못 만든 경우 - 이
+                # 마스킹은 생략하고 블랭킹만 적용된 채로 넘어간다.)
+                if _main_state_snapshot is not None and _pip_exclude_prefix:
                     _snap_plot_idx = next(
                         (i for i in range(len(_main_state_snapshot)) if _main_state_snapshot[i].strip() == "plot \\"),
                         None
                     )
                     if _snap_plot_idx is not None:
                         def _ellip_exclude_fn_for(cmd):
-                            return "_pip_ellip_ok_y2" if "axes x1y2" in cmd else "_pip_ellip_ok_y1"
+                            return f"{_pip_exclude_prefix}_y2" if "axes x1y2" in cmd else f"{_pip_exclude_prefix}_y1"
 
                         def _exclude_ellipse_line(cmd):
                             _fn = _ellip_exclude_fn_for(cmd)
@@ -6292,6 +6352,17 @@ class GnuplotGenerator:
                 "replot",
             ]
             lines.append("bind 'R' '" + "; ".join(_reset_cmds) + "'")
+            # [수정 - 사용자 재보고 반영] "우클릭 확대/축소, 스크롤 이동은
+            # 되는데, 맨처음 plot 그림 잔상이 남음(계속 확대해도 잔상 자체는
+            # 더 나빠지지 않고, u 키로 원위치 범위 복귀는 되지만 잔상은 안
+            # 지워짐) - 이를 지우고 u 키에서 다시 그리면 안 되나?" - gnuplot
+            # 기본 'u'(내부적으로 "확대 이력 전부 해제하고 원래 범위로"
+            # 되돌리는 C 레벨 처리)는 위 'R'과 의미상 완전히 같은 동작인데도
+            # 서로 다른 경로로 구현돼 있어(내부 처리 vs 스크립트의 명시적
+            # "replot" 재실행), 화면에 남은 잔상을 지우는 효과가 다를 수
+            # 있음 - 'u'도 'R'과 똑같이 명시적 재실행으로 덮어써서, 이참에
+            # 이 경로로 잔상이 지워지는지 실제 화면에서 확인해달라고 요청.
+            lines.append("bind 'u' '" + "; ".join(_reset_cmds) + "'")
 
         if fmt.lower() == "interactive": lines.append("pause mouse close")
         else: lines.append("set output")
