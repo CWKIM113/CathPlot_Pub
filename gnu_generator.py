@@ -4229,21 +4229,30 @@ class GnuplotGenerator:
             except ValueError:
                 return None
 
-        # [추가] "화면비율 기반 판정 함수" 대신 "생성 시점에 딱 한 번 계산한
-        # 고정 데이터 범위"로 PIP 박스의 재생-제외 영역을 표현하기 위한 역산
-        # - _ellip_ok_body/_rect_ok_body가 쓰는 것과 완전히 같은 선형 변환
-        # (data -> [0,1] axis비율 -> box비율)을 box 경계(-0.5/+0.5)에 대해
-        # 거꾸로 풀어 "이 박스가 실제로 덮는 data 범위[lo,hi]"를 구한다(위
-        # self._pip_replay_mask_box 도입 배경 주석 참고). frac_lo+frac_hi가
-        # 1에 가까우면(박스가 축 프레임을 거의 다 채움) 분모가 0에 가까워져
-        # 범위가 발산할 수 있으나, 그런 극단적 크기의 PIP는 애초에 "제외"할
-        # 실익이 없으므로 None을 돌려줘 마스킹 자체를 생략하게 한다.
-        def _box_bounds(dmin, dmax, frac_lo, frac_hi):
-            _denom = 1.0 - frac_lo - frac_hi
-            if abs(_denom) < 1e-6 or dmax == dmin:
+        # [수정 - 실사용 데이터로 재현된 버그] "PIP 박스가 화면 밖으로 튀어
+        # 나감(스크롤해야 보임), 그 여파로 main 렌더 전체가 흐트러짐" - 원래
+        # 이 함수는 _ellip_ok_body/_rect_ok_body가 쓰는 "_inset_left_frac 등"
+        # (PIP 박스 "자기 자신의" tic-label 여백 비율 - 대략 0.13~0.15로
+        # 거의 고정값)을 그대로 재사용해 "박스가 축 프레임에서 차지하는
+        # 위치"인 것처럼 역산했는데, 실측(실제 생성된 .plt 파일의 PIP
+        # origin/size 값과 대조)으로 이 두 값이 서로 전혀 무관함이 드러남 -
+        # 우연히 맞아떨어졌던 첫 테스트 케이스만으로 잘못 확정한 가정이었음.
+        # 박스가 축 프레임에서 실제로 차지하는 위치는 이미 위에서 계산된
+        # origin_x/origin_y/size_w/size_h(전체 페이지 비율)와 ab_x/ab_y/
+        # ab_w/ab_h(메인 축 프레임의 페이지 비율 - "set lmargin at screen"
+        # 등과 같은 좌표계)로 직접, 정확히 구할 수 있다 - 더 이상 margin
+        # 비율을 대신 끌어다 쓸 필요가 없다.
+        def _box_bounds(dmin, dmax, is_x):
+            if dmax == dmin:
                 return None
-            _lo = dmin + (dmax - dmin) * (-frac_lo / _denom)
-            _hi = dmin + (dmax - dmin) * ((1.0 - frac_lo) / _denom)
+            if is_x:
+                _frac_lo = (origin_x - ab_x) / ab_w if ab_w else 0.0
+                _frac_hi = (origin_x + size_w - ab_x) / ab_w if ab_w else 1.0
+            else:
+                _frac_lo = (origin_y - ab_y) / ab_h if ab_h else 0.0
+                _frac_hi = (origin_y + size_h - ab_y) / ab_h if ab_h else 1.0
+            _lo = dmin + (dmax - dmin) * _frac_lo
+            _hi = dmin + (dmax - dmin) * _frac_hi
             return (min(_lo, _hi), max(_lo, _hi))
 
         _xr_for_tics = _parse_range(xrange_cmd)
@@ -4792,12 +4801,26 @@ class GnuplotGenerator:
             _rxr = _parse_range(xrange_cmd)
             _ryr = _parse_range(yrange_cmd)
             _ry2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
+            # [수정 - 실사용 데이터로 재현된 버그] "PIP 박스가 화면 밖으로
+            # 튀어나감" - _box_bounds에 넘긴 dmin/dmax가 잘못됐었음: xrange_cmd/
+            # yrange_cmd/y2range_cmd는 "PIP 자신의" 확대 구간(예: [0:300])인데,
+            # 박스가 축 프레임에서 차지하는 위치(frac_lo/frac_hi)는 "메인의"
+            # 전체 range(예: [0:1051]) 기준으로 환산해야 함 - 서로 다른 두
+            # range를 섞어 써서 박스가 훨씬 좁은(또는 엉뚱한) data 구간으로
+            # 계산됐던 것. main의 실제 range는 위에서 이미 찾아둔
+            # _main_xrange_line/_main_yrange_line/_main_y2range_line에서 가져온다.
+            _main_xr = _parse_range(_main_xrange_line) if _main_xrange_line else None
+            _main_yr = _parse_range(_main_yrange_line) if _main_yrange_line else None
+            _main_y2r = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
             if (_rxr is not None and _ryr is not None and _rxr[1] != _rxr[0] and _ryr[1] != _ryr[0]
-                    and _ry2r is not None and _ry2r[1] != _ry2r[0]):
-                _mbx = _box_bounds(_rxr[0], _rxr[1], _inset_left_frac, _inset_right_frac)
-                _mby1 = _box_bounds(_ryr[0], _ryr[1], _inset_bottom_frac, _inset_top_frac)
+                    and _ry2r is not None and _ry2r[1] != _ry2r[0]
+                    and _main_xr is not None and _main_xr[1] != _main_xr[0]
+                    and _main_yr is not None and _main_yr[1] != _main_yr[0]
+                    and (not _uses_y2 or (_main_y2r is not None and _main_y2r[1] != _main_y2r[0]))):
+                _mbx = _box_bounds(_main_xr[0], _main_xr[1], True)
+                _mby1 = _box_bounds(_main_yr[0], _main_yr[1], False)
                 _mby2 = (
-                    _box_bounds(_ry2r[0], _ry2r[1], _inset_bottom_frac, _inset_top_frac)
+                    _box_bounds(_main_y2r[0], _main_y2r[1], False)
                     if _uses_y2 else None
                 )
                 if _mbx is not None and _mby1 is not None:
@@ -4869,12 +4892,21 @@ class GnuplotGenerator:
                 _erxr = _parse_range(xrange_cmd)
                 _eryr = _parse_range(yrange_cmd)
                 _ery2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
+                # [수정 - 근본원인, rect 쪽과 동일] _box_bounds에는 PIP 자신의
+                # 확대 구간(_erxr 등)이 아니라 main의 실제 전체 range를 써야
+                # 함 - 위 rect 분기의 같은 수정 배경 주석 참고.
+                _main_xr = _parse_range(_main_xrange_line) if _main_xrange_line else None
+                _main_yr = _parse_range(_main_yrange_line) if _main_yrange_line else None
+                _main_y2r = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
                 if (_erxr is not None and _eryr is not None and _erxr[1] != _erxr[0] and _eryr[1] != _eryr[0]
-                        and _ery2r is not None and _ery2r[1] != _ery2r[0]):
-                    _mbx = _box_bounds(_erxr[0], _erxr[1], _inset_left_frac, _inset_right_frac)
-                    _mby1 = _box_bounds(_eryr[0], _eryr[1], _inset_bottom_frac, _inset_top_frac)
+                        and _ery2r is not None and _ery2r[1] != _ery2r[0]
+                        and _main_xr is not None and _main_xr[1] != _main_xr[0]
+                        and _main_yr is not None and _main_yr[1] != _main_yr[0]
+                        and (not _uses_y2 or (_main_y2r is not None and _main_y2r[1] != _main_y2r[0]))):
+                    _mbx = _box_bounds(_main_xr[0], _main_xr[1], True)
+                    _mby1 = _box_bounds(_main_yr[0], _main_yr[1], False)
                     _mby2 = (
-                        _box_bounds(_ery2r[0], _ery2r[1], _inset_bottom_frac, _inset_top_frac)
+                        _box_bounds(_main_y2r[0], _main_y2r[1], False)
                         if _uses_y2 else None
                     )
                     if _mbx is not None and _mby1 is not None:
