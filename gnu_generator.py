@@ -3706,6 +3706,150 @@ class GnuplotGenerator:
             return None
         return f'"{_tmp_name}" using ($1):2{_suffix}', _tmp_path
 
+    def _build_pip_folded_overlay(self, plotdef, pip_xmin, pip_xmax, pip_y1min, pip_y1max,
+                                   pip_y2min, pip_y2max, box, plot_dir_):
+        """[추가 - PIP 렌더링 재설계] "R/u 직후 기본 화면은 깨끗해야 하는데
+        확대(replot)는 그걸 위한 NaN 마스킹 때문에 막힌다"는 근본 충돌을
+        피하기 위해, PIP(배경+테두리+자기 커브)를 별도 멀티플롯 패널이
+        아니라 main 재생(replay)의 "plot \" 명령 안에 함께 그려지는
+        "고정 데이터"로 바꾼다 - 이러면 재생이 통째로 replot돼도(확대/
+        스크롤) PIP가 매번 같이 다시 그려진다(단, 화면 코너 고정이 아니라
+        생성 시점 data 좌표에 고정되므로, 확대해서 그 data 구간이 시야
+        밖으로 나가면 PIP도 같이 안 보이게 됨 - 사용자 확인 완료: "바뀌더라도
+        제대로 되게, R/u로 원위치되니 괜찮다").
+
+        커브 데이터는 이 함수 자신이 gnuplot을 한 번 더(스크립트 생성
+        시점, _presmooth_spline_curve와 같은 "set table" 기법) 돌려서
+        PIP 자신의 구간([pip_xmin:pip_xmax] 등)으로 이미 필터링된 순수
+        (x,y) 숫자를 파일로 뽑아낸다 - 이 단계(생성 시점, 1회성 배치
+        실행)에서는 조건식(NaN 삼항)을 써도 전혀 문제없다(대화형 세션의
+        replot과는 완전히 다른, 비대화형 1회 실행이라 이 세션에서 겪은
+        "복잡한 조건식이 실제 대화형 replot에서 곡선을 통째로 안 그리게
+        만드는" 문제와 무관 - 단순 배치 실행은 이미 다른 용도(스플라인
+        사전계산 등)로 검증되어 있음). 최종 대화형 스크립트에는 그 결과
+        파일을 "고정 박스 좌표로 선형 변환"하는 산술식만(조건문 없음 -
+        이 세션에서 이런 단순 산술은 replot에도 안전함을 격리 테스트로
+        확인) 남긴다.
+
+        배경/테두리는 원/타원이어도 지금은 박스(사각형)로 근사한다 -
+        모양(둥근 테두리)까지 완전히 재현하려면 타원 둘레를 여러 점으로
+        쪼개 그려야 하는데(추후 확장 가능), 우선 "불투명 보호 + 확대
+        동작"이라는 핵심 기능부터 두 모양 모두에 확실히 적용한다.
+
+        Returns (fragment_lines, temp_files) - 실패(자동범위라 구체적
+        숫자가 없는 등)하면 ([], [])."""
+        fragments, temp_files = [], []
+        if box is None:
+            return fragments, temp_files
+        x_lo_hi = box.get("x")
+        y1_lo_hi = box.get("y1")
+        if not x_lo_hi or not y1_lo_hi:
+            return fragments, temp_files
+        x_lo, x_hi = x_lo_hi
+        y1_lo, y1_hi = y1_lo_hi
+        y2_lo_hi = box.get("y2")
+        try:
+            pxmin, pxmax = float(pip_xmin), float(pip_xmax)
+            py1min, py1max = float(pip_y1min), float(pip_y1max)
+        except (TypeError, ValueError):
+            return fragments, temp_files
+        if pxmax == pxmin or py1max == py1min:
+            return fragments, temp_files
+        _have_y2 = False
+        py2min = py2max = None
+        if y2_lo_hi is not None:
+            try:
+                py2min, py2max = float(pip_y2min), float(pip_y2max)
+                _have_y2 = py2max != py2min
+            except (TypeError, ValueError):
+                _have_y2 = False
+
+        # 배경(채워진 사각형) - PIP가 실제로 관측할 곡선보다 먼저(아래에)
+        # 그려져야 하므로 이 overlay 목록의 맨 앞에 둔다.
+        # [수정 - 실측으로 발견된 gnuplot/cairo 렌더링 버그] "박스는 맞는
+        # 위치/크기로 그려지는데 main 곡선이 계속 비쳐 보임" - 색을
+        # 초록색 등으로 바꿔서 렌더해보니 실제로는 박스 위치·크기·
+        # z-order(main을 제대로 덮음) 전부 정상이었고, 유일한 문제는
+        # 배경색이 정확히 순백(255,255,255 = "white")일 때만 이 특정
+        # 스크립트 구조(1차 그리기에서 같은 자리에 흰색 "front" 오브젝트를
+        # 쓴 적이 있는 등)에서 채우기 자체가 투명하게 사라지는 현상이었음
+        # (실측: fc rgb "#FEFEFE"(254)까지는 재현되고 "#FDFDFD"(253)부터는
+        # 정상 - 1의 차이로 갈리는 것으로 보아 cairo의 색상 비교/캐싱
+        # 관련 off-by-one성 버그로 추정). 육안으로는 순백과 구별 안 되는
+        # "#FDFDFD"를 대신 써서 이 버그를 피해간다.
+        _corners = [(x_lo, y1_lo), (x_hi, y1_lo), (x_hi, y1_hi), (x_lo, y1_hi), (x_lo, y1_lo)]
+        _bg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _corners)
+        fragments.append(f"$PipFoldBox << EOD\n{_bg_rows}\nEOD")
+        fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 noborder')
+        fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 1.2')
+
+        for curve in plotdef.curves:
+            is_y2 = getattr(curve, "axis", "y1") == "y2"
+            if is_y2 and not _have_y2:
+                continue
+            dest_lo, dest_hi = (y2_lo_hi if is_y2 else y1_lo_hi)
+            src_ymin, src_ymax = (py2min, py2max) if is_y2 else (py1min, py1max)
+            axis_spec = "x1y2" if is_y2 else "x1y1"
+            abs_path = curve.dat_file if os.path.isabs(curve.dat_file) else os.path.abspath(curve.dat_file)
+            try:
+                rel_path = os.path.relpath(abs_path, start=plot_dir_) if plot_dir_ else abs_path
+            except ValueError:
+                rel_path = abs_path
+            rel_path = rel_path.replace("\\", "/")
+            x_col_idx = curve.x_output_no if getattr(curve, "x_output_no", None) is not None else getattr(plotdef, "x_output_no", 0)
+            x_expr = f"(${x_col_idx + 1}+{curve.x_shift})"
+            y_expr = f"(${curve.output_no + 1})"
+            _tmp_name = f".cathplot_pipfold_{uuid.uuid4().hex}.dat"
+            _tmp_path = os.path.join(plot_dir_, _tmp_name)
+            _mini_script = (
+                f"set xrange [{pxmin}:{pxmax}]\n"
+                f"set yrange [{src_ymin}:{src_ymax}]\n"
+                f'set table "{_tmp_name}"\n'
+                f'plot "{rel_path}" using {x_expr}:{y_expr} notitle with lines\n'
+                f"unset table\n"
+            )
+            try:
+                _gp = _resolve_gnuplot_exe()
+                _res = subprocess.run(
+                    [_gp], input=_mini_script, text=True, encoding="utf-8", errors="replace",
+                    capture_output=True, cwd=plot_dir_, timeout=20, **_no_console_kwargs()
+                )
+                if _res.returncode != 0 or not os.path.exists(_tmp_path):
+                    continue
+                # [수정 - 실측으로 발견된 버그] "set table"는 xrange/yrange
+                # 밖의 점도 "실제 좌표값 + 상태표시(i=범위안/o=범위밖/
+                # u=undefined)"로 그대로 다 써낸다(줄이기/생략이 아니라
+                # "선이 경계에서 깔끔히 잘리게" 하려는 gnuplot의 의도적
+                # 동작) - 이걸 모르고 그냥 "using 1:2"로 읽으면 범위 밖
+                # 점까지 다 살아나 박스 밖으로 곡선이 삐져나옴(실제 렌더로
+                # 확인). 여기서는 "i"로 표시된, 확실히 PIP 구간 안인 점만
+                # 남긴 "순수 x y" 파일로 다시 쓴다(최종 스크립트에서는
+                # 조건문 없는 단순 선형변환 산술식만 남게 하기 위함).
+                _kept_rows = []
+                with open(_tmp_path, encoding="utf-8", errors="replace") as f:
+                    for ln in f:
+                        ln = ln.strip()
+                        if not ln or ln.startswith("#"):
+                            continue
+                        _parts = ln.split()
+                        if len(_parts) >= 3 and _parts[2] == "i":
+                            _kept_rows.append(f"{_parts[0]} {_parts[1]}")
+                os.remove(_tmp_path)
+                if not _kept_rows:
+                    continue
+                with open(_tmp_path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(_kept_rows))
+            except Exception:
+                continue
+            color = curve.color or DEFAULT_COLORS[plotdef.curves.index(curve) % len(DEFAULT_COLORS)]
+            _tx = f"({x_lo} + (($1-({pxmin}))/(({pxmax})-({pxmin})))*(({x_hi})-({x_lo})))"
+            _ty = f"({dest_lo} + (($2-({src_ymin}))/(({src_ymax})-({src_ymin})))*(({dest_hi})-({dest_lo})))"
+            fragments.append(
+                f'"{_tmp_name}" using {_tx}:{_ty} notitle axes {axis_spec} with lines lw 1.0 lc rgb "{color}"'
+            )
+            temp_files.append(_tmp_path)
+        return fragments, temp_files
+
     def _render_pip_inset(self, plotdef, lines, main_cmd_list, fmt, parent_box=None, force_postprocess=False):
         """[추가 - 요청] "작은 plot을 큰 plot 안에(PIP)" - 메인 plot을 이미 다
         그린 뒤(lines에 'plot ...'까지 채워진 상태) 같은 캔버스 위에 작은
@@ -3788,6 +3932,11 @@ class GnuplotGenerator:
         # 없어져 _pip_exclude_fn_prefix(도형별 함수 이름 구분)도 더 이상
         # 필요 없다.
         self._pip_replay_mask_box = None
+        # [추가 - PIP 렌더링 재설계] self._pip_replay_mask_box와 같은 시점에
+        # 같이 채워짐 - _build_pip_folded_overlay가 PIP 자신의 커브를
+        # "이 구간으로 필터링"하는 데 필요한 PIP 자신의 x/y1/y2 범위(파싱된
+        # 숫자, 화면비율이 아닌 data 값 그대로).
+        self._pip_fold_ranges = None
         pip = getattr(plotdef, "pip", None) or {}
         if not pip.get("enabled"):
             return
@@ -4653,6 +4802,7 @@ class GnuplotGenerator:
                 )
                 if _mbx is not None and _mby1 is not None:
                     self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
+                    self._pip_fold_ranges = {"x": _rxr, "y1": _ryr, "y2": _ry2r if _uses_y2 else None}
         elif _rect_no_bg:
             # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
             # 통일 필요(가는 외곽선은 다 있는 게 낫다)" - 배경(채우기)은
@@ -4729,6 +4879,7 @@ class GnuplotGenerator:
                     )
                     if _mbx is not None and _mby1 is not None:
                         self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
+                        self._pip_fold_ranges = {"x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None}
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
             # 있도록 항상 흰 배경만(테두리 없이) 깐다 - 최종 배경 불투명도/
@@ -6313,81 +6464,71 @@ class GnuplotGenerator:
                 _pip_probe_lines.append("unset object 7100")
                 _insert_before_first_plot(_pip_probe_lines, _pip_blank_line, _main_state_start_idx)
                 self._pip_main_blank_line = None
-                # [수정 - 사용자 지적으로 우선순위 재확정] "문제는 확대가
-                # 아니고 R/u 눌렀을 때의 첫 화면이 불투명인데 PIP에 그림이
-                # 겹치는 것 - 이게 기본 문제" - 지난 두 커밋의 경과: (1) 고정
-                # data범위 마스킹은 격리 테스트로는 정상이었지만 PIP 박스가
-                # 차지하는 실제 data 범위가 넓어 확대 시 자주 "겹치는 부분만
-                # 비어 보임"에 그치지 않고 (2) 그 시점엔 원인을 몰랐던 별개
-                # 버그(PIP 배경 오브젝트 7100이 계속 활성 선언 상태로 남아
-                # replot 자체가 곡선을 아예 다시 안 그리는 문제)까지 겹쳐 있어
-                # "확대해도 curve가 통째로 안 보임"으로 나타났었음 - 그래서
-                # 일단 마스킹을 끄고 7100 unset만으로 확대 자체는 살렸는데,
-                # 그 결과 정작 더 중요한 "기본"(첫 화면/R·u로 되돌린 직후)
-                # 상태에서 마스킹이 없어 불투명인데도 main이 PIP를 덮는
-                # 회귀가 생김 - 사용자가 명시적으로 "확대는 부차적, 이게
-                # 기본 문제"라고 우선순위를 재지정함.
-                # [조합] 사용자 제안("잘 조합하면 될 듯") 그대로: 위 7100
-                # unset 수정(확대 시 곡선 자체가 안 그려지던 진짜 원인)은
-                # 그대로 두고, 고정 data범위 마스킹(self._pip_replay_mask_box,
-                # 위에서 이미 계산해둠)을 다시 켠다. 7100 문제가 고쳐졌으니
-                # 이제 마스킹이 있어도 확대 시 곡선 자체는 정상적으로 다시
-                # 그려지고(마스킹은 "그 중 PIP 박스 자리만" 제외할 뿐,
-                # 이전처럼 곡선 전체가 안 그려지는 건 별개 버그였음), 그
-                # 결과: 첫 화면/R·u 직후는 정확히 PIP 박스 자리만 제외되어
-                # 완전히 깨끗하고(기본 문제 해결), 확대해도 "PIP가 원래
-                # 보여주던 그 data 구간"만 계속 비어 보일 뿐 나머지는 정상
-                # 표시되며(이전처럼 뷰 전체가 텅 비지 않음), 그마저 거슬리면
-                # R로 언제든 완전히 정리할 수 있다.
+                # [수정 - PIP 렌더링 재설계] "R/u 직후 기본 화면 보호"와
+                # "확대 시 실제 재렌더"가 NaN 마스킹 한 가지로는 동시에 안
+                # 된다는 게 이 세션 내내 반복 확인된 결론(마스킹 있으면 첫
+                # 화면은 깨끗하지만 실제 대화형 replot이 곡선을 아예 다시
+                # 안 그림 - 격리 pngcairo 테스트와 실제 Windows 터미널 결과가
+                # 다른 사례로 재확인됨). 사용자 승인(재생성돼도 괜찮음, R/u로
+                # 원위치)에 따라 접근을 바꾼다: 재생의 main 곡선은 (마스킹
+                # 없이) 그대로 두고 - 확대/스크롤이 항상 정상 재렌더됨 -
+                # PIP(배경+테두리+자기 커브)를 이 "plot \" 명령 "안에" 같은
+                # 목록의 뒤쪽 항목들로 덧붙인다(_build_pip_folded_overlay -
+                # 커브 데이터는 생성 시점에 gnuplot을 한 번 더 돌려 PIP 구간
+                # 으로 이미 필터링한 순수 숫자 파일로 뽑아두고, 여기서는
+                # "고정 박스 좌표로 선형 변환"하는 조건 없는 산술식만 씀 -
+                # 이런 형태는 이 세션의 격리 테스트로 replot에도 안전함을
+                # 확인함). 같은 명령이 통째로 replot되므로 확대해도 PIP가
+                # 매번 같이 다시 그려짐 - 다만 화면 비율이 아니라 생성 시점
+                # data 좌표에 고정되므로, 그 data 구간이 시야 밖으로 나가면
+                # PIP도 같이 안 보이게 된다(사용자 확인·승인됨).
                 _mask_box = getattr(self, "_pip_replay_mask_box", None)
                 self._pip_replay_mask_box = None
-                if _main_state_snapshot is not None and _mask_box:
+                _fold_ranges = getattr(self, "_pip_fold_ranges", None)
+                self._pip_fold_ranges = None
+                if _main_state_snapshot is not None and _mask_box and _fold_ranges:
                     _snap_plot_idx = next(
                         (i for i in range(len(_main_state_snapshot)) if _main_state_snapshot[i].strip() == "plot \\"),
                         None
                     )
                     if _snap_plot_idx is not None:
-                        _mbx_lo, _mbx_hi = _mask_box["x"]
-                        _mby1_bounds = _mask_box.get("y1")
-                        _mby2_bounds = _mask_box.get("y2")
-
-                        def _ybounds_for(cmd):
-                            if "axes x1y2" in cmd and _mby2_bounds:
-                                return _mby2_bounds
-                            return _mby1_bounds
-
-                        def _mask_ellipse_line(cmd):
-                            _yb = _ybounds_for(cmd)
-                            if _yb is None:
-                                return cmd
-
-                            def _wrap(m):
-                                expr, col = m.group(1), m.group(2)
-                                _cond = (
-                                    f"(({_mbx_lo})<=({expr}) && ({expr})<=({_mbx_hi}) && "
-                                    f"({_yb[0]})<=(${col}) && (${col})<=({_yb[1]}))"
-                                )
-                                return f"using ({_cond} ? (0/0) : ({expr})):({_cond} ? (0/0) : (${col}))"
-                            return re.sub(r"using \(([^)]+)\):(\d+)", _wrap, cmd)
-
-                        def _mask_ellipse_marker(cmd):
-                            _yb = _ybounds_for(cmd)
-                            if _yb is None:
-                                return cmd
-
-                            def _wrap(m):
-                                xcol, ycol = m.group(1), m.group(2)
-                                _cond = (
-                                    f"(({_mbx_lo})<=(${xcol}) && (${xcol})<=({_mbx_hi}) && "
-                                    f"({_yb[0]})<=(${ycol}) && (${ycol})<=({_yb[1]}))"
-                                )
-                                return f"using ({_cond} ? (0/0) : (${xcol})):({_cond} ? (0/0) : (${ycol}))"
-                            return re.sub(r"using (\d+):(\d+)\b", _wrap, cmd)
-
-                        for _i in range(_snap_plot_idx + 1, len(_main_state_snapshot)):
-                            _ln = _mask_ellipse_line(_main_state_snapshot[_i])
-                            _ln = _mask_ellipse_marker(_ln)
-                            _main_state_snapshot[_i] = _ln
+                        _fold_x = _fold_ranges.get("x")
+                        _fold_y1 = _fold_ranges.get("y1")
+                        _fold_y2 = _fold_ranges.get("y2")
+                        _fold_fragments, _fold_tempfiles = self._build_pip_folded_overlay(
+                            plotdef,
+                            _fold_x[0] if _fold_x else None, _fold_x[1] if _fold_x else None,
+                            _fold_y1[0] if _fold_y1 else None, _fold_y1[1] if _fold_y1 else None,
+                            _fold_y2[0] if _fold_y2 else None, _fold_y2[1] if _fold_y2 else None,
+                            _mask_box, self.plot_dir,
+                        )
+                        self._last_pip_fold_tempfiles = (getattr(self, "_last_pip_fold_tempfiles", None) or []) + _fold_tempfiles
+                        _decls = [f for f in _fold_fragments if f.startswith("$") and "<< EOD" in f]
+                        _clauses = [f for f in _fold_fragments if not (f.startswith("$") and "<< EOD" in f)]
+                        for _d in reversed(_decls):
+                            _main_state_snapshot.insert(_snap_plot_idx, _d)
+                            _snap_plot_idx += 1
+                        if _clauses:
+                            # [주의] _main_state_snapshot의 물리적 마지막 원소가
+                            # 항상 곡선 줄인 건 아님(예: 뒤에 빈 문자열 줄이
+                            # 따라올 수 있음, 실측으로 확인) - "plot \" 다음부터
+                            # 실제로 내용이 있는 마지막 줄을 찾아야 정확히 그
+                            # 줄 끝에 ", \"를 이어붙일 수 있다.
+                            _last_idx = len(_main_state_snapshot) - 1
+                            while _last_idx > _snap_plot_idx and not _main_state_snapshot[_last_idx].strip():
+                                _last_idx -= 1
+                            _last_line = _main_state_snapshot[_last_idx]
+                            if not _last_line.rstrip().endswith("\\"):
+                                _main_state_snapshot[_last_idx] = _last_line.rstrip() + ", \\"
+                            _new_clause_lines = []
+                            for _ci, _clause in enumerate(_clauses):
+                                _suffix = ", \\" if _ci < len(_clauses) - 1 else ""
+                                _new_clause_lines.append(_clause + _suffix)
+                            # 뒤에 남아있을 수 있는 빈 줄(위 주석 참고) 바로
+                            # 앞(=실제 마지막 곡선 줄 바로 뒤)에 끼워 넣는다 -
+                            # 그냥 append하면 그 빈 줄 뒤에 붙어 "\" 이어짐이
+                            # 중간에 끊기는 문법 오류가 됨.
+                            _main_state_snapshot[_last_idx + 1:_last_idx + 1] = _new_clause_lines
             if _pip_clip_info is not None and fmt.lower() in ("emf", "eps", "interactive"):
                 # [수정 - 요청] "반투명이 EMF에 불가능하면 50%를 기준으로
                 # 투명/불투명으로 구분" - 항상 완전불투명으로 대체하면, 사용자가
