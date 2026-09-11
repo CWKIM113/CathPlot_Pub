@@ -138,34 +138,78 @@ def _measure_text_width_in(text, font_name, font_pt):
 # symbol_pt를 보정한다. 측정 불가(폰트 파일이 없거나 이 문자를 아예 지원
 # 안 함)이면 안전하게 1.0(보정 없음 - 기존 동작 그대로).
 _MARKER_FONT_REF = "malgun gothic"
-_marker_font_ratio_cache = {}
+_MARKER_FONT_REF_PT = 60  # 작은 폰트에서는 bbox가 정수 픽셀 반올림 오차에 민감해 크게 잡아 측정
+_marker_font_bbox_cache = {}
 
-def _marker_font_size_ratio(symbol_char, font_name):
+def _get_marker_font_bboxes(symbol_char, font_name):
+    """symbol_char를 기준 폰트(Malgun Gothic)와 font_name 둘 다로 _MARKER_FONT_
+    REF_PT 크기로 그렸을 때의 PIL bbox(left, top, right, bottom, top-left
+    원점·y는 아래로 증가)를 함께 돌려준다. 측정 불가하면 (None, None)."""
     _font_key = (font_name or "").strip().lower()
-    if not symbol_char or _font_key == _MARKER_FONT_REF:
-        return 1.0
     cache_key = (symbol_char, _font_key)
-    if cache_key in _marker_font_ratio_cache:
-        return _marker_font_ratio_cache[cache_key]
-
-    ratio = 1.0
+    if cache_key in _marker_font_bbox_cache:
+        return _marker_font_bbox_cache[cache_key]
+    result = (None, None)
     try:
         ref_path = _FONT_FILE_MAP.get(_MARKER_FONT_REF)
         tgt_path = _FONT_FILE_MAP.get(_font_key)
         if ref_path and tgt_path and os.path.exists(ref_path) and os.path.exists(tgt_path):
             from PIL import ImageFont
-            _REF_PT = 60  # 작은 폰트에서는 bbox가 정수 픽셀 반올림 오차에 민감해 크게 잡아 측정
-            ref_bbox = ImageFont.truetype(ref_path, _REF_PT).getbbox(symbol_char)
-            tgt_bbox = ImageFont.truetype(tgt_path, _REF_PT).getbbox(symbol_char)
+            ref_bbox = ImageFont.truetype(ref_path, _MARKER_FONT_REF_PT).getbbox(symbol_char)
+            tgt_bbox = ImageFont.truetype(tgt_path, _MARKER_FONT_REF_PT).getbbox(symbol_char)
             if ref_bbox and tgt_bbox:
-                ref_area = max(ref_bbox[2] - ref_bbox[0], 1) * max(ref_bbox[3] - ref_bbox[1], 1)
-                tgt_area = max(tgt_bbox[2] - tgt_bbox[0], 1) * max(tgt_bbox[3] - tgt_bbox[1], 1)
-                if tgt_area > 0:
-                    ratio = max(0.5, min((ref_area / tgt_area) ** 0.5, 3.0))
+                result = (ref_bbox, tgt_bbox)
     except Exception:
-        ratio = 1.0
-    _marker_font_ratio_cache[cache_key] = ratio
-    return ratio
+        result = (None, None)
+    _marker_font_bbox_cache[cache_key] = result
+    return result
+
+def _marker_font_size_ratio(symbol_char, font_name):
+    _font_key = (font_name or "").strip().lower()
+    if not symbol_char or _font_key == _MARKER_FONT_REF:
+        return 1.0
+    ref_bbox, tgt_bbox = _get_marker_font_bboxes(symbol_char, font_name)
+    if ref_bbox is None:
+        return 1.0
+    ref_area = max(ref_bbox[2] - ref_bbox[0], 1) * max(ref_bbox[3] - ref_bbox[1], 1)
+    tgt_area = max(tgt_bbox[2] - tgt_bbox[0], 1) * max(tgt_bbox[3] - tgt_bbox[1], 1)
+    if tgt_area <= 0:
+        return 1.0
+    return max(0.5, min((ref_area / tgt_area) ** 0.5, 3.0))
+
+def _marker_font_y_delta_rowh(symbol_char, font_name, row_mult):
+    """[추가 - 사용자 보고 버그] "Courier New, Consolas 등에서는 네모가
+    중심 위로 올라감(legend에서만)" - MARKER_Y_OFFSET(_SCREEN)의 기존
+    보정치는 Malgun Gothic 기준으로 실측된 값인데, 폰트마다 "center" 정렬
+    기준(텍스트 베이스라인 메트릭)과 실제 글리프 잉크가 그 안에서 차지하는
+    위치가 달라(특히 고정폭 폰트는 상하 여백 비율이 크게 다름) 같은
+    보정치를 그대로 쓰면 기호가 위/아래로 더 어긋나 보인다. 기준 폰트와
+    대상 폰트에서 같은 문자의 잉크 bbox 수직 중심을 비교해 그 차이를
+    ROW_H 배수 단위로 돌려준다(호출부가 MARKER_Y_OFFSET(_SCREEN) 값에
+    더해 쓴다) - 기준 폰트이거나 측정 불가면 0.0(보정 없음)."""
+    _font_key = (font_name or "").strip().lower()
+    if not symbol_char or _font_key == _MARKER_FONT_REF:
+        return 0.0
+    ref_bbox, tgt_bbox = _get_marker_font_bboxes(symbol_char, font_name)
+    if ref_bbox is None:
+        return 0.0
+    ref_center = (ref_bbox[1] + ref_bbox[3]) / 2.0
+    tgt_center = (tgt_bbox[1] + tgt_bbox[3]) / 2.0
+    # PIL 좌표는 아래로 증가 - tgt_center가 ref_center보다 작으면(=화면에서
+    # 더 위쪽) 대상 폰트의 잉크가 기준보다 위로 치우쳐 있다는 뜻이라(실제
+    # 재보고 증상과 일치) 아래로 내려주도록(오프셋 감소) 부호를 반대로 뒤집는다
+    # ("+면 위로" 관례에 맞춰 offset += 이 값 그대로 쓸 수 있게).
+    delta_em_frac = (tgt_center - ref_center) / _MARKER_FONT_REF_PT
+    # [주의 - 실측 보정] PIL bbox 좌표계(글리프 자체의 잉크 범위)와 gnuplot의
+    # "center" 정렬 기준(폰트의 베이스라인/ascent-descent 메트릭)이 완전히
+    # 같은 기준점을 쓰지 않아서, 위 delta_em_frac을 그대로(또는 절반만)
+    # 반영하면 실측상 여전히 과보정(너무 아래로 내려감)됨을 실제 PNG
+    # 렌더링(delta 0~-0.236 구간을 촘촘히 스윕해 legend 마커를 확대 비교)으로
+    # 확인함 - 약 13%(0.13배)만 반영했을 때 Consolas에서 눈에 보이는 어긋남이
+    # 가장 적었음(경험적 보정 계수 - 정확한 이론값 아님, 추후 재보고 있으면
+    # 다시 조정 필요).
+    _MARKER_FONT_YDELTA_SCALE = 0.13
+    return (delta_em_frac * _MARKER_FONT_YDELTA_SCALE) / max(row_mult, 0.001)
 
 _GNUPLOT_FALLBACK_PATHS = [
     r"C:\Program Files\gnuplot\bin\gnuplot.exe",
@@ -2178,6 +2222,15 @@ class GnuplotGenerator:
                     _marker_offset = MARKER_Y_OFFSET.get(marker_shape, 0.0)
                 else:
                     _marker_offset = MARKER_Y_OFFSET_SCREEN.get(marker_shape, 0.12)
+                # [추가 - 사용자 보고 버그] "Courier New, Consolas 등에서는
+                # 네모가 중심 위로 올라감(legend에서만)" - 위 오프셋들은
+                # Malgun Gothic 기준 실측값이라, 폰트마다 다른 "center"
+                # 정렬 기준(베이스라인 메트릭) 대비 실제 글리프 위치 차이를
+                # 반영 못 함(고정폭 폰트일수록 이 차이가 큼) - 기준 폰트
+                # 대비 이 문자의 잉크 수직 중심 차이를 측정해 보정한다.
+                _marker_offset += _marker_font_y_delta_rowh(
+                    MARKER_SYMBOL_MAP[marker_shape], font_name, _legend_tuning["row_mult"]
+                )
                 symbol_y = row_y + _marker_offset * ROW_H
                 # [추가] 유니코드 기호마다 글자 em-box 안에 그려지는 잉크 크기가
                 # 서로 달라서(예: "+"는 원/사각형보다 훨씬 작고 얇게 그려짐),
