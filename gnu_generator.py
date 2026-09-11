@@ -7935,7 +7935,11 @@ class GnuplotGenerator:
                 except ValueError:
                     path = abs_path
                 path = path.replace("\\", "/")
-                _s_title = (s.get("label") or "").strip()
+                # [수정 - 사용자 요청] "3D 그림 이름을 legend에서 구별되게
+                # 수정 입력하게 해줘요" - curve(c.get("title"))와 동일하게
+                # surface도 "title"(사용자가 지정한 legend 이름)이 있으면
+                # 우선 쓰고, 없으면 기존처럼 label(파일명 기반)을 그대로 쓴다.
+                _s_title = (s.get("title") or s.get("label") or "").strip()
                 if _s_title and _n_sets_anim > 1:
                     _s_title_rendered, _s_title_enh = self._render_text(_s_title)
                     _s_title_clause = f'title "{_s_title_rendered}" {_s_title_enh}'
@@ -8777,7 +8781,9 @@ class GnuplotGenerator:
             except ValueError:
                 path = abs_path
             path = path.replace("\\", "/")
-            _s_title = (s.get("label") or "").strip()
+            # [수정 - 사용자 요청] curve와 동일하게 surface도 사용자 지정
+            # "title"이 있으면 우선 쓰고, 없으면 기존처럼 label을 그대로 씀.
+            _s_title = (s.get("title") or s.get("label") or "").strip()
             if _s_title and _n_sets > 1:
                 _s_title_rendered, _s_title_enh = self._render_text(_s_title)
                 _s_title_clause = f'title "{_s_title_rendered}" {_s_title_enh}'

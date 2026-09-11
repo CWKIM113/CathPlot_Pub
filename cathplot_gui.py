@@ -6316,8 +6316,8 @@ class CathPlotGUI:
         _style_choices_curve = [v for k, v in STYLE_3D_DISPLAY_MAP.items() if k != "pm3d"]
         _style_choices_surface = list(STYLE_3D_DISPLAY_MAP.values())
         _set_idx = 0
-        curve_check_vars = []    # [(BooleanVar, curve_dict, shape_StringVar, size_StringVar, style_StringVar), ...]
-        surface_check_vars = []  # [(BooleanVar, surface_dict, shape_StringVar, size_StringVar, style_StringVar), ...]
+        curve_check_vars = []    # [(BooleanVar, curve_dict, shape_StringVar, size_StringVar, style_StringVar, title_StringVar), ...]
+        surface_check_vars = []  # [(BooleanVar, surface_dict, shape_StringVar, size_StringVar, style_StringVar, title_StringVar), ...]
         # [추가 - 요청] "선택한 순서대로 curve를 그려주기 - 3D도 해당함" - 각
         # 행의 실제 Frame 위젯을 curve_check_vars/surface_check_vars와 나란히
         # 별도 리스트로 들고 있다가, ▲▼로 리스트 순서를 바꾸면 그 순서 그대로
@@ -6349,6 +6349,15 @@ class CathPlotGUI:
             frames_list[idx], frames_list[j] = frames_list[j], frames_list[idx]
             _repack_3d_rows()
 
+        # [추가 - 사용자 요청] "각 3D 그림 이름은 file명으로 고정돼 있는데,
+        # Plot/X/Y/Z Title처럼 사용자가 직접 수정 입력하게 해서 legend에도
+        # 구별되게 해주고 template에도 기록하게 해줘요" - curve/surface별로
+        # legend에 실제로 찍히는 이름(title_var_row, 비어있으면 기존처럼
+        # 파일명 기반 label을 그대로 씀)을 담을 입력칸을 새로 추가한다.
+        # c["label"]/s["label"] 자체는 손대지 않고 그대로 유지(marker 모양/
+        # 크기/style을 template에 저장·복원할 때 쓰는 매칭 키라, 여기를
+        # 사용자가 자유롭게 바꿀 수 있게 하면 그 매칭이 깨짐 - 그래서 이름
+        # 표시용 별도 필드를 새로 둔다).
         for c in eligible:
             srow = ttk.Frame(set_frame)
             srow.pack(fill="x", pady=1)
@@ -6357,6 +6366,7 @@ class CathPlotGUI:
             shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
             size_var = tk.StringVar(value="M")
             style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
+            title_var_row = tk.StringVar(value="")
             ttk.Combobox(srow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
                          width=10, state="readonly").pack(side="right", padx=4)
             ttk.Combobox(srow, textvariable=size_var, values=MARKER_SIZE_LIST,
@@ -6367,7 +6377,11 @@ class CathPlotGUI:
                          color="grey", btn_width=2, side="right", padx=1)
             self._mk_btn(srow, "▲", lambda fr=srow: _move_3d_row(curve_check_vars, curve_check_frames, fr, -1),
                          color="grey", btn_width=2, side="right", padx=(4, 1))
-            curve_check_vars.append((v, c, shape_var, size_var, style_var_row))
+            ttk.Label(srow, text="이름:").pack(side="left", padx=(6, 0))
+            name_entry = ttk.Entry(srow, textvariable=title_var_row, width=14)
+            name_entry.pack(side="left", padx=(2, 0))
+            name_entry.bind("<FocusIn>", lambda e, ent=name_entry: self.set_active_entry(ent))
+            curve_check_vars.append((v, c, shape_var, size_var, style_var_row, title_var_row))
             curve_check_frames.append(srow)
             _set_idx += 1
         for s in surfaces:
@@ -6379,6 +6393,7 @@ class CathPlotGUI:
             shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
             size_var = tk.StringVar(value="M")
             style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
+            title_var_row = tk.StringVar(value="")
             ttk.Combobox(srow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
                          width=10, state="readonly").pack(side="right", padx=4)
             ttk.Combobox(srow, textvariable=size_var, values=MARKER_SIZE_LIST,
@@ -6389,7 +6404,11 @@ class CathPlotGUI:
                          color="grey", btn_width=2, side="right", padx=1)
             self._mk_btn(srow, "▲", lambda fr=srow: _move_3d_row(surface_check_vars, surface_check_frames, fr, -1),
                          color="grey", btn_width=2, side="right", padx=(4, 1))
-            surface_check_vars.append((v, s, shape_var, size_var, style_var_row))
+            ttk.Label(srow, text="이름:").pack(side="left", padx=(6, 0))
+            name_entry = ttk.Entry(srow, textvariable=title_var_row, width=14)
+            name_entry.pack(side="left", padx=(2, 0))
+            name_entry.bind("<FocusIn>", lambda e, ent=name_entry: self.set_active_entry(ent))
+            surface_check_vars.append((v, s, shape_var, size_var, style_var_row, title_var_row))
             surface_check_frames.append(srow)
             _set_idx += 1
 
@@ -6593,7 +6612,7 @@ class CathPlotGUI:
             # 줄 수 있으므로) 이동" - 예전엔 전체 공용 하나였는데, 이제 각 행의
             # size_var/style_var_row를 그대로 쓴다. 체크 해제된 set은 제외.
             curves_final = []
-            for v, c, shape_var, size_var, style_var_row in curve_check_vars:
+            for v, c, shape_var, size_var, style_var_row, title_var_row in curve_check_vars:
                 if not v.get():
                     continue
                 c2 = dict(c)
@@ -6601,11 +6620,15 @@ class CathPlotGUI:
                 c2["marker_shape"] = hollow_pt
                 c2["marker_size"] = MARKER_SIZE_MAP.get(size_var.get(), 1.0)
                 c2["style"] = STYLE_3D_INTERNAL_MAP.get(style_var_row.get(), "lines")
-                c2["title"] = c["label"]
+                # [수정 - 사용자 요청] "3D 그림 이름이 file명 고정인데 legend에
+                # 구별되게 사용자가 수정하게 해줘요" - 새로 추가한 이름 입력칸
+                # (title_var_row)이 비어있지 않으면 그 값을, 비어있으면(기본)
+                # 기존처럼 파일명 기반 label을 그대로 legend title로 쓴다.
+                c2["title"] = title_var_row.get().strip() or c["label"]
                 curves_final.append(c2)
 
             surfaces_final = []
-            for v, s, shape_var, size_var, style_var_row in surface_check_vars:
+            for v, s, shape_var, size_var, style_var_row, title_var_row in surface_check_vars:
                 if not v.get():
                     continue
                 s2 = dict(s)
@@ -6613,6 +6636,9 @@ class CathPlotGUI:
                 s2["marker_shape"] = hollow_pt
                 s2["marker_size"] = MARKER_SIZE_MAP.get(size_var.get(), 1.0)
                 s2["style"] = STYLE_3D_INTERNAL_MAP.get(style_var_row.get(), "lines")
+                # [추가 - 사용자 요청] curve와 동일하게 surface도 legend 이름을
+                # 사용자가 지정할 수 있게 함(비어있으면 기존처럼 label 유지).
+                s2["title"] = title_var_row.get().strip() or s["label"]
                 surfaces_final.append(s2)
 
             # [추가 - 요청] "2D+3D 한번에" - Function Surface(수식, 파일 없음).
@@ -6707,15 +6733,20 @@ class CathPlotGUI:
         def _3d_template_dict():
             # [수정] "Marker Size, Style을 세트별로" - marker_shapes와 같은 방식
             # (label 기준 dict)으로 세트별 크기/스타일도 같이 저장한다.
-            _shapes, _sizes, _styles = {}, {}, {}
-            for v, c, shape_var, size_var, style_var_row in curve_check_vars:
+            # [추가 - 사용자 요청] "3D 그림 이름도 template에 기록되게" - 위
+            # marker 모양/크기/style과 동일한 방식(label 기준 dict)으로 사용자가
+            # 입력한 legend 이름(title_var_row)도 같이 저장한다.
+            _shapes, _sizes, _styles, _titles = {}, {}, {}, {}
+            for v, c, shape_var, size_var, style_var_row, title_var_row in curve_check_vars:
                 _shapes[c["label"]] = shape_var.get()
                 _sizes[c["label"]] = size_var.get()
                 _styles[c["label"]] = style_var_row.get()
-            for v, s, shape_var, size_var, style_var_row in surface_check_vars:
+                _titles[c["label"]] = title_var_row.get()
+            for v, s, shape_var, size_var, style_var_row, title_var_row in surface_check_vars:
                 _shapes[s["label"]] = shape_var.get()
                 _sizes[s["label"]] = size_var.get()
                 _styles[s["label"]] = style_var_row.get()
+                _titles[s["label"]] = title_var_row.get()
             return {
                 "type": "cathplot_3d_template",
                 "plot_title": plot_title_var.get(),
@@ -6728,7 +6759,7 @@ class CathPlotGUI:
                 "colorbox": colorbox_var.get(),
                 "equal_xyz": equal_xyz_var.get(),
                 "animate3d": animate3d_var.get(), "animate3d_duration": animate3d_duration_var.get(),
-                "marker_shapes": _shapes, "marker_sizes": _sizes, "styles": _styles,
+                "marker_shapes": _shapes, "marker_sizes": _sizes, "styles": _styles, "titles": _titles,
                 "annotations_3d": [
                     {"txt": d['txt'].get(), "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
                      "color": d['color'].get()}
@@ -6815,20 +6846,28 @@ class CathPlotGUI:
             _shapes = data.get("marker_shapes", {})
             _sizes = data.get("marker_sizes", {})
             _styles = data.get("styles", {})
-            for v, c, shape_var, size_var, style_var_row in curve_check_vars:
+            # [추가 - 사용자 요청] "3D 그림 이름도 template에 기록되게" - 위와
+            # 같은 label 기준 매칭으로 legend 이름(titles)도 복원한다(구버전
+            # 템플릿은 이 키가 없어 기존처럼 입력칸이 빈 채로 유지 = label 사용).
+            _titles = data.get("titles", {})
+            for v, c, shape_var, size_var, style_var_row, title_var_row in curve_check_vars:
                 if c["label"] in _shapes:
                     shape_var.set(_shapes[c["label"]])
                 if c["label"] in _sizes:
                     size_var.set(_sizes[c["label"]])
                 if c["label"] in _styles:
                     style_var_row.set(_styles[c["label"]])
-            for v, s, shape_var, size_var, style_var_row in surface_check_vars:
+                if c["label"] in _titles:
+                    title_var_row.set(_titles[c["label"]])
+            for v, s, shape_var, size_var, style_var_row, title_var_row in surface_check_vars:
                 if s["label"] in _shapes:
                     shape_var.set(_shapes[s["label"]])
                 if s["label"] in _sizes:
                     size_var.set(_sizes[s["label"]])
                 if s["label"] in _styles:
                     style_var_row.set(_styles[s["label"]])
+                if s["label"] in _titles:
+                    title_var_row.set(_titles[s["label"]])
 
             for d in list(anno3d_list):
                 d['frame'].destroy()
