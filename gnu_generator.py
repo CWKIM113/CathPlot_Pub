@@ -6911,12 +6911,31 @@ class GnuplotGenerator:
                     if _l.startswith(prefix):
                         return _l
                 return f"set autoscale {autoscale_name}"
+            # [수정 - 버그] "2D 기본 plot에서 확대 후 R 누르니까 plot창이
+            # 사라짐" - Y2를 실제로 쓰는 curve가 하나도 없으면(y1만 있는
+            # 흔한 기본 plot) main plot 명령 끝에 "NaN axes x1y2 notitle"
+            # 더미 curve만 붙어 있는데(y2 axis 선언용), 이 상태에서 "set
+            # y2range" 줄이 없어 _find_range_cmd가 폴백으로 내놓는 "set
+            # autoscale y2"를 그대로 실행한 뒤 replot하면 gnuplot이 "전부
+            # NaN인 y2 데이터로 autoscale을 계산하라"는 명령을 fatal error로
+            # 처리해 스크립트 실행이 그대로 죽어버림(-persist라도 창까지
+            # 같이 사라짐 - 실제 재현 확인: "all points y2 value undefined!").
+            # 처음 그릴 때는 이 "set autoscale y2"를 별도로 실행한 적이 없어
+            # (gnuplot의 최초 자동 스케일 계산 경로는 이 상황을 fatal로 안
+            # 만듦) 문제가 없었던 것 - Y2를 실제로 쓸 때만 y2 reset 명령을
+            # 넣고, 안 쓰면 아예 빼서(x/y range 재설정 + replot만) 이 fatal
+            # 경로 자체를 타지 않게 한다.
+            _r_uses_y2 = (
+                any(getattr(c, "axis", "y1") == "y2" for c in getattr(plotdef, "curves", []) or [])
+                or any(getattr(fc, "axis", "y1") == "y2" for fc in getattr(plotdef, "function_curves", []) or [])
+            )
             _reset_cmds = [
                 _find_range_cmd("set xrange", "x"),
                 _find_range_cmd("set yrange", "y"),
-                _find_range_cmd("set y2range", "y2"),
-                "replot",
             ]
+            if _r_uses_y2:
+                _reset_cmds.append(_find_range_cmd("set y2range", "y2"))
+            _reset_cmds.append("replot")
             # [수정 - 사용자 요청] "불투명도 확대는 되어야지?" - PIP가 켜진
             # 경우, 기존의 "set xrange/yrange/y2range 그대로 재실행 + replot"
             # 만으로는 확대/스크롤로 이미 겹쳐진 PIP 자리를 되살릴 수 없다
