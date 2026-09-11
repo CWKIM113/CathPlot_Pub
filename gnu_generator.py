@@ -960,6 +960,81 @@ class GnuplotGenerator:
         selected.sort(key=lambda p: p[0])
         return selected
 
+    def _select_marker_points_3d(self, dat_file, x_col_idx, y_col_idx, z_col_idx, x_shift, target_count, is_log_x=False):
+        """[추가 - 사용자 요청] "3D Marker 개수도 2D처럼 화면상 최대개수를
+        정해요" - 2D의 _select_marker_points와 동일한 방식(X 기준 등간격
+        선택 - 사용자 확인: 공간/유클리드 거리 기준은 축마다 단위가 다르고
+        3D는 회전각에 따라 화면상 거리도 계속 바뀌어 정규화 기준을 새로
+        정해야 하는 등 복잡도만 커져 X 기준을 그대로 쓰기로 함, log축도 2D와
+        동일하게 log(x) 공간에서 등간격)으로 3D curve의 마커 표시 개수를
+        줄인다. 2D와 달리 3D curve는 CurveDefinition 객체가 아니라 plain
+        dict(x_col/y_col/z_col은 1-based gnuplot 컬럼 번호)라 별도 함수로
+        분리했고, shared_x_range(2D의 curve간 밀도 통일용) 개념은 3D에는
+        아직 없어 이 curve 자신의 X 범위만 기준으로 삼는다."""
+        x_idx0, y_idx0, z_idx0 = x_col_idx - 1, y_col_idx - 1, z_col_idx - 1
+        try:
+            parser = CathenaDatParser()
+            dat_info = parser.parse(dat_file)
+            with open(dat_file, "r", encoding="utf-8", errors="ignore") as f:
+                file_lines = f.readlines()
+        except Exception:
+            return []
+
+        pts = []
+        max_col = max(x_idx0, y_idx0, z_idx0)
+        for row in file_lines[dat_info.data_start_line:]:
+            text = strip_inline_comment(row).strip()
+            if is_comment_or_blank(text):
+                continue
+            fields = re.split(r'[,\s]+', text)
+            if len(fields) <= max_col:
+                continue
+            try:
+                x_val = float(fields[x_idx0].replace("D", "E").replace("d", "e").replace(",", "")) + x_shift
+                y_val = float(fields[y_idx0].replace("D", "E").replace("d", "e").replace(",", ""))
+                z_val = float(fields[z_idx0].replace("D", "E").replace("d", "e").replace(",", ""))
+            except ValueError:
+                continue
+            if math.isfinite(x_val) and math.isfinite(y_val) and math.isfinite(z_val):
+                pts.append((x_val, y_val, z_val))
+
+        if not pts or len(pts) <= target_count:
+            return pts
+
+        x_min = min(p[0] for p in pts)
+        x_max = max(p[0] for p in pts)
+
+        if target_count <= 1:
+            all_targets = [(x_min + x_max) / 2.0]
+        elif is_log_x and x_max > 0:
+            ref_min = x_min
+            if ref_min <= 0:
+                positive_xs = [px for px, _, _ in pts if px > 0]
+                ref_min = min(positive_xs) if positive_xs else x_max * 0.001
+            lo, hi = math.log10(ref_min), math.log10(x_max)
+            all_targets = [10 ** (lo + (hi - lo) * i / (target_count - 1)) for i in range(target_count)]
+        elif x_max != x_min:
+            all_targets = [x_min + (x_max - x_min) * i / (target_count - 1) for i in range(target_count)]
+        else:
+            all_targets = [x_min] * target_count
+
+        selected = []
+        used_idx = set()
+        for t in all_targets:
+            best_i, best_d = None, None
+            for i, (px, _, _) in enumerate(pts):
+                d = abs(math.log10(px) - math.log10(t)) if (is_log_x and px > 0 and t > 0) else abs(px - t)
+                if best_d is None or d < best_d:
+                    best_i, best_d = i, d
+            if best_i is not None and best_i not in used_idx:
+                # [추가] 2D와 동일하게 국소 튐 보정 재사용 - _refine_marker_index는
+                # pts[j][1](Y값)만 보므로 3-tuple((x,y,z))에도 그대로 쓸 수 있다.
+                best_i = self._refine_marker_index(pts, best_i, used_idx)
+                used_idx.add(best_i)
+                selected.append(pts[best_i])
+        selected.sort(key=lambda p: p[0])
+        return selected
+
     def _refine_marker_index(self, pts, idx, used_idx, window=2):
         """[추가 - 사용자 요청] 위 _select_marker_points 참고 - target x에
         가장 가까운 점(idx) 앞뒤 최대 window칸 안에서, 바로 옆 이웃 두 점의
@@ -8716,7 +8791,8 @@ class GnuplotGenerator:
             lines.append("set pm3d depthorder")
 
         splot_parts = []
-        for c in curves_3d:
+        marker_datablocks_3d = []
+        for _c_idx, c in enumerate(curves_3d):
             abs_path = c["dat_file"] if os.path.isabs(c["dat_file"]) else os.path.abspath(c["dat_file"])
             try:
                 path = os.path.relpath(abs_path, start=plot_dir)
@@ -8765,6 +8841,38 @@ class GnuplotGenerator:
                 _title_clause = f'title "{_title_rendered}" {_title_enh}'
             else:
                 _title_clause = "notitle"
+
+            # [추가 - 사용자 요청] "3D Marker 개수도 2D처럼 화면상 최대개수를
+            # 정해요(기본 및 최대수 사용자 입력)" - style이 points/linespoints면
+            # (마커가 실제로 찍히는 경우) 화면에 찍히는 마커 개수를 제한한다
+            # (비우면 2D의 Max#와 동일한 기본값 Auto~25개). "간격을 X 기준으로
+            # 할지 공간 거리로 할지" 사용자 확인 결과 X 기준(2D와 동일, log축이면
+            # log(x) 등간격)을 그대로 쓰기로 함 - _select_marker_points_3d 참고.
+            # linespoints는 "선은 전체 데이터로 매끄럽게 + 마커만 듬성듬성"이
+            # 되도록 선(전체, with lines)과 마커(데이터블록, with points)를 별도
+            # splot 절 2개로 분리한다(legend는 선 쪽에만 붙여 중복 방지).
+            # points 단독이면 마커 데이터블록 하나로 끝난다.
+            if _c_style in ("points", "linespoints"):
+                _max_count = c.get("marker_max_count")
+                _target = _max_count if _max_count else 25
+                marker_pts = self._select_marker_points_3d(
+                    abs_path, c["x_col"], c["y_col"], c["z_col"], x_shift, _target, is_log_x=xlog
+                )
+                if marker_pts:
+                    dbname = f"$Marker3D{_c_idx}"
+                    block = [f"{dbname} << EOD"]
+                    block.extend(f"{px:.10g} {py:.10g} {pz:.10g}" for px, py, pz in marker_pts)
+                    block.append("EOD")
+                    marker_datablocks_3d.append(block)
+
+                    if _c_style == "points":
+                        splot_parts.append(f'{dbname} using 1:2:3:3 {_title_clause} with points{_pt_clause} palette')
+                    else:
+                        splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with lines palette')
+                        splot_parts.append(f'{dbname} using 1:2:3:3 notitle with points{_pt_clause} palette')
+                    continue
+                # marker_pts가 비면(파일 파싱 실패 등) 아래 공통 처리로 폴백해서
+                # 예전처럼 파일을 직접 참조하는 단일 splot 절로 그린다.
 
             splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette')
 
@@ -8816,13 +8924,46 @@ class GnuplotGenerator:
                         _s_pt_clause += f" pt {_fmt_pointtype(_s_marker_pt)}"
                     if _s_marker_size:
                         _s_pt_clause += f" ps {_s_marker_size}"
-                splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}')
+
+                # [추가 - 사용자 요청] "3D Marker 개수도 2D처럼 최대개수를 정해요" -
+                # curve와 동일하게(단, pm3d는 격자 전체가 있어야 면이 끊기지 않아
+                # 여기 대상이 아님 - 위 if에서 이미 분기됨) points/linespoints일
+                # 때만 화면에 찍히는 마커 개수를 제한한다. surface 원본은 컬럼
+                # 1:2:3(time:output_no:value)이 그대로라 x_col/y_col/z_col을
+                # 1,2,3(1-based)으로 고정해서 같은 선택 함수를 재사용한다.
+                _s_marker_pts = None
+                if _s_style in ("points", "linespoints"):
+                    _s_max_count = s.get("marker_max_count")
+                    _s_target = _s_max_count if _s_max_count else 25
+                    _s_marker_pts = self._select_marker_points_3d(
+                        abs_path, 1, 2, 3, 0.0, _s_target, is_log_x=xlog
+                    )
+                if _s_marker_pts:
+                    _s_dbname = f"$Marker3DSurf{_s_idx}"
+                    _s_block = [f"{_s_dbname} << EOD"]
+                    _s_block.extend(f"{px:.10g} {py:.10g} {pz:.10g}" for px, py, pz in _s_marker_pts)
+                    _s_block.append("EOD")
+                    marker_datablocks_3d.append(_s_block)
+
+                    if _s_style == "points":
+                        splot_parts.append(f'{_s_dbname} using 1:2:3:3 {_s_title_clause} with points{_s_pt_clause} palette')
+                    else:
+                        splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with lines palette{_s_dash_clause}')
+                        splot_parts.append(f'{_s_dbname} using 1:2:3:3 notitle with points{_s_pt_clause} palette')
+                else:
+                    splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}')
 
         # [추가 - 요청] "2D+3D 한번에" - Function Surface(수식만으로 그리는 Z=f(X,Y)).
         for fs in (function_surfaces or []):
             _fs_part = self._build_function_surface_part(fs, _resolve_style, _n_sets > 1)
             if _fs_part:
                 splot_parts.append(_fs_part)
+
+        # [추가 - 사용자 요청] "3D Marker 개수 제한" - 위 curve 루프에서 만든
+        # 마커 전용 데이터블록($Marker3D{n})들을 splot 명령보다 먼저 정의해야
+        # gnuplot이 참조할 수 있다(inline data block은 사용 전에 선언 필요).
+        for _block in marker_datablocks_3d:
+            lines.extend(_block)
 
         lines.append("splot " + ", \\\n      ".join(splot_parts))
 

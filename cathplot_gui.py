@@ -4151,6 +4151,10 @@ class CathPlotGUI:
         # 있었음 - marker_shapes/sizes/styles와 동일한 label 기준 dict이므로
         # 같은 방식으로 반영한다(없으면 기존처럼 label 그대로 사용).
         titles = td3_data.get("titles", {})
+        # [추가 - 사용자 요청] "3D Marker 개수도 template에 기록되게" - 화면
+        # 렌더링 경로와 동일하게 Batch도 3D Template에 저장된 MaxNo.를 그대로
+        # 적용한다(없으면 None = Auto~25개, create_3d_script 기본값).
+        maxcounts = td3_data.get("marker_max_counts", {})
         _legacy_size = MARKER_SIZE_MAP.get(td3_data.get("marker_size", "M"), 1.0)
         _legacy_style = STYLE_3D_INTERNAL_MAP.get(td3_data.get("style", "Lines"), "lines")
 
@@ -4161,6 +4165,8 @@ class CathPlotGUI:
             item["marker_size"] = MARKER_SIZE_MAP.get(sizes.get(item["label"], ""), _legacy_size)
             item["style"] = STYLE_3D_INTERNAL_MAP.get(styles.get(item["label"], ""), _legacy_style)
             item["title"] = titles.get(item["label"], "").strip() or item["label"]
+            _mc_str = str(maxcounts.get(item["label"], "") or "").strip()
+            item["marker_max_count"] = int(_mc_str) if _mc_str else None
             return item
 
         curves_final = [_with_marker(c) for c in eligible]
@@ -6533,8 +6539,8 @@ class CathPlotGUI:
         _style_choices_curve = [v for k, v in STYLE_3D_DISPLAY_MAP.items() if k != "pm3d"]
         _style_choices_surface = list(STYLE_3D_DISPLAY_MAP.values())
         _set_idx = 0
-        curve_check_vars = []    # [(BooleanVar, curve_dict, shape_StringVar, size_StringVar, style_StringVar, title_StringVar), ...]
-        surface_check_vars = []  # [(BooleanVar, surface_dict, shape_StringVar, size_StringVar, style_StringVar, title_StringVar), ...]
+        curve_check_vars = []    # [(BooleanVar, curve_dict, shape_StringVar, size_StringVar, style_StringVar, title_StringVar, maxno_StringVar), ...]
+        surface_check_vars = []  # [(BooleanVar, surface_dict, shape_StringVar, size_StringVar, style_StringVar, title_StringVar, maxno_StringVar), ...]
         # [추가 - 요청] "선택한 순서대로 curve를 그려주기 - 3D도 해당함" - 각
         # 행의 실제 Frame 위젯을 curve_check_vars/surface_check_vars와 나란히
         # 별도 리스트로 들고 있다가, ▲▼로 리스트 순서를 바꾸면 그 순서 그대로
@@ -6575,6 +6581,15 @@ class CathPlotGUI:
         # 크기/style을 template에 저장·복원할 때 쓰는 매칭 키라, 여기를
         # 사용자가 자유롭게 바꿀 수 있게 하면 그 매칭이 깨짐 - 그래서 이름
         # 표시용 별도 필드를 새로 둔다).
+        # [추가 - 사용자 요청] "3D Marker 개수도 2D처럼 한 화면상 최대개수를
+        # 정해요(기본 및 최대수 사용자 입력)" - 각 행 맨 끝에 MaxNo.(2D의 Max#와
+        # 동일한 의미 - 비우면 Auto~25개) 입력칸을 추가한다. 자리를 만들려고
+        # Style(LinesPoint) 입력박스를 2/3 정도로, size·모양(Shape) 칸도 같이
+        # 줄였고, MaxNo/Shape/Size/Style 네 칸 사이 여백(padx)을 전부 동일하게
+        # 맞춰 균등 간격으로 보이게 한다(정수만 입력 - 2D Max#와 동일한 검증).
+        _maxno_vcmd = (dialog.register(lambda s: s == "" or s.isdigit()), "%P")
+        _MAXNO_PADX = 3
+
         for c in eligible:
             srow = ttk.Frame(set_frame)
             srow.pack(fill="x", pady=1)
@@ -6588,12 +6603,17 @@ class CathPlotGUI:
             size_var = tk.StringVar(value="M")
             style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
             title_var_row = tk.StringVar(value="")
+            maxno_var = tk.StringVar(value="")
+            maxno_entry = ttk.Entry(srow, textvariable=maxno_var, width=5,
+                                     validate="key", validatecommand=_maxno_vcmd)
+            maxno_entry.pack(side="right", padx=_MAXNO_PADX)
+            ttk.Label(srow, text="MaxNo.").pack(side="right", padx=(_MAXNO_PADX, 0))
             ttk.Combobox(srow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
-                         width=10, state="readonly").pack(side="right", padx=4)
+                         width=7, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             ttk.Combobox(srow, textvariable=size_var, values=MARKER_SIZE_LIST,
-                         width=4, state="readonly").pack(side="right", padx=4)
+                         width=3, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             ttk.Combobox(srow, textvariable=style_var_row, values=_style_choices_curve,
-                         width=13, state="readonly").pack(side="right", padx=4)
+                         width=9, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             self._mk_btn(srow, "▼", lambda fr=srow: _move_3d_row(curve_check_vars, curve_check_frames, fr, 1),
                          color="grey", btn_width=2, side="right", padx=1)
             self._mk_btn(srow, "▲", lambda fr=srow: _move_3d_row(curve_check_vars, curve_check_frames, fr, -1),
@@ -6602,7 +6622,7 @@ class CathPlotGUI:
             name_entry = ttk.Entry(srow, textvariable=title_var_row, width=14)
             name_entry.pack(side="left", padx=(2, 0))
             name_entry.bind("<FocusIn>", lambda e, ent=name_entry: self.set_active_entry(ent))
-            curve_check_vars.append((v, c, shape_var, size_var, style_var_row, title_var_row))
+            curve_check_vars.append((v, c, shape_var, size_var, style_var_row, title_var_row, maxno_var))
             curve_check_frames.append(srow)
             _set_idx += 1
         for s in surfaces:
@@ -6615,12 +6635,17 @@ class CathPlotGUI:
             size_var = tk.StringVar(value="M")
             style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
             title_var_row = tk.StringVar(value="")
+            maxno_var = tk.StringVar(value="")
+            maxno_entry = ttk.Entry(srow, textvariable=maxno_var, width=5,
+                                     validate="key", validatecommand=_maxno_vcmd)
+            maxno_entry.pack(side="right", padx=_MAXNO_PADX)
+            ttk.Label(srow, text="MaxNo.").pack(side="right", padx=(_MAXNO_PADX, 0))
             ttk.Combobox(srow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
-                         width=10, state="readonly").pack(side="right", padx=4)
+                         width=7, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             ttk.Combobox(srow, textvariable=size_var, values=MARKER_SIZE_LIST,
-                         width=4, state="readonly").pack(side="right", padx=4)
+                         width=3, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             ttk.Combobox(srow, textvariable=style_var_row, values=_style_choices_surface,
-                         width=13, state="readonly").pack(side="right", padx=4)
+                         width=9, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             self._mk_btn(srow, "▼", lambda fr=srow: _move_3d_row(surface_check_vars, surface_check_frames, fr, 1),
                          color="grey", btn_width=2, side="right", padx=1)
             self._mk_btn(srow, "▲", lambda fr=srow: _move_3d_row(surface_check_vars, surface_check_frames, fr, -1),
@@ -6629,7 +6654,7 @@ class CathPlotGUI:
             name_entry = ttk.Entry(srow, textvariable=title_var_row, width=14)
             name_entry.pack(side="left", padx=(2, 0))
             name_entry.bind("<FocusIn>", lambda e, ent=name_entry: self.set_active_entry(ent))
-            surface_check_vars.append((v, s, shape_var, size_var, style_var_row, title_var_row))
+            surface_check_vars.append((v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var))
             surface_check_frames.append(srow)
             _set_idx += 1
 
@@ -6709,10 +6734,11 @@ class CathPlotGUI:
             style_var = tk.StringVar(value=STYLE_3D_DISPLAY_MAP.get(init.get('style', 'lines'), STYLE_3D_DISPLAY_MAP["lines"]))
             shape_var = tk.StringVar(value=init.get('shape') or (_shape_choices[0] if _shape_choices else "None"))
             size_var = tk.StringVar(value=init.get('size', "M"))
+            maxcount_var = tk.StringVar(value=init.get('maxcount', ""))
             data = {
                 'file_label': file_label_var, 'x': x_var, 'y': y_var, 'z': z_var,
                 'title': title_var, 'style': style_var, 'shape': shape_var, 'size': size_var,
-                'frame': row,
+                'maxcount': maxcount_var, 'frame': row,
             }
             manual_curve_rows.append(data)
 
@@ -6722,12 +6748,18 @@ class CathPlotGUI:
 
             ttk.Button(row, text="X", width=2, style="Compact.TButton",
                        command=lambda: (row.destroy(), manual_curve_rows.remove(data))).pack(side="right", padx=3)
+            # [추가 - 사용자 요청] "3D Marker 개수도 2D처럼 최대개수를 정해요" -
+            # 포함할 Set 목록과 동일하게 맨 끝에 MaxNo. 입력칸 추가(비우면 Auto).
+            maxcount_entry = ttk.Entry(row, textvariable=maxcount_var, width=5,
+                                       validate="key", validatecommand=_maxno_vcmd)
+            maxcount_entry.pack(side="right", padx=_MAXNO_PADX)
+            ttk.Label(row, text="MaxNo.").pack(side="right", padx=(_MAXNO_PADX, 0))
             ttk.Combobox(row, textvariable=shape_var, values=MARKER_SHAPE_LIST,
-                         width=8, state="readonly").pack(side="right", padx=2)
+                         width=6, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             ttk.Combobox(row, textvariable=size_var, values=MARKER_SIZE_LIST,
-                         width=3, state="readonly").pack(side="right", padx=2)
+                         width=3, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             ttk.Combobox(row, textvariable=style_var, values=_style_choices_curve,
-                         width=11, state="readonly").pack(side="right", padx=2)
+                         width=8, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             ttk.Label(row, text="이름:").pack(side="left", padx=(6, 0))
             t_entry = ttk.Entry(row, textvariable=title_var, width=12)
             t_entry.pack(side="left", padx=2)
@@ -6928,7 +6960,7 @@ class CathPlotGUI:
             # 줄 수 있으므로) 이동" - 예전엔 전체 공용 하나였는데, 이제 각 행의
             # size_var/style_var_row를 그대로 쓴다. 체크 해제된 set은 제외.
             curves_final = []
-            for v, c, shape_var, size_var, style_var_row, title_var_row in curve_check_vars:
+            for v, c, shape_var, size_var, style_var_row, title_var_row, maxno_var in curve_check_vars:
                 if not v.get():
                     continue
                 c2 = dict(c)
@@ -6941,10 +6973,14 @@ class CathPlotGUI:
                 # (title_var_row)이 비어있지 않으면 그 값을, 비어있으면(기본)
                 # 기존처럼 파일명 기반 label을 그대로 legend title로 쓴다.
                 c2["title"] = title_var_row.get().strip() or c["label"]
+                # [추가 - 사용자 요청] "3D Marker 개수도 2D처럼 최대개수를 정해요" -
+                # 비우면 None(Auto~25개, create_3d_script 참고), 숫자면 그 값으로 고정.
+                _maxno_str = maxno_var.get().strip()
+                c2["marker_max_count"] = int(_maxno_str) if _maxno_str else None
                 curves_final.append(c2)
 
             surfaces_final = []
-            for v, s, shape_var, size_var, style_var_row, title_var_row in surface_check_vars:
+            for v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var in surface_check_vars:
                 if not v.get():
                     continue
                 s2 = dict(s)
@@ -6955,6 +6991,8 @@ class CathPlotGUI:
                 # [추가 - 사용자 요청] curve와 동일하게 surface도 legend 이름을
                 # 사용자가 지정할 수 있게 함(비어있으면 기존처럼 label 유지).
                 s2["title"] = title_var_row.get().strip() or s["label"]
+                _s_maxno_str = maxno_var.get().strip()
+                s2["marker_max_count"] = int(_s_maxno_str) if _s_maxno_str else None
                 surfaces_final.append(s2)
 
             # [추가 - 요청] "2D+3D 한번에" - Function Surface(수식, 파일 없음).
@@ -7011,6 +7049,7 @@ class CathPlotGUI:
                 _x_shift = float(self.file_xshift_vars[_fn].get() or 0.0) if _fn in self.file_xshift_vars else 0.0
                 _hollow_pt, _ = MARKER_SHAPE_MAP.get(d['shape'].get(), (None, None))
                 _default_label = f"{self._dedup_display_name(_fn)} (X{x_no},Y{y_no},Z{z_no})"
+                _mc_maxno_str = d['maxcount'].get().strip()
                 curves_final.append({
                     "dat_file": _target_dat_file,
                     "x_col": x_no + 1, "y_col": y_no + 1, "z_col": z_no + 1,
@@ -7020,6 +7059,7 @@ class CathPlotGUI:
                     "marker_shape": _hollow_pt,
                     "marker_size": MARKER_SIZE_MAP.get(d['size'].get(), 1.0),
                     "style": STYLE_3D_INTERNAL_MAP.get(d['style'].get(), "lines"),
+                    "marker_max_count": int(_mc_maxno_str) if _mc_maxno_str else None,
                 })
 
             if _mc_yz_dup_labels:
@@ -7112,17 +7152,22 @@ class CathPlotGUI:
             # [추가 - 사용자 요청] "3D 그림 이름도 template에 기록되게" - 위
             # marker 모양/크기/style과 동일한 방식(label 기준 dict)으로 사용자가
             # 입력한 legend 이름(title_var_row)도 같이 저장한다.
-            _shapes, _sizes, _styles, _titles = {}, {}, {}, {}
-            for v, c, shape_var, size_var, style_var_row, title_var_row in curve_check_vars:
+            # [추가 - 사용자 요청] "3D Marker 개수도 template에 기록되게" - 위
+            # marker 모양/크기/style/이름과 동일한 방식(label 기준 dict)으로
+            # MaxNo.(marker_max_count, 비면 Auto)도 같이 저장한다.
+            _shapes, _sizes, _styles, _titles, _maxcounts = {}, {}, {}, {}, {}
+            for v, c, shape_var, size_var, style_var_row, title_var_row, maxno_var in curve_check_vars:
                 _shapes[c["label"]] = shape_var.get()
                 _sizes[c["label"]] = size_var.get()
                 _styles[c["label"]] = style_var_row.get()
                 _titles[c["label"]] = title_var_row.get()
-            for v, s, shape_var, size_var, style_var_row, title_var_row in surface_check_vars:
+                _maxcounts[c["label"]] = maxno_var.get()
+            for v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var in surface_check_vars:
                 _shapes[s["label"]] = shape_var.get()
                 _sizes[s["label"]] = size_var.get()
                 _styles[s["label"]] = style_var_row.get()
                 _titles[s["label"]] = title_var_row.get()
+                _maxcounts[s["label"]] = maxno_var.get()
 
             # [추가 - 사용자 요청] "3D template이 실제 Y1/Y2 짝 정보를 기억하게" -
             # Batch Set(헤드리스)이 화면에서 확정한 것과 똑같은 (Y1,Y2) 짝을 다시
@@ -7134,7 +7179,7 @@ class CathPlotGUI:
             # 유효할 때만 쓰고, 안 맞으면(템플릿을 손으로 고쳤거나 선택이
             # 바뀌었으면) 예전처럼 자동(오름차순) 추정으로 대체한다.
             _curve_pairs = {}
-            for v, c, shape_var, size_var, style_var_row, title_var_row in curve_check_vars:
+            for v, c, shape_var, size_var, style_var_row, title_var_row, maxno_var in curve_check_vars:
                 _of = c.get("orig_file")
                 if not _of or "y1_out" not in c or "y2_out" not in c:
                     continue  # "3D Curve 직접 추가"로 만든 curve는 이 짝짓기 대상이 아님
@@ -7157,6 +7202,7 @@ class CathPlotGUI:
                 "equal_xyz": equal_xyz_var.get(),
                 "animate3d": animate3d_var.get(), "animate3d_duration": animate3d_duration_var.get(),
                 "marker_shapes": _shapes, "marker_sizes": _sizes, "styles": _styles, "titles": _titles,
+                "marker_max_counts": _maxcounts,
                 "curve_pairs": _curve_pairs,
                 "annotations_3d": [
                     {"txt": d['txt'].get(), "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
@@ -7192,6 +7238,7 @@ class CathPlotGUI:
                         "title": d['title'].get(),
                         "style": STYLE_3D_INTERNAL_MAP.get(d['style'].get(), "lines"),
                         "shape": d['shape'].get(), "size": d['size'].get(),
+                        "maxcount": d['maxcount'].get(),
                     }
                     for d in manual_curve_rows
                 ],
@@ -7267,7 +7314,11 @@ class CathPlotGUI:
             # 같은 label 기준 매칭으로 legend 이름(titles)도 복원한다(구버전
             # 템플릿은 이 키가 없어 기존처럼 입력칸이 빈 채로 유지 = label 사용).
             _titles = data.get("titles", {})
-            for v, c, shape_var, size_var, style_var_row, title_var_row in curve_check_vars:
+            # [추가 - 사용자 요청] "3D Marker 개수도 template에 기록되게" - 위와
+            # 동일한 label 기준 매칭으로 MaxNo.(marker_max_count)도 복원(구버전
+            # 템플릿은 이 키가 없어 기존처럼 빈 칸 = Auto 유지).
+            _maxcounts = data.get("marker_max_counts", {})
+            for v, c, shape_var, size_var, style_var_row, title_var_row, maxno_var in curve_check_vars:
                 if c["label"] in _shapes:
                     shape_var.set(_shapes[c["label"]])
                 if c["label"] in _sizes:
@@ -7276,7 +7327,9 @@ class CathPlotGUI:
                     style_var_row.set(_styles[c["label"]])
                 if c["label"] in _titles:
                     title_var_row.set(_titles[c["label"]])
-            for v, s, shape_var, size_var, style_var_row, title_var_row in surface_check_vars:
+                if c["label"] in _maxcounts:
+                    maxno_var.set(_maxcounts[c["label"]])
+            for v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var in surface_check_vars:
                 if s["label"] in _shapes:
                     shape_var.set(_shapes[s["label"]])
                 if s["label"] in _sizes:
@@ -7285,6 +7338,8 @@ class CathPlotGUI:
                     style_var_row.set(_styles[s["label"]])
                 if s["label"] in _titles:
                     title_var_row.set(_titles[s["label"]])
+                if s["label"] in _maxcounts:
+                    maxno_var.set(_maxcounts[s["label"]])
 
             for d in list(anno3d_list):
                 d['frame'].destroy()
