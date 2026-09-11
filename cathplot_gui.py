@@ -2366,6 +2366,14 @@ class CathPlotGUI:
                 self.ylabel_var.set(data["ylabel"])
             if "y2label" in data:
                 self.y2label_var.set(data["y2label"])
+            # [추가 - 사용자 보고 버그 재검토로 발견] "Plot Title은 저장 안
+            # 되나요?"를 고치면서 확인해보니, Plot File Name(filename_var -
+            # Batch Set 출력 파일명 기본값)도 Save에는 포함되면서(_template_
+            # dict) Load에서는 아예 복원한 적이 없었음(Batch Set 전용 함수인
+            # _build_plotdef_from_template_data만 이 값을 읽음 - Template
+            # Load 버튼과는 무관). title과 같은 이유로 여기서 같이 복원한다.
+            if "filename" in data:
+                self.filename_var.set(data["filename"])
 
             # X/Y1/Y2 auto 여부 + min/max
             self.xauto_var.set(data.get("xauto", self.xauto_var.get()))
@@ -2503,7 +2511,16 @@ class CathPlotGUI:
                             self.file_xshift_vars[_datfile] = tk.StringVar(value="0")
                         self.file_xshift_vars[_datfile].set(str(_fa.get("x_shift") or "0"))
 
-                self.update_title_from_first_file()
+                # [수정 - 사용자 보고 버그] "Plot Title은 Template 저장 시 기록
+                # 안 되나요? 불러오니 file명으로 바뀜" - 여기서 update_title_
+                # from_first_file()을 불렀던 것(load_dat_file이 새 파일 여는
+                # 경우를 그대로 따라한 것)이 원인이었음: 이 함수 위쪽에서 이미
+                # data["title"]/data["filename"]으로 Plot Title을 정확히
+                # 복원해뒀는데, 그 뒤에 이 호출이 파일 이름 기준으로 다시
+                # 덮어써버렸음(파일을 새로 열든 재사용하든 상관없이 무조건
+                # 실행됐음). Template Load는 "파일을 새로 연 것"이 아니라
+                # "저장된 파일/변수 지정을 반영한 것"이므로, 제목은 템플릿이
+                # 저장해둔 값을 그대로 유지해야 함 - 이 호출을 제거한다.
                 self.show_variables()
                 self.sync_axis_labels()
 
