@@ -6020,11 +6020,139 @@ class CathPlotGUI:
         return circles
 
     # ===================== 3D Plot (splot) =====================
-    def _collect_3d_curves(self):
+    def _ordered_outs_for_file(self, d_file, out_nos):
+        """[추가 - 사용자 요청] "한 파일에서 y,z값을 따로 줄 수는 없나(여러
+        set)" - out_nos(해당 파일에서 선택된 output_no 목록)를 사용자가 클릭한
+        순서(self._curve_order) 기준으로 정렬해 돌려준다("기본은 순서쌍으로"
+        짝짓기의 기준). _curve_order에 없는 항목(예: Template Load로 클릭 없이
+        복원된 경우)은 뒤에 번호 순으로 덧붙인다(그래도 뭔가는 나오게 하는
+        방어적 처리)."""
+        key_set = {f"{d_file}||{n}" for n in out_nos}
+        ordered = [int(k.split("||")[1]) for k in self._curve_order if k in key_set]
+        remaining = sorted(n for n in out_nos if n not in ordered)
+        return ordered + remaining
+
+    def _var_display_name(self, d_file, out_no):
+        """[추가] 짝 맞추기 팝업 등에서 output_no만 보여주면 어떤 변수인지 알기
+        어려우니, legend_vars에 저장된 실제 변수명을 같이 보여주기 위한 헬퍼."""
+        key = f"{d_file}||{out_no}"
+        if key in self.legend_vars:
+            v = self.legend_vars[key].get()
+            if v:
+                return v
+        return f"var_{out_no}"
+
+    def _resolve_3d_pair_dialog(self, item):
+        """[추가 - 사용자 요청] "3D에서 한 파일에서 y,z값을 따로 줄 수는
+        없나(여러 set)... 기본은 순서쌍으로 하고 선택변수 쌍이 안맞으면 경고내고
+        선택하게(아님 취소 가능하게)... 기본 쌍도 사용자가 바꿀 수 있게" - 한
+        dat 파일에 Y1/Y2가 여러 개 선택돼(1:1이 아니어서) 자동으로 전부 짝지을
+        수 없거나, 짝지을 수는 있어도(개수가 같아) 사용자가 확인/변경할 기회가
+        필요한 경우에 뜨는 보조 팝업. 왼쪽에서 Y1 후보, 오른쪽에서 Y2 후보를
+        하나씩 골라 "짝 추가"하는 선택 방식(숫자를 직접 타이핑하지 않음)이고,
+        기본값으로 클릭 순서 기준 짝(item["default_pairs"])을 미리 채워둔다.
+        "이 파일 제외"를 누르면 그 파일 전체를 3D에서 뺀다(빈 리스트 반환)."""
+        d_file = item["d_file"]
+        y1_candidates = item["y1_candidates"]
+        y2_candidates = item["y2_candidates"]
+        result = {"pairs": list(item["default_pairs"])}
+
+        dlg = tk.Toplevel(self.root)
+        dlg.configure(bg=self.PALETTE["bg"])
+        dlg.title(f"3D Plot - Y1/Y2 짝 맞추기: {item['label']}")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        msg = f"'{item['label']}' 파일에 Y1 {len(y1_candidates)}개, Y2 {len(y2_candidates)}개가 선택돼 있습니다."
+        if item.get("mismatched"):
+            msg += "\n개수가 서로 달라 자동으로 전부 짝지을 수 없습니다 - 아래에서 직접 짝을 맞춰주세요."
+        else:
+            msg += "\n기본값(선택한 순서대로 짝지음)이 아래에 채워져 있습니다 - 필요하면 바꾸세요."
+        ttk.Label(dlg, text=msg, wraplength=440, justify="left").pack(padx=10, pady=(10, 6), anchor="w")
+
+        body = ttk.Frame(dlg)
+        body.pack(fill="both", expand=True, padx=10)
+
+        y1_frame = ttk.LabelFrame(body, text="Y1 후보")
+        y1_frame.pack(side="left", fill="y", padx=(0, 5))
+        y1_list = tk.Listbox(y1_frame, height=8, exportselection=False, width=20)
+        for no in y1_candidates:
+            y1_list.insert("end", f"{no}: {self._var_display_name(d_file, no)}")
+        y1_list.pack(padx=4, pady=4)
+
+        y2_frame = ttk.LabelFrame(body, text="Y2 후보")
+        y2_frame.pack(side="left", fill="y", padx=5)
+        y2_list = tk.Listbox(y2_frame, height=8, exportselection=False, width=20)
+        for no in y2_candidates:
+            y2_list.insert("end", f"{no}: {self._var_display_name(d_file, no)}")
+        y2_list.pack(padx=4, pady=4)
+
+        pair_frame = ttk.LabelFrame(body, text="확정된 짝 (3D curve 목록)")
+        pair_frame.pack(side="left", fill="both", expand=True, padx=(5, 0))
+        pair_list = tk.Listbox(pair_frame, height=8, exportselection=False, width=32)
+        pair_list.pack(padx=4, pady=4, fill="both", expand=True)
+
+        def _refresh_pairs():
+            pair_list.delete(0, "end")
+            for y1_no, y2_no in result["pairs"]:
+                pair_list.insert(
+                    "end",
+                    f"Y={y1_no}({self._var_display_name(d_file, y1_no)})  <->  "
+                    f"Z={y2_no}({self._var_display_name(d_file, y2_no)})"
+                )
+        _refresh_pairs()
+
+        btn_row = ttk.Frame(pair_frame)
+        btn_row.pack(fill="x", padx=4, pady=(0, 4))
+
+        def add_pair():
+            s1 = y1_list.curselection()
+            s2 = y2_list.curselection()
+            if not s1 or not s2:
+                messagebox.showwarning("3D Plot", "Y1, Y2 후보를 각각 하나씩 선택하세요.")
+                return
+            result["pairs"].append((y1_candidates[s1[0]], y2_candidates[s2[0]]))
+            _refresh_pairs()
+
+        def remove_pair():
+            s = pair_list.curselection()
+            if not s:
+                return
+            del result["pairs"][s[0]]
+            _refresh_pairs()
+
+        ttk.Button(btn_row, text="짝 추가 →", command=add_pair).pack(side="left", padx=2)
+        ttk.Button(btn_row, text="선택 삭제", command=remove_pair).pack(side="left", padx=2)
+
+        bottom = ttk.Frame(dlg)
+        bottom.pack(fill="x", padx=10, pady=10)
+
+        def _ok():
+            dlg.destroy()
+
+        def _exclude():
+            result["pairs"] = []
+            dlg.destroy()
+
+        ttk.Button(bottom, text="이 파일 제외", command=_exclude).pack(side="left")
+        ttk.Button(bottom, text="확인", command=_ok).pack(side="right")
+
+        dlg.protocol("WM_DELETE_WINDOW", _exclude)
+        self.root.wait_window(dlg)
+        return result["pairs"]
+
+    def _collect_3d_curves(self, manual_pairs=None):
         """[추가] 3D Plot - "X,Y1,Y2 -> X,Y,Z로 매핑, 여러 세트(파일)를 같은
-        화면에". 파일마다 Y1 1개 + Y2 1개가 선택되어 있어야 그 파일이 3D curve
-        하나가 됨(짝이 안 맞으면 제외하고 이유를 알려줌 - 한 파일에 여러 개면
-        어느 것끼리 짝지어야 할지 알 수 없어서)."""
+        화면에". 파일당 Y1/Y2가 정확히 1개씩이면 그대로 3D curve 하나가 되고,
+        [수정 - 사용자 요청] "한 파일에서 y,z값을 따로 줄 수는 없나(set로 여러
+        개)" - 한 파일에 Y1/Y2가 여러 개 선택돼 있어도(개수가 같든 다르든) 그
+        조합만큼 여러 3D curve를 만들 수 있다. 어떤 Y1과 어떤 Y2를 짝지을지는
+        이 함수가 직접 정하지 않고(모호함), 해당 파일들을 ambiguous로 돌려줘서
+        호출부(open_3d_plot_dialog)가 _resolve_3d_pair_dialog로 사용자에게
+        확인/지정하게 한 뒤, 그 결과(manual_pairs: {d_file: [(y1_out, y2_out),
+        ...]})를 가지고 다시 호출하면 그 지정대로 eligible을 만든다(빈 리스트면
+        그 파일 전체 제외 - "이 파일 제외" 버튼)."""
+        manual_pairs = manual_pairs or {}
         from collections import defaultdict
         y1_by_file = defaultdict(list)
         y2_by_file = defaultdict(list)
@@ -6040,64 +6168,101 @@ class CathPlotGUI:
         all_files = set(y1_by_file.keys()) | set(y2_by_file.keys())
         eligible = []
         skipped = []
+        ambiguous = []
         for d_file in sorted(all_files):
             y1s = y1_by_file.get(d_file, [])
             y2s = y2_by_file.get(d_file, [])
             # [수정] "3D legend에서도 동일 filename들을 filename-#로 구분 표기" -
             # Dat list 섹션 제목과 항상 같은 번호를 쓰도록 공용 dedup 함수 재사용.
             bn = self._dedup_display_name(d_file)
-            if len(y1s) == 1 and len(y2s) == 1:
-                file_x_output_no = 0
-                x_key_val = ""
-                for info in self.file_rows:
-                    if info.get("filename") == d_file:
-                        x_var_obj = info.get("x_var")
-                        if x_var_obj and hasattr(x_var_obj, 'get'):
-                            x_key_val = x_var_obj.get()
-                            if x_key_val and "||" in x_key_val:
-                                _, x_out_no_str = x_key_val.split("||")
-                                try:
-                                    file_x_output_no = int(x_out_no_str)
-                                except (ValueError, AttributeError):
-                                    pass
-                        break
-                try:
-                    target_dat_file = self.resort_dat_file(d_file, file_x_output_no)
-                except Exception:
-                    target_dat_file = d_file
-                x_shift = float(self.file_xshift_vars[d_file].get() or 0.0) if d_file in self.file_xshift_vars else 0.0
-                # [추가 - 버그] "선택 해제되면 차순위 file의 x,y,z(y2) title을
-                # 읽어와야지" - X/Y1/Y2 title도 Plot Title처럼 "체크된 첫
-                # curve"를 따라가려면, 그 curve가 실제로 어떤 변수(legend 이름)를
-                # 쓰는지 알아야 함 - sync_axis_labels()와 동일하게 legend_vars에서
-                # 실제 변수명을 가져와 같이 저장해둔다(2D의 xlabel_var 등 화면에
-                # 지금 떠 있는 값이 아니라, 이 curve 고유의 X/Y1/Y2 변수명).
-                y1_key = f"{d_file}||{y1s[0]}"
-                y2_key = f"{d_file}||{y2s[0]}"
-                x_title = self.legend_vars.get(x_key_val).get() if x_key_val in self.legend_vars else ""
+
+            if not y1s and not y2s:
+                continue  # 아예 선택 안 한 파일은 조용히 무시
+
+            if d_file in manual_pairs:
+                pairs = manual_pairs[d_file]
+            elif len(y1s) == 0 or len(y2s) == 0:
+                reason = []
+                if len(y1s) == 0: reason.append("Y1 없음")
+                if len(y2s) == 0: reason.append("Y2 없음")
+                skipped.append(f"{bn}: {', '.join(reason)}")
+                continue
+            elif len(y1s) == 1 and len(y2s) == 1:
+                pairs = [(y1s[0], y2s[0])]
+            else:
+                # [추가] 여러 쌍이 나올 수 있는 경우 - 기본(클릭 순서) 짝을
+                # 만들어 제안하되, 실제 확정은 항상 사용자 확인을 거친다.
+                y1_ordered = self._ordered_outs_for_file(d_file, y1s)
+                y2_ordered = self._ordered_outs_for_file(d_file, y2s)
+                default_pairs = list(zip(y1_ordered, y2_ordered))
+                ambiguous.append({
+                    "d_file": d_file,
+                    "label": bn,
+                    "y1_candidates": y1_ordered,
+                    "y2_candidates": y2_ordered,
+                    "default_pairs": default_pairs,
+                    "mismatched": len(y1s) != len(y2s),
+                })
+                continue
+
+            if not pairs:
+                continue  # manual_pairs에서 사용자가 이 파일 전체를 제외한 경우
+
+            file_x_output_no = 0
+            x_key_val = ""
+            for info in self.file_rows:
+                if info.get("filename") == d_file:
+                    x_var_obj = info.get("x_var")
+                    if x_var_obj and hasattr(x_var_obj, 'get'):
+                        x_key_val = x_var_obj.get()
+                        if x_key_val and "||" in x_key_val:
+                            _, x_out_no_str = x_key_val.split("||")
+                            try:
+                                file_x_output_no = int(x_out_no_str)
+                            except (ValueError, AttributeError):
+                                pass
+                    break
+            try:
+                target_dat_file = self.resort_dat_file(d_file, file_x_output_no)
+            except Exception:
+                target_dat_file = d_file
+            x_shift = float(self.file_xshift_vars[d_file].get() or 0.0) if d_file in self.file_xshift_vars else 0.0
+            # [추가 - 버그] "선택 해제되면 차순위 file의 x,y,z(y2) title을
+            # 읽어와야지" - X/Y1/Y2 title도 Plot Title처럼 "체크된 첫
+            # curve"를 따라가려면, 그 curve가 실제로 어떤 변수(legend 이름)를
+            # 쓰는지 알아야 함 - sync_axis_labels()와 동일하게 legend_vars에서
+            # 실제 변수명을 가져와 같이 저장해둔다(2D의 xlabel_var 등 화면에
+            # 지금 떠 있는 값이 아니라, 이 curve 고유의 X/Y1/Y2 변수명).
+            x_title = self.legend_vars.get(x_key_val).get() if x_key_val in self.legend_vars else ""
+
+            # [추가 - 사용자 요청] 한 파일에서 여러 쌍이 나오면 label에 번호를
+            # 붙여 구분한다(#1, #2, ...) - 기존 템플릿(marker_shapes 등은 label
+            # 기준 dict)과의 호환을 위해 파일당 쌍이 1개뿐이면 기존처럼 번호를
+            # 붙이지 않는다.
+            multi = len(pairs) > 1
+            for idx, (y1_out, y2_out) in enumerate(pairs):
+                y1_key = f"{d_file}||{y1_out}"
+                y2_key = f"{d_file}||{y2_out}"
                 y_title = self.legend_vars.get(y1_key).get() if y1_key in self.legend_vars else ""
                 y2_title = self.legend_vars.get(y2_key).get() if y2_key in self.legend_vars else ""
                 eligible.append({
                     "dat_file": target_dat_file,
                     "x_col": file_x_output_no + 1,
-                    "y_col": y1s[0] + 1,
-                    "z_col": y2s[0] + 1,
+                    "y_col": y1_out + 1,
+                    "z_col": y2_out + 1,
                     "x_shift": x_shift,
-                    "label": bn,
+                    "label": f"{bn}#{idx + 1}" if multi else bn,
                     "x_title": x_title,
                     "y_title": y_title,
                     "y2_title": y2_title,
+                    # [추가 - 사용자 요청] "(x,y,z)의 순서쌍 col 표기" - 3D Plot
+                    # 팝업의 Set 목록에서 실제 어떤 output_no끼리 짝지어졌는지
+                    # 바로 보이게(0-based, Dat list의 변수 번호와 동일 기준).
+                    "x_out": file_x_output_no,
+                    "y1_out": y1_out,
+                    "y2_out": y2_out,
                 })
-            elif not y1s and not y2s:
-                continue  # 아예 선택 안 한 파일은 조용히 무시
-            else:
-                reason = []
-                if len(y1s) == 0: reason.append("Y1 없음")
-                elif len(y1s) > 1: reason.append(f"Y1 {len(y1s)}개(어느 것끼리 짝지을지 모호)")
-                if len(y2s) == 0: reason.append("Y2 없음")
-                elif len(y2s) > 1: reason.append(f"Y2 {len(y2s)}개(어느 것끼리 짝지을지 모호)")
-                skipped.append(f"{bn}: {', '.join(reason)}")
-        return eligible, skipped
+        return eligible, skipped, ambiguous
 
     def _collect_3d_surfaces(self):
         """[추가] gnuplot splot용 CATHENA surface 파일(is_surface) 목록을 모은다.
@@ -6119,31 +6284,30 @@ class CathPlotGUI:
         return surfaces
 
     def open_3d_plot_dialog(self):
-        eligible, skipped = self._collect_3d_curves()
-        surfaces = self._collect_3d_surfaces()
+        eligible, skipped, ambiguous = self._collect_3d_curves()
 
-        # [추가 - 요청] "Y1 또는 Y2가 2개 이상이면 메시지 내고 창이 닫혀야
-        # 함(지금은 열린 채로 있음)" - 어느 것끼리 짝지어야 할지 정말로
-        # 모호한 경우(_collect_3d_curves가 "모호"라고 표시한 경우)는, 다른
-        # 파일이 정상이거나 Function Surface로 대체 가능하더라도 사용자가
-        # 먼저 그 선택부터 바로잡아야 하는 실수일 가능성이 높으므로, 안내
-        # 후 팝업 자체를 열지 않고 바로 닫는다("Y1/Y2 없음"만 해당하는 경우는
-        # 기존처럼 Function Surface 전용으로 계속 열 수 있음 - 아래 분기 그대로).
-        _ambiguous = [s for s in skipped if "모호" in s]
-        if _ambiguous:
-            messagebox.showerror(
-                "3D Plot",
-                "다음 파일은 Y1 또는 Y2가 2개 이상 선택돼 있어 3D로 그릴 수 없습니다"
-                "(어느 것끼리 짝지을지 알 수 없음) - Y1/Y2 선택을 각각 1개로 줄인 뒤 다시 시도해주세요:\n\n"
-                + "\n".join(_ambiguous)
-            )
-            return
+        # [수정 - 사용자 요청] "한 파일에서 y,z값을 따로 줄 수는 없나(여러
+        # set)... 기본은 순서쌍으로, 안 맞으면 경고 내고 선택하게(취소 가능)" -
+        # 예전엔 Y1/Y2가 2개 이상이면(어느 것끼리 짝지을지 모호하다며) 팝업
+        # 자체를 안 열고 바로 에러를 냈는데, 이제 그런 파일마다 _collect_3d_curves가
+        # ambiguous로 돌려주므로 각각에 대해 _resolve_3d_pair_dialog(선택 방식
+        # 짝짓기 팝업)를 띄워 사용자가 직접(또는 기본 순서쌍 그대로) 확정하게
+        # 한 뒤, 그 결과(manual_pairs)로 eligible을 다시 계산한다. "이 파일
+        # 제외"를 고르면 그 파일만 3D에서 빠지고(전체 취소가 아님) 나머지는
+        # 정상 진행된다.
+        if ambiguous:
+            manual_pairs = {}
+            for item in ambiguous:
+                manual_pairs[item["d_file"]] = self._resolve_3d_pair_dialog(item)
+            eligible, skipped, _ = self._collect_3d_curves(manual_pairs=manual_pairs)
+
+        surfaces = self._collect_3d_surfaces()
         # [수정 - 요청] "2D+3D 한번에" - 파일 기반 curve/surface가 하나도 없어도
         # Function Surface(데이터 없이 Z=f(X,Y) 수식만으로 그리는 splot)를 이
         # 팝업 안에서 새로 추가할 수 있으므로, 더 이상 여기서 막지 않고 항상
         # 다이얼로그를 연다(파일이 아예 없을 때만 참고용으로 안내).
         if not eligible and not surfaces:
-            msg = "지금 로드된 파일 중 3D로 바로 그릴 수 있는 것이 없습니다.\n(파일마다 Y1 1개 + Y2 1개가 선택되어 있어야 하고, Surface(splot) 파일은 로드만 하면 바로 사용 가능합니다.)\n아래 팝업에서 Function Surface(수식)만으로도 그릴 수 있습니다."
+            msg = "지금 로드된 파일 중 3D로 바로 그릴 수 있는 것이 없습니다.\n(파일마다 Y1/Y2가 각각 1개 이상 선택되어 있어야 하고, Surface(splot) 파일은 로드만 하면 바로 사용 가능합니다.)\n아래 팝업에서 Function Surface(수식)만으로도 그릴 수 있습니다."
             if skipped:
                 msg += "\n\n제외된 파일:\n" + "\n".join(skipped)
             messagebox.showinfo("3D Plot", msg)
@@ -6362,7 +6526,11 @@ class CathPlotGUI:
             srow = ttk.Frame(set_frame)
             srow.pack(fill="x", pady=1)
             v = tk.BooleanVar(value=True)
-            self._mk_check(srow, f"[Curve] {c['label']}", v, color="accent", side="left")
+            # [추가 - 사용자 요청] "(x,y,z)의 순서쌍 col 표기가 필요할 듯함,
+            # 예로 (0,1,2)" - 어떤 output_no끼리 짝지어 이 curve가 됐는지
+            # Set 목록에서 바로 보이게(0-based, Dat list 변수 번호와 동일 기준).
+            _col_tag = f" (X{c.get('x_out', '?')},Y{c.get('y1_out', '?')},Z{c.get('y2_out', '?')})"
+            self._mk_check(srow, f"[Curve] {c['label']}{_col_tag}", v, color="accent", side="left")
             shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
             size_var = tk.StringVar(value="M")
             style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
