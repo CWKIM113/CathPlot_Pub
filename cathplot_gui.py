@@ -8384,10 +8384,13 @@ class CathPlotGUI:
                 # 무조건 강제로 닫았는데, 여러 케이스를 화면에 나란히 띄워 비교하고
                 # 싶을 때도 있어서 이제는 그냥 두고 개수만 추적한다. 다만 너무 많이
                 # 쌓이면(gnuplot_qt.exe 공유 드라이버 폰트 캐시가 느려지는 문제가
-                # 있었으므로) 10개 이상이면 가장 먼저 연 창을 닫을지 물어본다.
+                # 있었으므로) 20개 이상이면 가장 먼저 연 창을 닫을지 물어본다.
+                # [수정 - 사용자 요청] "그림 표준화하다보면 plot이 여럿 그려지는데
+                # 10개는 너무 자주 물어봄 - 너무 많으면 Close All Plot으로 처리
+                # 하면 되니 20개로 늘려줘요."로 10 -> 20 상향.
                 alive = [p for p in getattr(self, "plot_processes", []) if p.poll() is None]
                 self.plot_processes = alive
-                if len(alive) >= 10:
+                if len(alive) >= 20:
                     if messagebox.askyesno(
                         "Plot 창 정리",
                         f"현재 열려있는 plot 창이 {len(alive)}개입니다.\n"
