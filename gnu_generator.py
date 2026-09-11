@@ -127,6 +127,46 @@ def _measure_text_width_in(text, font_name, font_pt):
     except Exception:
         return None
 
+# [추가 - 사용자 보고 버그] "맑은 고딕은 marker가 같은데 Times New Roman은
+# legend에서 작아짐" - legend의 marker 기호(MARKER_SYMBOL_MAP, "○"/"△" 등
+# 유니코드 도형 문자를 set label로 찍는 방식)는 MARKER_SIZE_SCALE 등 지금까지
+# 전부 Malgun Gothic 기준으로 실측된 보정값을 쓰는데, 같은 문자라도 폰트마다
+# 실제 그려지는 잉크 크기(글리프 디자인 자체)가 크게 다르다(직접 측정 확인:
+# 40pt 기준 "○"의 실제 폭이 Times New Roman에서는 Malgun Gothic의 약 60%뿐).
+# Legend Font가 Malgun Gothic이 아니면 PIL로 두 폰트에서 같은 문자를 그려
+# 실제 잉크 bbox 면적을 비교하고, 그 비율(면적비의 제곱근 = 선형 크기비)만큼
+# symbol_pt를 보정한다. 측정 불가(폰트 파일이 없거나 이 문자를 아예 지원
+# 안 함)이면 안전하게 1.0(보정 없음 - 기존 동작 그대로).
+_MARKER_FONT_REF = "malgun gothic"
+_marker_font_ratio_cache = {}
+
+def _marker_font_size_ratio(symbol_char, font_name):
+    _font_key = (font_name or "").strip().lower()
+    if not symbol_char or _font_key == _MARKER_FONT_REF:
+        return 1.0
+    cache_key = (symbol_char, _font_key)
+    if cache_key in _marker_font_ratio_cache:
+        return _marker_font_ratio_cache[cache_key]
+
+    ratio = 1.0
+    try:
+        ref_path = _FONT_FILE_MAP.get(_MARKER_FONT_REF)
+        tgt_path = _FONT_FILE_MAP.get(_font_key)
+        if ref_path and tgt_path and os.path.exists(ref_path) and os.path.exists(tgt_path):
+            from PIL import ImageFont
+            _REF_PT = 60  # 작은 폰트에서는 bbox가 정수 픽셀 반올림 오차에 민감해 크게 잡아 측정
+            ref_bbox = ImageFont.truetype(ref_path, _REF_PT).getbbox(symbol_char)
+            tgt_bbox = ImageFont.truetype(tgt_path, _REF_PT).getbbox(symbol_char)
+            if ref_bbox and tgt_bbox:
+                ref_area = max(ref_bbox[2] - ref_bbox[0], 1) * max(ref_bbox[3] - ref_bbox[1], 1)
+                tgt_area = max(tgt_bbox[2] - tgt_bbox[0], 1) * max(tgt_bbox[3] - tgt_bbox[1], 1)
+                if tgt_area > 0:
+                    ratio = max(0.5, min((ref_area / tgt_area) ** 0.5, 3.0))
+    except Exception:
+        ratio = 1.0
+    _marker_font_ratio_cache[cache_key] = ratio
+    return ratio
+
 _GNUPLOT_FALLBACK_PATHS = [
     r"C:\Program Files\gnuplot\bin\gnuplot.exe",
     r"C:\Program Files\gnuplot\bin\wgnuplot.exe",
@@ -2179,9 +2219,17 @@ class GnuplotGenerator:
                 # 아닌 크기를 쓰는 경우가 많았을 뿐, 첫 그리기에서도 M이 아닌
                 # 크기를 고르면 동일하게 나타나는 일반 버그).
                 _curve_marker_size = getattr(curve, "marker_size", 1.0) or 1.0
+                # [추가 - 사용자 보고 버그] "맑은 고딕은 marker가 같은데
+                # Times New Roman은 legend에서 작아짐" - MARKER_SIZE_SCALE
+                # 자체가 Malgun Gothic 기준 실측값이라, Legend Font를 다른
+                # 폰트로 바꾸면 같은 유니코드 도형 문자라도 실제 그려지는
+                # 잉크 크기가 달라 작게(또는 크게) 보임 - _marker_font_size_
+                # ratio로 그 차이를 보정한다(Malgun Gothic이면 1.0, 측정
+                # 불가한 폰트도 안전하게 1.0).
+                _font_size_ratio = _marker_font_size_ratio(MARKER_SYMBOL_MAP[marker_shape], font_name)
                 symbol_pt = (
                     _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0)
-                    * max(marker_size_factor, 0.3) * _curve_marker_size
+                    * max(marker_size_factor, 0.3) * _curve_marker_size * _font_size_ratio
                 )
                 symbol_pt = max(symbol_pt, 3.0)
                 lines.append(
