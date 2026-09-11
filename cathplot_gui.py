@@ -2166,21 +2166,25 @@ class CathPlotGUI:
             paths.append(rel_path)
         return paths
 
-    def _build_3d_curves_from_template_data(self, data):
+    def _build_3d_curves_from_template_data(self, data, td3_data=None):
         """[추가] "3D도 Batch에 연동" - 2D Template JSON의 file_assignments만으로
         (화면 상태를 전혀 안 건드리고) 3D curve 목록을 만든다.
         [수정 - 사용자 요청] "한 파일에서 y,z값을 따로 줄 수는 없나(여러 set)... "
         - 화면에서 쓰는 _collect_3d_curves와 마찬가지로, 파일당 Y1/Y2가 여러 개면
-        (개수가 같으면) 그 개수만큼 여러 3D curve를 만든다. 다만 이 경로는
-        백그라운드 스레드에서 Batch Set 여러 항목을 동시에 처리하며 호출되므로
-        _resolve_3d_pair_dialog 같은 확인 팝업을 띄울 수 없다(Tkinter 위젯 접근
-        불가) - 그래서 클릭 순서 대신 output_no 오름차순을 유일한 결정적 기준으로
-        삼아 자동으로 짝짓고, 개수가 서로 다르면(모호해서 자동으로 못 정함)
-        예전처럼 스킵하고 이유를 알려준다(화면판은 팝업으로 물어볼 수 있지만
-        Batch는 그럴 수 없어 그대로 둠 - 필요하면 화면에서 Template을 먼저
-        저장할 때 짝을 확정해서 저장해야 함)."""
+        (개수가 같으면) 그 개수만큼 여러 3D curve를 만든다.
+        [수정 - 사용자 요청] "(3D template을 이미 쓰는데) 이미 잘 정리된 set
+        아닌지" - 3D Template(td3_data)이 있고 그 안에 "curve_pairs"(화면에서
+        _resolve_3d_pair_dialog로 확정했던 실제 (Y1,Y2) 짝, 파일의 cwd 기준
+        상대경로가 키)가 있으면 그 짝을 그대로 쓴다(화면에서 기본 순서쌍이 아닌
+        다른 짝을 골랐어도 Batch가 똑같이 재현). 다만 그 짝이 지금 이 2D
+        Template의 y1_output_nos/y2_output_nos에 실제로 다 들어있는지 검증한
+        뒤에만 신뢰하고(템플릿을 손으로 고쳤거나 선택이 그 사이 바뀌었으면
+        안전하게 무시), 없거나 안 맞으면 예전처럼 output_no 오름차순 자동
+        짝짓기로 대체한다(클릭 순서 정보가 없는 헤드리스 환경의 차선책 - 개수가
+        다르면 그마저도 못 하므로 스킵)."""
         eligible = []
         skipped = []
+        _saved_pairs_by_file = (td3_data or {}).get("curve_pairs", {}) or {}
         for fa in data.get("file_assignments", []):
             rel_path = fa["filename"]
             abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(self.cwd, rel_path)
@@ -2194,19 +2198,32 @@ class CathPlotGUI:
             if not y1s and not y2s:
                 continue  # 아예 선택 안 한 파일은 조용히 무시
 
-            if len(y1s) == 0 or len(y2s) == 0:
-                reason = []
-                if len(y1s) == 0: reason.append("Y1 없음")
-                if len(y2s) == 0: reason.append("Y2 없음")
-                skipped.append(f"{bn}: {', '.join(reason)}")
-                continue
+            # [추가] 3D Template에 저장된 실제 짝을 먼저 시도(있고 유효할 때만).
+            pairs_for_file = None
+            _saved_pairs = _saved_pairs_by_file.get(rel_path)
+            if _saved_pairs:
+                _y1_set, _y2_set = set(y1s), set(y2s)
+                try:
+                    _candidate = [(int(p[0]), int(p[1])) for p in _saved_pairs]
+                except (TypeError, ValueError, IndexError):
+                    _candidate = []
+                if _candidate and all(p[0] in _y1_set and p[1] in _y2_set for p in _candidate):
+                    pairs_for_file = _candidate
 
-            if len(y1s) != len(y2s):
-                skipped.append(
-                    f"{bn}: Y1 {len(y1s)}개, Y2 {len(y2s)}개(개수가 달라 자동으로 못 정함 - "
-                    "Batch는 화면 확인 팝업을 띄울 수 없어 화면에서 짝을 맞춰 저장한 Template만 지원)"
-                )
-                continue
+            if pairs_for_file is None:
+                if len(y1s) == 0 or len(y2s) == 0:
+                    reason = []
+                    if len(y1s) == 0: reason.append("Y1 없음")
+                    if len(y2s) == 0: reason.append("Y2 없음")
+                    skipped.append(f"{bn}: {', '.join(reason)}")
+                    continue
+                if len(y1s) != len(y2s):
+                    skipped.append(
+                        f"{bn}: Y1 {len(y1s)}개, Y2 {len(y2s)}개(개수가 달라 자동으로 못 정함 - "
+                        "화면 3D Plot에서 짝을 맞춰 Template으로 저장해두면 Batch도 그 짝을 그대로 씀)"
+                    )
+                    continue
+                pairs_for_file = list(zip(y1s, y2s))
 
             if not os.path.exists(abs_path):
                 skipped.append(f"{bn}: 파일 없음")
@@ -2221,8 +2238,8 @@ class CathPlotGUI:
             # [추가 - 사용자 요청] 한 파일에서 여러 짝이 나오면 화면판과 동일하게
             # label에 번호를 붙여 구분(#1, #2, ...) - 1개뿐이면 기존처럼 번호 없음
             # (marker_shapes 등 label 기준 매칭 템플릿과의 호환 유지).
-            multi = len(y1s) > 1
-            for idx, (y1_no, y2_no) in enumerate(zip(y1s, y2s)):
+            multi = len(pairs_for_file) > 1
+            for idx, (y1_no, y2_no) in enumerate(pairs_for_file):
                 eligible.append({
                     "dat_file": target_dat_file,
                     "x_col": x_output_no + 1,
@@ -4117,7 +4134,7 @@ class CathPlotGUI:
         설정(회전각/Style/Palette/Marker/Comment 등)을 그대로 적용해서 3D 이미지를
         만든다. Tkinter 위젯 접근이 없어 백그라운드 스레드에서 호출해도 안전함.
         curve/surface가 하나도 없으면(적격 조건 안 맞음) 조용히 스킵(None 반환)."""
-        eligible, _skipped = self._build_3d_curves_from_template_data(data)
+        eligible, _skipped = self._build_3d_curves_from_template_data(data, td3_data)
         surfaces = self._build_3d_surfaces_from_template_data(data)
         if not eligible and not surfaces:
             return None
@@ -6290,6 +6307,13 @@ class CathPlotGUI:
                     "x_out": file_x_output_no,
                     "y1_out": y1_out,
                     "y2_out": y2_out,
+                    # [추가 - 사용자 요청] "3D template이 실제 Y1/Y2 짝 정보를
+                    # 기억하게" - target_dat_file(resort_dat_file이 돌려주는
+                    # 정렬 캐시 파일)이 아니라 원본 d_file을 같이 들고 있어야
+                    # _3d_template_dict가 이 짝을 원본 파일 기준(rel path)으로
+                    # 저장할 수 있다(target_dat_file은 매번 새로 만들어지는
+                    # 임시 캐시 경로라 저장용 키로 못 씀).
+                    "orig_file": d_file,
                 })
         return eligible, skipped, ambiguous
 
@@ -7099,6 +7123,27 @@ class CathPlotGUI:
                 _sizes[s["label"]] = size_var.get()
                 _styles[s["label"]] = style_var_row.get()
                 _titles[s["label"]] = title_var_row.get()
+
+            # [추가 - 사용자 요청] "3D template이 실제 Y1/Y2 짝 정보를 기억하게" -
+            # Batch Set(헤드리스)이 화면에서 확정한 것과 똑같은 (Y1,Y2) 짝을 다시
+            # 쓸 수 있도록, 파일별(원본 dat 파일의 cwd 기준 상대경로) 실제 사용된
+            # (y1_out, y2_out) 짝 목록을 그대로 저장한다. label(#1,#2...)이 아니라
+            # 원본 파일 경로를 키로 써야, Batch가 다시 계산한 순서가 화면과
+            # 달라져도(파일당 여러 짝이면 순서가 달라질 수 있음) 안전하게 매칭
+            #된다 - Batch 쪽은 이 짝을 실제 지금 선택된 Y1/Y2 목록과 대조해서
+            # 유효할 때만 쓰고, 안 맞으면(템플릿을 손으로 고쳤거나 선택이
+            # 바뀌었으면) 예전처럼 자동(오름차순) 추정으로 대체한다.
+            _curve_pairs = {}
+            for v, c, shape_var, size_var, style_var_row, title_var_row in curve_check_vars:
+                _of = c.get("orig_file")
+                if not _of or "y1_out" not in c or "y2_out" not in c:
+                    continue  # "3D Curve 직접 추가"로 만든 curve는 이 짝짓기 대상이 아님
+                try:
+                    _rel = os.path.relpath(_of, self.cwd)
+                except ValueError:
+                    _rel = _of
+                _curve_pairs.setdefault(_rel, []).append([c["y1_out"], c["y2_out"]])
+
             return {
                 "type": "cathplot_3d_template",
                 "plot_title": plot_title_var.get(),
@@ -7112,6 +7157,7 @@ class CathPlotGUI:
                 "equal_xyz": equal_xyz_var.get(),
                 "animate3d": animate3d_var.get(), "animate3d_duration": animate3d_duration_var.get(),
                 "marker_shapes": _shapes, "marker_sizes": _sizes, "styles": _styles, "titles": _titles,
+                "curve_pairs": _curve_pairs,
                 "annotations_3d": [
                     {"txt": d['txt'].get(), "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
                      "color": d['color'].get()}
