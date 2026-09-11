@@ -2550,6 +2550,15 @@ class CathPlotGUI:
                         # 템플릿과 무관하게 원래 값 그대로 유지돼야 함).
                         if _file_assignments and key_str not in _fa_scope_keys:
                             continue
+                        # [수정 - 사용자 보고 버그] "변수명(legend)을 수정해서
+                        # 저장했는데 load하니 원래 이름으로 되돌아감" - 위
+                        # _capture_curve_recipe에 새로 추가한 "legend" 필드를
+                        # 여기서 복원한다. 구버전 템플릿(이 필드 자체가 없음)은
+                        # style.get("legend")가 빈 문자열이라 조건에서 걸러져
+                        # 기존 값(파일 자체의 변수명)이 그대로 유지된다.
+                        _saved_legend = style.get("legend")
+                        if _saved_legend and key_str in self.legend_vars:
+                            self.legend_vars[key_str].set(_saved_legend)
                         if key_str in self.color_vars:
                             self.color_vars[key_str].set(style.get("color", self.color_vars[key_str].get()))
                         if key_str in self.linestyle_vars:
@@ -4389,6 +4398,17 @@ class CathPlotGUI:
             recipe.append({
                 "output_no": int(out_no),
                 "axis": "y1" if key in y1_set else "y2",
+                # [추가 - 사용자 보고 버그] "변수명(legend)을 수정해서 저장했는데
+                # load하니 원래 이름으로 되돌아감" - 지금까지 이 레시피가
+                # legend 텍스트(사용자가 직접 고친 curve 이름) 자체를 아예
+                # 저장하지 않아서, Load 시 파일을 새로 열거나 재사용할 때
+                # show_variables()가 항상 파일 자체의 원래 변수명으로만
+                # legend_vars를 채웠음(사용자가 고친 값이 있으면 안 덮어쓰지만,
+                # 애초에 저장된 값 자체가 없으니 복원할 게 없었음). Batch
+                # Set(_build_plotdef_from_template_data)은 원래도 이 값을 안
+                # 쓰고 대상 파일 자신의 변수명을 그대로 쓰므로(여러 dat 파일에
+                # 같은 레시피를 적용하는 용도라 의도적) 그쪽 동작에는 영향 없음.
+                "legend": self.legend_vars[key].get() if key in self.legend_vars else "",
                 "color": self.color_vars[key].get() if key in self.color_vars else "",
                 "linestyle": self.linestyle_vars[key].get() if key in self.linestyle_vars else "",
                 "linewidth": self.linewidth_vars[key].get() if key in self.linewidth_vars else "1.5",
