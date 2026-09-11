@@ -2168,9 +2168,17 @@ class CathPlotGUI:
 
     def _build_3d_curves_from_template_data(self, data):
         """[추가] "3D도 Batch에 연동" - 2D Template JSON의 file_assignments만으로
-        (화면 상태를 전혀 안 건드리고) 3D curve 목록을 만든다. _collect_3d_curves와
-        동일한 적격 조건(파일당 Y1 1개+Y2 1개)을 그대로 적용 - Batch Set과 같은
-        이유로 백그라운드 스레드에서 호출해도 안전함."""
+        (화면 상태를 전혀 안 건드리고) 3D curve 목록을 만든다.
+        [수정 - 사용자 요청] "한 파일에서 y,z값을 따로 줄 수는 없나(여러 set)... "
+        - 화면에서 쓰는 _collect_3d_curves와 마찬가지로, 파일당 Y1/Y2가 여러 개면
+        (개수가 같으면) 그 개수만큼 여러 3D curve를 만든다. 다만 이 경로는
+        백그라운드 스레드에서 Batch Set 여러 항목을 동시에 처리하며 호출되므로
+        _resolve_3d_pair_dialog 같은 확인 팝업을 띄울 수 없다(Tkinter 위젯 접근
+        불가) - 그래서 클릭 순서 대신 output_no 오름차순을 유일한 결정적 기준으로
+        삼아 자동으로 짝짓고, 개수가 서로 다르면(모호해서 자동으로 못 정함)
+        예전처럼 스킵하고 이유를 알려준다(화면판은 팝업으로 물어볼 수 있지만
+        Batch는 그럴 수 없어 그대로 둠 - 필요하면 화면에서 Template을 먼저
+        저장할 때 짝을 확정해서 저장해야 함)."""
         eligible = []
         skipped = []
         for fa in data.get("file_assignments", []):
@@ -2179,35 +2187,50 @@ class CathPlotGUI:
             bn = os.path.basename(abs_path)
 
             def _nos(items):
-                return [(v["output_no"] if isinstance(v, dict) else v) for v in (items or [])]
+                return sorted((v["output_no"] if isinstance(v, dict) else v) for v in (items or []))
             y1s = _nos(fa.get("y1_output_nos"))
             y2s = _nos(fa.get("y2_output_nos"))
 
-            if len(y1s) == 1 and len(y2s) == 1:
-                if not os.path.exists(abs_path):
-                    skipped.append(f"{bn}: 파일 없음")
-                    continue
-                x_output_no = fa.get("x_output_no") or 0
-                try:
-                    target_dat_file = self.resort_dat_file(abs_path, x_output_no)
-                except Exception:
-                    target_dat_file = abs_path
-                x_shift = float(fa.get("x_shift") or 0.0)
+            if not y1s and not y2s:
+                continue  # 아예 선택 안 한 파일은 조용히 무시
+
+            if len(y1s) == 0 or len(y2s) == 0:
+                reason = []
+                if len(y1s) == 0: reason.append("Y1 없음")
+                if len(y2s) == 0: reason.append("Y2 없음")
+                skipped.append(f"{bn}: {', '.join(reason)}")
+                continue
+
+            if len(y1s) != len(y2s):
+                skipped.append(
+                    f"{bn}: Y1 {len(y1s)}개, Y2 {len(y2s)}개(개수가 달라 자동으로 못 정함 - "
+                    "Batch는 화면 확인 팝업을 띄울 수 없어 화면에서 짝을 맞춰 저장한 Template만 지원)"
+                )
+                continue
+
+            if not os.path.exists(abs_path):
+                skipped.append(f"{bn}: 파일 없음")
+                continue
+            x_output_no = fa.get("x_output_no") or 0
+            try:
+                target_dat_file = self.resort_dat_file(abs_path, x_output_no)
+            except Exception:
+                target_dat_file = abs_path
+            x_shift = float(fa.get("x_shift") or 0.0)
+
+            # [추가 - 사용자 요청] 한 파일에서 여러 짝이 나오면 화면판과 동일하게
+            # label에 번호를 붙여 구분(#1, #2, ...) - 1개뿐이면 기존처럼 번호 없음
+            # (marker_shapes 등 label 기준 매칭 템플릿과의 호환 유지).
+            multi = len(y1s) > 1
+            for idx, (y1_no, y2_no) in enumerate(zip(y1s, y2s)):
                 eligible.append({
                     "dat_file": target_dat_file,
                     "x_col": x_output_no + 1,
-                    "y_col": y1s[0] + 1,
-                    "z_col": y2s[0] + 1,
+                    "y_col": y1_no + 1,
+                    "z_col": y2_no + 1,
                     "x_shift": x_shift,
-                    "label": bn,
+                    "label": f"{bn}#{idx + 1}" if multi else bn,
                 })
-            elif not y1s and not y2s:
-                continue
-            else:
-                reason = []
-                if len(y1s) != 1: reason.append(f"Y1 {len(y1s)}개")
-                if len(y2s) != 1: reason.append(f"Y2 {len(y2s)}개")
-                skipped.append(f"{bn}: {', '.join(reason)}")
         return eligible, skipped
 
     def _build_3d_surfaces_from_template_data(self, data):
@@ -4105,6 +4128,12 @@ class CathPlotGUI:
         shapes = td3_data.get("marker_shapes", {})
         sizes = td3_data.get("marker_sizes", {})
         styles = td3_data.get("styles", {})
+        # [수정 - 버그] "3D Curve 이름을 template에 저장" 기능(titles dict)이
+        # 화면(대화형) 렌더링 경로에만 반영되고, Batch Set의 이 헤드리스 경로는
+        # 계속 label을 그대로 title로 써서 사용자가 지정한 legend 이름이 무시되고
+        # 있었음 - marker_shapes/sizes/styles와 동일한 label 기준 dict이므로
+        # 같은 방식으로 반영한다(없으면 기존처럼 label 그대로 사용).
+        titles = td3_data.get("titles", {})
         _legacy_size = MARKER_SIZE_MAP.get(td3_data.get("marker_size", "M"), 1.0)
         _legacy_style = STYLE_3D_INTERNAL_MAP.get(td3_data.get("style", "Lines"), "lines")
 
@@ -4114,7 +4143,7 @@ class CathPlotGUI:
             item["marker_shape"] = hollow_pt
             item["marker_size"] = MARKER_SIZE_MAP.get(sizes.get(item["label"], ""), _legacy_size)
             item["style"] = STYLE_3D_INTERNAL_MAP.get(styles.get(item["label"], ""), _legacy_style)
-            item["title"] = item["label"]
+            item["title"] = titles.get(item["label"], "").strip() or item["label"]
             return item
 
         curves_final = [_with_marker(c) for c in eligible]
@@ -6621,6 +6650,101 @@ class CathPlotGUI:
             foreground="#555555"
         ).pack(anchor="w", padx=5, pady=(0, 4))
 
+        # [추가 - 사용자 요청] "추가시 Dat file-list 중 선택, curve title명 및
+        # (x,y,z) 입력 등" - 위 "포함할 Set"은 Dat list에서 Y1/Y2로 체크해둔
+        # 변수만 자동으로 모아 만드는데, 그와 별개로 이 팝업 안에서 곧바로
+        # (지금 로드된 Dat file 중 하나를 골라) X/Y/Z 변수를 직접 지정해 3D
+        # curve를 추가할 수 있게 한다(Function Surface와 동일하게 이 팝업
+        # 안에서 직접 행을 추가/삭제하는 목록 - 삭제는 각 행의 "X" 버튼).
+        manual_curve_rows = []
+        manual_curve_frame = ttk.LabelFrame(dialog, text="3D Curve 직접 추가 (Dat file에서 X/Y/Z 변수 직접 선택)")
+        manual_curve_frame.pack(fill="x", padx=10, pady=5)
+        mc_list_frame = ttk.Frame(manual_curve_frame)
+        mc_list_frame.pack(fill="x")
+
+        # 파일별 변수 선택지: {표시용 label: 실제 파일 경로}, {파일 경로: [(output_no, display_name), ...]}
+        _mc_file_var_choices = {}
+        for _info in self.file_rows:
+            _meta = _info.get("meta")
+            _fn = _info.get("filename")
+            if _meta is None or not _fn or not hasattr(_meta, "variables"):
+                continue
+            _mc_file_var_choices[_fn] = [(vv.output_no, vv.display_name) for vv in _meta.variables]
+        _mc_file_labels = [self._dedup_display_name(_fn) for _fn in _mc_file_var_choices.keys()]
+        _mc_label_to_file = dict(zip(_mc_file_labels, _mc_file_var_choices.keys()))
+
+        def add_manual_curve_row(initial=None):
+            init = initial or {}
+            row = ttk.Frame(mc_list_frame)
+            row.pack(fill="x", pady=1)
+            file_label_var = tk.StringVar(value=init.get('file_label') or (_mc_file_labels[0] if _mc_file_labels else ""))
+            x_var = tk.StringVar(value=init.get('x', ""))
+            y_var = tk.StringVar(value=init.get('y', ""))
+            z_var = tk.StringVar(value=init.get('z', ""))
+            title_var = tk.StringVar(value=init.get('title', ""))
+            style_var = tk.StringVar(value=STYLE_3D_DISPLAY_MAP.get(init.get('style', 'lines'), STYLE_3D_DISPLAY_MAP["lines"]))
+            shape_var = tk.StringVar(value=init.get('shape') or (_shape_choices[0] if _shape_choices else "None"))
+            size_var = tk.StringVar(value=init.get('size', "M"))
+            data = {
+                'file_label': file_label_var, 'x': x_var, 'y': y_var, 'z': z_var,
+                'title': title_var, 'style': style_var, 'shape': shape_var, 'size': size_var,
+                'frame': row,
+            }
+            manual_curve_rows.append(data)
+
+            def _var_choice_values():
+                _fn = _mc_label_to_file.get(file_label_var.get())
+                return [f"{no}:{name}" for no, name in _mc_file_var_choices.get(_fn, [])]
+
+            ttk.Button(row, text="X", width=2, style="Compact.TButton",
+                       command=lambda: (row.destroy(), manual_curve_rows.remove(data))).pack(side="right", padx=3)
+            ttk.Combobox(row, textvariable=shape_var, values=MARKER_SHAPE_LIST,
+                         width=8, state="readonly").pack(side="right", padx=2)
+            ttk.Combobox(row, textvariable=size_var, values=MARKER_SIZE_LIST,
+                         width=3, state="readonly").pack(side="right", padx=2)
+            ttk.Combobox(row, textvariable=style_var, values=_style_choices_curve,
+                         width=11, state="readonly").pack(side="right", padx=2)
+            ttk.Label(row, text="이름:").pack(side="left", padx=(6, 0))
+            t_entry = ttk.Entry(row, textvariable=title_var, width=12)
+            t_entry.pack(side="left", padx=2)
+            t_entry.bind("<FocusIn>", lambda e: self.set_active_entry(t_entry))
+
+            ttk.Label(row, text="Dat:").pack(side="left", padx=(6, 0))
+            file_cb = ttk.Combobox(row, textvariable=file_label_var, values=_mc_file_labels,
+                                    width=14, state="readonly")
+            file_cb.pack(side="left", padx=2)
+            ttk.Label(row, text="X:").pack(side="left", padx=(4, 0))
+            x_cb = ttk.Combobox(row, textvariable=x_var, width=12, state="readonly")
+            x_cb.pack(side="left", padx=2)
+            ttk.Label(row, text="Y:").pack(side="left", padx=(4, 0))
+            y_cb = ttk.Combobox(row, textvariable=y_var, width=12, state="readonly")
+            y_cb.pack(side="left", padx=2)
+            ttk.Label(row, text="Z:").pack(side="left", padx=(4, 0))
+            z_cb = ttk.Combobox(row, textvariable=z_var, width=12, state="readonly")
+            z_cb.pack(side="left", padx=2)
+
+            def _on_file_change(*_a):
+                vals = _var_choice_values()
+                for cb in (x_cb, y_cb, z_cb):
+                    cb['values'] = vals
+                if not vals:
+                    return
+                if x_var.get() not in vals:
+                    x_var.set(vals[0])
+                if y_var.get() not in vals:
+                    y_var.set(vals[min(1, len(vals) - 1)])
+                if z_var.get() not in vals:
+                    z_var.set(vals[min(2, len(vals) - 1)])
+            file_label_var.trace_add("write", _on_file_change)
+            _on_file_change()  # 처음 만들 때도 한 번 채움(Template 복원 시 저장된 값이 있으면 유지)
+
+        ttk.Button(manual_curve_frame, text="+ Add 3D Curve", command=add_manual_curve_row).pack(anchor="w", padx=5, pady=(0, 2))
+        ttk.Label(
+            manual_curve_frame,
+            text="Dat list의 Y1/Y2 체크와 무관하게, 로드된 파일 하나에서 원하는 X/Y/Z 변수를 직접 골라 3D curve로 추가합니다.",
+            foreground="#555555"
+        ).pack(anchor="w", padx=5, pady=(0, 4))
+
         # [수정 - 버그] "선택 여부에 따라 Plot Title/Z title의 default가 바뀌게" -
         # 위 체크박스들이 이제서야 다 만들어졌으니, 실제로 체크된 첫 curve(없으면
         # 첫 surface)를 기준으로 Plot Title/Z title 기본값을 다시 채운다. 체크를
@@ -6822,6 +6946,66 @@ class CathPlotGUI:
                     "style": STYLE_3D_INTERNAL_MAP.get(d['style'].get(), "lines"),
                 })
 
+            # [추가 - 사용자 요청] "추가시 Dat file-list 중 선택, curve title명 및
+            # (x,y,z) 입력 등" - 위 "3D Curve 직접 추가" 목록(Dat list의 Y1/Y2
+            # 체크와 무관하게 직접 고른 X/Y/Z)을 curves_final에 그대로 합친다.
+            # 대상 Dat file을 못 고른 경우(로드된 파일이 하나도 없어 콤보박스가
+            # 비어있던 경우 등)는 조용히 건너뛴다.
+            # [추가 - 사용자 요청] "y1=y2로 중복 선택은 안되게" - Dat list의
+            # Y1/Y2 체크박스는 같은 변수를 Y1과 Y2 양쪽에 동시에 선택할 수 없게
+            # 서로 배타적으로 막혀 있는데(체크박스 자체가 한쪽을 켜면 다른 쪽은
+            # 꺼짐), "3D Curve 직접 추가"는 X/Y/Z를 각각 독립된 콤보박스로 자유
+            # 선택하는 구조라 같은 변수를 Y와 Z에 동시에 고르는 것 자체는 막혀
+            # 있지 않음 - Z=Y(같은 컬럼)이면 항상 z=y인 의미 없는 선(대각선)만
+            # 나오므로, 여기서 걸러내고 한꺼번에 경고한다(다른 정상 행은 계속
+            # 포함시킴 - 전체를 막지 않음).
+            _mc_yz_dup_labels = []
+            for d in manual_curve_rows:
+                _fn = _mc_label_to_file.get(d['file_label'].get())
+                if not _fn:
+                    continue
+
+                def _parse_out_no(_s):
+                    try:
+                        return int(_s.split(":")[0])
+                    except (ValueError, AttributeError, IndexError):
+                        return None
+                x_no = _parse_out_no(d['x'].get())
+                y_no = _parse_out_no(d['y'].get())
+                z_no = _parse_out_no(d['z'].get())
+                if x_no is None or y_no is None or z_no is None:
+                    continue
+                if y_no == z_no:
+                    _mc_yz_dup_labels.append(
+                        f"{self._dedup_display_name(_fn)} (Y=Z={y_no}: {self._var_display_name(_fn, y_no)})"
+                    )
+                    continue
+                try:
+                    _target_dat_file = self.resort_dat_file(_fn, x_no)
+                except Exception:
+                    _target_dat_file = _fn
+                _x_shift = float(self.file_xshift_vars[_fn].get() or 0.0) if _fn in self.file_xshift_vars else 0.0
+                _hollow_pt, _ = MARKER_SHAPE_MAP.get(d['shape'].get(), (None, None))
+                _default_label = f"{self._dedup_display_name(_fn)} (X{x_no},Y{y_no},Z{z_no})"
+                curves_final.append({
+                    "dat_file": _target_dat_file,
+                    "x_col": x_no + 1, "y_col": y_no + 1, "z_col": z_no + 1,
+                    "x_shift": _x_shift,
+                    "label": _default_label,
+                    "title": d['title'].get().strip() or _default_label,
+                    "marker_shape": _hollow_pt,
+                    "marker_size": MARKER_SIZE_MAP.get(d['size'].get(), 1.0),
+                    "style": STYLE_3D_INTERNAL_MAP.get(d['style'].get(), "lines"),
+                })
+
+            if _mc_yz_dup_labels:
+                messagebox.showwarning(
+                    "3D Plot",
+                    "다음 '3D Curve 직접 추가' 행은 Y와 Z가 같은 변수로 지정돼 있어"
+                    "(z=y인 의미 없는 선) 제외했습니다 - Z를 다른 변수로 바꿔주세요:\n\n"
+                    + "\n".join(_mc_yz_dup_labels)
+                )
+
             # [추가] "time 구간 입력" - 비우면 제한 없음(None).
             def _parse_opt_float(s):
                 s = (s or "").strip()
@@ -6847,7 +7031,7 @@ class CathPlotGUI:
             # Plot/Save/Print를 누르면 여기서 대신 막는다(gnuplot이 빈 splot
             # 문법 오류를 내는 것보다 사용자에게 바로 알려주는 게 낫다).
             if not curves_final and not surfaces_final and not function_surfaces_final:
-                messagebox.showwarning("3D Plot", "그릴 curve/surface/Function Surface가 없습니다.\n(Set 체크박스를 켜거나 Function Surface를 하나 이상 추가하세요.)")
+                messagebox.showwarning("3D Plot", "그릴 curve/surface/Function Surface가 없습니다.\n(Set 체크박스를 켜거나, 3D Curve를 직접 추가하거나, Function Surface를 하나 이상 추가하세요.)")
                 return None
 
             return (curves_final, rot_x, rot_z, "lines", palette_var.get(),
@@ -6945,6 +7129,25 @@ class CathPlotGUI:
                     {"expression": d['expression'].get(), "title": d['title'].get(),
                      "style": STYLE_3D_INTERNAL_MAP.get(d['style'].get(), "lines")}
                     for d in func_surface_rows if d['expression'].get().strip()
+                ],
+                # [추가 - 사용자 요청] "추가시 Dat file-list 중 선택, curve title명
+                # 및 (x,y,z) 입력 등" - 3D Curve 직접 추가 목록도 저장한다.
+                # file_label(그 당시 표시명)뿐 아니라 file_rel(cwd 기준 상대경로)도
+                # 같이 저장해서, 다음에 불러올 때 파일이 다시 로드돼 있으면(표시
+                # 번호가 바뀌었더라도) 실제 경로 기준으로 다시 찾을 수 있게 한다.
+                "manual_curves": [
+                    {
+                        "file_label": d['file_label'].get(),
+                        "file_rel": (
+                            os.path.relpath(_mc_label_to_file[d['file_label'].get()], self.cwd)
+                            if d['file_label'].get() in _mc_label_to_file else ""
+                        ),
+                        "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
+                        "title": d['title'].get(),
+                        "style": STYLE_3D_INTERNAL_MAP.get(d['style'].get(), "lines"),
+                        "shape": d['shape'].get(), "size": d['size'].get(),
+                    }
+                    for d in manual_curve_rows
                 ],
             }
 
@@ -7065,6 +7268,40 @@ class CathPlotGUI:
                 func_surface_rows.clear()
                 for fs in data.get("function_surfaces", []):
                     add_func_surface_row(initial=fs)
+
+            # [추가 - 사용자 요청] "추가시 Dat file-list 중 선택, curve title명
+            # 및 (x,y,z) 입력 등" - 3D Curve 직접 추가 목록 복원. file_rel(cwd
+            # 기준 상대경로)로 지금 로드된 파일 중 실제 경로가 같은 것을 다시
+            # 찾아 그 표시 label을 쓰고(표시 번호가 그때와 달라졌어도 안전),
+            # 못 찾으면 옛 file_label이 지금도 그대로 있는지만 확인한다. 둘 다
+            # 안 되면(그 파일이 지금 로드 안 돼 있음) 잘못된 파일을 가리키는 것
+            # 보다 안전하게 그 행은 건너뛴다.
+            if "manual_curves" in data:
+                for d in list(manual_curve_rows):
+                    d['frame'].destroy()
+                manual_curve_rows.clear()
+                for mc in data.get("manual_curves", []):
+                    _restored_label = mc.get("file_label", "")
+                    _rel = mc.get("file_rel", "")
+                    if _rel:
+                        _abs = _rel if os.path.isabs(_rel) else os.path.join(self.cwd, _rel)
+                        for _lbl, _fn2 in _mc_label_to_file.items():
+                            try:
+                                if os.path.normcase(os.path.abspath(_fn2)) == os.path.normcase(os.path.abspath(_abs)):
+                                    _restored_label = _lbl
+                                    break
+                            except Exception:
+                                pass
+                    if _restored_label not in _mc_file_labels:
+                        continue
+                    add_manual_curve_row(initial={
+                        "file_label": _restored_label,
+                        "x": mc.get("x", ""), "y": mc.get("y", ""), "z": mc.get("z", ""),
+                        "title": mc.get("title", ""),
+                        "style": mc.get("style", "lines"),
+                        "shape": mc.get("shape", ""),
+                        "size": mc.get("size", "M"),
+                    })
 
             messagebox.showinfo("3D Template", "3D 템플릿을 불러왔습니다.")
 
