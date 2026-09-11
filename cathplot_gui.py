@@ -2569,13 +2569,32 @@ class CathPlotGUI:
             # 레시피와 동일한 개념 - 어떤 dat 파일인지와 무관하게 output_no로 매칭)
             curve_styles = data.get("curve_styles", [])
             if curve_styles:
-                style_by_no = {item["output_no"]: item for item in curve_styles}
+                # [수정 - 사용자 보고 크리티컬 버그] "Template load 해서 그리면
+                # 모두 나중 curve 이름/marker 모양 등이 같은 이름으로 나타남" -
+                # output_no만 키로 쓰면 서로 다른 파일이 같은 output_no를 쓸 때
+                # (흔함) dict 생성 과정에서 먼저 것들이 전부 덮어써져 마지막
+                # 항목 하나만 남았음(모든 curve가 그 하나의 스타일/이름을
+                # 공유하게 됨). 이제 각 항목이 원본 파일(rel path, "file"
+                # 필드 - 없으면 구버전 템플릿이므로 예전처럼 output_no만으로
+                # 폴백)을 같이 들고 있으므로, (file, output_no) 조합으로 먼저
+                # 정확히 매칭하고, 못 찾을 때만 output_no 전용 dict로 대체한다.
+                style_by_file_no = {}
+                style_by_no = {}
+                for item in curve_styles:
+                    style_by_no[item["output_no"]] = item  # 구버전 호환 폴백(마지막 항목 우선 - 기존 동작 유지)
+                    _item_file = item.get("file")
+                    if _item_file:
+                        style_by_file_no[(_item_file, item["output_no"])] = item
                 for info in self.file_rows:
                     if not info.get("filename") or info.get("meta") is None:
                         continue
                     datfile = info["filename"]
+                    try:
+                        _datfile_rel = os.path.relpath(datfile, self.cwd)
+                    except ValueError:
+                        _datfile_rel = datfile
                     for pv in info["meta"].variables:
-                        style = style_by_no.get(pv.output_no)
+                        style = style_by_file_no.get((_datfile_rel, pv.output_no)) or style_by_no.get(pv.output_no)
                         if not style:
                             continue
                         key_str = f"{datfile}||{pv.output_no}"
@@ -4446,9 +4465,24 @@ class CathPlotGUI:
         recipe = []
         ordered_keys, y1_set, _y2_set = self._ordered_selected_keys()
         for key in ordered_keys:
-            _, out_no = key.split("||")
+            _datfile_for_key, out_no = key.split("||")
+            # [추가 - 사용자 보고 크리티컬 버그] "Template load 해서 그리면
+            # 모두 나중 curve 이름/marker 모양 등이 같은 이름으로 나타남" -
+            # load_template의 curve_styles 복원이 output_no만으로 매칭해서,
+            # 서로 다른 파일이 같은 output_no를 쓰면(흔함) 전부 "레시피
+            # 목록에서 그 output_no로 마지막에 나온 항목"으로 덮어써지고
+            # 있었음. 여기서 각 항목에 원본 파일(cwd 기준 상대경로)을 같이
+            # 저장해두면, Template Load가 file_assignments(정확히 어떤
+            # 파일인지 이미 앎)와 함께 file+output_no로 정확히 매칭할 수
+            # 있다. Batch Queue(_build_plotdef_from_template_data)는 이
+            # 필드를 아예 안 읽으므로(의도적으로 파일 무관 재사용) 영향 없음.
+            try:
+                _rel_file_for_key = os.path.relpath(_datfile_for_key, self.cwd)
+            except ValueError:
+                _rel_file_for_key = _datfile_for_key
             recipe.append({
                 "output_no": int(out_no),
+                "file": _rel_file_for_key,
                 "axis": "y1" if key in y1_set else "y2",
                 # [추가 - 사용자 보고 버그] "변수명(legend)을 수정해서 저장했는데
                 # load하니 원래 이름으로 되돌아감" - 지금까지 이 레시피가

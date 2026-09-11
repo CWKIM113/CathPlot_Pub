@@ -2166,7 +2166,23 @@ class GnuplotGenerator:
                 # 경우를 대비해 최후 판독 안전장치로 3pt 절대 하한만 남긴다
                 # (이전 5pt보다 낮춤 - 5pt 자체가 비율 하한과 어긋나는 또
                 # 다른 기준점이 되지 않도록).
-                symbol_pt = _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0) * max(marker_size_factor, 0.3)
+                # [수정 - 사용자 보고 버그] "legend 내 marker 크기가 화면
+                # plot의 크기보다 작게 나타남" - 여기까지는 legend 기호
+                # 크기가 legend 폰트 크기·도형별 보정값·(PIP 인셋 축소용)
+                # marker_size_factor로만 정해지고, 정작 사용자가 Marker
+                # Settings에서 고른 크기(S/M/L/XL - 실제 curve 위 마커의
+                # ps를 그대로 곱하는 그 배율, curve.marker_size)는 전혀 반영
+                #되지 않고 있었음 - curve를 "M"(배율 1.0, 지금까지 이 공식이
+                # 맞춰져 있던 기준값) 말고 L/XL로 키우면 실제 마커는 커지는데
+                # legend 기호만 그대로라 legend가 상대적으로 작아 보였음
+                # (Template Load로 자주 눈에 띈 것은 저장된 템플릿들이 M이
+                # 아닌 크기를 쓰는 경우가 많았을 뿐, 첫 그리기에서도 M이 아닌
+                # 크기를 고르면 동일하게 나타나는 일반 버그).
+                _curve_marker_size = getattr(curve, "marker_size", 1.0) or 1.0
+                symbol_pt = (
+                    _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0)
+                    * max(marker_size_factor, 0.3) * _curve_marker_size
+                )
                 symbol_pt = max(symbol_pt, 3.0)
                 lines.append(
                     f'set label {id_offset + 5000 + row_i + 1} "{MARKER_SYMBOL_MAP[marker_shape]}" '
