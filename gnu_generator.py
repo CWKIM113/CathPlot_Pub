@@ -3906,7 +3906,8 @@ class GnuplotGenerator:
 
     def _build_pip_folded_overlay(self, plotdef, pip_xmin, pip_xmax, pip_y1min, pip_y1max,
                                    pip_y2min, pip_y2max, box, plot_dir_,
-                                   clip_shape="rect", clip_rx=50.0, clip_ry=50.0, minimal=False):
+                                   clip_shape="rect", clip_rx=50.0, clip_ry=50.0, minimal=False,
+                                   pip_cfg=None):
         """[추가 - PIP 렌더링 재설계] "R/u 직후 기본 화면은 깨끗해야 하는데
         확대(replot)는 그걸 위한 NaN 마스킹 때문에 막힌다"는 근본 충돌을
         피하기 위해, PIP(배경+테두리+자기 커브)를 별도 멀티플롯 패널이
@@ -4084,6 +4085,37 @@ class GnuplotGenerator:
             _lbl_body = "\n".join(_lbl_rows)
             fragments.append(f"$PipFoldTics << EOD\n{_lbl_body}\nEOD")
             fragments.append('$PipFoldTics using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,6" textcolor rgb "gray30"')
+
+            # [추가 - 사용자 요청] "Title, legend... 올바르게 되도록 같은
+            # 방식으로 만들어 넣기" - 다른 요소와 같은 "with labels" 데이터
+            # 방식(재생 간 상태 잔류 위험 없음)으로 Title(박스 바로 위)과
+            # Legend(박스 안쪽 위, curve별 색으로 구분되는 텍스트 목록 -
+            # 실제 곡선 옆 샘플선까지는 아니지만 이름+색으로 구분 가능)를
+            # 추가한다. 기존 개별 체크박스(title_on/legend_on)를 그대로
+            # 따른다.
+            _pip_cfg = pip_cfg if pip_cfg is not None else (getattr(plotdef, "pip", None) or {})
+            if _pip_cfg.get("title_on"):
+                _title_txt = str(_pip_cfg.get("title_text") or getattr(plotdef, "title", "") or "").strip()
+                if _title_txt:
+                    _esc = _title_txt.replace("\\", "\\\\").replace('"', '\\"')
+                    _ty_title = y1_hi + (y1_hi - y1_lo) * 0.12
+                    fragments.append(f'$PipFoldTitle << EOD\n{_cx:.6g} {_ty_title:.6g} "{_esc}"\nEOD')
+                    fragments.append('$PipFoldTitle using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,7" textcolor rgb "black"')
+            if _pip_cfg.get("legend_on") and plotdef.curves:
+                _leg_rows = []
+                _n_leg = len(plotdef.curves)
+                for _li, _lcurve in enumerate(plotdef.curves):
+                    _lcolor = _lcurve.color or DEFAULT_COLORS[_li % len(DEFAULT_COLORS)]
+                    _lname = (_lcurve.title or "").strip()
+                    if not _lname:
+                        continue
+                    _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
+                    _ly = y1_hi - (y1_hi - y1_lo) * (0.10 + 0.09 * _li)
+                    _lx = _cx + (x_hi - x_lo) * 0.02
+                    _leg_rows.append((_lx, _ly, _esc, _lcolor))
+                for _li, (_lx, _ly, _esc, _lcolor) in enumerate(_leg_rows):
+                    fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
+                    fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,6" textcolor rgb "{_lcolor}"')
 
         for curve in plotdef.curves:
             is_y2 = getattr(curve, "axis", "y1") == "y2"
