@@ -6806,7 +6806,59 @@ class GnuplotGenerator:
             # 진하기로 그려지게 한다(title/tic이 원 밖으로 아주 드물게
             # 살짝 삐져나올 수 있는 것은 이 사용성 이득에 비해 감수함).
             _pip_probe_lines = list(lines)
+            _pip_before_len = len(_pip_probe_lines)
             _pip_clip_info = self._render_pip_inset(plotdef, _pip_probe_lines, _main_cmd_list, fmt, force_postprocess=(fmt.lower() != "interactive"))
+            # [추가 - 사용자 요청] "PIP 초기 복사본 삭제" - 대화형+원/타원·사각형
+            # 완전불투명 native 경로(self._pip_main_blank_line이 세워짐 -
+            # 아래에서 이 값을 읽어가는 것과 같은 판정)에서는 이 호출이 방금
+            # _pip_probe_lines에 덧붙인 "PIP 자신만의 별도 멀티플롯 패널"
+            # (origin/size/margin/datablock/legend/plot 명령 전부)이 곧
+            # main 재생에 덧붙는 접힌(fold) 오버레이로 완전히 대체될 것이라
+            # 더 이상 필요 없다 - 오히려 확대 후 데이터 앵커링된 접힌
+            # 오버레이가 다른 화면 위치로 옮겨가면 이 "화면 고정" 옛 패널이
+            # 다시 드러나는 버그의 근본 원인이었다(첫 렌더 시점엔 우연히
+            # 같은 위치라 접힌 오버레이가 가려줬을 뿐). 이 함수가 방금
+            # 덧붙인 내용을 통째로 잘라낸다 - 부수효과로 남겨둔
+            # self._pip_main_blank_line/self._pip_replay_mask_box/
+            # self._pip_fold_ranges 등은 lines 리스트가 아니라 별도
+            # 인스턴스 속성이라 이 자르기와 무관하게 그대로 살아있다.
+            if getattr(self, "_pip_main_blank_line", None) and fmt.lower() == "interactive":
+                # [수정 - 실측으로 발견된 버그] "PIP 박스는 있는데 안이 텅
+                # 비어(격자/커브 다 없음) 보임" - 처음엔 옛 패널이 덧붙인
+                # 내용을 통째로(설정+실제 곡선 plot 전부) 잘라냈는데, 그러면
+                # main 1차 그리기와 재생(replay) "plot \" 사이에 gnuplot
+                # "plot" 명령이 단 한 번도 안 끼는 상태가 됨 - 이 세션
+                # 내내 반복 확인된 cairo 합성 버그(같은 자리를 두 번 그릴
+                # 때, 그 사이에 아무 plot도 안 끼면 나중 것의 배경 채우기가
+                # 캔버스에 합성 안 됨)가 여기서도 그대로 재현됨. 다행히
+                # 원/타원 완전불투명 경로는 바로 이 이유로 이미 "준비운동"
+                # plot(위 _ellipse_fully_opaque 분기, 아래 [주의] 참고)을
+                # 자기 자신의 실제 곡선 plot 바로 앞에 심어뒀었음 - 옛 패널의
+                # "실제 곡선을 그리는 마지막 'plot \'"만 그 뒤로 잘라내고
+                # (준비운동 plot 포함, 그 앞의 origin/size/margin/배경
+                # 오브젝트/데이터블록 설정은 그대로 남겨) 이 준비운동 plot이
+                # 여전히 실행되게 하면 재생의 배경 합성 문제가 같이 해결됨
+                # (rect처럼 준비운동이 원래 없는 경우엔 안 보이는 최소 plot
+                # 하나를 대신 넣어 같은 효과를 낸다).
+                _pip_real_plot_idx = next(
+                    (i for i in range(len(_pip_probe_lines) - 1, _pip_before_len - 1, -1)
+                     if _pip_probe_lines[i].strip() == "plot \\"),
+                    None
+                )
+                if _pip_real_plot_idx is not None:
+                    del _pip_probe_lines[_pip_real_plot_idx:]
+                else:
+                    del _pip_probe_lines[_pip_before_len:]
+                    _pip_probe_lines.append('plot 0 notitle with lines lc rgb "white"')
+                # [추가] 옛 패널이 선언해둔 배경/테두리 "set object"(7100/
+                # 7101/7102 등)는 위 준비운동 plot이 한 번 실행되는 동안
+                # (그 자체를 위해 필요했음 - 위 배경 주석 참고) 이미 제
+                # 역할을 다했으므로, 재생에 그대로 남아 보이지 않도록 지운다.
+                _pip_probe_lines.append("unset object")
+                _pip_probe_lines.append("unset label")
+                _pip_probe_lines.append("unset arrow")
+                _pip_probe_lines.append("set origin 0,0")
+                _pip_probe_lines.append("set size 1,1")
             # [추가 - 사용자 제안 채택, 재수정] "불투명일 때 in-plot 위치만큼
             # 비워두고 그리는 방안" - 위 _render_pip_inset이 원/타원 네이티브
             # 완전불투명일 때 self._pip_main_blank_line에 "메인 자신의 첫
