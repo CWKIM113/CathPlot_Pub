@@ -7189,19 +7189,25 @@ class CathPlotGUI:
             # [추가 - 사용자 요청] "3D Marker 개수도 template에 기록되게" - 위
             # marker 모양/크기/style/이름과 동일한 방식(label 기준 dict)으로
             # MaxNo.(marker_max_count, 비면 Auto)도 같이 저장한다.
-            _shapes, _sizes, _styles, _titles, _maxcounts = {}, {}, {}, {}, {}
+            # [추가 - 사용자 요청] "3D Template이 curve/surface 체크(선택) 여부
+            # 자체를 저장 안 함"(821541c에서 발견해 기록해둔 별개 이슈) - marker
+            # 모양/크기/style/이름/MaxNo.와 같은 label 기준 dict로 체크 상태도
+            # 같이 저장한다.
+            _shapes, _sizes, _styles, _titles, _maxcounts, _checked = {}, {}, {}, {}, {}, {}
             for v, c, shape_var, size_var, style_var_row, title_var_row, maxno_var in curve_check_vars:
                 _shapes[c["label"]] = shape_var.get()
                 _sizes[c["label"]] = size_var.get()
                 _styles[c["label"]] = style_var_row.get()
                 _titles[c["label"]] = title_var_row.get()
                 _maxcounts[c["label"]] = maxno_var.get()
+                _checked[c["label"]] = bool(v.get())
             for v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var in surface_check_vars:
                 _shapes[s["label"]] = shape_var.get()
                 _sizes[s["label"]] = size_var.get()
                 _styles[s["label"]] = style_var_row.get()
                 _titles[s["label"]] = title_var_row.get()
                 _maxcounts[s["label"]] = maxno_var.get()
+                _checked[s["label"]] = bool(v.get())
 
             # [추가 - 사용자 요청] "3D template이 실제 Y1/Y2 짝 정보를 기억하게" -
             # Batch Set(헤드리스)이 화면에서 확정한 것과 똑같은 (Y1,Y2) 짝을 다시
@@ -7236,7 +7242,7 @@ class CathPlotGUI:
                 "equal_xyz": equal_xyz_var.get(),
                 "animate3d": animate3d_var.get(), "animate3d_duration": animate3d_duration_var.get(),
                 "marker_shapes": _shapes, "marker_sizes": _sizes, "styles": _styles, "titles": _titles,
-                "marker_max_counts": _maxcounts,
+                "marker_max_counts": _maxcounts, "checked": _checked,
                 "curve_pairs": _curve_pairs,
                 "annotations_3d": [
                     {"txt": d['txt'].get(), "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
@@ -7352,6 +7358,11 @@ class CathPlotGUI:
             # 동일한 label 기준 매칭으로 MaxNo.(marker_max_count)도 복원(구버전
             # 템플릿은 이 키가 없어 기존처럼 빈 칸 = Auto 유지).
             _maxcounts = data.get("marker_max_counts", {})
+            # [추가 - 사용자 요청] "3D Template이 curve/surface 체크 여부를
+            # 저장 안 함" 발견분 처리 - 같은 label 기준으로 체크 상태도
+            # 복원한다(구버전 템플릿은 이 키가 없어 기존처럼 현재 체크
+            # 상태 그대로 유지).
+            _checked = data.get("checked", {})
             for v, c, shape_var, size_var, style_var_row, title_var_row, maxno_var in curve_check_vars:
                 if c["label"] in _shapes:
                     shape_var.set(_shapes[c["label"]])
@@ -7363,6 +7374,8 @@ class CathPlotGUI:
                     title_var_row.set(_titles[c["label"]])
                 if c["label"] in _maxcounts:
                     maxno_var.set(_maxcounts[c["label"]])
+                if c["label"] in _checked:
+                    v.set(_checked[c["label"]])
             for v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var in surface_check_vars:
                 if s["label"] in _shapes:
                     shape_var.set(_shapes[s["label"]])
@@ -7374,6 +7387,8 @@ class CathPlotGUI:
                     title_var_row.set(_titles[s["label"]])
                 if s["label"] in _maxcounts:
                     maxno_var.set(_maxcounts[s["label"]])
+                if s["label"] in _checked:
+                    v.set(_checked[s["label"]])
 
             for d in list(anno3d_list):
                 d['frame'].destroy()
