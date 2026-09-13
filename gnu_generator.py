@@ -4340,19 +4340,6 @@ class GnuplotGenerator:
             # opaque_bg가 꺼져 있으면 테두리를 점선으로 그린다.
             _border_dash_clause = '' if opaque_bg else ' dashtype "."'
             fragments.append(f'$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 1.2{_border_dash_clause}')
-        elif clip_shape in ("circle", "ellipse"):
-            # [추가 - 사용자 요청] "간단히 표시에 체크하니까 표시없는 원에
-            # 돋보기가 나오는데 원 표시는 필요할 듯함 - 점선이나 가는
-            # 실선으로" - "간단히 표시"(minimal)는 원래 사각형 PIP를 염두에
-            # 두고 설계됨(사각형은 title/tic 없이 curve만 있어도 캔버스
-            # 가장자리 자체가 경계로 보임) - 하지만 원/타원(돋보기가 기본으로
-            # 쓰는 모양)은 minimal이면 경계가 전혀 안 그려져 "확대된 curve가
-            # 어디까지가 인셋이고 어디부터 main인지" 구분이 안 됨(돋보기의
-            # 핵심 목적인 "구별"과 정면으로 배치). rect의 title/tic까지 포함한
-            # 전체 재설계 없이, 원/타원 minimal일 때만 가는 점선 경계 하나를
-            # 추가한다(불투명/투명 관계없이 - 배경은 opaque_bg가 이미 위에서
-            # 처리하므로 여기선 경계선만).
-            fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 0.8 dashtype "."')
 
             # [수정 - 사용자 반복 지적, 근본 재설계] "inset의 plot frame(바깥
             # 테두리)은 맞는데 내부의 axis frame이 안 맞음 - curve는 axis
@@ -4563,6 +4550,28 @@ class GnuplotGenerator:
         else:
             ix_lo, ix_hi, iy1_lo, iy1_hi = x_lo, x_hi, y1_lo, y1_hi
             iy2_lo, iy2_hi = (y2_lo_hi if y2_lo_hi is not None else (None, None))
+            if clip_shape in ("circle", "ellipse"):
+                # [추가 - 사용자 요청] "간단히 표시에 체크하니까 표시없는
+                # 원에 돋보기가 나오는데 원 표시는 필요할 듯함 - 점선이나
+                # 가는 실선으로" - "간단히 표시"(minimal)는 원래 사각형 PIP를
+                # 염두에 두고 설계됨(사각형은 title/tic 없이 curve만 있어도
+                # 캔버스 가장자리 자체가 경계로 보임) - 하지만 원/타원(돋보기가
+                # 기본으로 쓰는 모양)은 minimal이면 경계가 전혀 안 그려져
+                # "확대된 curve가 어디까지가 인셋이고 어디부터 main인지"
+                # 구분이 안 됨(돋보기의 핵심 목적인 "구별"과 정면으로 배치).
+                # [수정 - 버그] 처음엔 이 fragment를 위 "if not minimal:"의
+                # elif로 잘못 붙였다가, 그 바람에 minimal=False일 때 실행되는
+                # if-분기가 그 elif 이전 5줄(테두리만)로 끊겨 뒤에 이어지던
+                # 거대한 axis-frame/tic/legend 계산 블록 전체가 elif 쪽으로
+                # 통째로 빨려 들어가 버렸다 - 그 결과 minimal=False에서
+                # iy1_lo가 전혀 정의되지 않아 "cannot access local variable
+                # 'iy1_lo'" 오류로 실제 실행 중 재현됨(실사용자 보고로 발견) -
+                # rect의 title/tic까지 포함한 전체 재설계 없이, 이 else(=
+                # minimal=True) 분기 안에 원/타원일 때만 가는 점선 경계
+                # 하나를 추가하는 것으로 원래 의도대로 바로잡는다(불투명/
+                # 투명 관계없이 - 배경은 opaque_bg가 이미 위에서 처리하므로
+                # 여기선 경계선만).
+                fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 0.8 dashtype "."')
 
         for curve in plotdef.curves:
             is_y2 = getattr(curve, "axis", "y1") == "y2"
