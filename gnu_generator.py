@@ -711,6 +711,20 @@ class CurveDefinition:
     # gnuplot의 자연 3차 스플라인 보간(smooth csplines)을 적용할지 여부만
     # 켜고 끄는 체크박스 - 새 함수 입력 없이 기존 데이터를 부드럽게 잇는다.
     smooth_csplines: bool = False
+    # [추가 - 사용자 질문/요청] "PIP inset을 다른 plot/.plt 파일에서 불러올 때,
+    # 그 파일이 참조하는 dat 파일이 다른 기기/세션에 없으면?" - dat_file은
+    # 화면에서 plot을 그릴 때 이미 resort_dat_file()이 만든 정렬용 임시 캐시
+    # 파일(plot/temp_sorted/... - .gitignore 대상이라 다른 기기로 옮기거나
+    # "임시 파일 정리"만 해도 사라짐) 경로로 바뀐 뒤라, .plt 스크립트에도 그
+    # 임시 경로가 그대로 기록된다(실측 확인: PIP의 ".plt 파일" 소스로 그
+    # 스크립트를 나중에 다시 읽어올 때, 캐시가 없으면 원본으로 복구할 방법이
+    # 없어 그 curve만 조용히 사라짐). orig_dat_file(선택, cwd 기준 상대경로 -
+    # 사용자 확인: 절대경로는 기기마다 다르지만 상대경로는 보통 같은 프로젝트
+    # 폴더 구조를 유지하면 남아있음)에 원본 경로를 같이 들고 있으면,
+    # _build_plot_commands가 이를 .plt에 복구용 주석으로 함께 남기고,
+    # _parse_plt_curves가 캐시가 없을 때 이 주석을 보고 원본에서 정렬 캐시를
+    # 그 자리에서 다시 만들어(resort_dat_file) 복구할 수 있다.
+    orig_dat_file: str | None = None
 
     def __post_init__(self):
         # [위치] 데이터클래스 속성 정의 바로 아래, 일반 메서드들보다 위에 위치합니다.
@@ -3830,6 +3844,17 @@ class GnuplotGenerator:
         lines.append("plot \\")
         cmd_list = []
         marker_datablocks = []  # (마커 있는 curve용 인라인 데이터블록 텍스트 모음 - plot 앞에 삽입)
+        # [추가 - 사용자 질문/요청] "PIP inset을 다른 plot/.plt 파일에서 불러올
+        # 때 원본 dat 파일 경로가 기록돼야" - curve.orig_dat_file(있으면)을
+        # "# CathPlot-src <순번> orig="<경로>" xout=<번호>" 주석으로 plot 절
+        # 바로 앞에 같이 남겨둔다. 이 .plt를 나중에 PIP의 ".plt 파일" 소스로
+        # 다시 읽을 때(_parse_plt_curves), 지금 plot 절에 박힌 경로(대부분
+        # resort_dat_file이 만든 임시 정렬 캐시 - 다른 기기/세션엔 없을 수
+        # 있음)가 사라졌으면 이 주석의 원본 경로(cwd 기준 상대경로 - 사용자
+        # 확인: 절대경로는 기기마다 다르지만 상대경로는 보통 프로젝트 폴더
+        # 구조를 유지하면 남아있음)로 그 자리에서 정렬 캐시를 다시 만들어
+        # 복구할 수 있다.
+        _pip_src_origin_lines = []
 
         default_x_col = getattr(plotdef, "x_output_no", 0)
 
@@ -3878,6 +3903,16 @@ class GnuplotGenerator:
                 # 제대로 그리므로 그 결과가 그대로 JPG에도 남아 이 한계 자체가
                 # 없어짐(직접 렌더링해서 dash가 JPG에 남는 것을 확인함).
             cmd_list.append(cmd)
+            # [주의] 여기 인덱스는 cmd_list 안에서의 위치가 아니라 "몇 번째
+            # curve(with lines 줄)인지"(=for i, curve in enumerate(...)의 i)
+            # 여야 한다 - _parse_plt_curves의 정규식은 "with points"(마커)나
+            # Function Curve 줄은 아예 안 매치하므로, 그 정규식이 찾아내는
+            # matches의 순서는 항상 이 curve 순번(i)과 그대로 대응한다(마커가
+            # 앞선 curve에 있어 cmd_list 위치 자체는 밀려도 무관).
+            _orig_ref = getattr(curve, "orig_dat_file", None)
+            if _orig_ref:
+                _orig_esc = str(_orig_ref).replace("\\", "/").replace('"', '\\"')
+                _pip_src_origin_lines.append(f'# CathPlot-src {i} orig="{_orig_esc}" xout={x_col_idx}')
 
             # [수정] every-N(단순 인덱스 간격) 방식은 log축에서 시각적으로
             # 고르지 않게(한쪽에 몰림) 찍히는 문제가 있었음 - 실제 (x,y) 데이터를
@@ -3939,6 +3974,17 @@ class GnuplotGenerator:
             for block in marker_datablocks:
                 insert_lines.extend(block)
             lines[plot_line_idx:plot_line_idx] = insert_lines
+
+        # [추가 - 사용자 질문/요청] 위에서 모은 원본 dat 파일 위치 주석들을
+        # "plot \" 바로 앞에 남긴다(순수 주석이라 gnuplot 파싱/실행에 전혀
+        # 영향 없음 - "plot \" 줄과는 완전히 분리된 별개 줄이라 backslash
+        # 이어짐과도 무관함).
+        if _pip_src_origin_lines:
+            lines[plot_line_idx:plot_line_idx] = (
+                ["# --- CathPlot dat-source-map (PIP '.plt 파일' 소스 복구용 - 원본 dat 경로 기록) ---"]
+                + _pip_src_origin_lines
+                + ["# --- end dat-source-map ---"]
+            )
 
         if not uses_y2 and cmd_list:
             cmd_list.append("NaN axes x1y2 notitle")

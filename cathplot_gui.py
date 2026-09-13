@@ -2821,6 +2821,7 @@ class CathPlotGUI:
                             marker_size=MARKER_SIZE_MAP.get(style.get("marker_size_label", "M"), 1.0),
                             marker_max_count=(int(style["marker_max_count"]) if str(style.get("marker_max_count", "")).strip() else None),
                             smooth_csplines=style.get("smooth_csplines", False),
+                            orig_dat_file=rel_path,
                         )))
                     except ValueError:
                         continue  # X/Y 번호가 같은 경우 등은 건너뜀
@@ -2924,10 +2925,26 @@ class CathPlotGUI:
             # main_cmd_list(이 Template 자신의 곡선)를 그대로 씀.
         elif source == "pltfile":
             path = pip_data.get("pltfile_path", "")
-            if path and os.path.exists(path):
-                curves = self._parse_plt_curves(path)
+            # [수정 - 사용자 질문/요청] "template를 다른 폴더에서 가져오면
+            # PIP그림은 없으니까 오류내지 경고를 줘야" - 예전엔 여기서 미리
+            # os.path.exists(path)로 걸러서, .plt 파일 자체가 없으면(템플릿을
+            # 통째로 다른 폴더에서 불러온 경우 등) _parse_plt_curves를 아예
+            # 안 부르고 조용히 "현재 plot"으로 폴백했음. 이제 그 사전 검사를
+            # 없애 _parse_plt_curves가 직접 열어보게 하고(OSError면 그 자체를
+            # 이유로 담은 warnings를 돌려줌 - 위 docstring/OSError 분기 참고),
+            # 아래에서 _resolve_pip_config(대화형)과 동일하게 warnings를
+            # 항상 남긴다.
+            if path:
+                curves, warnings = self._parse_plt_curves(path)
                 if curves:
                     pip_data["curves"] = curves
+                if warnings:
+                    # [추가 - 사용자 질문/요청] 여기는 백그라운드 스레드에서도
+                    # 호출될 수 있어(Batch Set) messagebox를 바로 띄울 수 없음.
+                    # _process_one_batch_set_item이 res["warnings"]로 모아
+                    # 사용자에게 보여주는 기존 관례를 따라, pip_data 자체에
+                    # 담아 호출부가 꺼내 쓰게 한다(조용히 사라지지 않게).
+                    pip_data["_source_warnings"] = warnings
         self._pip_autofill_range(pip_data)
         return pip_data
 
@@ -2939,12 +2956,21 @@ class CathPlotGUI:
         복원한다. 어디까지나 "이미 그려진 plot을 그대로 다시 쓰는" 캐시 방식의
         보조 수단이라, 이 함수는 우리 자신의 생성 포맷에만 맞춰져 있고(범용
         gnuplot 스크립트 파서가 아님) marker/legend_group 등 부가 정보는
-        복원하지 않는다(inset은 어차피 선(line)만 그리므로 문제 없음)."""
+        복원하지 않는다(inset은 어차피 선(line)만 그리므로 문제 없음).
+        [수정 - 사용자 질문/요청] "다른 기기/세션에서 이 .plt를 불러오면, plot
+        절에 박힌 경로(대부분 resort_dat_file의 임시 정렬 캐시 - .gitignore
+        대상이라 사라질 수 있음)가 없을 텐데?" - (curves, warnings) 튜플을
+        돌려주도록 바꾼다. 캐시 경로가 없으면 _build_plot_commands가 같이
+        남겨둔 "# CathPlot-src N orig="..." xout=N" 복구용 주석(원본 dat 파일의
+        cwd 기준 상대경로)을 보고 그 자리에서 resort_dat_file을 다시 실행해
+        이 기기에 캐시를 새로 만든다 - 원본조차 없으면(또는 이 주석 자체가
+        없는 예전 .plt면) 그 curve만 건너뛰고 이유를 warnings에 담아 호출부가
+        사용자에게 알릴 수 있게 한다(예전처럼 조용히 사라지지 않음)."""
         try:
             with open(plt_path, "r", encoding="utf-8", errors="replace") as f:
                 text = f.read()
-        except OSError:
-            return []
+        except OSError as e:
+            return [], [f".plt 파일을 열 수 없습니다: {plt_path} ({e})"]
 
         # [수정 - 사용자 보고 버그] "PIP 인셋 안에 두 가지 그림이 겹쳐 보임" -
         # 소스로 지정한 .plt 파일 자신이 (CathPlot이 만든 파일이니 흔히 그럴
@@ -3017,6 +3043,20 @@ class CathPlotGUI:
 
         base_dir = os.path.dirname(os.path.abspath(plt_path))
         curves = []
+        warnings = []
+        # [추가 - 사용자 질문/요청] _build_plot_commands가 같이 남겨둔 원본 dat
+        # 파일 경로 복구용 주석("# CathPlot-src N orig="..." xout=N")을 curve
+        # 순번(N) 기준으로 파싱해둔다 - N은 아래 "for i, m in enumerate(_matches)"
+        # 의 i와 항상 같은 기준(둘 다 plotdef.curves를 순서대로 훑어 만들어짐)
+        # 이라 그대로 조회할 수 있다. 이 주석이 없는(예전 버전에서 만든) .plt는
+        # 그냥 빈 dict라 아래 폴백이 자동으로 생략되고 기존 동작 그대로다.
+        _origin_re = re.compile(r'#\s*CathPlot-src\s+(\d+)\s+orig="((?:[^"\\]|\\.)*)"\s+xout=(\d+)')
+        _origin_map = {}
+        for _om in _origin_re.finditer(text):
+            try:
+                _origin_map[int(_om.group(1))] = (_om.group(2).replace('\\"', '"'), int(_om.group(3)))
+            except ValueError:
+                pass
         _matches = list(pattern.finditer(text))
         # 개수가 정확히 같으면(가장 흔한 경우 - legend에서 빠진 curve가 없음)
         # 순서 그대로 1:1 대응시킨다 - plot \ 절과 legend 블록 둘 다
@@ -3035,6 +3075,38 @@ class CathPlotGUI:
         for i, m in enumerate(_matches):
             path, x_col, x_shift, y_col, axis, lw, color = m.groups()
             dat_file = path if os.path.isabs(path) else os.path.normpath(os.path.join(base_dir, path))
+            # [추가 - 사용자 질문/요청] "다른 기기/세션이면 이 경로(대부분
+            # resort_dat_file의 임시 정렬 캐시)가 없을 텐데?" - 없으면 원본
+            # 경로(위 _origin_map, cwd 기준 상대경로)로 이 기기에서 정렬
+            # 캐시를 그 자리에서 다시 만들어본다. 원본조차 없으면(또는 이
+            # 주석 자체가 없는 예전 .plt면) 이 curve만 건너뛰고 이유를
+            # warnings에 남겨 호출부가 사용자에게 알릴 수 있게 한다(예전처럼
+            # 조용히 사라지지 않음).
+            if not os.path.exists(dat_file):
+                _orig_info = _origin_map.get(i)
+                _recovered = None
+                if _orig_info:
+                    _orig_rel, _orig_xout = _orig_info
+                    _orig_abs = _orig_rel if os.path.isabs(_orig_rel) else os.path.join(self.cwd, _orig_rel)
+                    if os.path.exists(_orig_abs):
+                        try:
+                            _recovered = self.resort_dat_file(_orig_abs, _orig_xout)
+                        except Exception:
+                            _recovered = _orig_abs  # 정렬은 실패해도 원본 자체는 있으니 그거라도 사용
+                if _recovered and os.path.exists(_recovered):
+                    dat_file = _recovered
+                elif _orig_info:
+                    warnings.append(
+                        f"curve {i + 1}: dat 파일을 찾을 수 없습니다 "
+                        f"(정렬 캐시: {os.path.basename(path)} 없음, 원본도 없음: {_orig_info[0]})"
+                    )
+                    continue
+                else:
+                    warnings.append(
+                        f"curve {i + 1}: dat 파일을 찾을 수 없습니다 ({path}) - "
+                        "이 .plt에는 원본 경로 복구 정보가 없습니다(예전 버전에서 생성됐을 수 있음)"
+                    )
+                    continue
             _title = None
             _dash_raw = None
             if _use_positional:
@@ -3057,7 +3129,7 @@ class CathPlotGUI:
                 ))
             except ValueError:
                 continue  # X/Y 컬럼이 같은 경우 등은 건너뜀(CurveDefinition.__post_init__ 참고)
-        return curves
+        return curves, warnings
 
     def _parse_plt_titles(self, plt_path):
         """[추가 - 요청] "in-plot x/y1/y2의 default를 main-plot(또는 읽어온
@@ -3315,7 +3387,17 @@ class CathPlotGUI:
 
         self._mk_btn(pltfile_row, "찾아보기...", _pick_pltfile, color="grey", side="left", padx=(5, 0))
         if self.pip_pltfile_path_var.get():
-            pltfile_label.config(text=os.path.basename(self.pip_pltfile_path_var.get()), foreground="black")
+            _cur_pltfile = self.pip_pltfile_path_var.get()
+            # [추가 - 사용자 질문/요청] "template를 다른 폴더에서 가져오면
+            # PIP그림은 없으니까... 위치를 다시 입력하게" - 다이얼로그를 열
+            # 때마다(다른 기기/폴더에서 불러온 Template일 수 있으므로) 현재
+            # 경로가 실제로 존재하는지 확인해서, 없으면 빨간 글씨로 표시해
+            # "찾아보기..."로 다시 지정하라는 신호를 바로 눈에 띄게 준다
+            # (렌더링 시점의 messagebox 경고와 별개로, 설정을 여는 즉시 보임).
+            if os.path.exists(_cur_pltfile):
+                pltfile_label.config(text=os.path.basename(_cur_pltfile), foreground="black")
+            else:
+                pltfile_label.config(text=f"(없음) {os.path.basename(_cur_pltfile)}", foreground="red")
 
         # --- 위치/크기 ---
         # [수정 - 요청] "기준이 좌상단/캔버스 전체인데 legend/annotation은
@@ -3912,9 +3994,17 @@ class CathPlotGUI:
             if cached_plotdef is not None:
                 pip["curves"] = cached_plotdef.curves
         elif pip["source"] == "pltfile" and pip["pltfile_path"]:
-            curves = self._parse_plt_curves(pip["pltfile_path"])
+            curves, warnings = self._parse_plt_curves(pip["pltfile_path"])
             if curves:
                 pip["curves"] = curves
+            if warnings:
+                # [추가 - 사용자 질문/요청] 여기는 메인(대화형) 스레드에서만
+                # 호출되므로(execute_plot_pipeline) messagebox를 바로 띄워도
+                # 안전함 - "조용히 사라지는 것보다는" 요청대로 즉시 알린다.
+                messagebox.showwarning(
+                    "PIP 소스 dat 파일 문제",
+                    "PIP inset의 일부 곡선을 복구하지 못했습니다:\n\n" + "\n".join(warnings),
+                )
         self._pip_autofill_range(pip)
         return pip
 
@@ -4520,6 +4610,15 @@ class CathPlotGUI:
         except Exception as e:
             res["errors"].append(f"{tname}: {e}")
             return res
+
+        # [추가 - 사용자 질문/요청] PIP가 ".plt 파일" 소스를 쓰는데 그 파일이
+        # 참조하던 dat(정렬 캐시나 원본)를 이 기기/폴더에서 못 찾은 경우
+        # (_resolve_pip_dict_for_batch가 채워둠) - 조용히 빠지지 않고 다른
+        # 경고들과 같은 방식으로 res["warnings"]에 모아 사용자에게 보인다.
+        _pip_src_warn = (plotdef.pip or {}).pop("_source_warnings", None) if getattr(plotdef, "pip", None) else None
+        if _pip_src_warn:
+            for w in _pip_src_warn:
+                res["warnings"].append(f"{tname}: PIP {w}")
 
         raw_name = (data.get("filename") or "").strip() or os.path.splitext(tname)[0]
         safe_name = "".join(c for c in raw_name if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
@@ -5252,6 +5351,11 @@ class CathPlotGUI:
 
         var_by_no = {v.output_no: v for v in dat_info.variables}
 
+        try:
+            _orig_rel = os.path.relpath(abs_path, self.cwd)
+        except ValueError:
+            _orig_rel = abs_path
+
         curves = []
         for item in recipe:
             var_obj = var_by_no.get(item["output_no"])
@@ -5273,6 +5377,7 @@ class CathPlotGUI:
                     marker_size=MARKER_SIZE_MAP.get(item.get("marker_size_label", "M"), 1.0),
                     marker_max_count=(int(item["marker_max_count"]) if str(item.get("marker_max_count", "")).strip() else None),
                     smooth_csplines=item.get("smooth_csplines", False),
+                    orig_dat_file=_orig_rel,
                 ))
             except ValueError:
                 continue  # X/Y 번호가 같은 경우 등은 건너뜀
@@ -9088,6 +9193,18 @@ class CathPlotGUI:
                 except Exception:
                     target_dat_file = d_file
 
+                # [추가 - 사용자 질문/요청] "PIP inset을 다른 plot/.plt 파일에서
+                # 불러올 때, 원본 dat 파일 경로가 기록돼야" - dat_file(위
+                # target_dat_file)은 resort_dat_file이 만든 임시 정렬 캐시라
+                # 다른 기기/세션엔 없을 수 있음 - 원본(d_file)을 cwd 기준
+                # 상대경로로 같이 넘겨서, gnu_generator가 .plt에 복구용 주석을
+                # 남기게 한다(사용자 확인: 절대경로는 기기마다 다르지만
+                # 상대경로는 프로젝트 폴더 구조를 유지하면 보통 남아있음).
+                try:
+                    _orig_rel = os.path.relpath(d_file, self.cwd)
+                except ValueError:
+                    _orig_rel = d_file
+
                 _marker_shape, _marker_size, _marker_max_count = self._get_marker_fields(key)
                 curves.append(CurveDefinition(
                     dat_file=target_dat_file,
@@ -9103,6 +9220,7 @@ class CathPlotGUI:
                     in_legend1=self.in_legend1_vars[key].get() if key in self.in_legend1_vars else True,
                     marker_shape=_marker_shape, marker_size=_marker_size, marker_max_count=_marker_max_count,
                     smooth_csplines=self.smooth_csplines_vars[key].get() if key in self.smooth_csplines_vars else False,
+                    orig_dat_file=_orig_rel,
                 ))
 
             # 2. Auto Range 미리보기 값을 Min/Max 입력창에 표시 - 실제 렌더링(플롯
