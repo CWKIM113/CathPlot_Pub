@@ -3445,6 +3445,15 @@ class CathPlotGUI:
                 for _c in _w.winfo_children():
                     if isinstance(_c, ttk.Entry):
                         _c.config(state=_zstate)
+            # [추가 - 사용자 지적] "PIP W/H 단위가 %,in,cm인데 돋보기랑
+            # 헷갈릴 듯" - 돋보기가 켜지면 compute_magnifier_pip이 가로/세로
+            # 크기와 단위(%로 고정)를 배율로부터 자동 계산해 덮어쓰므로, 위
+            # 확대구간 입력(xz_row/yz_row)과 마찬가지로 "가로/세로 크기(W/H)"
+            # 입력칸과 단위 선택도 동시에 비활성화해 "이건 돋보기가 대신
+            # 계산한다"는 걸 화면에서 바로 알 수 있게 한다.
+            for _c in size_row.winfo_children():
+                if isinstance(_c, (ttk.Entry, ttk.Combobox)):
+                    _c.config(state=_zstate if isinstance(_c, ttk.Entry) else ("disabled" if _on else "readonly"))
         self.pip_mag_on_var.trace_add("write", _toggle_mag_entries)
         _toggle_mag_entries()
 

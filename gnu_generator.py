@@ -1478,6 +1478,16 @@ class GnuplotGenerator:
         _pip["xmax"] = f"{_xmax:.6g}"
         _pip["size_w"] = f"{_size_w * 100:.4g}"
         _pip["size_h"] = f"{_size_h * 100:.4g}"
+        # [수정 - 사용자 지적 버그] "PIP W/H 단위가 %,in,cm인데 돋보기랑
+        # 헷갈릴 듯" - 실제로 헷갈리는 정도가 아니라 진짜 버그였음: 위
+        # size_w/size_h는 항상 "배율에서 계산한 %"인데, 사용자가 돋보기를
+        # 켜기 전에 PIP의 가로/세로 크기 단위를 "in"이나 "cm"로 골라 뒀었다면
+        # (existing_pip에 size_unit="in" 등이 이미 들어있음) 이 % 숫자가
+        # size_unit은 안 바뀐 채 그대로 "in"/"cm"로 해석돼(_render_pip_inset의
+        # size_unit 분기 참고) 예를 들어 "35.5%"가 "35.5인치"로 둔갑하는
+        # 심각한 오류가 났다 - 돋보기는 항상 %로 계산하므로 size_unit도
+        # 같이 "%"로 강제한다.
+        _pip["size_unit"] = "%"
         if _y1_window:
             _pip["ymin"] = f"{_y1_window[0]:.6g}"
             _pip["ymax"] = f"{_y1_window[1]:.6g}"
