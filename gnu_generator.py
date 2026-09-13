@@ -1383,18 +1383,26 @@ class GnuplotGenerator:
             return None
         return min(values), max(values)
 
-    def _resolve_magnifier_value(self, raw, mode, axis_lo, axis_hi):
+    def _resolve_magnifier_value(self, raw, mode, axis_lo, axis_hi, is_length=False):
         """[추가 - 요청] "돋보기" 중심/반지름 입력을 "좌표값" 또는 "%"(현재
         축 표시범위 대비) 중 어느 모드든 실제 데이터 값 하나로 변환한다.
         중심의 %는 축의 0~100%(axis_lo가 0%) 기준, 반지름의 %는 "축 표시
         범위(axis_hi-axis_lo)의 %만큼의 폭"으로 해석한다(전자는 위치, 후자는
-        길이라는 차이 - 호출부에서 is_length로 구분)."""
+        길이라는 차이 - is_length로 구분).
+        [수정 - 버그] docstring이 설명하는 "호출부에서 is_length로 구분"이
+        실제 매개변수로는 빠져 있어, 중심(위치)의 %도 반지름(길이)과 똑같이
+        "v/100*(hi-lo)"만 반환했었다 - 위치는 axis_lo(0%)를 더해야 하는데
+        빠져서(예: axis가 100~200이고 중심을 "50%"로 넣으면 위치는 150이어야
+        하는데 50만 반환) 실제 데이터축이 0에서 시작하지 않는 대부분의 경우
+        중심 % 모드가 조용히 틀렸었다 - is_length(기본 False=위치)를 추가해
+        위치일 때만 axis_lo를 더한다(반지름 호출부는 is_length=True로 명시)."""
         try:
             v = float(str(raw).strip())
         except (TypeError, ValueError):
             return None
         if mode == "pct":
-            return v / 100.0 * (axis_hi - axis_lo)
+            span = v / 100.0 * (axis_hi - axis_lo)
+            return span if is_length else axis_lo + span
         return v
 
     def compute_magnifier_pip(self, plotdef, mag_cfg, existing_pip=None):
@@ -1412,7 +1420,7 @@ class GnuplotGenerator:
             return None, None
         _ax_x_lo, _ax_x_hi, _ = _nice_x
         _cx = self._resolve_magnifier_value(mag_cfg.get("center_x"), mag_cfg.get("center_x_mode", "data"), _ax_x_lo, _ax_x_hi)
-        _r = self._resolve_magnifier_value(mag_cfg.get("radius_x"), mag_cfg.get("radius_x_mode", "data"), _ax_x_lo, _ax_x_hi)
+        _r = self._resolve_magnifier_value(mag_cfg.get("radius_x"), mag_cfg.get("radius_x_mode", "data"), _ax_x_lo, _ax_x_hi, is_length=True)
         if _cx is None or _r is None or _r <= 0:
             return None, None
         _xmin, _xmax = _cx - _r, _cx + _r
@@ -1477,11 +1485,25 @@ class GnuplotGenerator:
             _pip["y2min"] = f"{_y2_window[0]:.6g}"
             _pip["y2max"] = f"{_y2_window[1]:.6g}"
 
+        _nice_y1 = self._nice_axis_range(plotdef, "y1", is_log=getattr(plotdef, "y1log", False))
+        _ax_y1_lo, _ax_y1_hi = _nice_y1[:2] if _nice_y1 else (0, 1)
         _cy1 = self._resolve_magnifier_value(mag_cfg.get("center_y1"), mag_cfg.get("center_y1_mode", "data"),
-                                              *(self._nice_axis_range(plotdef, "y1", is_log=getattr(plotdef, "y1log", False))[:2]
-                                                if self._nice_axis_range(plotdef, "y1", is_log=getattr(plotdef, "y1log", False)) else (0, 1)))
+                                              _ax_y1_lo, _ax_y1_hi)
+        # [수정 - 사용자 보고 버그] "중심값과 일치하는 원이 안 보임" - 중심
+        # Y1을 비웠거나 잘못 입력해 파싱에 실패하면 예전엔 무조건 "0"으로
+        # 빠졌는데, 데이터가 0 근처가 아니면(흔한 경우) 원이 전혀 엉뚱한
+        # 위치에 그려져 "중심값과 안 맞는 원"으로 보였다 - Y1을 굳이 다시
+        # 입력하지 않아도 되게, 이미 위에서 구해 둔 "이 X 구간의 실제 Y1
+        # 데이터 범위"(_y1_window - 겹친 커브가 실제로 있는 구간) 중앙값을
+        # 훨씬 합리적인 기본값으로 우선 쓴다(0은 그 데이터조차 없을 때의
+        # 최후 보루로만 남긴다).
+        if _cy1 is None:
+            if _y1_window:
+                _cy1 = (_y1_window[0] + _y1_window[1]) / 2.0
+            else:
+                _cy1 = 0.0
         _circle = {
-            "x": f"{_cx:.6g}", "y": f"{_cy1:.6g}" if _cy1 is not None else "0",
+            "x": f"{_cx:.6g}", "y": f"{_cy1:.6g}",
             "rx": f"{_r:.6g}", "ry": "", "coord_mode": "data",
             "color": "black", "dashtype": ".",
         }
@@ -4237,21 +4259,25 @@ class GnuplotGenerator:
         # [수정 - 실측 재현, 사용자 보고 "잔상"] "불투명 PIP만 마우스로
         # 이동/확대하면 곡선이 2겹으로 겹침(투명/PIP 없음은 정상)" - 실제
         # windows 터미널에 PostMessage로 마우스 드래그를 직접 재현해 격리
-        # 확인: 이 흰색 배경 채우기(filledcurves fillstyle solid, "plot \"
-        # 재생 목록에 포함돼 gnuplot 네이티브 마우스 확대/이동이 내부적으로
-        # 다시 그릴 때마다 매번 같이 다시 칠해짐)가 원인으로 강하게 의심됨
-        # (이 파일 다른 곳에 이미 문서화된 "같은 자리를 배경색으로 두 번
-        # 칠하면 합성이 깨지는" 버그와 같은 계열). 완전불투명 rect는 이미
-        # 화면 고정(screen-anchored) "set object 7100"이 배경+테두리를
-        # 담당하고 있어(_render_pip_inset) 이 데이터 기반 채우기는 사실
-        # 중복이었다 - rect+opaque_bg일 때만 생략하고 object 7100(아래에서
-        # 더 이상 unset하지 않음)에 맡긴다. [주의 - 실측으로 확인, rect만
-        # 적용] 원/타원(ellipse)은 이 채우기가 "준비운동(warmup) plot"
-        # cairo/GDI 합성 버그 회피와도 얽혀 있어서, 똑같이 생략했더니
-        # 오히려 "첫 렌더부터" 곡선이 겹쳐 보이는 새 회귀가 실측 확인됨 -
-        # 원/타원은 되돌려서 기존 방식(채우기 포함) 그대로 유지한다(잔상
-        # 문제는 rect보다 우선순위 낮음 - 별도 조사 필요).
-        if opaque_bg and clip_shape != "rect":
+        # [수정 - 사용자 재보고 버그, 위 rect 전용 생략을 되돌림] "불투명,
+        # 4각에서 main-plot clipping 안됨(원은 됨)" - 한때(커밋 72c8373)
+        # 완전불투명 rect만 이 데이터 기반 흰 배경 채우기를 생략하고 화면
+        # 고정 "set object 7100"(behind)에 맡겼었는데, 이는 잘못된 전제에
+        # 기반한 수정이었음이 이번에 드러남: "behind" 오브젝트는 같은 "plot"
+        # 명령 안에 있는 커브 데이터보다 "항상" 아래에 그려지므로(목록상의
+        # 순서와 무관), main 자신의 곡선(재생 "plot \" 목록의 앞쪽 항목)도
+        # object 7100보다 위에 그려져 전혀 가려지지 않는다 - 이것이 이번에
+        # 보고된 "불투명 rect가 main을 안 가림" 회귀의 근본 원인. 데이터
+        # 기반 채우기(이 fragment)는 "plot \" 목록 "안"의 순서로 그려지므로
+        # (main 곡선 항목 다음, PIP 자신의 커브 항목 이전에 위치) main을
+        # 정확히 가리면서 PIP 커브는 그 위에 그려지게 하는 유일한 방법 -
+        # 원/타원은 처음부터 이 방식을 그대로 유지해 문제가 없었다(72c8373
+        # 당시엔 "잔상"의 원인으로 이 채우기 자체를 의심했었지만, 실제 잔상의
+        # 진짜 원인은 이후 커밋 4f3e0aa에서 밝혀진 "재생 직전 clear 누락"
+        # 이었고 그 일반 수정이 이미 rect를 포함한 모든 도형에 적용돼 있어
+        # 이 생략은 더 이상 필요하지 않다) - rect도 원/타원과 동일하게
+        # 되돌린다.
+        if opaque_bg:
             fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 noborder')
         # [추가 - 사용자 요청] "돋보기 형태로 위치/반지름만 주고 그 안엔
         # curve만 - title/축 frame/tic 숫자 다 무시" - minimal이 켜지면
@@ -4263,6 +4289,19 @@ class GnuplotGenerator:
             # opaque_bg가 꺼져 있으면 테두리를 점선으로 그린다.
             _border_dash_clause = '' if opaque_bg else ' dashtype "."'
             fragments.append(f'$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 1.2{_border_dash_clause}')
+        elif clip_shape in ("circle", "ellipse"):
+            # [추가 - 사용자 요청] "간단히 표시에 체크하니까 표시없는 원에
+            # 돋보기가 나오는데 원 표시는 필요할 듯함 - 점선이나 가는
+            # 실선으로" - "간단히 표시"(minimal)는 원래 사각형 PIP를 염두에
+            # 두고 설계됨(사각형은 title/tic 없이 curve만 있어도 캔버스
+            # 가장자리 자체가 경계로 보임) - 하지만 원/타원(돋보기가 기본으로
+            # 쓰는 모양)은 minimal이면 경계가 전혀 안 그려져 "확대된 curve가
+            # 어디까지가 인셋이고 어디부터 main인지" 구분이 안 됨(돋보기의
+            # 핵심 목적인 "구별"과 정면으로 배치). rect의 title/tic까지 포함한
+            # 전체 재설계 없이, 원/타원 minimal일 때만 가는 점선 경계 하나를
+            # 추가한다(불투명/투명 관계없이 - 배경은 opaque_bg가 이미 위에서
+            # 처리하므로 여기선 경계선만).
+            fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 0.8 dashtype "."')
 
             # [수정 - 사용자 반복 지적, 근본 재설계] "inset의 plot frame(바깥
             # 테두리)은 맞는데 내부의 axis frame이 안 맞음 - curve는 axis
@@ -7858,36 +7897,25 @@ class GnuplotGenerator:
             # 애초에 투명은 비울 필요가 없음)만 blank_line이 있을 때로
             # 좁혀 안쪽에 남긴다.
             if getattr(self, "_pip_fold_active", False):
-              # [추가 - 잔상 수정 범위 한정] rect만 "object 7100을 계속
-              # 선언된 채로 두고 데이터 기반 배경 채우기는 생략"하는 실측
-              # 확인된 수정을 적용한다(원/타원은 첫 렌더부터 겹침 회귀가
-              # 있어 기존 방식 유지 - 위 _build_pip_folded_overlay의
-              # clip_shape 분기 참고).
-              _fold_shape_peek = (getattr(self, "_pip_fold_ranges", None) or {}).get("clip_shape")
+              # [수정 - 사용자 재보고 버그, rect 전용 예외를 되돌림] 한때
+              # (커밋 72c8373) rect+완전불투명만 "object 7100을 계속 선언된
+              # 채로 두고(unset 안 함) 데이터 기반 배경 채우기는 생략"했었는데,
+              # 위 _build_pip_folded_overlay의 opaque_bg fragment를 되돌린
+              # 것과 짝을 이뤄 이것도 원래대로 되돌린다: object 7100은
+              # "behind"라 재생 "plot \" 안의 main 곡선(먼저 나열됨)보다
+              # 항상 아래에 그려져 main을 전혀 가리지 못하므로(이번에 보고된
+              # "불투명 rect가 main을 안 가림" 회귀의 원인), rect도 원/타원과
+              # 동일하게 데이터 기반 채우기로 가리고 이 화면 고정 object는
+              # 첫 사용(메인 자신의 첫 정적 렌더 보호용) 후 곧바로 unset한다.
               if _pip_blank_line:
-                # [추가 - 사용자 재재재보고 대응 실험] "불투명 확대는 curve
-                # 변화 없음(좌표축만) / 투명은 확대 가능함" - 재생의 using식
-                # 자체는 이제 둘이 완전히 같은데(마스킹 없음), 유일하게 남은
-                # 구조적 차이는 PIP 자신의 배경 오브젝트(불투명: id 7100을
-                # "behind ... fillstyle solid"로 채워 넣고 이후 unset 없이
-                # 세션 끝까지 계속 선언된 채로 둠 / 투명: "front ... fillstyle
-                # empty"만 - 채움 없음). 완전불투명 배경처럼 큰 "behind
-                # solid fill" 오브젝트가 세션 내내 계속 활성 선언 상태로
-                # 남아 있는 것이, gnuplot 네이티브 확대(내부적으로 replot을
-                # 쓰는 부분 재렌더 경로)가 곡선 데이터를 다시 그리지 못하게
-                # 막는 원인일 가능성이 있어 실험적으로 지웠었으나, PostMessage로
-                # 실제 windows 터미널에 마우스 드래그를 직접 재현해 재검증한
-                # 결과 정반대로 $PipFoldBox의 데이터 기반 흰색 채우기(재생
-                # "plot \" 목록에 포함돼 네이티브 마우스 확대/이동마다 매번
-                # 다시 칠해짐)가 잔상의 진짜 원인이었음을 확인(이 화면 고정
-                # object는 데이터 재생과 무관해 안전) - rect는 위 $PipFoldBox
-                # 채우기를 생략하고 이 object를 계속 선언된 채로 둔다(더 이상
-                # unset 안 함). 원/타원은 채우기를 생략하면 오히려 "첫 렌더
-                # 부터" 겹침 회귀가 실측 확인돼 기존 방식(채우기 포함 + 이
-                # object는 첫 사용 후 unset) 그대로 유지 - 잔상 수정은 이번
-                # 라운드에 rect만 적용.
-                if _fold_shape_peek != "rect":
-                    _pip_probe_lines.append("unset object 7100")
+                # [수정 - 되돌림] 한때(커밋 72c8373) 완전불투명 rect만 이
+                # "unset object 7100"을 생략하고 계속 선언된 채로 뒀었으나,
+                # 이는 "재생 plot 안의 main 곡선이 behind 오브젝트보다 항상
+                # 위에 그려진다"는 사실을 놓친 잘못된 전제에 기반했었다(위
+                # _build_pip_folded_overlay 수정 참고) - 원/타원과 동일하게
+                # rect도 첫 사용 후 항상 unset한다(계속 선언해 둘 이유가
+                # 없음: 재생마다 필요한 가리기는 데이터 기반 채우기가 담당).
+                _pip_probe_lines.append("unset object 7100")
                 _insert_before_first_plot(_pip_probe_lines, _pip_blank_line, _main_state_start_idx)
                 self._pip_main_blank_line = None
               # [수정 - PIP 렌더링 재설계] "R/u 직후 기본 화면 보호"와
