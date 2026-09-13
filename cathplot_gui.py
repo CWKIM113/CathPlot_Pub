@@ -855,7 +855,9 @@ class CathPlotGUI:
         # (compute_magnifier_pip 참고) - 값을 넣으면 그 자리/크기를 직접
         # 지정할 수 있음(축 프레임 % 기준, 반지름은 "%").
         self.pip_mag_box_center_x_var = tk.StringVar(value="")
+        self.pip_mag_box_center_x_mode_var = tk.StringVar(value="data")
         self.pip_mag_box_center_y_var = tk.StringVar(value="")
+        self.pip_mag_box_center_y_mode_var = tk.StringVar(value="data")
         self.pip_mag_box_radius_var = tk.StringVar(value="")
         self.pip_title_on_var = tk.BooleanVar(value=False)
         # [추가 - 요청] "PIP PopUp에서 Plot Title과 Axis Title check box 분리"
@@ -2437,7 +2439,9 @@ class CathPlotGUI:
             self.pip_mag_radius_x_mode_var.set(_mag_data.get("radius_x_mode", self.pip_mag_radius_x_mode_var.get()))
             self.pip_mag_ratio_var.set(_mag_data.get("magnification", self.pip_mag_ratio_var.get()))
             self.pip_mag_box_center_x_var.set(_mag_data.get("box_center_x", self.pip_mag_box_center_x_var.get()))
+            self.pip_mag_box_center_x_mode_var.set(_mag_data.get("box_center_x_mode", self.pip_mag_box_center_x_mode_var.get()))
             self.pip_mag_box_center_y_var.set(_mag_data.get("box_center_y", self.pip_mag_box_center_y_var.get()))
+            self.pip_mag_box_center_y_mode_var.set(_mag_data.get("box_center_y_mode", self.pip_mag_box_center_y_mode_var.get()))
             self.pip_mag_box_radius_var.set(_mag_data.get("box_radius", self.pip_mag_box_radius_var.get()))
 
             if "extra_gnuplot" in data:
@@ -3471,12 +3475,19 @@ class CathPlotGUI:
         # 폭의 절반"을 뜻해서(원이면 그대로 눈에 보이는 반지름, 사각형이면
         # 박스 가로폭의 절반) 두 모양 다 같은 필드 하나로 처리되고 따로
         # 입력칸을 나눌 필요가 없다.
+        # [수정 - 사용자 보고 버그, 요청] "x=200은 200%인데 위치가?" - 이
+        # 중심 입력이 항상 축 프레임 %(0~100)만 받아서, 중심X/Y1과 같은
+        # 감각으로 데이터 좌표값(예: X=200)을 넣으면 200%로 잘못 해석돼
+        # 유효범위(0~100)를 훌쩍 넘어 엉뚱한 자리로 튕겨나갔다 - 위 중심X/Y1
+        # 과 완전히 같은 방식(좌표값/% 선택, 기본 좌표값)으로 바꾼다.
         mag_box_row = ttk.Frame(mag_frame)
         mag_box_row.pack(fill="x", padx=5, pady=(0, 2))
-        ttk.Label(mag_box_row, text="인셋 박스 중심(%) X:").pack(side="left")
-        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_x_var, width=6).pack(side="left", padx=(4, 8))
+        ttk.Label(mag_box_row, text="인셋 박스 중심 X:").pack(side="left")
+        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_x_var, width=6).pack(side="left", padx=(4, 2))
+        _mk_mode_combo(mag_box_row, self.pip_mag_box_center_x_mode_var).pack(side="left", padx=(0, 8))
         ttk.Label(mag_box_row, text="Y:").pack(side="left")
-        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_y_var, width=6).pack(side="left", padx=(4, 12))
+        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_y_var, width=6).pack(side="left", padx=(4, 2))
+        _mk_mode_combo(mag_box_row, self.pip_mag_box_center_y_mode_var).pack(side="left", padx=(0, 12))
         ttk.Label(mag_box_row, text="반지름(%, 보통 10~20 · 50=축 전체를 채움):").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_radius_var, width=6).pack(side="left", padx=(4, 2))
         # [수정 - 사용자 재보고] "반지름을 50으로 주면 원이 크게 나타남" -
@@ -3849,7 +3860,9 @@ class CathPlotGUI:
             "radius_x_mode": self.pip_mag_radius_x_mode_var.get(),
             "magnification": self.pip_mag_ratio_var.get(),
             "box_center_x": self.pip_mag_box_center_x_var.get(),
+            "box_center_x_mode": self.pip_mag_box_center_x_mode_var.get(),
             "box_center_y": self.pip_mag_box_center_y_var.get(),
+            "box_center_y_mode": self.pip_mag_box_center_y_mode_var.get(),
             "box_radius": self.pip_mag_box_radius_var.get(),
         }
 

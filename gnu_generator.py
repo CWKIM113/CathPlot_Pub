@@ -1536,16 +1536,32 @@ class GnuplotGenerator:
         _y1_span = max(_ax_y1_hi - _ax_y1_lo, 1e-9)
         _box_cx_frac = (_cx - _ax_x_lo) / _x_span
         _box_cy_frac = (_cy1 - _ax_y1_lo) / _y1_span
+        # [수정 - 사용자 요청] "인셋 박스 중심 입력을 좌표값과 %로 옵션으로
+        # - 기본이 좌표값" - 예전엔 항상 축 프레임 %(0~100)만 받아서, 사용자가
+        # (중심X/Y1과 같은 감각으로) 데이터 좌표값(예: X=200)을 넣으면 200%로
+        # 잘못 해석돼(유효범위 0~100의 2배) 엉뚱한 자리로 튕겨나갔다("x=200은
+        # 200%인데 위치가?" 로 재현된 버그) - center_x/center_y1과 완전히
+        # 같은 관례(box_center_x_mode/box_center_y_mode, 기본값 "data")로
+        # 좌표값도 받을 수 있게 하고, 그 경우 이 함수가 이미 알고 있는 축
+        # 범위(_ax_x_lo/hi, _ax_y1_lo/hi)로 직접 축 프레임 %로 환산한다.
         _box_cx_raw = str(mag_cfg.get("box_center_x", "") or "").strip()
         if _box_cx_raw:
             try:
-                _box_cx_frac = float(_box_cx_raw) / 100.0
+                _box_cx_val = float(_box_cx_raw)
+                if str(mag_cfg.get("box_center_x_mode", "data")).strip().lower() == "pct":
+                    _box_cx_frac = _box_cx_val / 100.0
+                else:
+                    _box_cx_frac = (_box_cx_val - _ax_x_lo) / _x_span
             except (TypeError, ValueError):
                 pass
         _box_cy_raw = str(mag_cfg.get("box_center_y", "") or "").strip()
         if _box_cy_raw:
             try:
-                _box_cy_frac = float(_box_cy_raw) / 100.0
+                _box_cy_val = float(_box_cy_raw)
+                if str(mag_cfg.get("box_center_y_mode", "data")).strip().lower() == "pct":
+                    _box_cy_frac = _box_cy_val / 100.0
+                else:
+                    _box_cy_frac = (_box_cy_val - _ax_y1_lo) / _y1_span
             except (TypeError, ValueError):
                 pass
         _pos_x = min(max(_box_cx_frac * 100.0 - _size_w * 100.0 / 2.0, 0.0), 100.0 - _size_w * 100.0)
