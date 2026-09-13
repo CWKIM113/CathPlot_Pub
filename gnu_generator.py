@@ -7756,6 +7756,23 @@ class GnuplotGenerator:
                       None
                   )
                   if _snap_plot_idx is not None:
+                      # [수정 - 사용자 제안, 실측 확인] "첫 그림을 지우는
+                      # 것도 안 되는 것인가?" - 근본 원인 재확인: 왕복
+                      # 드래그(원위치 복귀)로 검증했을 때는 몰랐는데, 편도
+                      # 드래그(한 방향으로만 이동/확대)로 다시 확인하니 main
+                      # 곡선이 2겹으로 겹치는 게 여전히 재현됨 - inset은
+                      # 항상 정상, main만 "첫 화면이 하나도 안 지워지고
+                      # 계속 쌓이는" 증상이었음. 이 재생(replay) "plot \"
+                      # 직전에 gnuplot의 명시적 "clear" 명령을 한 번 넣어
+                      # 보니(PostMessage로 실제 마우스 편도 드래그를 여러
+                      # 번 연속 재현) 완전히 해결됨 - "clear"는 현재
+                      # 캔버스를 지우기만 하고 그 직후 이 "plot \"이 전체를
+                      # 다시 그리므로 깜빡임 등 부작용 없음. PIP 유무/모양과
+                      # 무관하게 이 replay 경로 전체에 적용(원/타원도 함께
+                      # 혜택 볼 가능성이 높음 - 이전에 사각형만 국한했던
+                      # object 7100 실험과는 별개의, 더 근본적인 수정).
+                      _main_state_snapshot.insert(_snap_plot_idx, "clear")
+                      _snap_plot_idx += 1
                       _fold_x = _fold_ranges.get("x")
                       _fold_y1 = _fold_ranges.get("y1")
                       _fold_y2 = _fold_ranges.get("y2")
