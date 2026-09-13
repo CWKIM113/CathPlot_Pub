@@ -4007,7 +4007,7 @@ class GnuplotGenerator:
         _font_tic = max(9.0 * _fs, 3.5)
         _font_title = max(float(getattr(plotdef, "title_size", None) or 14) * _fs, 6.0)
         _font_axis = max(float(getattr(plotdef, "xlabel_size", None) or 11) * _fs, 5.0)
-        _font_leg = max(float(getattr(plotdef, "legend_size", None) or 9) * _fs * 0.75, 5.0)
+        _font_leg = max(float(getattr(plotdef, "legend_size", None) or 9) * _fs * 0.6, 4.0)
 
         # 배경(채워진 사각형) - PIP가 실제로 관측할 곡선보다 먼저(아래에)
         # 그려져야 하므로 이 overlay 목록의 맨 앞에 둔다.
@@ -4108,18 +4108,18 @@ class GnuplotGenerator:
             _lbl_rows = []
             for _f in _grid_fracs:
                 _gx = ix_lo + _f * (ix_hi - ix_lo)
-                _ly = iy1_lo - (iy1_lo - y1_lo) * 0.35
+                _ly = iy1_lo - (iy1_lo - y1_lo) * 0.45
                 _val = pxmin + _f * (pxmax - pxmin)
                 _lbl_rows.append(f'{_gx:.6g} {_ly:.6g} "{_fmt(_val)}"')
             for _f in _grid_fracs:
                 _gy = iy1_lo + _f * (iy1_hi - iy1_lo)
-                _lx = ix_lo - (ix_lo - x_lo) * 0.35
+                _lx = ix_lo - (ix_lo - x_lo) * 0.45
                 _val = py1min + _f * (py1max - py1min)
                 _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
             if _have_y2:
                 for _f in _grid_fracs:
                     _gy = iy1_lo + _f * (iy1_hi - iy1_lo)
-                    _lx = ix_hi + (x_hi - ix_hi) * 0.35
+                    _lx = ix_hi + (x_hi - ix_hi) * 0.45
                     _val = py2min + _f * (py2max - py2min)
                     _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
             _lbl_body = "\n".join(_lbl_rows)
@@ -4145,20 +4145,20 @@ class GnuplotGenerator:
                 _xl_txt = str(_pip_cfg.get("xlabel_text") or getattr(plotdef, "xlabel", "") or "").strip()
                 if _xl_txt:
                     _esc = _xl_txt.replace("\\", "\\\\").replace('"', '\\"')
-                    _xl_y = y1_lo + (iy1_lo - y1_lo) * 0.15
+                    _xl_y = y1_lo + (iy1_lo - y1_lo) * 0.28
                     fragments.append(f'$PipFoldXLabel << EOD\n{_cx:.6g} {_xl_y:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldXLabel using 1:2:3 notitle axes x1y1 with labels center font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
                 _yl_txt = str(_pip_cfg.get("ylabel_text") or getattr(plotdef, "ylabel", "") or "").strip()
                 if _yl_txt:
                     _esc = _yl_txt.replace("\\", "\\\\").replace('"', '\\"')
-                    _yl_x = x_lo + (ix_lo - x_lo) * 0.15
+                    _yl_x = x_lo + (ix_lo - x_lo) * 0.28
                     fragments.append(f'$PipFoldYLabel << EOD\n{_yl_x:.6g} {_cy:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldYLabel using 1:2:3 notitle axes x1y1 with labels center rotate by 90 font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
                 if _have_y2:
                     _y2l_txt = str(_pip_cfg.get("y2label_text") or getattr(plotdef, "y2label", "") or "").strip()
                     if _y2l_txt:
                         _esc = _y2l_txt.replace("\\", "\\\\").replace('"', '\\"')
-                        _y2l_x = x_hi - (x_hi - ix_hi) * 0.15
+                        _y2l_x = x_hi - (x_hi - ix_hi) * 0.28
                         _cy2 = (y2_lo_hi[0] + y2_lo_hi[1]) / 2.0
                         fragments.append(f'$PipFoldY2Label << EOD\n{_y2l_x:.6g} {_cy2:.6g} "{_esc}"\nEOD')
                         fragments.append(f'$PipFoldY2Label using 1:2:3 notitle axes x1y2 with labels center rotate by -90 font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
@@ -4230,12 +4230,12 @@ class GnuplotGenerator:
                     # 62%/줄당 최대 0.15이던 예산을 55%/줄당 최대 0.11로
                     # 줄여 더 촘촘하게 붙인다(여전히 커브 개수에 반비례해서
                     # 몇 개든 안쪽 axis frame을 넘지 않음).
-                    _row_step = min(0.11, 0.55 / _n_rows)
+                    _row_step = min(0.085, 0.45 / _n_rows)
                     _lx = ix_hi - (ix_hi - ix_lo) * 0.06
                     _leg_rows = []
                     for _ri, (_lcolor, _lname, _lmarker) in enumerate(_titled):
                         _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
-                        _ly = iy1_hi - (iy1_hi - iy1_lo) * (0.11 + _row_step * _ri)
+                        _ly = iy1_hi - (iy1_hi - iy1_lo) * (0.08 + _row_step * _ri)
                         _leg_rows.append((_lx, _ly, _esc, _lcolor, _lmarker))
                     # [수정 - 사용자 지적] "main legend에서 이미 다 설계
                     # 했던 건데" - main legend처럼 마커는 "그 줄 자기 텍스트
@@ -4258,7 +4258,7 @@ class GnuplotGenerator:
                     # 0.01/0.02(거의 0)에서 눈에 보이는 마진으로 늘린다.
                     _lbg_x1 = ix_hi - (ix_hi - ix_lo) * 0.04
                     _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * 0.05
-                    _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * 0.06
+                    _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * 0.04
                     _lbg_corners = [(_lbg_x0, _lbg_y0), (_lbg_x1, _lbg_y0), (_lbg_x1, _lbg_y1), (_lbg_x0, _lbg_y1), (_lbg_x0, _lbg_y0)]
                     _lbg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _lbg_corners)
                     fragments.append(f"$PipFoldLegBg << EOD\n{_lbg_rows}\nEOD")
