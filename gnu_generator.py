@@ -1835,11 +1835,24 @@ class GnuplotGenerator:
         # 0.1% 이하) 1.5배 크게 나옴 - box_chars 등 여백 계수를 아무리 줄여도
         # 라벨 자체가 실제보다 1.5배 넓게 추정되니 box가 계속 커 보였던 것.
         # _legend_tuning["text_corr"](위 _FORMAT_TUNING)로 포맷별 보정.
-        _measured_widths_in = [_measure_text_width_in(c.title, font_name, font_pt) for c in curves]
+        # [수정 - 사용자 요청] "PIP inset legend에 적용한 글자수 제한을
+        # main-plot legend에도 적용해야지?" - curve title이 극단적으로
+        # 길면(수십 자) box_w가 실측 폭 그대로 한없이 커져 legend box가
+        # axis 밖까지 삐져나갈 수 있었음(실측 확인) - 표시용 title을 미리
+        # 여기서 한 번 잘라(너무 길면 "…") 그 잘린 길이 기준으로 박스 폭도
+        # 계산하고, 아래 row 출력 루프도 같은 잘린 텍스트를 쓰게 해서 박스와
+        # 글자가 항상 일치하게 한다(짧은 title은 지금까지와 완전히 동일).
+        _LEGEND_MAX_CHARS = 30
+        _capped_titles = {}
+        for _c in curves:
+            _t = _c.title or ""
+            _capped_titles[id(_c)] = _t if len(_t) <= _LEGEND_MAX_CHARS else _t[:_LEGEND_MAX_CHARS - 1] + "…"
+
+        _measured_widths_in = [_measure_text_width_in(_capped_titles[id(c)], font_name, font_pt) for c in curves]
         if curves and all(w is not None for w in _measured_widths_in):
             max_label_len = max(_measured_widths_in) * _legend_tuning["text_corr"] / char_width_in
         else:
-            max_label_len = max((_weighted_label_len(c.title) for c in curves), default=1.0)
+            max_label_len = max((_weighted_label_len(_capped_titles[id(c)]) for c in curves), default=1.0)
         char_width_frac = char_width_in / max(axis_w_in, 0.5)
         # [수정] "legend box 샘플선과 curve title 사이 간격을 줄여달라(13자
         # 라벨 기준 2자 정도)" - 기존엔 이 간격(그리고 박스 테두리<->샘플선
@@ -2290,7 +2303,7 @@ class GnuplotGenerator:
                     f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front '
                     f'font "{font_name},{max(int(round(symbol_pt)), 3)}" textcolor rgb "{color}"'
                 )
-            lbl_text, lbl_enh = self._render_text(curve.title)
+            lbl_text, lbl_enh = self._render_text(_capped_titles[id(curve)])
             lines.append(
                 f'set label {id_offset + row_i + 1} "{lbl_text}" at graph {label_x:.4f},{row_y:.4f} '
                 f'{label_just} front font "{font_name},{max(int(_label_font_pt), 5)}" {lbl_enh}'
