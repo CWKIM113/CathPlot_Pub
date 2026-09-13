@@ -4007,7 +4007,10 @@ class GnuplotGenerator:
         _font_tic = max(9.0 * _fs, 3.5)
         _font_title = max(float(getattr(plotdef, "title_size", None) or 14) * _fs, 6.0)
         _font_axis = max(float(getattr(plotdef, "xlabel_size", None) or 11) * _fs, 5.0)
-        _font_leg = max(float(getattr(plotdef, "legend_size", None) or 9) * _fs * 0.6, 4.0)
+        # [수정 - 사용자 요청] "font 글자 하한을 가능한 작게" - 4pt ->
+        # 3pt(gnuplot이 실제로 읽을 수 있게 그리는 실질 하한에 가까움)로
+        # 더 낮춘다.
+        _font_leg = max(float(getattr(plotdef, "legend_size", None) or 9) * _fs * 0.6, 3.0)
 
         # 배경(채워진 사각형) - PIP가 실제로 관측할 곡선보다 먼저(아래에)
         # 그려져야 하므로 이 overlay 목록의 맨 앞에 둔다.
@@ -4066,7 +4069,15 @@ class GnuplotGenerator:
             # 만든다 - 이 안쪽 사각형의 네 모서리는 (네이티브가 이미 그렇게
             # 보장해 둔 그대로) 항상 바깥 원/타원 안쪽에 들어오므로, 아래
             # curve/legend에서 별도의 타원 현(chord) 계산이 더 이상 필요 없다.
-            _m_top = max(min(float((margins or {}).get("top", 0.15)), 0.45), 0.03)
+            # [수정 - 사용자 재지적] "title 위/아래 여백 둘 다 커 보인다" -
+            # 네이티브가 예전 별도 패널 시절 기준으로 넉넉히 잡아둔 위쪽
+            # 여백 띠(원/타원은 모서리가 안쪽에 들어오게, 사각형도 title
+            # 표시분까지 미리 감안)가, title 한 줄만 놓기엔 필요 이상으로
+            # 커서 title을 어디에 둬도 반대쪽에 큰 빈 공간이 남았다 - 상한을
+            # 0.45에서 0.25로 낮춰 이 fold overlay 전용으로는 더 좁게
+            # 쓴다(원/타원의 모서리 보호 하한(0.03)은 그대로 유지 - 최소한은
+            # 손대지 않음).
+            _m_top = max(min(float((margins or {}).get("top", 0.15)), 0.16), 0.03)
             _m_bottom = max(min(float((margins or {}).get("bottom", 0.13)), 0.45), 0.03)
             _m_left = max(min(float((margins or {}).get("left", 0.15)), 0.45), 0.03)
             _m_right = max(min(float((margins or {}).get("right", 0.13)), 0.45), 0.03)
@@ -4108,18 +4119,18 @@ class GnuplotGenerator:
             _lbl_rows = []
             for _f in _grid_fracs:
                 _gx = ix_lo + _f * (ix_hi - ix_lo)
-                _ly = iy1_lo - (iy1_lo - y1_lo) * 0.18
+                _ly = iy1_lo - (iy1_lo - y1_lo) * 0.15
                 _val = pxmin + _f * (pxmax - pxmin)
                 _lbl_rows.append(f'{_gx:.6g} {_ly:.6g} "{_fmt(_val)}"')
             for _f in _grid_fracs:
                 _gy = iy1_lo + _f * (iy1_hi - iy1_lo)
-                _lx = ix_lo - (ix_lo - x_lo) * 0.18
+                _lx = ix_lo - (ix_lo - x_lo) * 0.15
                 _val = py1min + _f * (py1max - py1min)
                 _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
             if _have_y2:
                 for _f in _grid_fracs:
                     _gy = iy1_lo + _f * (iy1_hi - iy1_lo)
-                    _lx = ix_hi + (x_hi - ix_hi) * 0.18
+                    _lx = ix_hi + (x_hi - ix_hi) * 0.15
                     _val = py2min + _f * (py2max - py2min)
                     _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
             _lbl_body = "\n".join(_lbl_rows)
@@ -4138,27 +4149,33 @@ class GnuplotGenerator:
                 _title_txt = str(_pip_cfg.get("title_text") or getattr(plotdef, "title", "") or "").strip()
                 if _title_txt:
                     _esc = _title_txt.replace("\\", "\\\\").replace('"', '\\"')
-                    _ty_title = y1_hi - (y1_hi - iy1_hi) * 0.25
+                    # [수정 - 사용자 재지적] "제목 위 여백도 작아야, 그런데
+                    # 제목 아래(legend/box까지) 여백도 커 보인다" - 위쪽
+                    # 여백 띠 자체가(원/타원은 모서리가 안쪽에 들어오도록,
+                    # 사각형은 title 표시분까지 감안해) 넉넉히 잡혀 있어
+                    # title을 어느 한쪽 끝에 붙이면 반대쪽이 항상 넓게 남는다
+                    # - 위/아래 어느 한쪽으로 치우치지 않게 띠 중앙에 둔다.
+                    _ty_title = (y1_hi + iy1_hi) / 2.0
                     fragments.append(f'$PipFoldTitle << EOD\n{_cx:.6g} {_ty_title:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldTitle using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,{_font_title:.1f}" textcolor rgb "black"')
             if _pip_cfg.get("axis_title_on"):
                 _xl_txt = str(_pip_cfg.get("xlabel_text") or getattr(plotdef, "xlabel", "") or "").strip()
                 if _xl_txt:
                     _esc = _xl_txt.replace("\\", "\\\\").replace('"', '\\"')
-                    _xl_y = y1_lo + (iy1_lo - y1_lo) * 0.28
+                    _xl_y = y1_lo + (iy1_lo - y1_lo) * 0.20
                     fragments.append(f'$PipFoldXLabel << EOD\n{_cx:.6g} {_xl_y:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldXLabel using 1:2:3 notitle axes x1y1 with labels center font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
                 _yl_txt = str(_pip_cfg.get("ylabel_text") or getattr(plotdef, "ylabel", "") or "").strip()
                 if _yl_txt:
                     _esc = _yl_txt.replace("\\", "\\\\").replace('"', '\\"')
-                    _yl_x = x_lo + (ix_lo - x_lo) * 0.28
+                    _yl_x = x_lo + (ix_lo - x_lo) * 0.20
                     fragments.append(f'$PipFoldYLabel << EOD\n{_yl_x:.6g} {_cy:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldYLabel using 1:2:3 notitle axes x1y1 with labels center rotate by 90 font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
                 if _have_y2:
                     _y2l_txt = str(_pip_cfg.get("y2label_text") or getattr(plotdef, "y2label", "") or "").strip()
                     if _y2l_txt:
                         _esc = _y2l_txt.replace("\\", "\\\\").replace('"', '\\"')
-                        _y2l_x = x_hi - (x_hi - ix_hi) * 0.28
+                        _y2l_x = x_hi - (x_hi - ix_hi) * 0.20
                         _cy2 = (y2_lo_hi[0] + y2_lo_hi[1]) / 2.0
                         fragments.append(f'$PipFoldY2Label << EOD\n{_y2l_x:.6g} {_cy2:.6g} "{_esc}"\nEOD')
                         fragments.append(f'$PipFoldY2Label using 1:2:3 notitle axes x1y2 with labels center rotate by -90 font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
@@ -4211,12 +4228,15 @@ class GnuplotGenerator:
                     # 상한 폭에 안 들어가는 이름은 "…"로 줄인다(실측 기준
                     # 으로 한 글자씩 줄이며 확인 - 문자수 근사와 달리 언어/
                     # 폰트에 따라 문자당 폭이 달라도 항상 정확함). [수정 -
-                    # 사용자 보고 버그] "마커가 글자에 가려 안 보임" - marker_on
-                    # 이면 텍스트 왼쪽에 마커 기호+간격(_mk_gap, 아래)이 더
-                    # 붙는데 그 몫을 안 빼고 92%를 그대로 캡으로 쓰면 마커
-                    # 자리가 박스/축 frame 밖으로 밀려남 - marker_on일 때는
-                    # 그만큼 캡을 미리 줄여서 마커가 항상 안쪽에 들어오게 한다.
-                    _text_cap = 0.92 - (0.12 if marker_on else 0.0)
+                    # 사용자 보고 버그] "legend box 좌우 길이가 거의 x축
+                    # 길이" - 이전 상한(92%)은 "박스가 안쪽 axis frame을
+                    # 벗어나지만 않으면 된다"는 기준이었는데, 그 기준대로면
+                    # curve 이름 하나만 길어도 legend가 인셋 폭 대부분을
+                    # 차지해버렸다(실측 확인). legend는 범례일 뿐 plot의
+                    # 주인공이 아니므로 "인셋 폭의 절반 정도"를 실질 상한
+                    # (55%)으로 훨씬 타이트하게 줄인다 - 넘는 이름은 그만큼
+                    # 더 "…"로 줄어든다.
+                    _text_cap = 0.55 - (0.12 if marker_on else 0.0)
 
                     def _clip_name(_n):
                         if _text_w_frac(_n) <= _text_cap:
@@ -4250,8 +4270,26 @@ class GnuplotGenerator:
                     # "글자 한 개 폭" 간격을 서로 다른 두 값으로 분리한다
                     # (하나로 합쳐 쓰면 여백을 줄일수록 테두리가 축 frame에
                     # 다시 붙어버리는 문제가 있었음).
+                    # [수정 - 사용자 보고 버그] "legend 안 title이 위에서
+                    # 잘림" - 첫 줄 위치를 박스 위쪽 테두리에서 "글자 폭"
+                    # 만큼(0.4*줄높이, 실제 글자 "높이"의 절반에 못 미침)만
+                    # 떨어뜨렸더니, 글자 자체의 세로 높이(중심 기준 위/아래로
+                    # 뻗음) 중 위쪽 절반이 박스 테두리 밖으로 튀어나와
+                    # 잘려(가려져) 보였다 - 줄 간격(_row_step, 이미 폰트
+                    # 높이 기준으로 계산됨)의 절반을 그대로 첫 줄 오프셋으로
+                    # 써서, 글자 전체 높이가 항상 테두리 안쪽에 들어오게
+                    # 한다.
+                    # [수정 - 사용자 재지적] "1글자라고 강조했다" - 방금
+                    # 위 clip 수정에서 쓴 "줄 간격(_row_step)의 절반"은
+                    # 줄간격 자체에 이미 여유(1.3배 leading)가 들어있어
+                    # 필요한 것보다 더 크게 벌어졌다 - 글자가 안 잘리는 데
+                    # 필요한 건 "줄 간격의 절반"이 아니라 "글자 높이(순수
+                    # font_pt, leading 없이)의 절반"뿐이므로 그 값만 쓴다
+                    # (여전히 실제 물리 치수 기준이라 안 잘리는 건 보장되고,
+                    # leading분(약 30%)만큼 더 촘촘해진다).
                     _frame_gap_frac = 0.025
-                    _char_gap_frac = min(_row_step * 0.4, _char_frac)
+                    _glyph_half_in = (_font_leg / 72.0) * 0.55
+                    _char_gap_frac = (_glyph_half_in / axis_h_in) if (axis_h_in and axis_h_in > 0) else _row_step * 0.4
                     # [수정 - 사용자 보고 버그] "왼쪽 box 선과 title 사이가
                     # 큼" - 지금까지 우측 정렬(right-justify)이었는데, 박스
                     # 폭은 가장 긴 줄 기준이라 짧은 줄은 항상 왼쪽에 텍스트가
@@ -4264,12 +4302,34 @@ class GnuplotGenerator:
                     # 같은 고정 x가 되어(마커+텍스트가 항상 나란히 시작)
                     # 이전처럼 "가장 긴 줄만 마커가 글자에 가려짐" 문제 자체가
                     # 구조적으로 없어진다.
+                    # [수정 - 사용자 지적] "정렬은 main-plot의 legend 설정을
+                    # 따라가야" - main legend(_render_legend_box)가 legend_pos/
+                    # legend_align(Auto면 위치의 좌/우로 자동 판정)로 정하는
+                    # is_right_side와 같은 로직을 그대로 재사용해, 인셋
+                    # legend도 main과 같은 쪽으로 정렬한다(하드코딩된 좌측
+                    # 정렬이 아님).
+                    _lp = str(getattr(plotdef, "legend_pos", "") or "").strip().lower()
+                    _lalign = str(getattr(plotdef, "legend_align", "Auto") or "Auto")
+                    if _lalign == "Left":
+                        _leg_right_side = False
+                    elif _lalign == "Right":
+                        _leg_right_side = True
+                    else:
+                        _leg_right_side = ("left" not in _lp)
                     _max_text_w = max(_text_w_frac(_n) for _, _n, _ in _titled)
                     _mk_col = ((ix_hi - ix_lo) * 0.09) if marker_on else 0.0
-                    _lbg_x0 = ix_lo + (ix_hi - ix_lo) * 0.04
-                    _lbg_x1 = min(_lbg_x0 + _mk_col + _max_text_w * (ix_hi - ix_lo) + (ix_hi - ix_lo) * 0.05, ix_hi - (ix_hi - ix_lo) * 0.02)
-                    _lx = _lbg_x0 + _mk_col + (ix_hi - ix_lo) * 0.015
-                    _mk_x = _lbg_x0 + (ix_hi - ix_lo) * 0.01
+                    if _leg_right_side:
+                        _lbg_x1 = ix_hi - (ix_hi - ix_lo) * 0.02
+                        _lbg_x0 = max(_lbg_x1 - _mk_col - _max_text_w * (ix_hi - ix_lo) - (ix_hi - ix_lo) * 0.05, ix_lo)
+                        _mk_x = _lbg_x1 - (ix_hi - ix_lo) * 0.015
+                        _lx = _mk_x - _mk_col - (ix_hi - ix_lo) * 0.01
+                        _justify = "right"
+                    else:
+                        _lbg_x0 = ix_lo + (ix_hi - ix_lo) * 0.04
+                        _lbg_x1 = min(_lbg_x0 + _mk_col + _max_text_w * (ix_hi - ix_lo) + (ix_hi - ix_lo) * 0.05, ix_hi - (ix_hi - ix_lo) * 0.02)
+                        _mk_x = _lbg_x0 + (ix_hi - ix_lo) * 0.01
+                        _lx = _lbg_x0 + _mk_col + (ix_hi - ix_lo) * 0.015
+                        _justify = "left"
                     _leg_rows = []
                     for _ri, (_lcolor, _lname, _lmarker) in enumerate(_titled):
                         _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
@@ -4287,10 +4347,10 @@ class GnuplotGenerator:
                             if not _sym:
                                 continue
                             fragments.append(f'$PipFoldLegMk{_li} << EOD\n{_mk_x:.6g} {_ly:.6g} "{_sym}"\nEOD')
-                            fragments.append(f'$PipFoldLegMk{_li} using 1:2:3 notitle axes x1y1 with labels left font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
+                            fragments.append(f'$PipFoldLegMk{_li} using 1:2:3 notitle axes x1y1 with labels {_justify} font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
                     for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x) in enumerate(_leg_rows):
                         fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
-                        fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels left font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
+                        fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels {_justify} font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
         else:
             ix_lo, ix_hi, iy1_lo, iy1_hi = x_lo, x_hi, y1_lo, y1_hi
             iy2_lo, iy2_hi = (y2_lo_hi if y2_lo_hi is not None else (None, None))
