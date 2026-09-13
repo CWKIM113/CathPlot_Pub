@@ -4101,6 +4101,34 @@ class GnuplotGenerator:
                     _ty_title = y1_hi + (y1_hi - y1_lo) * 0.12
                     fragments.append(f'$PipFoldTitle << EOD\n{_cx:.6g} {_ty_title:.6g} "{_esc}"\nEOD')
                     fragments.append('$PipFoldTitle using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,7" textcolor rgb "black"')
+            # [추가 - 사용자 보고] "Title만 나오고 X/Y1/Y2 title은 안 나옴" -
+            # 이 fold overlay가 애초에 축 title(xlabel/ylabel/y2label)은 전혀
+            # 그리지 않고 있었음(Plot Title/Legend만 있었음) - 기존 네이티브
+            # 인셋 패널이 남긴 잔상에 우연히 기대고 있었을 뿐이라 도형(사각/
+            # 원)에 따라 있다 없다가 갈렸던 것. 같은 "with labels" 데이터
+            # 방식으로 박스 바깥(아래/좌/우)에 직접 추가한다 - x title은
+            # 아래 중앙, y1 title은 왼쪽(세로쓰기), y2 title은 오른쪽(세로쓰기).
+            if _pip_cfg.get("axis_title_on"):
+                _xl_txt = str(_pip_cfg.get("xlabel_text") or getattr(plotdef, "xlabel", "") or "").strip()
+                if _xl_txt:
+                    _esc = _xl_txt.replace("\\", "\\\\").replace('"', '\\"')
+                    _xl_y = y1_lo - (y1_hi - y1_lo) * 0.32
+                    fragments.append(f'$PipFoldXLabel << EOD\n{_cx:.6g} {_xl_y:.6g} "{_esc}"\nEOD')
+                    fragments.append('$PipFoldXLabel using 1:2:3 notitle axes x1y1 with labels center font "Malgun Gothic,7" textcolor rgb "black"')
+                _yl_txt = str(_pip_cfg.get("ylabel_text") or getattr(plotdef, "ylabel", "") or "").strip()
+                if _yl_txt:
+                    _esc = _yl_txt.replace("\\", "\\\\").replace('"', '\\"')
+                    _yl_x = x_lo - (x_hi - x_lo) * 0.30
+                    fragments.append(f'$PipFoldYLabel << EOD\n{_yl_x:.6g} {_cy:.6g} "{_esc}"\nEOD')
+                    fragments.append('$PipFoldYLabel using 1:2:3 notitle axes x1y1 with labels center rotate by 90 font "Malgun Gothic,7" textcolor rgb "black"')
+                if _have_y2:
+                    _y2l_txt = str(_pip_cfg.get("y2label_text") or getattr(plotdef, "y2label", "") or "").strip()
+                    if _y2l_txt:
+                        _esc = _y2l_txt.replace("\\", "\\\\").replace('"', '\\"')
+                        _y2l_x = x_hi + (x_hi - x_lo) * 0.30
+                        _cy2 = (y2_lo_hi[0] + y2_lo_hi[1]) / 2.0
+                        fragments.append(f'$PipFoldY2Label << EOD\n{_y2l_x:.6g} {_cy2:.6g} "{_esc}"\nEOD')
+                        fragments.append('$PipFoldY2Label using 1:2:3 notitle axes x1y2 with labels center rotate by -90 font "Malgun Gothic,7" textcolor rgb "black"')
             if _pip_cfg.get("legend_on") and plotdef.curves:
                 _leg_rows = []
                 _n_leg = len(plotdef.curves)
@@ -4111,11 +4139,24 @@ class GnuplotGenerator:
                         continue
                     _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
                     _ly = y1_hi - (y1_hi - y1_lo) * (0.10 + 0.09 * _li)
-                    _lx = _cx + (x_hi - x_lo) * 0.02
+                    _lx = x_lo + (x_hi - x_lo) * 0.04
                     _leg_rows.append((_lx, _ly, _esc, _lcolor))
+                # [수정 - 사용자 보고] "legend가 box 없이 가운데 정렬로 나옴" -
+                # 실제 legend(main plot의 것)처럼 흰 배경+테두리 박스를 텍스트
+                # 뒤에 깔고, 중앙 정렬 대신 박스 왼쪽에서부터 왼쪽 정렬로
+                # 줄줄이 나열한다(네이티브 key box와 같은 인상).
+                if _leg_rows:
+                    _lbg_x0 = min(r[0] for r in _leg_rows) - (x_hi - x_lo) * 0.02
+                    _lbg_x1 = x_hi - (x_hi - x_lo) * 0.03
+                    _lbg_y1 = y1_hi - (y1_hi - y1_lo) * 0.03
+                    _lbg_y0 = min(r[1] for r in _leg_rows) - (y1_hi - y1_lo) * 0.06
+                    _lbg_corners = [(_lbg_x0, _lbg_y0), (_lbg_x1, _lbg_y0), (_lbg_x1, _lbg_y1), (_lbg_x0, _lbg_y1), (_lbg_x0, _lbg_y0)]
+                    _lbg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _lbg_corners)
+                    fragments.append(f"$PipFoldLegBg << EOD\n{_lbg_rows}\nEOD")
+                    fragments.append('$PipFoldLegBg using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 border lc rgb "black" lw 0.8')
                 for _li, (_lx, _ly, _esc, _lcolor) in enumerate(_leg_rows):
                     fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
-                    fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,6" textcolor rgb "{_lcolor}"')
+                    fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels left font "Malgun Gothic,6" textcolor rgb "{_lcolor}"')
 
         for curve in plotdef.curves:
             is_y2 = getattr(curve, "axis", "y1") == "y2"
@@ -4626,14 +4667,27 @@ class GnuplotGenerator:
         # 등과 같은 좌표계)로 직접, 정확히 구할 수 있다 - 더 이상 margin
         # 비율을 대신 끌어다 쓸 필요가 없다.
         def _box_bounds(dmin, dmax, is_x):
+            # [수정 - 사용자 보고] "fold overlay 배경이 inset 자신의 tic
+            # 숫자/title/legend 영역까지 덮어써서 그 위에 그려둔 네이티브
+            # 인셋 장식이 지워짐(뭉개짐)" - 예전엔 origin_x/size_w(=박스
+            # "전체" 바깥 테두리, tic 라벨 여백까지 포함)를 기준으로 이
+            # 함수를 썼는데, 그러면 fold overlay(마스크 배경+커브)가 실제
+            # curve가 그려지는 영역보다 훨씬 넓게(여백까지 포함해) main
+            # data 좌표로 환산돼, 나중에 그 마스크가 인셋 자신의 tic-라벨/
+            # title/legend 자리까지 흰 배경으로 덮어버렸음. 이제 인셋
+            # 자신의 실제 plot-area 경계(_inset_lmargin/rmargin/tmargin/
+            # bmargin - "set lmargin at screen ..." 등으로 이미 써넣은,
+            # tic 여백을 뺀 순수 축 프레임)를 기준으로 환산해, fold overlay가
+            # 딱 curve가 보이는 영역만 차지하게 한다(여백의 네이티브 장식은
+            # 그 위에 안전하게 남음).
             if dmax == dmin:
                 return None
             if is_x:
-                _frac_lo = (origin_x - ab_x) / ab_w if ab_w else 0.0
-                _frac_hi = (origin_x + size_w - ab_x) / ab_w if ab_w else 1.0
+                _frac_lo = (_inset_lmargin - ab_x) / ab_w if ab_w else 0.0
+                _frac_hi = (_inset_rmargin - ab_x) / ab_w if ab_w else 1.0
             else:
-                _frac_lo = (origin_y - ab_y) / ab_h if ab_h else 0.0
-                _frac_hi = (origin_y + size_h - ab_y) / ab_h if ab_h else 1.0
+                _frac_lo = (_inset_bmargin - ab_y) / ab_h if ab_h else 0.0
+                _frac_hi = (_inset_tmargin - ab_y) / ab_h if ab_h else 1.0
             _lo = dmin + (dmax - dmin) * _frac_lo
             _hi = dmin + (dmax - dmin) * _frac_hi
             return (min(_lo, _hi), max(_lo, _hi))
@@ -6878,6 +6932,39 @@ class GnuplotGenerator:
                     None
                 )
                 if _pip_real_plot_idx is not None:
+                    # [수정 - 사용자 보고 버그] "원(circle) inset에서만 X/Y1/Y2
+                    # title, tic 숫자, 사각 테두리가 fold overlay와 중복으로
+                    # 남아 겹쳐 보임(사각형은 안 그럼)" - 원인: 원/타원
+                    # 완전불투명 경로는 위 준비운동(warmup) plot(cairo 합성
+                    # 버그 회피용, _ellipse_fully_opaque 분기 참고)이 실제
+                    # 곡선 plot보다 "먼저" 실행되는데, 그 시점엔 아직 이 옛
+                    # 패널의 title/xtics/ytics/y2tics/xlabel/ylabel/y2label과
+                    # 배경/테두리 object(7100/7101/7102)가 전부 "설정된 채"라
+                    # 이 준비운동 plot 자신이 그 장식을 전부 화면에 실제로
+                    # 그려버림(진짜 곡선 plot만 뒤에서 잘라내 봤자 이미 그려진
+                    # 픽셀은 안 지워짐). 사각형은 이런 준비운동 plot 자체가
+                    # 없어(NaN 감싸기를 안 써서 이 cairo 버그와 무관 - 위
+                    # _ellipse_fully_opaque 조건 참고) 애초에 아무것도 안
+                    # 그려진 채 바로 잘리므로 이 문제가 없었음. 원/타원도
+                    # 같은 "깨끗하게 빈 준비운동"이 되도록, 그 준비운동 plot
+                    # 줄 "바로 앞"에서 장식을 전부 unset해 넣는다(뒤에서
+                    # "unset object/label/arrow"만 추가하는 기존 방식은 이미
+                    # 그려진 픽셀에는 영향이 없어 소용없었음 - 그리기 전에
+                    # 미리 꺼야 함). 장식은 이 뒤(재생/replay)에서 fold
+                    # overlay가 다시 책임지고 그리므로 안전하다.
+                    _pip_warmup_idx = next(
+                        (i for i in range(_pip_before_len, _pip_real_plot_idx)
+                         if _pip_probe_lines[i].startswith("plot ") and _pip_probe_lines[i].strip() != "plot \\"),
+                        None
+                    )
+                    if _pip_warmup_idx is not None:
+                        _unset_deco = [
+                            "unset title", "unset xlabel", "unset ylabel", "unset y2label",
+                            "unset xtics", "unset ytics", "unset y2tics", "unset border",
+                            "unset object 7100", "unset object 7101", "unset object 7102",
+                        ]
+                        _pip_probe_lines[_pip_warmup_idx:_pip_warmup_idx] = _unset_deco
+                        _pip_real_plot_idx += len(_unset_deco)
                     del _pip_probe_lines[_pip_real_plot_idx:]
                 else:
                     del _pip_probe_lines[_pip_before_len:]
