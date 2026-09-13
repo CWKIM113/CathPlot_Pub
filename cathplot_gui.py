@@ -3438,6 +3438,53 @@ class CathPlotGUI:
         ttk.Entry(mag_radius_row, textvariable=self.pip_mag_ratio_var, width=6).pack(side="left", padx=(4, 2))
         ttk.Label(mag_radius_row, text="배").pack(side="left")
 
+        # [추가 - 사용자 지적] "배율을 활용한 크기를 직관적으로 알기 어렵다" -
+        # 반지름/배율을 입력할 때마다 실제로 계산될 인셋 박스 크기(%)를
+        # 미리 보여준다(실행 버튼을 눌러보지 않고도 감을 잡을 수 있게).
+        # 계산식은 compute_magnifier_pip과 완전히 동일(중복 방지를 위해 그
+        # 함수를 그대로 호출) - 다만 X축 범위는 매번 실제로 다시 그려서
+        # 구하면 무거우므로, 이미 화면에 있는 xmin_var/xmax_var(Auto면
+        # 마지막 실행 때 계산돼 채워진 값, Manual이면 사용자가 직접 넣은 값)
+        # 를 그대로 재사용한다 - 아직 한 번도 실행 안 해 비어있으면 "?"로
+        # 표시(추정 불가).
+        mag_preview_var = tk.StringVar(value="")
+        mag_preview_row = ttk.Frame(mag_frame)
+        mag_preview_row.pack(fill="x", padx=5, pady=(0, 5))
+        ttk.Label(mag_preview_row, text="→ 예상 인셋 크기:", foreground="#666666").pack(side="left")
+        ttk.Label(mag_preview_row, textvariable=mag_preview_var, foreground="#0056b3").pack(side="left", padx=(4, 0))
+
+        def _update_mag_preview(*_a):
+            if not self.pip_mag_on_var.get():
+                mag_preview_var.set("")
+                return
+            try:
+                _xlo = float(self.xmin_var.get())
+                _xhi = float(self.xmax_var.get())
+                if not (_xhi > _xlo):
+                    raise ValueError
+            except (TypeError, ValueError):
+                mag_preview_var.set("? (먼저 한 번 실행해서 X축 범위를 확정해 주세요)")
+                return
+            _gen = GnuplotGenerator(self.plot_dir)
+            _mag_cfg = self._collect_magnifier_dict()
+            _r = _gen._resolve_magnifier_value(_mag_cfg.get("radius_x"), _mag_cfg.get("radius_x_mode", "data"), _xlo, _xhi, is_length=True)
+            try:
+                _mag = float(_mag_cfg.get("magnification") or 1.0)
+            except (TypeError, ValueError):
+                _mag = 1.0
+            _mag = max(_mag, 0.1)
+            if _r is None or _r <= 0:
+                mag_preview_var.set("? (반지름을 먼저 입력해 주세요)")
+                return
+            _size_w = min(max((2.0 * _r) / max(_xhi - _xlo, 1e-9) * _mag, 0.05), 1.0)
+            _size_h = min(max(_size_w * (5.95 / 4.17), 0.05), 1.0)
+            mag_preview_var.set(f"가로 {_size_w * 100:.1f}% / 세로 {_size_h * 100:.1f}%  (X축 전체 {_xhi - _xlo:.4g} 중 {2 * _r:.4g} 구간 기준)")
+
+        for _v in (self.pip_mag_on_var, self.pip_mag_radius_x_var, self.pip_mag_radius_x_mode_var,
+                   self.pip_mag_ratio_var):
+            _v.trace_add("write", _update_mag_preview)
+        _update_mag_preview()
+
         def _toggle_mag_entries(*_a):
             _on = self.pip_mag_on_var.get()
             _zstate = "disabled" if _on else "normal"
