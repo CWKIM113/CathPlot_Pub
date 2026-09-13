@@ -4207,8 +4207,9 @@ class GnuplotGenerator:
                 for _ci, _lcurve in enumerate(plotdef.curves):
                     _lname = (_lcurve.title or "").strip()
                     if _lname:
+                        _l_linestyle = _lcurve.linestyle or DEFAULT_LINESTYLES[_ci % len(DEFAULT_LINESTYLES)]
                         _titled.append((_lcurve.color or DEFAULT_COLORS[_ci % len(DEFAULT_COLORS)], _lname,
-                                        getattr(_lcurve, "marker_shape", None)))
+                                        getattr(_lcurve, "marker_shape", None), _l_linestyle))
                 _n_rows = len(_titled)
                 if _n_rows:
                     # [수정 - 사용자 지적] "main legend에서 이미 다 설계
@@ -4258,7 +4259,7 @@ class GnuplotGenerator:
                         while len(_n2) > 1 and _text_w_frac(_n2 + "…") > _text_cap:
                             _n2 = _n2[:-1]
                         return _n2 + "…"
-                    _titled = [(_c, _clip_name(_n), _ms) for _c, _n, _ms in _titled]
+                    _titled = [(_c, _clip_name(_n), _ms, _lst) for _c, _n, _ms, _lst in _titled]
                     # [수정 - 사용자 보고] "줄 상하 간격이 너무 큼" - 위쪽
                     # 62%/줄당 최대 0.15이던 예산을 55%/줄당 최대 0.11로
                     # 줄여 더 촘촘하게 붙인다(여전히 커브 개수에 반비례해서
@@ -4335,28 +4336,39 @@ class GnuplotGenerator:
                     # 까지는 항상 위쪽 고정이었음). native _resolve_anchor와
                     # 같은 방식으로 "top"/"bottom" 문자열 포함 여부로 판정.
                     _leg_top_side = ("bottom" not in _lp)
-                    _max_text_w = max(_text_w_frac(_n) for _, _n, _ in _titled)
+                    _max_text_w = max(_text_w_frac(_n) for _, _n, _, _ in _titled)
+                    # [수정 - 사용자 요청] "legend sample선은 style 구별해서
+                    # 보여주어야지요" - main legend(_render_legend_box)처럼
+                    # marker 기호 자리 앞(또는 marker_on이 꺼져 있어도 항상)에
+                    # curve의 실제 색상+선굵기+dashtype(위 curve 루프와 동일
+                    # 계산)으로 짧은 샘플선을 긋는다 - marker 기호는 그 샘플선
+                    # 한가운데에 겹쳐 찍는다(네이티브와 같은 배치).
+                    _sample_col = (ix_hi - ix_lo) * 0.10
                     _mk_col = ((ix_hi - ix_lo) * 0.09) if marker_on else 0.0
+                    _lead_col = _sample_col + _mk_col
                     if _leg_right_side:
                         _lbg_x1 = ix_hi - (ix_hi - ix_lo) * 0.02
-                        _lbg_x0 = max(_lbg_x1 - _mk_col - _max_text_w * (ix_hi - ix_lo) - (ix_hi - ix_lo) * 0.05, ix_lo)
-                        _mk_x = _lbg_x1 - (ix_hi - ix_lo) * 0.015
-                        _lx = _mk_x - _mk_col - (ix_hi - ix_lo) * 0.01
+                        _lbg_x0 = max(_lbg_x1 - _lead_col - _max_text_w * (ix_hi - ix_lo) - (ix_hi - ix_lo) * 0.06, ix_lo)
+                        _sample_x2 = _lbg_x1 - (ix_hi - ix_lo) * 0.015
+                        _sample_x1 = _sample_x2 - _sample_col
+                        _lx = _sample_x1 - (ix_hi - ix_lo) * 0.015
                         _justify = "right"
                     else:
                         _lbg_x0 = ix_lo + (ix_hi - ix_lo) * 0.04
-                        _lbg_x1 = min(_lbg_x0 + _mk_col + _max_text_w * (ix_hi - ix_lo) + (ix_hi - ix_lo) * 0.05, ix_hi - (ix_hi - ix_lo) * 0.02)
-                        _mk_x = _lbg_x0 + (ix_hi - ix_lo) * 0.01
-                        _lx = _lbg_x0 + _mk_col + (ix_hi - ix_lo) * 0.015
+                        _sample_x1 = _lbg_x0 + (ix_hi - ix_lo) * 0.01
+                        _sample_x2 = _sample_x1 + _sample_col
+                        _lbg_x1 = min(_sample_x2 + _max_text_w * (ix_hi - ix_lo) + (ix_hi - ix_lo) * 0.06, ix_hi - (ix_hi - ix_lo) * 0.02)
+                        _lx = _sample_x2 + (ix_hi - ix_lo) * 0.015
                         _justify = "left"
+                    _mk_x = (_sample_x1 + _sample_x2) / 2.0
                     _leg_rows = []
-                    for _ri, (_lcolor, _lname, _lmarker) in enumerate(_titled):
+                    for _ri, (_lcolor, _lname, _lmarker, _llinestyle) in enumerate(_titled):
                         _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
                         if _leg_top_side:
                             _ly = iy1_hi - (iy1_hi - iy1_lo) * (_frame_gap_frac + _char_gap_frac + _row_step * _ri)
                         else:
                             _ly = iy1_lo + (iy1_hi - iy1_lo) * (_frame_gap_frac + _char_gap_frac + _row_step * _ri)
-                        _leg_rows.append((_lx, _ly, _esc, _lcolor, _lmarker, _mk_x))
+                        _leg_rows.append((_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle))
                     if _leg_top_side:
                         _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * _frame_gap_frac
                         _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * _char_gap_frac
@@ -4367,14 +4379,24 @@ class GnuplotGenerator:
                     _lbg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _lbg_corners)
                     fragments.append(f"$PipFoldLegBg << EOD\n{_lbg_rows}\nEOD")
                     fragments.append('$PipFoldLegBg using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 border lc rgb "black" lw 0.8')
+                    # [추가 - 사용자 요청] "legend sample선은 style 구별해서
+                    # 보여주어야지요" - curve 실제 색상+lw+dashtype으로 짧은
+                    # 샘플선을 긋는다(main legend의 화살표 샘플선과 같은
+                    # 역할 - 여기서는 "set arrow" 상태 잔류 위험을 피하려고
+                    # 다른 요소와 같은 데이터 plot 방식(2점 직선)을 쓴다).
+                    for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle) in enumerate(_leg_rows):
+                        _l_dash = _dash_pattern_for_fmt(_llinestyle, "interactive")
+                        _l_dash_clause = f' dashtype ({_l_dash})' if _l_dash else ''
+                        fragments.append(f"$PipFoldLegSmp{_li} << EOD\n{_sample_x1:.6g} {_ly:.6g}\n{_sample_x2:.6g} {_ly:.6g}\nEOD")
+                        fragments.append(f'$PipFoldLegSmp{_li} using 1:2 notitle axes x1y1 with lines lw 1.2 lc rgb "{_lcolor}"{_l_dash_clause}')
                     if marker_on:
-                        for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x) in enumerate(_leg_rows):
+                        for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle) in enumerate(_leg_rows):
                             _sym = MARKER_SYMBOL_MAP.get(_lmarker)
                             if not _sym:
                                 continue
                             fragments.append(f'$PipFoldLegMk{_li} << EOD\n{_mk_x:.6g} {_ly:.6g} "{_sym}"\nEOD')
-                            fragments.append(f'$PipFoldLegMk{_li} using 1:2:3 notitle axes x1y1 with labels {_justify} font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
-                    for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x) in enumerate(_leg_rows):
+                            fragments.append(f'$PipFoldLegMk{_li} using 1:2:3 notitle axes x1y1 with labels center font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
+                    for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle) in enumerate(_leg_rows):
                         fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
                         fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels {_justify} font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
         else:
@@ -4503,8 +4525,18 @@ class GnuplotGenerator:
             color = curve.color or DEFAULT_COLORS[plotdef.curves.index(curve) % len(DEFAULT_COLORS)]
             _tx = f"({ix_lo} + (($1-({pxmin}))/(({pxmax})-({pxmin})))*(({ix_hi})-({ix_lo})))"
             _ty = f"({dest_lo} + (($2-({src_ymin}))/(({src_ymax})-({src_ymin})))*(({dest_hi})-({dest_lo})))"
+            # [수정 - 사용자 요청] "legend sample선은 style 구별해서 보여
+            # 주어야지요, curve에도 반영되어야 하고" - 지금까지 inset 안
+            # curve는 항상 실선(lw 1.0)으로만 그려 main의 점선/파선 등
+            # linestyle이 인셋에서는 안 보였음(legend도 마찬가지) - main
+            # curve가 쓰는 것과 같은 linestyle/dashtype 계산을 그대로
+            # 재사용해 curve와 legend 샘플선(아래) 둘 다에 적용한다.
+            _idx_for_style = plotdef.curves.index(curve)
+            _linestyle = curve.linestyle or DEFAULT_LINESTYLES[_idx_for_style % len(DEFAULT_LINESTYLES)]
+            _dash_pat = _dash_pattern_for_fmt(_linestyle, "interactive")
+            _dash_clause = f' dashtype ({_dash_pat})' if _dash_pat else ''
             fragments.append(
-                f'"{_tmp_name}" using {_tx}:{_ty} notitle axes {axis_spec} with lines lw 1.0 lc rgb "{color}"'
+                f'"{_tmp_name}" using {_tx}:{_ty} notitle axes {axis_spec} with lines lw 1.0 lc rgb "{color}"{_dash_clause}'
             )
             # [추가 - 요청] "Inset 크기에 따라 다르니까, PIP 입력에 마커
             # on/off (원래 plot에 마커 있는 경우만) 넣어 두지" - 켜져 있고
