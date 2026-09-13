@@ -3408,29 +3408,32 @@ class CathPlotGUI:
             foreground="#666666", font=("", 8)
         ).pack(anchor="w", padx=5, pady=(0, 4))
 
+        # [수정 - 사용자 요청] "data 대신 좌표값, pct 대신 %로" - 다른 곳
+        # (Comment/Arrow/Circle 좌표 모드, self.COORD_MODE_DISPLAY 참고)과
+        # 동일하게, 내부 저장 값("data"/"pct" - gnu_generator.py의
+        # compute_magnifier_pip이 이 문자열로 분기)은 그대로 두고 화면
+        # 표시용 별도 StringVar만 만들어 "%"/"좌표값"으로 보여준다.
+        def _mk_mode_combo(parent, mode_var):
+            _disp = tk.StringVar(value=self.COORD_MODE_DISPLAY.get(mode_var.get(), "좌표값"))
+            def _sync(*_a):
+                mode_var.set(self.COORD_MODE_FROM_DISPLAY.get(_disp.get(), "data"))
+            _disp.trace_add("write", _sync)
+            return ttk.Combobox(parent, textvariable=_disp, state="readonly", width=5, values=["좌표값", "%"])
+
         mag_center_row = ttk.Frame(mag_frame)
         mag_center_row.pack(fill="x", padx=5, pady=2)
         ttk.Label(mag_center_row, text="중심 X:").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_center_x_var, width=8).pack(side="left", padx=(4, 2))
-        ttk.Combobox(
-            mag_center_row, textvariable=self.pip_mag_center_x_mode_var, state="readonly", width=5,
-            values=["data", "pct"]
-        ).pack(side="left", padx=(0, 12))
+        _mk_mode_combo(mag_center_row, self.pip_mag_center_x_mode_var).pack(side="left", padx=(0, 12))
         ttk.Label(mag_center_row, text="중심 Y1:").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_center_y1_var, width=8).pack(side="left", padx=(4, 2))
-        ttk.Combobox(
-            mag_center_row, textvariable=self.pip_mag_center_y1_mode_var, state="readonly", width=5,
-            values=["data", "pct"]
-        ).pack(side="left")
+        _mk_mode_combo(mag_center_row, self.pip_mag_center_y1_mode_var).pack(side="left")
 
         mag_radius_row = ttk.Frame(mag_frame)
         mag_radius_row.pack(fill="x", padx=5, pady=(0, 5))
         ttk.Label(mag_radius_row, text="반지름 X:").pack(side="left")
         ttk.Entry(mag_radius_row, textvariable=self.pip_mag_radius_x_var, width=8).pack(side="left", padx=(4, 2))
-        ttk.Combobox(
-            mag_radius_row, textvariable=self.pip_mag_radius_x_mode_var, state="readonly", width=5,
-            values=["data", "pct"]
-        ).pack(side="left", padx=(0, 12))
+        _mk_mode_combo(mag_radius_row, self.pip_mag_radius_x_mode_var).pack(side="left", padx=(0, 12))
         ttk.Label(mag_radius_row, text="배율:").pack(side="left")
         ttk.Entry(mag_radius_row, textvariable=self.pip_mag_ratio_var, width=6).pack(side="left", padx=(4, 2))
         ttk.Label(mag_radius_row, text="배").pack(side="left")
