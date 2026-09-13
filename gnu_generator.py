@@ -3921,7 +3921,8 @@ class GnuplotGenerator:
                                    pip_y2min, pip_y2max, box, plot_dir_,
                                    clip_shape="rect", clip_rx=50.0, clip_ry=50.0, minimal=False,
                                    pip_cfg=None, size_factor=1.0, font_scale=0.6, margins=None,
-                                   marker_on=False, marker_scale=0.3, axis_w_in=None, axis_h_in=None):
+                                   marker_on=False, marker_scale=0.3, axis_w_in=None, axis_h_in=None,
+                                   opaque_bg=True):
         """[추가 - PIP 렌더링 재설계] "R/u 직후 기본 화면은 깨끗해야 하는데
         확대(replot)는 그걸 위한 NaN 마스킹 때문에 막힌다"는 근본 충돌을
         피하기 위해, PIP(배경+테두리+자기 커브)를 별도 멀티플롯 패널이
@@ -4023,7 +4024,13 @@ class GnuplotGenerator:
         # [수정 - 사용자 요청] "font 글자 하한을 가능한 작게" - 4pt ->
         # 3pt(gnuplot이 실제로 읽을 수 있게 그리는 실질 하한에 가까움)로
         # 더 낮춘다.
-        _font_leg = max(float(getattr(plotdef, "legend_size", None) or 9) * _fs * _axis_shape_scale * 0.6, 3.0)
+        # [수정 - 사용자 요청] "title 폰트 대비 legend box font가 너무
+        # 작다 - 조금 더 키워줘요" - title은 title_size*_fs를 그대로 쓰는데
+        # (추가 축소 계수 없음) legend만 별도로 *0.6이 곱해져 있어서, main
+        # 의 실제 비율(legend_size 9 : title_size 14 = 0.64)보다 인셋에서는
+        # 훨씬 작게(0.64*0.6=0.39) 나왔다 - 0.6을 0.8로 올려 title 대비
+        # 비율을 main에 더 가깝게(0.64*0.8=0.51) 되돌린다.
+        _font_leg = max(float(getattr(plotdef, "legend_size", None) or 9) * _fs * _axis_shape_scale * 0.8, 3.0)
 
         # 배경(채워진 사각형) - PIP가 실제로 관측할 곡선보다 먼저(아래에)
         # 그려져야 하므로 이 overlay 목록의 맨 앞에 둔다.
@@ -4061,13 +4068,22 @@ class GnuplotGenerator:
             _corners = [(x_lo, y1_lo), (x_hi, y1_lo), (x_hi, y1_hi), (x_lo, y1_hi), (x_lo, y1_lo)]
         _bg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _corners)
         fragments.append(f"$PipFoldBox << EOD\n{_bg_rows}\nEOD")
-        fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 noborder')
+        # [수정 - 사용자 요청] "투명 적용 먼저 하고" - opaque_bg가 꺼져
+        # 있으면(투명 PIP) 배경 채우기 자체를 생략해 main이 그대로 비쳐
+        # 보이게 한다(테두리는 아래에서 그대로, 다만 점선으로 - 네이티브
+        # no_bg 관례와 동일).
+        if opaque_bg:
+            fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 noborder')
         # [추가 - 사용자 요청] "돋보기 형태로 위치/반지름만 주고 그 안엔
         # curve만 - title/축 frame/tic 숫자 다 무시" - minimal이 켜지면
         # 테두리 선/격자/tic 숫자를 전부 건너뛰고 배경(위, 불투명 보호용
         # 기능이라 유지)+curve만 남긴다.
         if not minimal:
-            fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 1.2')
+            # [수정 - 사용자 요청] "투명 적용" - 네이티브 no_bg 관례(배경이
+            # 없어 경계가 안 보일 수 있어 점선으로 표시)를 그대로 따라,
+            # opaque_bg가 꺼져 있으면 테두리를 점선으로 그린다.
+            _border_dash_clause = '' if opaque_bg else ' dashtype "."'
+            fragments.append(f'$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 1.2{_border_dash_clause}')
 
             # [수정 - 사용자 반복 지적, 근본 재설계] "inset의 plot frame(바깥
             # 테두리)은 맞는데 내부의 axis frame이 안 맞음 - curve는 axis
@@ -4104,6 +4120,33 @@ class GnuplotGenerator:
                 iy2_hi = _y2b_hi - _m_top * (_y2b_hi - _y2b_lo)
             else:
                 iy2_lo = iy2_hi = None
+
+            # [수정 - 사용자 재지적] "legend 제목 마진이 10글자는 되겠다"
+            # (원/타원에서) - tic<->title 간격에서 먼저 찾은 것과 같은
+            # 근본 원인: axis_w_in/axis_h_in은 네이티브가 계산한 "clamp
+            # 되기 전" 실제 여백 비율 기준 물리 치수인데, 바로 위 _m_top/
+            # _m_bottom/_m_left/_m_right는 0.03~0.45로 clamp해서 쓴다(원/
+            # 타원은 모서리 보호 때문에 실제 필요 여백이 0.45를 넘는 경우가
+            # 흔함) - 그러면 "물리 inch -> data-fraction" 환산에 쓰는
+            # axis_h_in/axis_w_in이 실제 이 함수가 쓰는 (clamp된) ix/iy
+            # 폭·높이와 안 맞아, 문자 간격처럼 작아야 할 값들이 원/타원
+            # 에서만 몇 배씩 부풀려졌다(tic<->title 간격은 안전 상한을
+            # 따로 걸어 막았지만, legend의 줄 간격/테두리 여백은 아직
+            # 안 걸려 있어 그대로 노출됨). 매번 안전 상한을 개별로 추가하는
+            # 대신, 여기서 한 번에 "clamp된 ix/iy 폭·높이에 실제로 맞는"
+            # 물리 치수로 axis_h_in/axis_w_in 자체를 보정해, 아래(tic/
+            # title/legend 전부)에서 공통으로 쓰게 한다 - clamp가 없었으면
+            # (사각형처럼) 보정 비율이 1에 가까워 기존과 동일하게 동작한다.
+            _raw_top = float((margins or {}).get("top", 0.15))
+            _raw_bottom = float((margins or {}).get("bottom", 0.13))
+            _raw_left = float((margins or {}).get("left", 0.15))
+            _raw_right = float((margins or {}).get("right", 0.13))
+            _raw_inner_h = (1.0 - _raw_top - _raw_bottom) * (y1_hi - y1_lo)
+            _raw_inner_w = (1.0 - _raw_left - _raw_right) * (x_hi - x_lo)
+            if axis_h_in and _raw_inner_h and _raw_inner_h > 0:
+                axis_h_in = axis_h_in * ((iy1_hi - iy1_lo) / _raw_inner_h)
+            if axis_w_in and _raw_inner_w and _raw_inner_w > 0:
+                axis_w_in = axis_w_in * ((ix_hi - ix_lo) / _raw_inner_w)
 
             # 안쪽 축 frame 자체도 옅게 그려서(네이티브의 "set border"에
             # 해당) "여기까지가 실제 curve 영역"임을 보여준다.
@@ -4172,233 +4215,82 @@ class GnuplotGenerator:
                     fragments.append(f'$PipFoldTitle << EOD\n{_cx:.6g} {_ty_title:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldTitle using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,{_font_title:.1f}" textcolor rgb "black"')
             if _pip_cfg.get("axis_title_on"):
+                # [수정 - 사용자 재지적] "x,y1,y2 title이 tic 숫자와 너무
+                # 떨어짐 - 1글자 간격으로" - 지금까지는 여백 띠 전체 높이/
+                # 폭의 20%를 "바깥 박스 가장자리" 기준으로 고정해 title을
+                # 배치했는데, tic 숫자는(위에서) 항상 "안쪽 axis frame
+                # 가장자리"에 바짝 붙게(15%) 배치되므로, 둘 사이에 여백 띠의
+                # 나머지(~65%)가 통째로 빈 공간으로 남아 tic<->title 간격이
+                # 비정상적으로 커 보였다(원/타원은 corner-fit 때문에 이 여백
+                # 띠 자체가 사각형보다 훨씬 커서 더 두드러짐 - 다만 "title
+                # 위치 계산식 자체"는 사각/원 공용이라 둘이 동일하고, 띠가
+                # 커지는 만큼 title<->바깥 가장자리 여백만 더 남게 됨 - 이건
+                # 원/타원이 모서리를 안쪽에 두기 위해 필요한 정상적인 여유).
+                # legend의 _char_gap_frac과 같은 방식(실제 폰트 물리 치수,
+                # leading 없이)으로 "tic 텍스트 중심 <-> title 텍스트 중심"
+                # 간격을 (tic 글자 절반 높이 + 1글자 간격 + title 글자 절반
+                # 높이)로 직접 계산해, title이 tic 바로 아래(또는 옆)에
+                # "1글자"만큼만 떨어지도록 한다.
+                _scale_y_in = (axis_h_in / (iy1_hi - iy1_lo)) if (axis_h_in and (iy1_hi - iy1_lo)) else None
+                _scale_x_in = (axis_w_in / (ix_hi - ix_lo)) if (axis_w_in and (ix_hi - ix_lo)) else None
+                # [수정 - 사용자 재지적] "원/타원에서 여전히 tic<->title 간격이
+                # 큼" - 실측으로 원인을 추적해 보니, 위 axis_h_in/axis_w_in은
+                # 네이티브가 계산한 "보정 전(clamp 안 된)" 실제 여백 비율
+                # 기준인데, 바로 위 _m_top/_m_bottom/_m_left/_m_right는 그
+                # 값을 0.03~0.45로 clamp해서 쓴다(원/타원은 모서리 보호 때문에
+                # 실제 필요한 여백이 0.45를 넘는 경우가 흔함) - 그러면 물리
+                # 치수(axis_h_in/axis_w_in)와 여기서 실제 쓰는 띠 높이/폭
+                # (clamp된 iy1_lo/ix_lo 기준)가 서로 안 맞아, 물리 변환식
+                # (_gap_in/_scale_*_in)이 원/타원에서 실제보다 훨씬 큰 data-
+                # 단위 간격으로 잘못 환산됐다(실측: 사각 0.35 vs 원 0.60,
+                # 거의 1.7배 - 사각과 똑같이 작게 계산됐어야 함). 두 값을
+                # 완전히 다시 맞추는 대신(clamp 자체가 모서리 보호에 필요),
+                # 안전판으로 "간격이 아무리 커도 띠 높이/폭의 35%는 넘지
+                # 않는다"는 상한을 추가로 걸어, 물리 변환이 어긋나는 극단
+                # 케이스(원/타원)에서도 title이 tic 근처에 남게 한다(사각형
+                # 처럼 이미 물리 변환이 작게 나오는 경우엔 이 상한에 안
+                # 걸려 기존 값 그대로 쓰임).
                 _xl_txt = str(_pip_cfg.get("xlabel_text") or getattr(plotdef, "xlabel", "") or "").strip()
                 if _xl_txt:
                     _esc = _xl_txt.replace("\\", "\\\\").replace('"', '\\"')
-                    _xl_y = y1_lo + (iy1_lo - y1_lo) * 0.20
+                    _tic_y_ref = iy1_lo - (iy1_lo - y1_lo) * 0.15
+                    if _scale_y_in:
+                        _gap_in = (_font_tic / 72.0) * 0.55 + (_font_axis / 72.0) * 1.0 + (_font_axis / 72.0) * 0.55
+                        _xl_y = _tic_y_ref - _gap_in / _scale_y_in
+                        _xl_y = max(_xl_y, _tic_y_ref - (iy1_lo - y1_lo) * 0.35)
+                        _xl_y = max(_xl_y, y1_lo + (iy1_lo - y1_lo) * 0.04)
+                    else:
+                        _xl_y = y1_lo + (iy1_lo - y1_lo) * 0.20
                     fragments.append(f'$PipFoldXLabel << EOD\n{_cx:.6g} {_xl_y:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldXLabel using 1:2:3 notitle axes x1y1 with labels center font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
                 _yl_txt = str(_pip_cfg.get("ylabel_text") or getattr(plotdef, "ylabel", "") or "").strip()
                 if _yl_txt:
                     _esc = _yl_txt.replace("\\", "\\\\").replace('"', '\\"')
-                    _yl_x = x_lo + (ix_lo - x_lo) * 0.20
+                    _tic_x_ref = ix_lo - (ix_lo - x_lo) * 0.15
+                    if _scale_x_in:
+                        _gap_in = (_font_tic / 72.0) * 0.55 + (_font_axis / 72.0) * 1.0 + (_font_axis / 72.0) * 0.55
+                        _yl_x = _tic_x_ref - _gap_in / _scale_x_in
+                        _yl_x = max(_yl_x, _tic_x_ref - (ix_lo - x_lo) * 0.35)
+                        _yl_x = max(_yl_x, x_lo + (ix_lo - x_lo) * 0.04)
+                    else:
+                        _yl_x = x_lo + (ix_lo - x_lo) * 0.20
                     fragments.append(f'$PipFoldYLabel << EOD\n{_yl_x:.6g} {_cy:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldYLabel using 1:2:3 notitle axes x1y1 with labels center rotate by 90 font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
                 if _have_y2:
                     _y2l_txt = str(_pip_cfg.get("y2label_text") or getattr(plotdef, "y2label", "") or "").strip()
                     if _y2l_txt:
                         _esc = _y2l_txt.replace("\\", "\\\\").replace('"', '\\"')
-                        _y2l_x = x_hi - (x_hi - ix_hi) * 0.20
+                        _tic_x2_ref = ix_hi + (x_hi - ix_hi) * 0.15
+                        if _scale_x_in:
+                            _gap_in = (_font_tic / 72.0) * 0.55 + (_font_axis / 72.0) * 1.0 + (_font_axis / 72.0) * 0.55
+                            _y2l_x = _tic_x2_ref + _gap_in / _scale_x_in
+                            _y2l_x = min(_y2l_x, _tic_x2_ref + (x_hi - ix_hi) * 0.35)
+                            _y2l_x = min(_y2l_x, x_hi - (x_hi - ix_hi) * 0.04)
+                        else:
+                            _y2l_x = x_hi - (x_hi - ix_hi) * 0.20
                         _cy2 = (y2_lo_hi[0] + y2_lo_hi[1]) / 2.0
                         fragments.append(f'$PipFoldY2Label << EOD\n{_y2l_x:.6g} {_cy2:.6g} "{_esc}"\nEOD')
                         fragments.append(f'$PipFoldY2Label using 1:2:3 notitle axes x1y2 with labels center rotate by -90 font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
-            if _pip_cfg.get("legend_on") and plotdef.curves:
-                # [수정 - 사용자 보고 버그] "legend box가 plot 전체를 덮음" -
-                # 줄 간격(row 높이)이 curve 개수와 무관한 고정 fraction(0.15)
-                # 이었음 - curve가 몇 개든 항상 0.15씩 차지하니, 커브가
-                # 몇 개만 넘어도(실제 데이터는 보통 2개보다 많음) 줄들이
-                # 안쪽 axis frame 아래·박스 밖까지 밀려나 박스 전체를 뒤덮는
-                # 배경으로 이어졌다. 실제 표시될 줄 수(제목이 있는 curve만)로
-                # 미리 나눠서, 몇 개든 항상 안쪽 axis frame 위쪽 62% 안에
-                # 들어오도록 줄 간격을 계산한다. [수정 - 사용자 보고] "위치는
-                # 우상단, 정렬은 우측이어야" - 네이티브 legend(_render_legend_
-                # box)가 쓰는 것과 같은 "right top" 배치·우측 정렬로 통일.
-                _titled = []
-                for _ci, _lcurve in enumerate(plotdef.curves):
-                    _lname = (_lcurve.title or "").strip()
-                    if _lname:
-                        _l_linestyle = _lcurve.linestyle or DEFAULT_LINESTYLES[_ci % len(DEFAULT_LINESTYLES)]
-                        _titled.append((_lcurve.color or DEFAULT_COLORS[_ci % len(DEFAULT_COLORS)], _lname,
-                                        getattr(_lcurve, "marker_shape", None), _l_linestyle))
-                _n_rows = len(_titled)
-                if _n_rows:
-                    # [수정 - 사용자 지적] "main legend에서 이미 다 설계
-                    # 했던 건데 왜 여기선 안 되나" - 글자 폭을 문자수 근사
-                    # (font_pt*상수)로 추측하는 대신, main legend(_render_
-                    # legend_box)가 이미 쓰는 실측 함수(_measure_text_width_in
-                    # - PIL로 실제 폰트 파일을 읽어 렌더 폭을 inch로 잼)를
-                    # 그대로 재사용한다. 인셋의 실제 물리 폭(axis_w_in, 위에서
-                    # _render_pip_inset이 함께 넘겨줌)으로 나누면 main과 똑같이
-                    # "박스 폭 대비 몇 %"가 정확히 나온다 - 폰트/문자열이
-                    # 뭐든(긴 영문, 특수문자 등) 실제 렌더 폭 그대로라 추측
-                    # 오차로 인한 겹침이 구조적으로 없다. 측정 불가(폰트 파일
-                    # 없음 등)시에만 기존 문자수 근사로 안전하게 대체한다.
-                    _char_frac = min(0.045, max(0.020, _font_leg * 0.006))
-                    _legend_font_name = getattr(plotdef, "legend_font", None) or "Malgun Gothic"
-
-                    def _text_w_frac(_s):
-                        # [수정 - 사용자 보고 버그] "마커가 글자에 가려 안
-                        # 보임" - PIL 실측은 이 "windows" 대화형 터미널의
-                        # 실제 렌더 폭과 완전히 같다는 보장이 없다(main
-                        # legend가 PDF/PNG 포맷마다 text_corr 보정치를 따로
-                        # 두는 것과 같은 이유 - 화면은 아직 실측 보정치가
-                        # 없음) - 15% 여유를 더해 실제가 추정보다 조금 더
-                        # 넓어도 박스/마커 간격이 항상 충분하게 한다.
-                        _measured = _measure_text_width_in(_s, _legend_font_name, _font_leg)
-                        if _measured is not None and axis_w_in and axis_w_in > 0:
-                            return (_measured / axis_w_in) * 1.15
-                        return _char_frac * len(_s)
-
-                    # 상한 폭에 안 들어가는 이름은 "…"로 줄인다(실측 기준
-                    # 으로 한 글자씩 줄이며 확인 - 문자수 근사와 달리 언어/
-                    # 폰트에 따라 문자당 폭이 달라도 항상 정확함). [수정 -
-                    # 사용자 보고 버그] "legend box 좌우 길이가 거의 x축
-                    # 길이" - 이전 상한(92%)은 "박스가 안쪽 axis frame을
-                    # 벗어나지만 않으면 된다"는 기준이었는데, 그 기준대로면
-                    # curve 이름 하나만 길어도 legend가 인셋 폭 대부분을
-                    # 차지해버렸다(실측 확인). legend는 범례일 뿐 plot의
-                    # 주인공이 아니므로 "인셋 폭의 절반 정도"를 실질 상한
-                    # (55%)으로 훨씬 타이트하게 줄인다 - 넘는 이름은 그만큼
-                    # 더 "…"로 줄어든다.
-                    _text_cap = 0.55 - (0.12 if marker_on else 0.0)
-
-                    def _clip_name(_n):
-                        if _text_w_frac(_n) <= _text_cap:
-                            return _n
-                        _n2 = _n
-                        while len(_n2) > 1 and _text_w_frac(_n2 + "…") > _text_cap:
-                            _n2 = _n2[:-1]
-                        return _n2 + "…"
-                    _titled = [(_c, _clip_name(_n), _ms, _lst) for _c, _n, _ms, _lst in _titled]
-                    # [수정 - 사용자 보고] "줄 상하 간격이 너무 큼" - 위쪽
-                    # 62%/줄당 최대 0.15이던 예산을 55%/줄당 최대 0.11로
-                    # 줄여 더 촘촘하게 붙인다(여전히 커브 개수에 반비례해서
-                    # 몇 개든 안쪽 axis frame을 넘지 않음).
-                    # [수정 - 사용자 재지적] "border와 title 간격이 1글자
-                    # 정도여야 하지 않나" - 여백 띠 "높이 대비 %"라는 임의
-                    # 기준을 버리고, 위 legend 폭(실측)과 같은 방식으로 줄
-                    # 높이도 실제 물리 치수(inch)로 구한다 - font_pt(pt,
-                    # =1/72in)에 줄간격 배수(1.3, native ROW_H가 쓰는 것과
-                    # 비슷한 여유)를 곱해 "줄 하나가 실제로 차지하는 높이"를
-                    # inch로 얻고, 인셋의 실제 물리 높이(axis_h_in)로 나눠
-                    # data-fraction으로 바꾼다 - 폰트 크기가 뭐든 항상 "글자
-                    # 한두 줄 정도"의 자연스러운 간격이 되고, 위쪽 여백(box
-                    # 테두리<->첫 줄)도 같은 단위(줄 높이의 35%, 대략 글자
-                    # 한 개 폭 정도)로 맞춘다.
-                    _row_h_in = (_font_leg / 72.0) * 1.3
-                    _row_h_frac = (_row_h_in / axis_h_in) if (axis_h_in and axis_h_in > 0) else 0.07
-                    _row_step = min(_row_h_frac, 0.45 / _n_rows)
-                    # [수정 - 사용자 재지적] "border와 title 간격이 1글자
-                    # 정도여야" - 박스 테두리(안쪽 axis frame과 부딪히지
-                    # 않게 하는 고정 최소 여백)와, 그 테두리부터 첫 줄까지의
-                    # "글자 한 개 폭" 간격을 서로 다른 두 값으로 분리한다
-                    # (하나로 합쳐 쓰면 여백을 줄일수록 테두리가 축 frame에
-                    # 다시 붙어버리는 문제가 있었음).
-                    # [수정 - 사용자 보고 버그] "legend 안 title이 위에서
-                    # 잘림" - 첫 줄 위치를 박스 위쪽 테두리에서 "글자 폭"
-                    # 만큼(0.4*줄높이, 실제 글자 "높이"의 절반에 못 미침)만
-                    # 떨어뜨렸더니, 글자 자체의 세로 높이(중심 기준 위/아래로
-                    # 뻗음) 중 위쪽 절반이 박스 테두리 밖으로 튀어나와
-                    # 잘려(가려져) 보였다 - 줄 간격(_row_step, 이미 폰트
-                    # 높이 기준으로 계산됨)의 절반을 그대로 첫 줄 오프셋으로
-                    # 써서, 글자 전체 높이가 항상 테두리 안쪽에 들어오게
-                    # 한다.
-                    # [수정 - 사용자 재지적] "1글자라고 강조했다" - 방금
-                    # 위 clip 수정에서 쓴 "줄 간격(_row_step)의 절반"은
-                    # 줄간격 자체에 이미 여유(1.3배 leading)가 들어있어
-                    # 필요한 것보다 더 크게 벌어졌다 - 글자가 안 잘리는 데
-                    # 필요한 건 "줄 간격의 절반"이 아니라 "글자 높이(순수
-                    # font_pt, leading 없이)의 절반"뿐이므로 그 값만 쓴다
-                    # (여전히 실제 물리 치수 기준이라 안 잘리는 건 보장되고,
-                    # leading분(약 30%)만큼 더 촘촘해진다).
-                    _frame_gap_frac = 0.025
-                    _glyph_half_in = (_font_leg / 72.0) * 0.55
-                    _char_gap_frac = (_glyph_half_in / axis_h_in) if (axis_h_in and axis_h_in > 0) else _row_step * 0.4
-                    # [수정 - 사용자 보고 버그] "왼쪽 box 선과 title 사이가
-                    # 큼" - 지금까지 우측 정렬(right-justify)이었는데, 박스
-                    # 폭은 가장 긴 줄 기준이라 짧은 줄은 항상 왼쪽에 텍스트가
-                    # 시작 안 되는 빈 공간이 컸다(오른쪽 끝만 맞추면 왼쪽은
-                    # 줄마다 제각각 비게 됨). 실제 목록처럼 왼쪽 정렬로
-                    # 바꾼다 - 모든 줄이 같은 x(box 왼쪽에서 고정 간격)에서
-                    # 시작하고, 짧은 줄은 자연스럽게 오른쪽이 먼저 끝난다
-                    # (빈 공간이 있어도 "다음 내용이 이어질 자리"로 보여
-                    # 어색하지 않음). 부수효과로 마커 위치도 모든 줄에서
-                    # 같은 고정 x가 되어(마커+텍스트가 항상 나란히 시작)
-                    # 이전처럼 "가장 긴 줄만 마커가 글자에 가려짐" 문제 자체가
-                    # 구조적으로 없어진다.
-                    # [수정 - 사용자 지적] "정렬은 main-plot의 legend 설정을
-                    # 따라가야" - main legend(_render_legend_box)가 legend_pos/
-                    # legend_align(Auto면 위치의 좌/우로 자동 판정)로 정하는
-                    # is_right_side와 같은 로직을 그대로 재사용해, 인셋
-                    # legend도 main과 같은 쪽으로 정렬한다(하드코딩된 좌측
-                    # 정렬이 아님).
-                    _lp = str(getattr(plotdef, "legend_pos", "") or "").strip().lower()
-                    _lalign = str(getattr(plotdef, "legend_align", "Auto") or "Auto")
-                    if _lalign == "Left":
-                        _leg_right_side = False
-                    elif _lalign == "Right":
-                        _leg_right_side = True
-                    else:
-                        _leg_right_side = ("left" not in _lp)
-                    # [추가 - 사용자 요청] "legend 위치와 정렬은 자기의
-                    # main-plot을 따라가면 됨" - 좌/우(정렬)뿐 아니라 위/
-                    # 아래(위치)도 main의 legend_pos를 그대로 따른다(지금
-                    # 까지는 항상 위쪽 고정이었음). native _resolve_anchor와
-                    # 같은 방식으로 "top"/"bottom" 문자열 포함 여부로 판정.
-                    _leg_top_side = ("bottom" not in _lp)
-                    _max_text_w = max(_text_w_frac(_n) for _, _n, _, _ in _titled)
-                    # [수정 - 사용자 요청] "legend sample선은 style 구별해서
-                    # 보여주어야지요" - main legend(_render_legend_box)처럼
-                    # marker 기호 자리 앞(또는 marker_on이 꺼져 있어도 항상)에
-                    # curve의 실제 색상+선굵기+dashtype(위 curve 루프와 동일
-                    # 계산)으로 짧은 샘플선을 긋는다 - marker 기호는 그 샘플선
-                    # 한가운데에 겹쳐 찍는다(네이티브와 같은 배치).
-                    _sample_col = (ix_hi - ix_lo) * 0.10
-                    _mk_col = ((ix_hi - ix_lo) * 0.09) if marker_on else 0.0
-                    _lead_col = _sample_col + _mk_col
-                    if _leg_right_side:
-                        _lbg_x1 = ix_hi - (ix_hi - ix_lo) * 0.02
-                        _lbg_x0 = max(_lbg_x1 - _lead_col - _max_text_w * (ix_hi - ix_lo) - (ix_hi - ix_lo) * 0.06, ix_lo)
-                        _sample_x2 = _lbg_x1 - (ix_hi - ix_lo) * 0.015
-                        _sample_x1 = _sample_x2 - _sample_col
-                        _lx = _sample_x1 - (ix_hi - ix_lo) * 0.015
-                        _justify = "right"
-                    else:
-                        _lbg_x0 = ix_lo + (ix_hi - ix_lo) * 0.04
-                        _sample_x1 = _lbg_x0 + (ix_hi - ix_lo) * 0.01
-                        _sample_x2 = _sample_x1 + _sample_col
-                        _lbg_x1 = min(_sample_x2 + _max_text_w * (ix_hi - ix_lo) + (ix_hi - ix_lo) * 0.06, ix_hi - (ix_hi - ix_lo) * 0.02)
-                        _lx = _sample_x2 + (ix_hi - ix_lo) * 0.015
-                        _justify = "left"
-                    _mk_x = (_sample_x1 + _sample_x2) / 2.0
-                    _leg_rows = []
-                    for _ri, (_lcolor, _lname, _lmarker, _llinestyle) in enumerate(_titled):
-                        _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
-                        if _leg_top_side:
-                            _ly = iy1_hi - (iy1_hi - iy1_lo) * (_frame_gap_frac + _char_gap_frac + _row_step * _ri)
-                        else:
-                            _ly = iy1_lo + (iy1_hi - iy1_lo) * (_frame_gap_frac + _char_gap_frac + _row_step * _ri)
-                        _leg_rows.append((_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle))
-                    if _leg_top_side:
-                        _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * _frame_gap_frac
-                        _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * _char_gap_frac
-                    else:
-                        _lbg_y0 = iy1_lo + (iy1_hi - iy1_lo) * _frame_gap_frac
-                        _lbg_y1 = max(r[1] for r in _leg_rows) + (iy1_hi - iy1_lo) * _char_gap_frac
-                    _lbg_corners = [(_lbg_x0, _lbg_y0), (_lbg_x1, _lbg_y0), (_lbg_x1, _lbg_y1), (_lbg_x0, _lbg_y1), (_lbg_x0, _lbg_y0)]
-                    _lbg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _lbg_corners)
-                    fragments.append(f"$PipFoldLegBg << EOD\n{_lbg_rows}\nEOD")
-                    fragments.append('$PipFoldLegBg using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 border lc rgb "black" lw 0.8')
-                    # [추가 - 사용자 요청] "legend sample선은 style 구별해서
-                    # 보여주어야지요" - curve 실제 색상+lw+dashtype으로 짧은
-                    # 샘플선을 긋는다(main legend의 화살표 샘플선과 같은
-                    # 역할 - 여기서는 "set arrow" 상태 잔류 위험을 피하려고
-                    # 다른 요소와 같은 데이터 plot 방식(2점 직선)을 쓴다).
-                    for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle) in enumerate(_leg_rows):
-                        _l_dash = _dash_pattern_for_fmt(_llinestyle, "interactive")
-                        _l_dash_clause = f' dashtype ({_l_dash})' if _l_dash else ''
-                        fragments.append(f"$PipFoldLegSmp{_li} << EOD\n{_sample_x1:.6g} {_ly:.6g}\n{_sample_x2:.6g} {_ly:.6g}\nEOD")
-                        fragments.append(f'$PipFoldLegSmp{_li} using 1:2 notitle axes x1y1 with lines lw 1.2 lc rgb "{_lcolor}"{_l_dash_clause}')
-                    if marker_on:
-                        for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle) in enumerate(_leg_rows):
-                            _sym = MARKER_SYMBOL_MAP.get(_lmarker)
-                            if not _sym:
-                                continue
-                            fragments.append(f'$PipFoldLegMk{_li} << EOD\n{_mk_x:.6g} {_ly:.6g} "{_sym}"\nEOD')
-                            fragments.append(f'$PipFoldLegMk{_li} using 1:2:3 notitle axes x1y1 with labels center font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
-                    for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle) in enumerate(_leg_rows):
-                        fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
-                        fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels {_justify} font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
         else:
             ix_lo, ix_hi, iy1_lo, iy1_hi = x_lo, x_hi, y1_lo, y1_hi
             iy2_lo, iy2_hi = (y2_lo_hi if y2_lo_hi is not None else (None, None))
@@ -4557,6 +4449,346 @@ class GnuplotGenerator:
                     f'with points pt {_fmt_pointtype(_marker_shape)} ps {_ps:.3f} lc rgb "{color}"'
                 )
             temp_files.append(_tmp_path)
+        # [수정 - 사용자 보고 버그] "inset curve가 legend 위로 겹침" -
+        # legend(배경 채움+테두리+샘플선+텍스트) fragment를 curve
+        # fragment보다 "먼저" fragments 리스트에 추가했었는데, 같은
+        # "plot ... , ... , ..." 명령 안에서는 뒤에 오는 항목이 앞의
+        # 것 위로 그려진다(gnuplot의 기본 그리기 순서) - 그래서 legend가
+        # curve보다 먼저(=아래에) 그려져, curve 선이 legend box 위로
+        # 그대로 겹쳐 보였다(main legend는 애초에 curve와 별개 오브젝트라
+        # 이 문제가 없었음 - 실측 스크린샷으로 재현 확인). curve를 다
+        # 그린 "뒤에" legend를 그리도록 이 블록 전체를 curve 루프
+        # 뒤로 옮긴다 - legend가 항상 최상단에 그려져 main과 같은 인상이
+        # 된다.
+        if not minimal:
+            if _pip_cfg.get("legend_on") and plotdef.curves:
+                # [수정 - 사용자 보고 버그] "legend box가 plot 전체를 덮음" -
+                # 줄 간격(row 높이)이 curve 개수와 무관한 고정 fraction(0.15)
+                # 이었음 - curve가 몇 개든 항상 0.15씩 차지하니, 커브가
+                # 몇 개만 넘어도(실제 데이터는 보통 2개보다 많음) 줄들이
+                # 안쪽 axis frame 아래·박스 밖까지 밀려나 박스 전체를 뒤덮는
+                # 배경으로 이어졌다. 실제 표시될 줄 수(제목이 있는 curve만)로
+                # 미리 나눠서, 몇 개든 항상 안쪽 axis frame 위쪽 62% 안에
+                # 들어오도록 줄 간격을 계산한다. [수정 - 사용자 보고] "위치는
+                # 우상단, 정렬은 우측이어야" - 네이티브 legend(_render_legend_
+                # box)가 쓰는 것과 같은 "right top" 배치·우측 정렬로 통일.
+                _titled = []
+                for _ci, _lcurve in enumerate(plotdef.curves):
+                    _lname = (_lcurve.title or "").strip()
+                    if _lname:
+                        _l_linestyle = _lcurve.linestyle or DEFAULT_LINESTYLES[_ci % len(DEFAULT_LINESTYLES)]
+                        _titled.append((_lcurve.color or DEFAULT_COLORS[_ci % len(DEFAULT_COLORS)], _lname,
+                                        getattr(_lcurve, "marker_shape", None), _l_linestyle))
+                _n_rows = len(_titled)
+                if _n_rows:
+                    # [수정 - 사용자 지적] "main legend에서 이미 다 설계
+                    # 했던 건데 왜 여기선 안 되나" - 글자 폭을 문자수 근사
+                    # (font_pt*상수)로 추측하는 대신, main legend(_render_
+                    # legend_box)가 이미 쓰는 실측 함수(_measure_text_width_in
+                    # - PIL로 실제 폰트 파일을 읽어 렌더 폭을 inch로 잼)를
+                    # 그대로 재사용한다. 인셋의 실제 물리 폭(axis_w_in, 위에서
+                    # _render_pip_inset이 함께 넘겨줌)으로 나누면 main과 똑같이
+                    # "박스 폭 대비 몇 %"가 정확히 나온다 - 폰트/문자열이
+                    # 뭐든(긴 영문, 특수문자 등) 실제 렌더 폭 그대로라 추측
+                    # 오차로 인한 겹침이 구조적으로 없다. 측정 불가(폰트 파일
+                    # 없음 등)시에만 기존 문자수 근사로 안전하게 대체한다.
+                    _char_frac = min(0.045, max(0.020, _font_leg * 0.006))
+                    _legend_font_name = getattr(plotdef, "legend_font", None) or "Malgun Gothic"
+
+                    def _text_w_frac(_s):
+                        # [수정 - 사용자 보고 버그] "마커가 글자에 가려 안
+                        # 보임" - PIL 실측은 이 "windows" 대화형 터미널의
+                        # 실제 렌더 폭과 완전히 같다는 보장이 없다(main
+                        # legend가 PDF/PNG 포맷마다 text_corr 보정치를 따로
+                        # 두는 것과 같은 이유 - 화면은 아직 실측 보정치가
+                        # 없음) - 15% 여유를 더해 실제가 추정보다 조금 더
+                        # 넓어도 박스/마커 간격이 항상 충분하게 한다.
+                        _measured = _measure_text_width_in(_s, _legend_font_name, _font_leg)
+                        if _measured is not None and axis_w_in and axis_w_in > 0:
+                            return (_measured / axis_w_in) * 1.15
+                        return _char_frac * len(_s)
+
+                    # [수정 - 사용자 재지적] "우측 정렬이면 좌측 border와는
+                    # 가장 긴 글자 기준 1자" - 박스 폭(_max_text_w)에 위
+                    # _text_w_frac의 15% 안전 여유(글자 잘림 방지용 - clip
+                    # 판정에는 계속 필요)까지 그대로 넣었더니, 가장 긴 줄
+                    # 조차 실제 텍스트보다 15%나 더 넓게 박스가 잡혀 1글자
+                    # 여백 계산과 무관하게 그 자체로 눈에 띄는 여분 공간이
+                    # 생겼다 - 박스 폭에는 안전 여유 없는 실측값을 쓰고,
+                    # "1글자" 여백(_char_w_frac, 아래)만으로 안전 마진을
+                    # 대신하게 한다(clip 판정용 _text_w_frac은 그대로 유지).
+                    def _text_w_frac_raw(_s):
+                        _measured = _measure_text_width_in(_s, _legend_font_name, _font_leg)
+                        if _measured is not None and axis_w_in and axis_w_in > 0:
+                            return _measured / axis_w_in
+                        return _char_frac * len(_s) / 1.15
+
+                    # 상한 폭에 안 들어가는 이름은 "…"로 줄인다(실측 기준
+                    # 으로 한 글자씩 줄이며 확인 - 문자수 근사와 달리 언어/
+                    # 폰트에 따라 문자당 폭이 달라도 항상 정확함). [수정 -
+                    # 사용자 재지적] "박스 폭이 여전히 너무 크다 - 이름을
+                    # 잘라서라도 줄여라" - 55%도 긴 이름(예: 22자) 하나로
+                    # 박스가 인셋 폭의 절반 가까이 차지하는 걸 못 막았음 -
+                    # 30%로 훨씬 타이트하게 낮춘다(넘는 이름은 "…"로 더
+                    # 잘림 - box 폭이 이 상한을 직접 따라가므로 확실히
+                    # 줄어듦).
+                    # [수정 - 사용자 재지적] "그래도 남는 공간이 많다 - box
+                    # 폭 계산 자체 문제" - 30%도 부족, 더 확 줄인다.
+                    # [수정 - 사용자 요청] "글자수 15자 기준으로" - 위 15자
+                    # 상한이 실제 주된 기준이 되도록, 폭(%) 상한은 15자가
+                    # 넉넉히 들어갈 정도로 다시 넓힌다(안전망 역할만).
+                    _text_cap = 0.38 - (0.10 if marker_on else 0.0)
+
+                    # [수정 - 사용자 요청] "글자수는 다시 키우고 제한치는
+                    # 15자 정도로" - 폭(%) 기준 상한 대신, 이해하기 쉬운
+                    # "글자 개수" 상한(15자)을 기준으로 자른다 - 폭 상한
+                    # (_text_cap)은 그래도 안전망으로 같이 걸어둔다(혹시
+                    # 아주 좁은 인셋에서 15자도 넘칠 수 있으므로).
+                    # [수정 - 사용자 최종 확정] "글자수는 13자로(대문자
+                    # 기준)" - 마진(여백) 축소와는 별개로 글자수 상한 자체는
+                    # 13으로 확정.
+                    _NAME_MAX_CHARS = 13
+
+                    def _clip_name(_n):
+                        _n2 = _n
+                        if len(_n2) > _NAME_MAX_CHARS:
+                            _n2 = _n2[:_NAME_MAX_CHARS]
+                        if _text_w_frac(_n2) <= _text_cap and len(_n2) == len(_n):
+                            return _n
+                        while len(_n2) > 1 and _text_w_frac(_n2 + "…") > _text_cap:
+                            _n2 = _n2[:-1]
+                        return (_n2 + "…") if len(_n2) < len(_n) else _n
+                    _titled = [(_c, _clip_name(_n), _ms, _lst) for _c, _n, _ms, _lst in _titled]
+                    # [수정 - 사용자 보고] "줄 상하 간격이 너무 큼" - 위쪽
+                    # 62%/줄당 최대 0.15이던 예산을 55%/줄당 최대 0.11로
+                    # 줄여 더 촘촘하게 붙인다(여전히 커브 개수에 반비례해서
+                    # 몇 개든 안쪽 axis frame을 넘지 않음).
+                    # [수정 - 사용자 재지적] "border와 title 간격이 1글자
+                    # 정도여야 하지 않나" - 여백 띠 "높이 대비 %"라는 임의
+                    # 기준을 버리고, 위 legend 폭(실측)과 같은 방식으로 줄
+                    # 높이도 실제 물리 치수(inch)로 구한다 - font_pt(pt,
+                    # =1/72in)에 줄간격 배수를 곱해 "줄 하나가 실제로 차지
+                    # 하는 높이"를 inch로 얻고, 인셋의 실제 물리 높이
+                    # (axis_h_in)로 나눠 data-fraction으로 바꾼다 - 폰트
+                    # 크기가 뭐든 항상 "글자 한두 줄 정도"의 자연스러운
+                    # 간격이 되고, 위쪽 여백(box 테두리<->첫 줄)도 같은
+                    # 단위(줄 높이의 35%, 대략 글자 한 개 폭 정도)로 맞춘다.
+                    # [수정 - 사용자 재지적] "curve 사이(줄과 줄) 간격도
+                    # 줄여야" - 배수 1.3(native ROW_H와 같던 값, 줄 사이에
+                    # 여유 있는 "문단" 인상을 주려던 것)은 legend처럼 촘촘한
+                    # 목록에는 과했다 - tic<->title 간격 수정 때와 같은
+                    # "글자 높이 + 아주 작은 여유"만 남기도록 1.05로 줄인다
+                    # (0이면 줄끼리 맞닿아 안 되고, 아주 살짝의 여유만).
+                    _row_h_in = (_font_leg / 72.0) * 1.05
+                    _row_h_frac = (_row_h_in / axis_h_in) if (axis_h_in and axis_h_in > 0) else 0.07
+                    _row_step = min(_row_h_frac, 0.45 / _n_rows)
+                    # [수정 - 사용자 재지적] "border와 title 간격이 1글자
+                    # 정도여야" - 박스 테두리(안쪽 axis frame과 부딪히지
+                    # 않게 하는 고정 최소 여백)와, 그 테두리부터 첫 줄까지의
+                    # "글자 한 개 폭" 간격을 서로 다른 두 값으로 분리한다
+                    # (하나로 합쳐 쓰면 여백을 줄일수록 테두리가 축 frame에
+                    # 다시 붙어버리는 문제가 있었음).
+                    # [수정 - 사용자 보고 버그] "legend 안 title이 위에서
+                    # 잘림" - 첫 줄 위치를 박스 위쪽 테두리에서 "글자 폭"
+                    # 만큼(0.4*줄높이, 실제 글자 "높이"의 절반에 못 미침)만
+                    # 떨어뜨렸더니, 글자 자체의 세로 높이(중심 기준 위/아래로
+                    # 뻗음) 중 위쪽 절반이 박스 테두리 밖으로 튀어나와
+                    # 잘려(가려져) 보였다 - 줄 간격(_row_step, 이미 폰트
+                    # 높이 기준으로 계산됨)의 절반을 그대로 첫 줄 오프셋으로
+                    # 써서, 글자 전체 높이가 항상 테두리 안쪽에 들어오게
+                    # 한다.
+                    # [수정 - 사용자 재지적] "1글자라고 강조했다" - 방금
+                    # 위 clip 수정에서 쓴 "줄 간격(_row_step)의 절반"은
+                    # 줄간격 자체에 이미 여유(1.3배 leading)가 들어있어
+                    # 필요한 것보다 더 크게 벌어졌다 - 글자가 안 잘리는 데
+                    # 필요한 건 "줄 간격의 절반"이 아니라 "글자 높이(순수
+                    # font_pt, leading 없이)의 절반"뿐이므로 그 값만 쓴다
+                    # (여전히 실제 물리 치수 기준이라 안 잘리는 건 보장되고,
+                    # leading분(약 30%)만큼 더 촘촘해진다).
+                    # [수정 - 사용자 재지적] "legend 내 title 마진(테두리
+                    # <->첫 줄)이 아직 해결 안 됨" - 줄 간격(_row_step)은
+                    # 이미 촘촘하게 줄였는데 이 테두리 여백은 고정값(0.025,
+                    # 물리 치수와 무관)이라 그대로 남아, 좁아진 줄 간격
+                    # 대비 상대적으로 더 크고 어색해 보였다 - _char_gap_frac
+                    # 과 같은 물리(inch) 기준으로 통일한다.
+                    # [수정 - 사용자 요청] "legend box 상단<->frame top
+                    # 간격을 조금 더(적어도 글자 반~1자), 우측도 동일하게"
+                    # - 이건 "테두리<->첫 줄 텍스트" 간격(_char_gap_frac이
+                    # 담당, 아래 그대로 유지)과는 다른, "legend box 자체의
+                    # 테두리<->안쪽 axis frame 가장자리" 간격이다(_lbg_y1이
+                    # iy1_hi에서 얼마나 떨어지는지 - 아래 top-side 계산에서
+                    # 텍스트 위치엔 상쇄돼 영향 없고, 오직 box 테두리 자체
+                    # 위치에만 반영됨). 0.15배(너무 작았음)에서 0.85배(글자
+                    # 높이의 85% - "반~1자" 범위)로 키운다.
+                    _frame_gap_in = (_font_leg / 72.0) * 0.85
+                    _frame_gap_frac = (_frame_gap_in / axis_h_in) if (axis_h_in and axis_h_in > 0) else 0.03
+                    # 우측(legend box 우측 테두리<->axis frame 우측 가장자리)
+                    # 간격도 같은 물리 크기로 맞춘다(가로 환산은 axis_w_in
+                    # 기준) - 기존엔 0.02(span의 2%, 폭이 얼마든 고정 비율)
+                    # 였음.
+                    _frame_gap_x_in = (_font_leg / 72.0) * 0.85
+                    _frame_gap_x_frac = (_frame_gap_x_in / axis_w_in) if (axis_w_in and axis_w_in > 0) else 0.03
+                    _glyph_half_in = (_font_leg / 72.0) * 0.55
+                    _char_gap_frac = (_glyph_half_in / axis_h_in) if (axis_h_in and axis_h_in > 0) else _row_step * 0.4
+                    # [수정 - 사용자 보고 버그] "왼쪽 box 선과 title 사이가
+                    # 큼" - 지금까지 우측 정렬(right-justify)이었는데, 박스
+                    # 폭은 가장 긴 줄 기준이라 짧은 줄은 항상 왼쪽에 텍스트가
+                    # 시작 안 되는 빈 공간이 컸다(오른쪽 끝만 맞추면 왼쪽은
+                    # 줄마다 제각각 비게 됨). 실제 목록처럼 왼쪽 정렬로
+                    # 바꾼다 - 모든 줄이 같은 x(box 왼쪽에서 고정 간격)에서
+                    # 시작하고, 짧은 줄은 자연스럽게 오른쪽이 먼저 끝난다
+                    # (빈 공간이 있어도 "다음 내용이 이어질 자리"로 보여
+                    # 어색하지 않음). 부수효과로 마커 위치도 모든 줄에서
+                    # 같은 고정 x가 되어(마커+텍스트가 항상 나란히 시작)
+                    # 이전처럼 "가장 긴 줄만 마커가 글자에 가려짐" 문제 자체가
+                    # 구조적으로 없어진다.
+                    # [수정 - 사용자 지적] "정렬은 main-plot의 legend 설정을
+                    # 따라가야" - main legend(_render_legend_box)가 legend_pos/
+                    # legend_align(Auto면 위치의 좌/우로 자동 판정)로 정하는
+                    # is_right_side와 같은 로직을 그대로 재사용해, 인셋
+                    # legend도 main과 같은 쪽으로 정렬한다(하드코딩된 좌측
+                    # 정렬이 아님).
+                    _lp = str(getattr(plotdef, "legend_pos", "") or "").strip().lower()
+                    _lalign = str(getattr(plotdef, "legend_align", "Auto") or "Auto")
+                    if _lalign == "Left":
+                        _leg_right_side = False
+                    elif _lalign == "Right":
+                        _leg_right_side = True
+                    else:
+                        _leg_right_side = ("left" not in _lp)
+                    # [추가 - 사용자 요청] "legend 위치와 정렬은 자기의
+                    # main-plot을 따라가면 됨" - 좌/우(정렬)뿐 아니라 위/
+                    # 아래(위치)도 main의 legend_pos를 그대로 따른다(지금
+                    # 까지는 항상 위쪽 고정이었음). native _resolve_anchor와
+                    # 같은 방식으로 "top"/"bottom" 문자열 포함 여부로 판정.
+                    _leg_top_side = ("bottom" not in _lp)
+                    # [수정 - 사용자 요청, 디버그로 원인 확인] "box 가로
+                    # 길이 계산에 쓰인 길이와 최대 글자수 길이를 비교해
+                    # 봐라" - 실측(디버그 출력) 결과: PIL 실측 폭(0.44in)이
+                    # native의 "글자수 기반" 추정(15자 기준 0.32in)보다
+                    # 훨씬 컸음 - 버그가 아니라 "MFLOR-SQRT(1)" 같은 대문자/
+                    # 넓은 글자 위주 문자열의 실제 폭이 "평균 글자 폭" 추정
+                    # 보다 정말로 넓기 때문(PIL 실측은 정확함). 사용자가
+                    # "글자수 제한으로 box 폭을 결정"하길 원하므로, box 폭
+                    # 계산만 native와 같은 "글자수 x 평균 폭" 방식으로
+                    # 바꾼다(실측 대신) - 이러면 넓은 글자 위주 문자열은
+                    # box보다 살짝 넓게 그려질 수 있음(트레이드오프, 필요시
+                    # 재조정). [수정 - 사용자 보고 버그] "5자 테스트에서
+                    # 오히려 글자가 잘림" - 평균 폭(0.0049) 그대로는 실제
+                    # 대문자 위주 글자 폭에 못 미쳐 살짝 잘렸음 - 15%
+                    # 안전 여유를 다시 더한다(PIL 실측 때 쓰던 것과 같은
+                    # 계수 - 완전히 없앤 게 과했음).
+                    _avg_char_w_in = 0.0049 * _font_leg * 1.15
+                    _max_text_w = (max(len(_n) for _, _n, _, _ in _titled) * _avg_char_w_in / axis_w_in) if (axis_w_in and axis_w_in > 0) else max(_text_w_frac_raw(_n) for _, _n, _, _ in _titled)
+                    # [수정 - 사용자 요청] "legend sample선은 style 구별해서
+                    # 보여주어야지요" - main legend(_render_legend_box)처럼
+                    # marker 기호 자리 앞(또는 marker_on이 꺼져 있어도 항상)에
+                    # curve의 실제 색상+선굵기+dashtype(위 curve 루프와 동일
+                    # 계산)으로 짧은 샘플선을 긋는다 - marker 기호는 그 샘플선
+                    # 한가운데에 겹쳐 찍는다(네이티브와 같은 배치).
+                    # [수정 - 사용자 재지적] "고정분도 inset 배율에 비례해야
+                    # 하는데 실제값으로 고정한 것 아닌지" - 0.10(고정 비율)은
+                    # ix span에는 비례하지만 font 크기와는 무관하게 커서,
+                    # 작은 인셋/작은 폰트에서 샘플선이 상대적으로 과하게
+                    # 길었다 - 0.05로 줄인다.
+                    _sample_col = (ix_hi - ix_lo) * 0.05
+                    _mk_col = ((ix_hi - ix_lo) * 0.09) if marker_on else 0.0
+                    _lead_col = _sample_col + _mk_col
+                    # [수정 - 사용자 최종 확정] "우측(style 쪽) 정렬이면
+                    # style과 title은 1글자, 좌측 border와는 가장 긴 글자
+                    # 기준 1자 - 좌우 정렬이 아니라 우측만 정렬" - 텍스트
+                    # 블록과 샘플선 블록을 서로 다른 테두리에 각각 붙이는
+                    # (직전) 시도는 틀렸음: 원래 요구는 하나의 방향으로만
+                    # (우측 정렬이면 샘플선+텍스트가 한 덩어리로 오른쪽에
+                    # 붙어 함께 움직임 - main legend와 동일) 정렬하되, 그
+                    # 정렬 기준이 되는 두 간격(①샘플선<->텍스트, ②텍스트
+                    # 왼쪽 끝<->박스 테두리 - 단, "가장 긴 curve 이름" 기준
+                    # 으로 고정)을 물리 폰트 크기 기준 "1글자"로 계산하는
+                    # 것. 짧은 이름은 (박스 폭이 가장 긴 이름 기준 고정이므로)
+                    # 자연히 왼쪽에 더 큰 공백이 남는데 - 이건 결함이 아니라
+                    # 우측 정렬의 당연한 결과(main legend도 동일)로 받아들
+                    # 인다.
+                    # [수정 - 사용자 재지적] "M자(가장 긴 줄)랑 [박스 좌측
+                    # 테두리가] 1글자 [간격] 되게" - font_pt/72(=1em, 실제
+                    # 문자 폭보다 훨씬 큼)를 "1글자 폭"으로 잘못 썼음 - main
+                    # legend(_render_legend_box)가 이미 실측 보정해 쓰는
+                    # "문자 하나당 실제 폭"(0.0049*font_pt, 대문자 기준
+                    # 화면 실측) 공식을 그대로 재사용한다.
+                    # [수정 - 사용자 보고 버그] "3,4번째 줄(pressure/flowrate)은
+                    # title과 sample선이 붙어 보임" - 원인: "M자에 [테두리]
+                    # 붙여봐"(box 테두리<->가장 긴 title 간격) 요청에 맞춰
+                    # _char_w_frac을 거의 0으로 줄였는데, 같은 변수를 "샘플선
+                    # <->텍스트" 간격에도 그대로 재사용하고 있었다 - 이 둘은
+                    # 서로 다른 간격인데 하나로 묶은 게 버그였음(짧은 이름
+                    # 줄일수록 title이 sample 쪽으로 더 붙어 보이는 이유이기도
+                    # 함 - 우측 정렬이라 title이 sample에서부터 그려지므로).
+                    # 샘플선<->텍스트 간격은 별도 변수(native legend의 compact
+                    # LABEL_GAP_FRAC 배율 0.3과 같은 수준)로 분리한다 - 테두리
+                    # <->가장 긴 title 간격(_char_w_frac, 거의 0)과는 무관하게
+                    # 항상 일정하게 유지됨.
+                    _char_w_in = 0.0049 * _font_leg * 0.02
+                    _char_w_frac = (_char_w_in / axis_w_in) if (axis_w_in and axis_w_in > 0) else 0.02
+                    # [수정 - 사용자 요청] "title<->sample 간격을 조금 더
+                    # 크게 주되(충분하니까) box 가로길이 계산에는 넣지 말 것"
+                    # - 0.3배 -> 0.6배로 키우되, 아래에서 box 폭(_lbg_x0/x1)을
+                    # 더 이상 _lx(샘플-텍스트 간격이 반영된 위치)에서 역산
+                    # 하지 않고 "샘플 위치 + 글자수 기반 예상 폭"으로 독립
+                    # 계산해, 이 간격을 늘려도 box 폭 자체는 안 늘어난다.
+                    _sample_gap_in = 0.0049 * _font_leg * 0.6
+                    _sample_gap_frac = (_sample_gap_in / axis_w_in) if (axis_w_in and axis_w_in > 0) else 0.02
+                    if _leg_right_side:
+                        _lbg_x1 = ix_hi - (ix_hi - ix_lo) * _frame_gap_x_frac
+                        _sample_x2 = _lbg_x1 - (ix_hi - ix_lo) * 0.015
+                        _sample_x1 = _sample_x2 - _sample_col
+                        _lx = _sample_x1 - (ix_hi - ix_lo) * _sample_gap_frac
+                        _lbg_x0 = max(_sample_x1 - _max_text_w * (ix_hi - ix_lo) - (ix_hi - ix_lo) * _char_w_frac, ix_lo)
+                        _justify = "right"
+                    else:
+                        _lbg_x0 = ix_lo + (ix_hi - ix_lo) * _frame_gap_x_frac
+                        _sample_x1 = _lbg_x0 + (ix_hi - ix_lo) * 0.015
+                        _sample_x2 = _sample_x1 + _sample_col
+                        _lx = _sample_x2 + (ix_hi - ix_lo) * _sample_gap_frac
+                        _lbg_x1 = min(_sample_x2 + _max_text_w * (ix_hi - ix_lo) + (ix_hi - ix_lo) * _char_w_frac, ix_hi - (ix_hi - ix_lo) * _frame_gap_x_frac)
+                        _justify = "left"
+                    _mk_x = (_sample_x1 + _sample_x2) / 2.0
+                    _leg_rows = []
+                    for _ri, (_lcolor, _lname, _lmarker, _llinestyle) in enumerate(_titled):
+                        _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
+                        if _leg_top_side:
+                            _ly = iy1_hi - (iy1_hi - iy1_lo) * (_frame_gap_frac + _char_gap_frac + _row_step * _ri)
+                        else:
+                            _ly = iy1_lo + (iy1_hi - iy1_lo) * (_frame_gap_frac + _char_gap_frac + _row_step * _ri)
+                        _leg_rows.append((_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle, _sample_x1, _sample_x2))
+                    if _leg_top_side:
+                        _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * _frame_gap_frac
+                        _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * _char_gap_frac
+                    else:
+                        _lbg_y0 = iy1_lo + (iy1_hi - iy1_lo) * _frame_gap_frac
+                        _lbg_y1 = max(r[1] for r in _leg_rows) + (iy1_hi - iy1_lo) * _char_gap_frac
+                    _lbg_corners = [(_lbg_x0, _lbg_y0), (_lbg_x1, _lbg_y0), (_lbg_x1, _lbg_y1), (_lbg_x0, _lbg_y1), (_lbg_x0, _lbg_y0)]
+                    _lbg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _lbg_corners)
+                    fragments.append(f"$PipFoldLegBg << EOD\n{_lbg_rows}\nEOD")
+                    fragments.append('$PipFoldLegBg using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 border lc rgb "black" lw 0.8')
+                    # [추가 - 사용자 요청] "legend sample선은 style 구별해서
+                    # 보여주어야지요" - curve 실제 색상+lw+dashtype으로 짧은
+                    # 샘플선을 긋는다(main legend의 화살표 샘플선과 같은
+                    # 역할 - 여기서는 "set arrow" 상태 잔류 위험을 피하려고
+                    # 다른 요소와 같은 데이터 plot 방식(2점 직선)을 쓴다).
+                    for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle, _row_sx1, _row_sx2) in enumerate(_leg_rows):
+                        _l_dash = _dash_pattern_for_fmt(_llinestyle, "interactive")
+                        _l_dash_clause = f' dashtype ({_l_dash})' if _l_dash else ''
+                        fragments.append(f"$PipFoldLegSmp{_li} << EOD\n{_row_sx1:.6g} {_ly:.6g}\n{_row_sx2:.6g} {_ly:.6g}\nEOD")
+                        fragments.append(f'$PipFoldLegSmp{_li} using 1:2 notitle axes x1y1 with lines lw 1.2 lc rgb "{_lcolor}"{_l_dash_clause}')
+                    if marker_on:
+                        for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle, _row_sx1, _row_sx2) in enumerate(_leg_rows):
+                            _sym = MARKER_SYMBOL_MAP.get(_lmarker)
+                            if not _sym:
+                                continue
+                            fragments.append(f'$PipFoldLegMk{_li} << EOD\n{_mk_x:.6g} {_ly:.6g} "{_sym}"\nEOD')
+                            fragments.append(f'$PipFoldLegMk{_li} using 1:2:3 notitle axes x1y1 with labels center font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
+                    for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle, _row_sx1, _row_sx2) in enumerate(_leg_rows):
+                        fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
+                        fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels {_justify} font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
         return fragments, temp_files
 
     def _render_pip_inset(self, plotdef, lines, main_cmd_list, fmt, parent_box=None, force_postprocess=False):
@@ -4646,6 +4878,17 @@ class GnuplotGenerator:
         # "이 구간으로 필터링"하는 데 필요한 PIP 자신의 x/y1/y2 범위(파싱된
         # 숫자, 화면비율이 아닌 data 값 그대로).
         self._pip_fold_ranges = None
+        # [추가 - 사용자 요청] "투명 적용 먼저 하고" - 지금까지 fold overlay
+        # 재설계(옛 별도 패널 제거 + main 재생에 데이터로 접어넣기)는
+        # 완전불투명(opaque) 케이스에서 self._pip_main_blank_line이 세워질
+        # 때만 create_script가 감지해서 적용했는데, 투명(no_bg) 케이스는
+        # "메인을 비워둘 필요가 없어" 애초에 그 표식을 세우지 않아 여전히
+        # 옛 방식(화면 고정 별도 패널 - 확대 후 잔상 버그 있음) 그대로였다.
+        # blank_line 유무와 무관하게 "이 PIP를 fold overlay로 처리해야
+        # 하는지"를 따로 나타내는 플래그를 둬서, 투명 케이스도 옛 패널을
+        # 잘라내고 fold overlay로 옮기되 배경만 안 그리게(메인이 그대로
+        # 비쳐 보이도록) 한다.
+        self._pip_fold_active = False
         pip = getattr(plotdef, "pip", None) or {}
         if not pip.get("enabled"):
             return
@@ -5573,11 +5816,13 @@ class GnuplotGenerator:
                         # 같은 고정 캔버스 폭(5.95in)을 그대로 쓴다.
                         "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
                         "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
+                        "opaque_bg": True,
                         "margins": {
                             "top": _inset_top_frac, "bottom": _inset_bottom_frac,
                             "left": _inset_left_frac, "right": _inset_right_frac,
                         },
                     }
+                    self._pip_fold_active = True
         elif _rect_no_bg:
             # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
             # 통일 필요(가는 외곽선은 다 있는 게 낫다)" - 배경(채우기)은
@@ -5589,6 +5834,50 @@ class GnuplotGenerator:
                 f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
                 f'front fc rgb "black" fillstyle empty border lc rgb "black" lw {_deco_lw:.2f} dashtype "."'
             )
+            # [추가 - 사용자 요청] "투명 적용 먼저 하고" - opaque(완전불투명)
+            # 케이스와 똑같이 fold overlay로 옮긴다 - 유일한 차이는 배경을
+            # 안 채워서(opaque_bg=False) main이 그대로 비쳐 보인다는 것뿐이다.
+            # [수정 - 근본 원인] self._pip_replay_mask_box는 이름과 달리
+            # "main을 가리는 제외 영역" 전용이 아니라, _build_pip_folded_
+            # overlay가 배경/테두리/커브를 어디에 그릴지 아는 유일한 통로
+            # (box 인자)라 투명이어도 반드시 계산해 둬야 한다(처음엔 "가리기
+            # 용도라 투명엔 필요 없다"고 잘못 판단해 아예 안 채웠다가, box가
+            # None이라 _build_pip_folded_overlay가 곧바로 빈 결과를 반환해
+            # 투명 PIP가 통째로 안 보이는 회귀로 이어짐 - 실측 전에 코드
+            # 리뷰로 미리 발견해 고침).
+            _rxr2 = _parse_range(xrange_cmd)
+            _ryr2 = _parse_range(yrange_cmd)
+            _ry2r2 = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
+            _main_xr2 = _parse_range(_main_xrange_line) if _main_xrange_line else None
+            _main_yr2 = _parse_range(_main_yrange_line) if _main_yrange_line else None
+            _main_y2r2 = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
+            if (_rxr2 is not None and _ryr2 is not None and _rxr2[1] != _rxr2[0] and _ryr2[1] != _ryr2[0]
+                    and _ry2r2 is not None and _ry2r2[1] != _ry2r2[0]
+                    and _main_xr2 is not None and _main_xr2[1] != _main_xr2[0]
+                    and _main_yr2 is not None and _main_yr2[1] != _main_yr2[0]
+                    and (not _uses_y2 or (_main_y2r2 is not None and _main_y2r2[1] != _main_y2r2[0]))):
+                _mbx2 = _box_bounds_outer(_main_xr2[0], _main_xr2[1], True)
+                _mby12 = _box_bounds_outer(_main_yr2[0], _main_yr2[1], False)
+                _mby22 = _box_bounds_outer(_main_y2r2[0], _main_y2r2[1], False) if _uses_y2 else None
+                if _mbx2 is not None and _mby12 is not None:
+                    self._pip_replay_mask_box = {"x": _mbx2, "y1": _mby12, "y2": _mby22}
+                    self._pip_fold_ranges = {
+                        "x": _rxr2, "y1": _ryr2, "y2": _ry2r2 if _uses_y2 else None,
+                        "clip_shape": "rect", "clip_rx": 50.0, "clip_ry": 50.0,
+                        "minimal": bool(pip.get("minimal")),
+                        "size_factor": min(1.0, max(size_w, size_h)),
+                        "font_scale": font_scale,
+                        "marker_on": bool(pip.get("marker_on")),
+                        "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
+                        "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
+                        "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
+                        "opaque_bg": False,
+                        "margins": {
+                            "top": _inset_top_frac, "bottom": _inset_bottom_frac,
+                            "left": _inset_left_frac, "right": _inset_right_frac,
+                        },
+                    }
+                    self._pip_fold_active = True
         elif _ellipse_fully_opaque or _ellipse_no_bg:
             _ecx = origin_x + size_w / 2.0
             _ecy = origin_y + size_h / 2.0
@@ -5672,12 +5961,51 @@ class GnuplotGenerator:
                             "marker_on": bool(pip.get("marker_on")),
                             "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
                             "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
-                        "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
+                            "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
+                            "opaque_bg": True,
                             "margins": {
                                 "top": _inset_top_frac, "bottom": _inset_bottom_frac,
                                 "left": _inset_left_frac, "right": _inset_right_frac,
                             },
                         }
+                        self._pip_fold_active = True
+            elif _ellipse_no_bg:
+                # [추가 - 사용자 요청] "투명 적용 먼저 하고" - rect_no_bg와
+                # 같은 이유(box 인자는 투명이어도 필수)로 self._pip_replay_
+                # mask_box도 같이 계산해 둔다 - 위 rect_no_bg 분기의 설명 참고.
+                _erxr = _parse_range(xrange_cmd)
+                _eryr = _parse_range(yrange_cmd)
+                _ery2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
+                _main_xr3 = _parse_range(_main_xrange_line) if _main_xrange_line else None
+                _main_yr3 = _parse_range(_main_yrange_line) if _main_yrange_line else None
+                _main_y2r3 = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
+                if (_erxr is not None and _eryr is not None and _erxr[1] != _erxr[0] and _eryr[1] != _eryr[0]
+                        and _ery2r is not None and _ery2r[1] != _ery2r[0]
+                        and _main_xr3 is not None and _main_xr3[1] != _main_xr3[0]
+                        and _main_yr3 is not None and _main_yr3[1] != _main_yr3[0]
+                        and (not _uses_y2 or (_main_y2r3 is not None and _main_y2r3[1] != _main_y2r3[0]))):
+                    _mbx3 = _box_bounds_outer(_main_xr3[0], _main_xr3[1], True)
+                    _mby13 = _box_bounds_outer(_main_yr3[0], _main_yr3[1], False)
+                    _mby23 = _box_bounds_outer(_main_y2r3[0], _main_y2r3[1], False) if _uses_y2 else None
+                    if _mbx3 is not None and _mby13 is not None:
+                        self._pip_replay_mask_box = {"x": _mbx3, "y1": _mby13, "y2": _mby23}
+                        self._pip_fold_ranges = {
+                            "x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None,
+                            "clip_shape": _clip_shape, "clip_rx": _clip_rx, "clip_ry": _clip_ry,
+                            "minimal": bool(pip.get("minimal")),
+                            "size_factor": min(1.0, max(size_w, size_h)),
+                            "font_scale": font_scale,
+                            "marker_on": bool(pip.get("marker_on")),
+                            "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
+                            "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
+                            "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
+                            "opaque_bg": False,
+                            "margins": {
+                                "top": _inset_top_frac, "bottom": _inset_bottom_frac,
+                                "left": _inset_left_frac, "right": _inset_right_frac,
+                            },
+                        }
+                        self._pip_fold_active = True
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
             # 있도록 항상 흰 배경만(테두리 없이) 깐다 - 최종 배경 불투명도/
@@ -7229,7 +7557,15 @@ class GnuplotGenerator:
             # self._pip_main_blank_line/self._pip_replay_mask_box/
             # self._pip_fold_ranges 등은 lines 리스트가 아니라 별도
             # 인스턴스 속성이라 이 자르기와 무관하게 그대로 살아있다.
-            if getattr(self, "_pip_main_blank_line", None) and fmt.lower() == "interactive":
+            # [수정 - 사용자 요청] "투명 적용 먼저 하고" - 이 게이트가
+            # self._pip_main_blank_line(완전불투명일 때만 세워짐 - main을
+            # 비워둘 필요가 있을 때만)로만 걸려 있어서, 투명(no_bg) PIP는
+            # 이 옛 패널 제거 + fold overlay 전환 자체가 전혀 적용 안 됐다
+            # (여전히 화면 고정 별도 패널 - 줌 후 잔상 버그 그대로). "이
+            # PIP를 fold overlay로 처리해야 하는지"를 나타내는
+            # self._pip_fold_active(투명도 포함해 네이티브 shape 케이스면
+            # 전부 True)로 게이트를 바꾼다.
+            if getattr(self, "_pip_fold_active", False) and fmt.lower() == "interactive":
                 # [수정 - 실측으로 발견된 버그] "PIP 박스는 있는데 안이 텅
                 # 비어(격자/커브 다 없음) 보임" - 처음엔 옛 패널이 덧붙인
                 # 내용을 통째로(설정+실제 곡선 plot 전부) 잘라냈는데, 그러면
@@ -7334,7 +7670,16 @@ class GnuplotGenerator:
                 if _idx is not None:
                     _target_list.insert(_idx, _blank_line)
             _pip_blank_line = getattr(self, "_pip_main_blank_line", None)
-            if _pip_blank_line:
+            # [수정 - 사용자 요청] "투명 적용 먼저 하고" - 이 블록 전체가
+            # _pip_blank_line(완전불투명일 때만 세워짐)으로만 걸려 있어서,
+            # 투명(no_bg) PIP는 아래의 mask_box/fold_ranges 소비(=fold
+            # overlay를 재생에 접어넣는 핵심 로직) 자체가 전혀 실행 안
+            # 됐었다 - self._pip_fold_active(투명 포함)로 게이트를 넓히고,
+            # blank_line 관련 처리(main 자신의 첫 plot을 비워두는 것 -
+            # 애초에 투명은 비울 필요가 없음)만 blank_line이 있을 때로
+            # 좁혀 안쪽에 남긴다.
+            if getattr(self, "_pip_fold_active", False):
+              if _pip_blank_line:
                 # [추가 - 사용자 재재재보고 대응 실험] "불투명 확대는 curve
                 # 변화 없음(좌표축만) / 투명은 확대 가능함" - 재생의 using식
                 # 자체는 이제 둘이 완전히 같은데(마스킹 없음), 유일하게 남은
@@ -7356,82 +7701,83 @@ class GnuplotGenerator:
                 _pip_probe_lines.append("unset object 7100")
                 _insert_before_first_plot(_pip_probe_lines, _pip_blank_line, _main_state_start_idx)
                 self._pip_main_blank_line = None
-                # [수정 - PIP 렌더링 재설계] "R/u 직후 기본 화면 보호"와
-                # "확대 시 실제 재렌더"가 NaN 마스킹 한 가지로는 동시에 안
-                # 된다는 게 이 세션 내내 반복 확인된 결론(마스킹 있으면 첫
-                # 화면은 깨끗하지만 실제 대화형 replot이 곡선을 아예 다시
-                # 안 그림 - 격리 pngcairo 테스트와 실제 Windows 터미널 결과가
-                # 다른 사례로 재확인됨). 사용자 승인(재생성돼도 괜찮음, R/u로
-                # 원위치)에 따라 접근을 바꾼다: 재생의 main 곡선은 (마스킹
-                # 없이) 그대로 두고 - 확대/스크롤이 항상 정상 재렌더됨 -
-                # PIP(배경+테두리+자기 커브)를 이 "plot \" 명령 "안에" 같은
-                # 목록의 뒤쪽 항목들로 덧붙인다(_build_pip_folded_overlay -
-                # 커브 데이터는 생성 시점에 gnuplot을 한 번 더 돌려 PIP 구간
-                # 으로 이미 필터링한 순수 숫자 파일로 뽑아두고, 여기서는
-                # "고정 박스 좌표로 선형 변환"하는 조건 없는 산술식만 씀 -
-                # 이런 형태는 이 세션의 격리 테스트로 replot에도 안전함을
-                # 확인함). 같은 명령이 통째로 replot되므로 확대해도 PIP가
-                # 매번 같이 다시 그려짐 - 다만 화면 비율이 아니라 생성 시점
-                # data 좌표에 고정되므로, 그 data 구간이 시야 밖으로 나가면
-                # PIP도 같이 안 보이게 된다(사용자 확인·승인됨).
-                _mask_box = getattr(self, "_pip_replay_mask_box", None)
-                self._pip_replay_mask_box = None
-                _fold_ranges = getattr(self, "_pip_fold_ranges", None)
-                self._pip_fold_ranges = None
-                if _main_state_snapshot is not None and _mask_box and _fold_ranges:
-                    _snap_plot_idx = next(
-                        (i for i in range(len(_main_state_snapshot)) if _main_state_snapshot[i].strip() == "plot \\"),
-                        None
-                    )
-                    if _snap_plot_idx is not None:
-                        _fold_x = _fold_ranges.get("x")
-                        _fold_y1 = _fold_ranges.get("y1")
-                        _fold_y2 = _fold_ranges.get("y2")
-                        _fold_fragments, _fold_tempfiles = self._build_pip_folded_overlay(
-                            plotdef,
-                            _fold_x[0] if _fold_x else None, _fold_x[1] if _fold_x else None,
-                            _fold_y1[0] if _fold_y1 else None, _fold_y1[1] if _fold_y1 else None,
-                            _fold_y2[0] if _fold_y2 else None, _fold_y2[1] if _fold_y2 else None,
-                            _mask_box, self.plot_dir,
-                            clip_shape=_fold_ranges.get("clip_shape", "rect"),
-                            clip_rx=_fold_ranges.get("clip_rx", 50.0),
-                            clip_ry=_fold_ranges.get("clip_ry", 50.0),
-                            minimal=_fold_ranges.get("minimal", False),
-                            size_factor=_fold_ranges.get("size_factor", 1.0),
-                            font_scale=_fold_ranges.get("font_scale", 0.6),
-                            margins=_fold_ranges.get("margins"),
-                            marker_on=_fold_ranges.get("marker_on", False),
-                            marker_scale=_fold_ranges.get("marker_scale", 0.3),
-                            axis_w_in=_fold_ranges.get("axis_w_in"),
-                            axis_h_in=_fold_ranges.get("axis_h_in"),
-                        )
-                        self._last_pip_fold_tempfiles = (getattr(self, "_last_pip_fold_tempfiles", None) or []) + _fold_tempfiles
-                        _decls = [f for f in _fold_fragments if f.startswith("$") and "<< EOD" in f]
-                        _clauses = [f for f in _fold_fragments if not (f.startswith("$") and "<< EOD" in f)]
-                        for _d in reversed(_decls):
-                            _main_state_snapshot.insert(_snap_plot_idx, _d)
-                            _snap_plot_idx += 1
-                        if _clauses:
-                            # [주의] _main_state_snapshot의 물리적 마지막 원소가
-                            # 항상 곡선 줄인 건 아님(예: 뒤에 빈 문자열 줄이
-                            # 따라올 수 있음, 실측으로 확인) - "plot \" 다음부터
-                            # 실제로 내용이 있는 마지막 줄을 찾아야 정확히 그
-                            # 줄 끝에 ", \"를 이어붙일 수 있다.
-                            _last_idx = len(_main_state_snapshot) - 1
-                            while _last_idx > _snap_plot_idx and not _main_state_snapshot[_last_idx].strip():
-                                _last_idx -= 1
-                            _last_line = _main_state_snapshot[_last_idx]
-                            if not _last_line.rstrip().endswith("\\"):
-                                _main_state_snapshot[_last_idx] = _last_line.rstrip() + ", \\"
-                            _new_clause_lines = []
-                            for _ci, _clause in enumerate(_clauses):
-                                _suffix = ", \\" if _ci < len(_clauses) - 1 else ""
-                                _new_clause_lines.append(_clause + _suffix)
-                            # 뒤에 남아있을 수 있는 빈 줄(위 주석 참고) 바로
-                            # 앞(=실제 마지막 곡선 줄 바로 뒤)에 끼워 넣는다 -
-                            # 그냥 append하면 그 빈 줄 뒤에 붙어 "\" 이어짐이
-                            # 중간에 끊기는 문법 오류가 됨.
-                            _main_state_snapshot[_last_idx + 1:_last_idx + 1] = _new_clause_lines
+              # [수정 - PIP 렌더링 재설계] "R/u 직후 기본 화면 보호"와
+              # "확대 시 실제 재렌더"가 NaN 마스킹 한 가지로는 동시에 안
+              # 된다는 게 이 세션 내내 반복 확인된 결론(마스킹 있으면 첫
+              # 화면은 깨끗하지만 실제 대화형 replot이 곡선을 아예 다시
+              # 안 그림 - 격리 pngcairo 테스트와 실제 Windows 터미널 결과가
+              # 다른 사례로 재확인됨). 사용자 승인(재생성돼도 괜찮음, R/u로
+              # 원위치)에 따라 접근을 바꾼다: 재생의 main 곡선은 (마스킹
+              # 없이) 그대로 두고 - 확대/스크롤이 항상 정상 재렌더됨 -
+              # PIP(배경+테두리+자기 커브)를 이 "plot \" 명령 "안에" 같은
+              # 목록의 뒤쪽 항목들로 덧붙인다(_build_pip_folded_overlay -
+              # 커브 데이터는 생성 시점에 gnuplot을 한 번 더 돌려 PIP 구간
+              # 으로 이미 필터링한 순수 숫자 파일로 뽑아두고, 여기서는
+              # "고정 박스 좌표로 선형 변환"하는 조건 없는 산술식만 씀 -
+              # 이런 형태는 이 세션의 격리 테스트로 replot에도 안전함을
+              # 확인함). 같은 명령이 통째로 replot되므로 확대해도 PIP가
+              # 매번 같이 다시 그려짐 - 다만 화면 비율이 아니라 생성 시점
+              # data 좌표에 고정되므로, 그 data 구간이 시야 밖으로 나가면
+              # PIP도 같이 안 보이게 된다(사용자 확인·승인됨).
+              _mask_box = getattr(self, "_pip_replay_mask_box", None)
+              self._pip_replay_mask_box = None
+              _fold_ranges = getattr(self, "_pip_fold_ranges", None)
+              self._pip_fold_ranges = None
+              if _main_state_snapshot is not None and _mask_box and _fold_ranges:
+                  _snap_plot_idx = next(
+                      (i for i in range(len(_main_state_snapshot)) if _main_state_snapshot[i].strip() == "plot \\"),
+                      None
+                  )
+                  if _snap_plot_idx is not None:
+                      _fold_x = _fold_ranges.get("x")
+                      _fold_y1 = _fold_ranges.get("y1")
+                      _fold_y2 = _fold_ranges.get("y2")
+                      _fold_fragments, _fold_tempfiles = self._build_pip_folded_overlay(
+                          plotdef,
+                          _fold_x[0] if _fold_x else None, _fold_x[1] if _fold_x else None,
+                          _fold_y1[0] if _fold_y1 else None, _fold_y1[1] if _fold_y1 else None,
+                          _fold_y2[0] if _fold_y2 else None, _fold_y2[1] if _fold_y2 else None,
+                          _mask_box, self.plot_dir,
+                          clip_shape=_fold_ranges.get("clip_shape", "rect"),
+                          clip_rx=_fold_ranges.get("clip_rx", 50.0),
+                          clip_ry=_fold_ranges.get("clip_ry", 50.0),
+                          minimal=_fold_ranges.get("minimal", False),
+                          size_factor=_fold_ranges.get("size_factor", 1.0),
+                          font_scale=_fold_ranges.get("font_scale", 0.6),
+                          margins=_fold_ranges.get("margins"),
+                          marker_on=_fold_ranges.get("marker_on", False),
+                          marker_scale=_fold_ranges.get("marker_scale", 0.3),
+                          axis_w_in=_fold_ranges.get("axis_w_in"),
+                          axis_h_in=_fold_ranges.get("axis_h_in"),
+                          opaque_bg=_fold_ranges.get("opaque_bg", True),
+                      )
+                      self._last_pip_fold_tempfiles = (getattr(self, "_last_pip_fold_tempfiles", None) or []) + _fold_tempfiles
+                      _decls = [f for f in _fold_fragments if f.startswith("$") and "<< EOD" in f]
+                      _clauses = [f for f in _fold_fragments if not (f.startswith("$") and "<< EOD" in f)]
+                      for _d in reversed(_decls):
+                          _main_state_snapshot.insert(_snap_plot_idx, _d)
+                          _snap_plot_idx += 1
+                      if _clauses:
+                          # [주의] _main_state_snapshot의 물리적 마지막 원소가
+                          # 항상 곡선 줄인 건 아님(예: 뒤에 빈 문자열 줄이
+                          # 따라올 수 있음, 실측으로 확인) - "plot \" 다음부터
+                          # 실제로 내용이 있는 마지막 줄을 찾아야 정확히 그
+                          # 줄 끝에 ", \"를 이어붙일 수 있다.
+                          _last_idx = len(_main_state_snapshot) - 1
+                          while _last_idx > _snap_plot_idx and not _main_state_snapshot[_last_idx].strip():
+                              _last_idx -= 1
+                          _last_line = _main_state_snapshot[_last_idx]
+                          if not _last_line.rstrip().endswith("\\"):
+                              _main_state_snapshot[_last_idx] = _last_line.rstrip() + ", \\"
+                          _new_clause_lines = []
+                          for _ci, _clause in enumerate(_clauses):
+                              _suffix = ", \\" if _ci < len(_clauses) - 1 else ""
+                              _new_clause_lines.append(_clause + _suffix)
+                          # 뒤에 남아있을 수 있는 빈 줄(위 주석 참고) 바로
+                          # 앞(=실제 마지막 곡선 줄 바로 뒤)에 끼워 넣는다 -
+                          # 그냥 append하면 그 빈 줄 뒤에 붙어 "\" 이어짐이
+                          # 중간에 끊기는 문법 오류가 됨.
+                          _main_state_snapshot[_last_idx + 1:_last_idx + 1] = _new_clause_lines
             if _pip_clip_info is not None and fmt.lower() in ("emf", "eps", "interactive"):
                 # [수정 - 요청] "반투명이 EMF에 불가능하면 50%를 기준으로
                 # 투명/불투명으로 구분" - 항상 완전불투명으로 대체하면, 사용자가
