@@ -3907,7 +3907,7 @@ class GnuplotGenerator:
     def _build_pip_folded_overlay(self, plotdef, pip_xmin, pip_xmax, pip_y1min, pip_y1max,
                                    pip_y2min, pip_y2max, box, plot_dir_,
                                    clip_shape="rect", clip_rx=50.0, clip_ry=50.0, minimal=False,
-                                   pip_cfg=None, size_factor=1.0):
+                                   pip_cfg=None, size_factor=1.0, font_scale=0.6, margins=None):
         """[추가 - PIP 렌더링 재설계] "R/u 직후 기본 화면은 깨끗해야 하는데
         확대(replot)는 그걸 위한 NaN 마스킹 때문에 막힌다"는 근본 충돌을
         피하기 위해, PIP(배경+테두리+자기 커브)를 별도 멀티플롯 패널이
@@ -3977,12 +3977,23 @@ class GnuplotGenerator:
         # 반대로 반비례해서 늘려(박스가 작을수록 데이터-fraction 자체를
         # 더 크게 잡아야 화면 픽셀 간격이 유지됨) 박스 크기와 무관하게 항상
         # 비슷한 픽셀 간격이 나오게 한다.
-        _sf = max(min(float(size_factor or 1.0), 1.0), 0.12)
-        _ext = min(1.0 / _sf, 1.7)
-        _font_tic = max(6.0 * _sf, 4.5)
-        _font_title = max(7.0 * _sf, 5.0)
-        _font_axis = max(6.5 * _sf, 5.0)
-        _font_leg = max(6.0 * _sf, 4.5)
+        # [수정 - 사용자 반복 지적, 근본 재설계] "예전 inset(Animation 등
+        # 네이티브 경로)의 legend 크기/여백/font, title&font, 축 frame을
+        # 그대로 참조해서 만들라" - 지금까지 이 함수 자체가 만들어낸 임의의
+        # 상수(6~7pt, 0.92/0.80 안쪽 당김 비율 등)를 쓰고 있었는데, 그게
+        # 매번 박스 크기·위치 조합에 따라 다시 어긋나는 근본 원인이었다.
+        # _render_pip_inset은 이미 이 "PIP 인셋 전용" font_scale(사용자
+        # font_scale 입력 * 크기 초과시 축소비율)과, 그 font_scale로 tic/
+        # title/legend 폰트를 계산하는 공식(_tic_size=max(9*font_scale,3.5),
+        # _title_size=max(title_size*font_scale,6), legend font_pt=max(
+        # legend_size*font_scale*0.75,5) 등)을 검증해 갖고 있으므로, 여기서도
+        # "새로 발명"하지 않고 그 값들을 그대로 재사용한다(font_scale 자체를
+        # _pip_fold_ranges로 넘겨받음 - size_factor는 하위호환을 위해 남겨둠).
+        _fs = max(float(font_scale or 0.6), 0.05)
+        _font_tic = max(9.0 * _fs, 3.5)
+        _font_title = max(float(getattr(plotdef, "title_size", None) or 14) * _fs, 6.0)
+        _font_axis = max(float(getattr(plotdef, "xlabel_size", None) or 11) * _fs, 5.0)
+        _font_leg = max(float(getattr(plotdef, "legend_size", None) or 9) * _fs * 0.75, 5.0)
 
         # 배경(채워진 사각형) - PIP가 실제로 관측할 곡선보다 먼저(아래에)
         # 그려져야 하므로 이 overlay 목록의 맨 앞에 둔다.
@@ -4027,170 +4038,139 @@ class GnuplotGenerator:
         # 기능이라 유지)+curve만 남긴다.
         if not minimal:
             fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with lines lc rgb "black" lw 1.2')
-            # [추가 - 사용자 보고] "inset에 축 frame이 안 나타남, grid도 없음" -
-            # 기존 별도 패널 방식의 실제 tic/grid만큼 정교하진 않지만, 박스
-            # 내부를 가로/세로 3등분하는 옅은 점선(격자)을 데이터로 그려
-            # "안이 텅 빈 배경"처럼 보이지 않게 한다(숫자 tic 라벨은 이 방식
-            # (재생에 얹는 정적 데이터)으로는 아직 안 넣음 - 다음 과제).
-            # 원/타원이면 격자선이 박스 테두리를 넘지 않도록 그 위치에서의
-            # 타원 현(chord) 길이로 잘라 그린다.
+
+            # [수정 - 사용자 반복 지적, 근본 재설계] "inset의 plot frame(바깥
+            # 테두리)은 맞는데 내부의 axis frame이 안 맞음 - curve는 axis
+            # frame 안에 그려져야" - 지금까지 curve/grid/tic/legend를 전부
+            # 박스 "전체"(배경/테두리와 같은 기준) 가장자리까지 채워 그렸는데,
+            # 네이티브 인셋(Animation 등)은 박스 전체 중 tic-라벨용 여백(위/
+            # 아래/좌/우)을 뺀 "안쪽" 직사각형(_inset_lmargin/rmargin/tmargin/
+            # bmargin과 같은 역할)에만 curve를 그리고, 그 여백 띠 안에 tic
+            # 숫자/축 title을 배치한다. margins(_render_pip_inset이 이미
+            # 실측·검증해 계산해 둔 _inset_top_frac 등 - 크기/도형에 맞춰
+            # 자동으로 적응함)를 그대로 넘겨받아 여기서도 같은 안쪽 사각형을
+            # 만든다 - 이 안쪽 사각형의 네 모서리는 (네이티브가 이미 그렇게
+            # 보장해 둔 그대로) 항상 바깥 원/타원 안쪽에 들어오므로, 아래
+            # curve/legend에서 별도의 타원 현(chord) 계산이 더 이상 필요 없다.
+            _m_top = max(min(float((margins or {}).get("top", 0.15)), 0.45), 0.03)
+            _m_bottom = max(min(float((margins or {}).get("bottom", 0.13)), 0.45), 0.03)
+            _m_left = max(min(float((margins or {}).get("left", 0.15)), 0.45), 0.03)
+            _m_right = max(min(float((margins or {}).get("right", 0.13)), 0.45), 0.03)
+            ix_lo = x_lo + _m_left * (x_hi - x_lo)
+            ix_hi = x_hi - _m_right * (x_hi - x_lo)
+            iy1_lo = y1_lo + _m_bottom * (y1_hi - y1_lo)
+            iy1_hi = y1_hi - _m_top * (y1_hi - y1_lo)
+            if y2_lo_hi is not None:
+                _y2b_lo, _y2b_hi = y2_lo_hi
+                iy2_lo = _y2b_lo + _m_bottom * (_y2b_hi - _y2b_lo)
+                iy2_hi = _y2b_hi - _m_top * (_y2b_hi - _y2b_lo)
+            else:
+                iy2_lo = iy2_hi = None
+
+            # 안쪽 축 frame 자체도 옅게 그려서(네이티브의 "set border"에
+            # 해당) "여기까지가 실제 curve 영역"임을 보여준다.
+            fragments.append(
+                f"$PipFoldAxisFrame << EOD\n{ix_lo:.6g} {iy1_lo:.6g}\n{ix_hi:.6g} {iy1_lo:.6g}\n"
+                f"{ix_hi:.6g} {iy1_hi:.6g}\n{ix_lo:.6g} {iy1_hi:.6g}\n{ix_lo:.6g} {iy1_lo:.6g}\nEOD"
+            )
+            fragments.append('$PipFoldAxisFrame using 1:2 notitle axes x1y1 with lines lc rgb "gray40" lw 0.8')
+
             _grid_fracs = (0.25, 0.5, 0.75)
             _grid_segs = []
             for _f in _grid_fracs:
-                _gx = x_lo + _f * (x_hi - x_lo)
-                if _is_ellipse and _rx > 0:
-                    _t = 1.0 - ((_gx - _cx) / _rx) ** 2
-                    if _t > 0:
-                        _half = _ry * math.sqrt(_t)
-                        _grid_segs.append(((_gx, _cy - _half), (_gx, _cy + _half)))
-                else:
-                    _grid_segs.append(((_gx, y1_lo), (_gx, y1_hi)))
+                _gx = ix_lo + _f * (ix_hi - ix_lo)
+                _grid_segs.append(((_gx, iy1_lo), (_gx, iy1_hi)))
             for _f in _grid_fracs:
-                _gy = y1_lo + _f * (y1_hi - y1_lo)
-                if _is_ellipse and _ry > 0:
-                    _t = 1.0 - ((_gy - _cy) / _ry) ** 2
-                    if _t > 0:
-                        _half = _rx * math.sqrt(_t)
-                        _grid_segs.append(((_cx - _half, _gy), (_cx + _half, _gy)))
-                else:
-                    _grid_segs.append(((x_lo, _gy), (x_hi, _gy)))
+                _gy = iy1_lo + _f * (iy1_hi - iy1_lo)
+                _grid_segs.append(((ix_lo, _gy), (ix_hi, _gy)))
             for _gi, (_p0, _p1) in enumerate(_grid_segs):
                 fragments.append(f"$PipFoldGrid{_gi} << EOD\n{_p0[0]:.6g} {_p0[1]:.6g}\n{_p1[0]:.6g} {_p1[1]:.6g}\nEOD")
                 fragments.append(f'$PipFoldGrid{_gi} using 1:2 notitle axes x1y1 with lines lc rgb "gray70" lw 0.6 dashtype "."')
 
-            # [수정 - 사용자 지적] "원 안에 있어야 하지 않는지?" - 인셋 박스가
-            # 작고 main plot 위에 겹쳐 있어서, 기존 별도 패널 방식도 tic
-            # 숫자를 박스 "안쪽" 가장자리에 붙여 그렸음(밖에 두면 main 곡선과
-            # 겹쳐 헷갈림) - 같은 관례로 박스 안쪽으로 들여서 찍는다("set
-            # label" 대신 "with labels" plot 스타일을 쓰는 이유는 위 주석
-            # 그대로 - 재생 간 상태 잔류 위험 없음). [수정 - 실측으로 발견]
-            # 처음엔 사각형 박스 기준 고정 offset을 그대로 썼는데, 원/타원은
-            # 가장자리 쪽(격자 fraction 0.25/0.75)에서 세로/가로 폭이 훨씬
-            # 좁아서 그 offset이 오히려 원 "밖"으로 나가버렸음 - 격자선과 같은
-            # 현(chord) 계산으로 그 위치의 실제 원 안쪽 여유를 구해 그 비율
-            # (70%)만큼만 들여서 확실히 원 안에 들어오게 한다.
+            # tic 숫자는 "여백 띠"(안쪽 axis frame과 바깥 박스 가장자리
+            # 사이) 안에, axis frame 쪽으로 살짝 치우친 위치에 찍는다(네이티브
+            # tic이 axis 바로 옆에 붙는 것과 같은 인상).
             _fmt = lambda v: f"{v:.4g}"
             _lbl_rows = []
             for _f in _grid_fracs:
-                _gx = x_lo + _f * (x_hi - x_lo)
-                if _is_ellipse and _rx > 0:
-                    _t = 1.0 - ((_gx - _cx) / _rx) ** 2
-                    _half = _ry * math.sqrt(_t) if _t > 0 else 0.0
-                else:
-                    _half = (y1_hi - y1_lo) / 2.0
-                _ly = _cy - _half * 0.80
+                _gx = ix_lo + _f * (ix_hi - ix_lo)
+                _ly = iy1_lo - (iy1_lo - y1_lo) * 0.35
                 _val = pxmin + _f * (pxmax - pxmin)
                 _lbl_rows.append(f'{_gx:.6g} {_ly:.6g} "{_fmt(_val)}"')
             for _f in _grid_fracs:
-                _gy = y1_lo + _f * (y1_hi - y1_lo)
-                if _is_ellipse and _ry > 0:
-                    _t = 1.0 - ((_gy - _cy) / _ry) ** 2
-                    _half = _rx * math.sqrt(_t) if _t > 0 else 0.0
-                else:
-                    _half = (x_hi - x_lo) / 2.0
-                _lx = _cx - _half * 0.80
+                _gy = iy1_lo + _f * (iy1_hi - iy1_lo)
+                _lx = ix_lo - (ix_lo - x_lo) * 0.35
                 _val = py1min + _f * (py1max - py1min)
                 _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
             if _have_y2:
                 for _f in _grid_fracs:
-                    _gy = y1_lo + _f * (y1_hi - y1_lo)
-                    if _is_ellipse and _ry > 0:
-                        _t = 1.0 - ((_gy - _cy) / _ry) ** 2
-                        _half = _rx * math.sqrt(_t) if _t > 0 else 0.0
-                    else:
-                        _half = (x_hi - x_lo) / 2.0
-                    _lx = _cx + _half * 0.80
+                    _gy = iy1_lo + _f * (iy1_hi - iy1_lo)
+                    _lx = ix_hi + (x_hi - ix_hi) * 0.35
                     _val = py2min + _f * (py2max - py2min)
                     _lbl_rows.append(f'{_lx:.6g} {_gy:.6g} "{_fmt(_val)}"')
             _lbl_body = "\n".join(_lbl_rows)
             fragments.append(f"$PipFoldTics << EOD\n{_lbl_body}\nEOD")
             fragments.append(f'$PipFoldTics using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,{_font_tic:.1f}" textcolor rgb "gray30"')
 
-            # [추가 - 사용자 요청] "Title, legend... 올바르게 되도록 같은
-            # 방식으로 만들어 넣기" - 다른 요소와 같은 "with labels" 데이터
-            # 방식(재생 간 상태 잔류 위험 없음)으로 Title(박스 바로 위)과
-            # Legend(박스 안쪽 위, curve별 색으로 구분되는 텍스트 목록 -
-            # 실제 곡선 옆 샘플선까지는 아니지만 이름+색으로 구분 가능)를
-            # 추가한다. 기존 개별 체크박스(title_on/legend_on)를 그대로
-            # 따른다.
+            # [추가 - 사용자 요청, 재설계] Title/Legend/축 title 모두 박스
+            # "안쪽"에만 배치한다(위 여백 띠 설계와 같은 이유 - 박스가 화면
+            # 어디 있든, 어느 쪽이 main 축/화면 가장자리와 가깝든 절대
+            # 부딪히거나 밖으로 안 나간다). Title은 위쪽 여백 띠 중앙,
+            # xlabel은 아래쪽 여백 띠(그 tic 숫자보다 더 바깥쪽), y1label/
+            # y2label은 좌/우 여백 띠(세로쓰기), Legend는 안쪽 axis frame
+            # 안의 위쪽에 둔다.
             _pip_cfg = pip_cfg if pip_cfg is not None else (getattr(plotdef, "pip", None) or {})
-            # [수정 - 사용자 보고 버그, 근본 재설계] "박스가 main plot 왼쪽
-            # 가장자리 가까이 있으면 Y1 title이 main 자신의 축 title과
-            # 겹치고, Y2 title은 화면 밖으로 밀려 아예 안 보임" - Title/축
-            # title을 전부 박스 "바깥"으로 미는 접근 자체가 틀렸었다: 박스가
-            # main 축 프레임 가장자리에 가까우면 바깥쪽에는 여유 공간이
-            # 거의 없어(반대편은 main 축 title 자리, 다른 쪽은 화면 밖) 미는
-            # 양과 무관하게 어디선가는 항상 부딪히거나 잘린다. 네이티브
-            # 인셋(Animation 등)은애초에 title/tic/축 title을 전부 박스
-            # "안쪽" 여백에 넣어 이 충돌 자체가 구조적으로 없다 - 같은
-            # 방식으로 옮긴다: title은 박스 맨 위 안쪽, xlabel은 맨 아래
-            # 안쪽, y1label/y2label은 좌/우 안쪽에(세로쓰기) 배치한다(모두
-            # 박스 자신의 footprint 안에만 있으므로 박스가 화면 어디에
-            # 있든 절대 밖으로 넘치지 않는다).
             if _pip_cfg.get("title_on"):
                 _title_txt = str(_pip_cfg.get("title_text") or getattr(plotdef, "title", "") or "").strip()
                 if _title_txt:
                     _esc = _title_txt.replace("\\", "\\\\").replace('"', '\\"')
-                    _ty_title = y1_hi - (y1_hi - y1_lo) * 0.05
+                    _ty_title = (iy1_hi + y1_hi) / 2.0
                     fragments.append(f'$PipFoldTitle << EOD\n{_cx:.6g} {_ty_title:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldTitle using 1:2:3 notitle axes x1y1 with labels font "Malgun Gothic,{_font_title:.1f}" textcolor rgb "black"')
             if _pip_cfg.get("axis_title_on"):
                 _xl_txt = str(_pip_cfg.get("xlabel_text") or getattr(plotdef, "xlabel", "") or "").strip()
                 if _xl_txt:
                     _esc = _xl_txt.replace("\\", "\\\\").replace('"', '\\"')
-                    _xl_y = y1_lo + (y1_hi - y1_lo) * 0.04
+                    _xl_y = y1_lo + (iy1_lo - y1_lo) * 0.15
                     fragments.append(f'$PipFoldXLabel << EOD\n{_cx:.6g} {_xl_y:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldXLabel using 1:2:3 notitle axes x1y1 with labels center font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
                 _yl_txt = str(_pip_cfg.get("ylabel_text") or getattr(plotdef, "ylabel", "") or "").strip()
                 if _yl_txt:
                     _esc = _yl_txt.replace("\\", "\\\\").replace('"', '\\"')
-                    _yl_x = x_lo + (x_hi - x_lo) * 0.04
+                    _yl_x = x_lo + (ix_lo - x_lo) * 0.15
                     fragments.append(f'$PipFoldYLabel << EOD\n{_yl_x:.6g} {_cy:.6g} "{_esc}"\nEOD')
                     fragments.append(f'$PipFoldYLabel using 1:2:3 notitle axes x1y1 with labels center rotate by 90 font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
                 if _have_y2:
                     _y2l_txt = str(_pip_cfg.get("y2label_text") or getattr(plotdef, "y2label", "") or "").strip()
                     if _y2l_txt:
                         _esc = _y2l_txt.replace("\\", "\\\\").replace('"', '\\"')
-                        _y2l_x = x_hi - (x_hi - x_lo) * 0.04
+                        _y2l_x = x_hi - (x_hi - ix_hi) * 0.15
                         _cy2 = (y2_lo_hi[0] + y2_lo_hi[1]) / 2.0
                         fragments.append(f'$PipFoldY2Label << EOD\n{_y2l_x:.6g} {_cy2:.6g} "{_esc}"\nEOD')
                         fragments.append(f'$PipFoldY2Label using 1:2:3 notitle axes x1y2 with labels center rotate by -90 font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
             if _pip_cfg.get("legend_on") and plotdef.curves:
                 _leg_rows = []
-                _n_leg = len(plotdef.curves)
                 for _li, _lcurve in enumerate(plotdef.curves):
                     _lcolor = _lcurve.color or DEFAULT_COLORS[_li % len(DEFAULT_COLORS)]
                     _lname = (_lcurve.title or "").strip()
                     if not _lname:
                         continue
                     _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
-                    _ly = y1_hi - (y1_hi - y1_lo) * (0.17 + 0.09 * _ext * _li)
+                    _ly = iy1_hi - (iy1_hi - iy1_lo) * (0.12 + 0.15 * _li)
                     _leg_rows.append((_ly, _esc, _lcolor))
-                # [수정 - 사용자 보고] "legend box가 원 밖으로 삐져나옴" - 원/
-                # 타원이면 legend 영역이 시작되는 (가장 좁은) 윗쪽 높이의 원
-                # 현(chord) 폭 안으로 legend box(텍스트+배경 둘 다) 좌우를
-                # 맞춘다(tic 라벨의 chord 계산과 동일한 방식). 사각형이면
-                # 그냥 박스 절반 폭이 그대로 나와 기존과 동일하다.
                 if _leg_rows:
-                    _top_y = max(r[0] for r in _leg_rows)
-                    if _is_ellipse and _rx > 0 and _ry > 0:
-                        _t = 1.0 - ((_top_y - _cy) / _ry) ** 2
-                        _half = _rx * math.sqrt(_t) * 0.90 if _t > 0 else 0.0
-                    else:
-                        _half = (x_hi - x_lo) / 2.0 * 0.92
-                    _leg_left = max(x_lo, _cx - _half)
-                    _leg_right = min(x_hi, _cx + _half)
-                    _lx = _leg_left + (x_hi - x_lo) * 0.015
+                    _lx = ix_lo + (ix_hi - ix_lo) * 0.03
                     _leg_rows = [(_lx, _ly, _esc, _lcolor) for (_ly, _esc, _lcolor) in _leg_rows]
-                # [수정 - 사용자 보고] "legend가 box 없이 가운데 정렬로 나옴" -
-                # 실제 legend(main plot의 것)처럼 흰 배경+테두리 박스를 텍스트
-                # 뒤에 깔고, 중앙 정렬 대신 박스 왼쪽에서부터 왼쪽 정렬로
-                # 줄줄이 나열한다(네이티브 key box와 같은 인상).
+                # [수정 - 사용자 보고] "legend가 box 없이 가운데 정렬로 나옴 /
+                # 원 밖으로 삐져나옴" - 실제 legend(main plot의 것)처럼 흰
+                # 배경+테두리 박스를 텍스트 뒤에 깔고 왼쪽 정렬로 나열한다.
+                # 안쪽 axis frame(ix_lo..ix_hi) 폭 안에만 두므로(위 설명대로
+                # 이미 원/타원 안쪽임이 보장됨) 더 이상 별도로 죌 필요가 없다.
                 if _leg_rows:
-                    _lbg_x0 = _leg_left
-                    _lbg_x1 = _leg_right
-                    _lbg_y1 = y1_hi - (y1_hi - y1_lo) * 0.13
-                    _lbg_y0 = min(r[1] for r in _leg_rows) - (y1_hi - y1_lo) * 0.06
+                    _lbg_x0 = ix_lo + (ix_hi - ix_lo) * 0.01
+                    _lbg_x1 = ix_hi - (ix_hi - ix_lo) * 0.01
+                    _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * 0.02
+                    _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * 0.09
                     _lbg_corners = [(_lbg_x0, _lbg_y0), (_lbg_x1, _lbg_y0), (_lbg_x1, _lbg_y1), (_lbg_x0, _lbg_y1), (_lbg_x0, _lbg_y0)]
                     _lbg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _lbg_corners)
                     fragments.append(f"$PipFoldLegBg << EOD\n{_lbg_rows}\nEOD")
@@ -4198,12 +4178,18 @@ class GnuplotGenerator:
                 for _li, (_lx, _ly, _esc, _lcolor) in enumerate(_leg_rows):
                     fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
                     fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels left font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
+        else:
+            ix_lo, ix_hi, iy1_lo, iy1_hi = x_lo, x_hi, y1_lo, y1_hi
+            iy2_lo, iy2_hi = (y2_lo_hi if y2_lo_hi is not None else (None, None))
 
         for curve in plotdef.curves:
             is_y2 = getattr(curve, "axis", "y1") == "y2"
             if is_y2 and not _have_y2:
                 continue
-            dest_lo, dest_hi = (y2_lo_hi if is_y2 else y1_lo_hi)
+            # [수정 - 사용자 반복 지적, 근본 재설계] curve는 박스 "전체"가
+            # 아니라 위에서 계산한 안쪽 axis frame(ix_lo/ix_hi, iy1_lo/hi,
+            # iy2_lo/hi - minimal이면 박스 전체와 동일)에만 그린다.
+            dest_lo, dest_hi = (iy2_lo, iy2_hi) if is_y2 else (iy1_lo, iy1_hi)
             src_ymin, src_ymax = (py2min, py2max) if is_y2 else (py1min, py1max)
             axis_spec = "x1y2" if is_y2 else "x1y1"
             abs_path = curve.dat_file if os.path.isabs(curve.dat_file) else os.path.abspath(curve.dat_file)
@@ -4274,12 +4260,21 @@ class GnuplotGenerator:
                 # 뒤, 그 박스를 [-1,1] 정규화 공간으로 바꿔 거기서 타원
                 # 방정식을 적용한다 - Y1/Y2 어느 쪽이든, 어떤 data 단위든
                 # 항상 "박스 절반 크기 대비 몇 %"로 일관되게 판정된다.
-                _e_hw = (x_hi - x_lo) / 2.0
+                # [수정 - 근본 재설계] curve가 이제(minimal이 아니면) 안쪽
+                # axis frame(ix_lo/ix_hi - 네이티브가 이미 원/타원 안쪽에
+                # 들어오도록 계산해 둔 margins 기준)에만 그려지므로, 그
+                # 네 모서리는 항상 바깥 원/타원 안쪽이 보장돼 있어 이 타원
+                # 방정식 필터가 더 이상 필요 없다(오히려 안쪽의 더 작은
+                # 사각형 기준으로 다시 걸러버리면 실제로는 원 안인 점까지
+                # 잘못 잘라내게 됨). minimal(커브가 박스 "전체" = 원/타원
+                # 경계 자체를 채움)일 때만 그대로 적용한다.
+                _e_hw = (ix_hi - ix_lo) / 2.0
                 _e_hh = (dest_hi - dest_lo) / 2.0
-                _e_cx_dest = (x_lo + x_hi) / 2.0
+                _e_cx_dest = (ix_lo + ix_hi) / 2.0
                 _e_cy_dest = (dest_lo + dest_hi) / 2.0
                 _e_rxf = clip_rx / 50.0
                 _e_ryf = clip_ry / 50.0
+                _apply_ellipse_filter = _is_ellipse and minimal
                 _kept_rows = []
                 with open(_tmp_path, encoding="utf-8", errors="replace") as f:
                     for ln in f:
@@ -4289,12 +4284,12 @@ class GnuplotGenerator:
                         _parts = ln.split()
                         if len(_parts) < 3 or _parts[2] != "i":
                             continue
-                        if _is_ellipse and _e_hw > 0 and _e_hh > 0 and _e_rxf > 0 and _e_ryf > 0:
+                        if _apply_ellipse_filter and _e_hw > 0 and _e_hh > 0 and _e_rxf > 0 and _e_ryf > 0:
                             try:
                                 _px, _py = float(_parts[0]), float(_parts[1])
                             except ValueError:
                                 continue
-                            _tx_norm = ((x_lo + (_px - pxmin) / (pxmax - pxmin) * (x_hi - x_lo)) - _e_cx_dest) / _e_hw
+                            _tx_norm = ((ix_lo + (_px - pxmin) / (pxmax - pxmin) * (ix_hi - ix_lo)) - _e_cx_dest) / _e_hw
                             _ty_norm = ((dest_lo + (_py - src_ymin) / (src_ymax - src_ymin) * (dest_hi - dest_lo)) - _e_cy_dest) / _e_hh
                             if (_tx_norm / _e_rxf) ** 2 + (_ty_norm / _e_ryf) ** 2 > 1.0:
                                 continue
@@ -4307,7 +4302,7 @@ class GnuplotGenerator:
             except Exception:
                 continue
             color = curve.color or DEFAULT_COLORS[plotdef.curves.index(curve) % len(DEFAULT_COLORS)]
-            _tx = f"({x_lo} + (($1-({pxmin}))/(({pxmax})-({pxmin})))*(({x_hi})-({x_lo})))"
+            _tx = f"({ix_lo} + (($1-({pxmin}))/(({pxmax})-({pxmin})))*(({ix_hi})-({ix_lo})))"
             _ty = f"({dest_lo} + (($2-({src_ymin}))/(({src_ymax})-({src_ymin})))*(({dest_hi})-({dest_lo})))"
             fragments.append(
                 f'"{_tmp_name}" using {_tx}:{_ty} notitle axes {axis_spec} with lines lw 1.0 lc rgb "{color}"'
@@ -5310,6 +5305,11 @@ class GnuplotGenerator:
                         "clip_shape": "rect", "clip_rx": 50.0, "clip_ry": 50.0,
                         "minimal": bool(pip.get("minimal")),
                         "size_factor": min(1.0, max(size_w, size_h)),
+                        "font_scale": font_scale,
+                        "margins": {
+                            "top": _inset_top_frac, "bottom": _inset_bottom_frac,
+                            "left": _inset_left_frac, "right": _inset_right_frac,
+                        },
                     }
         elif _rect_no_bg:
             # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
@@ -5401,6 +5401,11 @@ class GnuplotGenerator:
                             "clip_shape": _clip_shape, "clip_rx": _clip_rx, "clip_ry": _clip_ry,
                             "minimal": bool(pip.get("minimal")),
                             "size_factor": min(1.0, max(size_w, size_h)),
+                            "font_scale": font_scale,
+                            "margins": {
+                                "top": _inset_top_frac, "bottom": _inset_bottom_frac,
+                                "left": _inset_left_frac, "right": _inset_right_frac,
+                            },
                         }
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
@@ -7122,6 +7127,8 @@ class GnuplotGenerator:
                             clip_ry=_fold_ranges.get("clip_ry", 50.0),
                             minimal=_fold_ranges.get("minimal", False),
                             size_factor=_fold_ranges.get("size_factor", 1.0),
+                            font_scale=_fold_ranges.get("font_scale", 0.6),
+                            margins=_fold_ranges.get("margins"),
                         )
                         self._last_pip_fold_tempfiles = (getattr(self, "_last_pip_fold_tempfiles", None) or []) + _fold_tempfiles
                         _decls = [f for f in _fold_fragments if f.startswith("$") and "<< EOD" in f]
