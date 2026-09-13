@@ -4149,35 +4149,44 @@ class GnuplotGenerator:
                         fragments.append(f'$PipFoldY2Label << EOD\n{_y2l_x:.6g} {_cy2:.6g} "{_esc}"\nEOD')
                         fragments.append(f'$PipFoldY2Label using 1:2:3 notitle axes x1y2 with labels center rotate by -90 font "Malgun Gothic,{_font_axis:.1f}" textcolor rgb "black"')
             if _pip_cfg.get("legend_on") and plotdef.curves:
-                _leg_rows = []
-                for _li, _lcurve in enumerate(plotdef.curves):
-                    _lcolor = _lcurve.color or DEFAULT_COLORS[_li % len(DEFAULT_COLORS)]
+                # [수정 - 사용자 보고 버그] "legend box가 plot 전체를 덮음" -
+                # 줄 간격(row 높이)이 curve 개수와 무관한 고정 fraction(0.15)
+                # 이었음 - curve가 몇 개든 항상 0.15씩 차지하니, 커브가
+                # 몇 개만 넘어도(실제 데이터는 보통 2개보다 많음) 줄들이
+                # 안쪽 axis frame 아래·박스 밖까지 밀려나 박스 전체를 뒤덮는
+                # 배경으로 이어졌다. 실제 표시될 줄 수(제목이 있는 curve만)로
+                # 미리 나눠서, 몇 개든 항상 안쪽 axis frame 위쪽 62% 안에
+                # 들어오도록 줄 간격을 계산한다. [수정 - 사용자 보고] "위치는
+                # 우상단, 정렬은 우측이어야" - 네이티브 legend(_render_legend_
+                # box)가 쓰는 것과 같은 "right top" 배치·우측 정렬로 통일.
+                _titled = []
+                for _ci, _lcurve in enumerate(plotdef.curves):
                     _lname = (_lcurve.title or "").strip()
-                    if not _lname:
-                        continue
-                    _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
-                    _ly = iy1_hi - (iy1_hi - iy1_lo) * (0.12 + 0.15 * _li)
-                    _leg_rows.append((_ly, _esc, _lcolor))
-                if _leg_rows:
-                    _lx = ix_lo + (ix_hi - ix_lo) * 0.03
-                    _leg_rows = [(_lx, _ly, _esc, _lcolor) for (_ly, _esc, _lcolor) in _leg_rows]
-                # [수정 - 사용자 보고] "legend가 box 없이 가운데 정렬로 나옴 /
-                # 원 밖으로 삐져나옴" - 실제 legend(main plot의 것)처럼 흰
-                # 배경+테두리 박스를 텍스트 뒤에 깔고 왼쪽 정렬로 나열한다.
-                # 안쪽 axis frame(ix_lo..ix_hi) 폭 안에만 두므로(위 설명대로
-                # 이미 원/타원 안쪽임이 보장됨) 더 이상 별도로 죌 필요가 없다.
-                if _leg_rows:
-                    _lbg_x0 = ix_lo + (ix_hi - ix_lo) * 0.01
+                    if _lname:
+                        _titled.append((_lcurve.color or DEFAULT_COLORS[_ci % len(DEFAULT_COLORS)], _lname))
+                _n_rows = len(_titled)
+                if _n_rows:
+                    _row_step = min(0.15, 0.62 / _n_rows)
+                    _lx = ix_hi - (ix_hi - ix_lo) * 0.03
+                    _leg_rows = []
+                    for _ri, (_lcolor, _lname) in enumerate(_titled):
+                        _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
+                        _ly = iy1_hi - (iy1_hi - iy1_lo) * (0.09 + _row_step * _ri)
+                        _leg_rows.append((_lx, _ly, _esc, _lcolor))
+                    # 배경 박스는 우측에 붙여서(네이티브의 "right top"과 같은
+                    # 인상) 안쪽 axis frame 폭의 오른쪽 65%만 차지한다(긴
+                    # curve 이름의 정확한 실제 폭은 재지 않으므로 근사값).
+                    _lbg_x0 = ix_hi - (ix_hi - ix_lo) * 0.66
                     _lbg_x1 = ix_hi - (ix_hi - ix_lo) * 0.01
                     _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * 0.02
-                    _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * 0.09
+                    _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * 0.07
                     _lbg_corners = [(_lbg_x0, _lbg_y0), (_lbg_x1, _lbg_y0), (_lbg_x1, _lbg_y1), (_lbg_x0, _lbg_y1), (_lbg_x0, _lbg_y0)]
                     _lbg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _lbg_corners)
                     fragments.append(f"$PipFoldLegBg << EOD\n{_lbg_rows}\nEOD")
                     fragments.append('$PipFoldLegBg using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 border lc rgb "black" lw 0.8')
-                for _li, (_lx, _ly, _esc, _lcolor) in enumerate(_leg_rows):
-                    fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
-                    fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels left font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
+                    for _li, (_lx, _ly, _esc, _lcolor) in enumerate(_leg_rows):
+                        fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
+                        fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels right font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
         else:
             ix_lo, ix_hi, iy1_lo, iy1_hi = x_lo, x_hi, y1_lo, y1_hi
             iy2_lo, iy2_hi = (y2_lo_hi if y2_lo_hi is not None else (None, None))
