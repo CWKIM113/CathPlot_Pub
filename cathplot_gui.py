@@ -3432,6 +3432,8 @@ class CathPlotGUI:
             _disp.trace_add("write", _sync)
             return ttk.Combobox(parent, textvariable=_disp, state="readonly", width=5, values=["좌표값", "%"])
 
+        # [수정 - 사용자 요청] "두 줄로 나뉘어 있는데 한 줄로 합쳐줘요" -
+        # 중심X/Y1 + 반지름X + 배율(대상 curve 쪽 4개 입력)을 한 줄로 합침.
         mag_center_row = ttk.Frame(mag_frame)
         mag_center_row.pack(fill="x", padx=5, pady=2)
         ttk.Label(mag_center_row, text="중심 X:").pack(side="left")
@@ -3439,16 +3441,13 @@ class CathPlotGUI:
         _mk_mode_combo(mag_center_row, self.pip_mag_center_x_mode_var).pack(side="left", padx=(0, 12))
         ttk.Label(mag_center_row, text="중심 Y1:").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_center_y1_var, width=8).pack(side="left", padx=(4, 2))
-        _mk_mode_combo(mag_center_row, self.pip_mag_center_y1_mode_var).pack(side="left")
-
-        mag_radius_row = ttk.Frame(mag_frame)
-        mag_radius_row.pack(fill="x", padx=5, pady=(0, 5))
-        ttk.Label(mag_radius_row, text="반지름 X:").pack(side="left")
-        ttk.Entry(mag_radius_row, textvariable=self.pip_mag_radius_x_var, width=8).pack(side="left", padx=(4, 2))
-        _mk_mode_combo(mag_radius_row, self.pip_mag_radius_x_mode_var).pack(side="left", padx=(0, 12))
-        ttk.Label(mag_radius_row, text="배율:").pack(side="left")
-        ttk.Entry(mag_radius_row, textvariable=self.pip_mag_ratio_var, width=6).pack(side="left", padx=(4, 2))
-        ttk.Label(mag_radius_row, text="배").pack(side="left")
+        _mk_mode_combo(mag_center_row, self.pip_mag_center_y1_mode_var).pack(side="left", padx=(0, 12))
+        ttk.Label(mag_center_row, text="반지름 X:").pack(side="left")
+        ttk.Entry(mag_center_row, textvariable=self.pip_mag_radius_x_var, width=8).pack(side="left", padx=(4, 2))
+        _mk_mode_combo(mag_center_row, self.pip_mag_radius_x_mode_var).pack(side="left", padx=(0, 12))
+        ttk.Label(mag_center_row, text="배율:").pack(side="left")
+        ttk.Entry(mag_center_row, textvariable=self.pip_mag_ratio_var, width=6).pack(side="left", padx=(4, 2))
+        ttk.Label(mag_center_row, text="배").pack(side="left")
 
         # [추가 - 사용자 지적] "배율을 활용한 크기를 직관적으로 알기 어렵다" -
         # 반지름/배율을 입력할 때마다 실제로 계산될 인셋 박스 크기(%)를
@@ -3466,13 +3465,19 @@ class CathPlotGUI:
         # 있는 둘째 줄. 비워두면(기본) 중심은 위 중심X/Y1과 자동 일치, 반지름은
         # 배율로 자동 계산 - 값을 넣으면 그 값이 우선한다(compute_magnifier_pip
         # 참고).
+        # [수정 - 사용자 질문] "네모일 때는 입력을 어떻게?" - 라벨을 "큰원"
+        # (원 전용처럼 보임)에서 "인셋 박스"로 바꿈: 이 반지름은 프레임
+        # 모양(원/사각형, 위 "프레임 모양" 드롭다운)과 무관하게 항상 "박스
+        # 폭의 절반"을 뜻해서(원이면 그대로 눈에 보이는 반지름, 사각형이면
+        # 박스 가로폭의 절반) 두 모양 다 같은 필드 하나로 처리되고 따로
+        # 입력칸을 나눌 필요가 없다.
         mag_box_row = ttk.Frame(mag_frame)
         mag_box_row.pack(fill="x", padx=5, pady=(0, 2))
-        ttk.Label(mag_box_row, text="큰원 중심(%) X:").pack(side="left")
+        ttk.Label(mag_box_row, text="인셋 박스 중심(%) X:").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_x_var, width=6).pack(side="left", padx=(4, 8))
         ttk.Label(mag_box_row, text="Y:").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_y_var, width=6).pack(side="left", padx=(4, 12))
-        ttk.Label(mag_box_row, text="반지름(%):").pack(side="left")
+        ttk.Label(mag_box_row, text="반지름(%, 원/사각형 공통 - 박스 폭의 절반):").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_radius_var, width=6).pack(side="left", padx=(4, 2))
         ttk.Label(mag_box_row, text="(비우면 중심X/Y1·배율에서 자동)", foreground="#888888", font=("", 8)).pack(side="left", padx=(6, 0))
 
