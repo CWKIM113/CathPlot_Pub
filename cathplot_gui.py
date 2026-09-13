@@ -834,6 +834,20 @@ class CathPlotGUI:
         # 기본값은 빈 문자열(=지정 안 함 = plot 자체 구간을 그대로 따름).
         self.pip_y2min_var = tk.StringVar(value="")
         self.pip_y2max_var = tk.StringVar(value="")
+        # [추가 - 요청] "돋보기(magnifier)" - 확대 구간(X/Y min/max)을 직접
+        # 입력하는 대신, 중심(X,Y1)+반지름(X)+배율만 주면 gnu_generator.
+        # compute_magnifier_pip가 자동으로 xmin/xmax/y1min/y1max/y2min/y2max
+        # (실제 데이터에 맞게)와 size_w/size_h(배율로)를 계산한다. 여러 curve
+        # 가 겹친 지점을 구별하는 용도 - main plot에는 점선 원으로 위치 표시.
+        # 켜져 있으면 위 xmin/xmax/ymin/ymax는 무시되고 이 값들로 덮어씀.
+        self.pip_mag_on_var = tk.BooleanVar(value=False)
+        self.pip_mag_center_x_var = tk.StringVar(value="")
+        self.pip_mag_center_x_mode_var = tk.StringVar(value="data")
+        self.pip_mag_center_y1_var = tk.StringVar(value="")
+        self.pip_mag_center_y1_mode_var = tk.StringVar(value="data")
+        self.pip_mag_radius_x_var = tk.StringVar(value="")
+        self.pip_mag_radius_x_mode_var = tk.StringVar(value="data")
+        self.pip_mag_ratio_var = tk.StringVar(value="4")
         self.pip_title_on_var = tk.BooleanVar(value=False)
         # [추가 - 요청] "PIP PopUp에서 Plot Title과 Axis Title check box 분리"
         # - 기존엔 Plot Title(plotdef.title)만 껐다 켤 수 있었고, X/Y1/Y2축
@@ -2112,6 +2126,7 @@ class CathPlotGUI:
                 "source": self.pip_source_var.get(),
                 "cached_name": self.pip_cached_name_var.get(),
                 "pltfile_path": self.pip_pltfile_path_var.get(),
+                "magnifier": self._collect_magnifier_dict(),
             },
         }
 
@@ -2402,6 +2417,16 @@ class CathPlotGUI:
             self.pip_source_var.set(_pip_data.get("source", self.pip_source_var.get()))
             self.pip_cached_name_var.set(_pip_data.get("cached_name", self.pip_cached_name_var.get()))
             self.pip_pltfile_path_var.set(_pip_data.get("pltfile_path", self.pip_pltfile_path_var.get()))
+            # [추가 - 요청] "돋보기" 설정도 Template Load 때 같이 복원.
+            _mag_data = _pip_data.get("magnifier") or {}
+            self.pip_mag_on_var.set(bool(_mag_data.get("enabled", self.pip_mag_on_var.get())))
+            self.pip_mag_center_x_var.set(_mag_data.get("center_x", self.pip_mag_center_x_var.get()))
+            self.pip_mag_center_x_mode_var.set(_mag_data.get("center_x_mode", self.pip_mag_center_x_mode_var.get()))
+            self.pip_mag_center_y1_var.set(_mag_data.get("center_y1", self.pip_mag_center_y1_var.get()))
+            self.pip_mag_center_y1_mode_var.set(_mag_data.get("center_y1_mode", self.pip_mag_center_y1_mode_var.get()))
+            self.pip_mag_radius_x_var.set(_mag_data.get("radius_x", self.pip_mag_radius_x_var.get()))
+            self.pip_mag_radius_x_mode_var.set(_mag_data.get("radius_x_mode", self.pip_mag_radius_x_mode_var.get()))
+            self.pip_mag_ratio_var.set(_mag_data.get("magnification", self.pip_mag_ratio_var.get()))
 
             if "extra_gnuplot" in data:
                 self.raw_gnuplot_text.delete("1.0", "end")
@@ -3156,8 +3181,11 @@ class CathPlotGUI:
         # 650을 넘지 않게 상한을 둬서(요청하신 "너무 남는" 여백 방지) 그 두
         # 극단 사이를 화면 크기에 맞게 자동으로 채운다. 작업표시줄/제목줄
         # 등에 뺏기는 여백을 고려해 화면 높이에서 100px을 먼저 빼고 계산.
+        # [수정 - 사용자 요청] "PIP 입력창 세로를 조금 더 길게" - 상한을
+        # 650 -> 700으로 올린다(화면이 작으면 여전히 비례해서 줄어들고,
+        # 그래도 모자라면 스크롤이 안전망 - 구조는 그대로 유지).
         _screen_h = dlg.winfo_screenheight()
-        _dlg_h = max(420, min(650, int((_screen_h - 100) * 0.85)))
+        _dlg_h = max(420, min(700, int((_screen_h - 100) * 0.85)))
         dlg.geometry(f"760x{_dlg_h}")
 
         # [수정 - 요청] "팝업 안의 PIP 사용 체크박스는 없애고, 메인 창 PIP
@@ -3360,6 +3388,62 @@ class CathPlotGUI:
         # [추가 - 요청] "Ymin/Ymax가 Y1에만 적용되고 Y2는 그대로 나타남 - Y2도
         # 따로 입력받게" (비우면 plot 자체 Y2 구간을 그대로 따름 -
         # gnu_generator._render_pip_inset의 y2range_cmd 참고).
+
+        # --- 돋보기(magnifier) ---
+        # [추가 - 요청] "돋보기 기능 - 여러 curve(/마커포함)가 겹치면 구별
+        # 용도, 중심(x,y1)+반지름(x)+배율만 주면 확대해서 그려줌, 중심/
+        # 반지름 둘 다 좌표값 또는 %로" - 켜면 위 X/Y min/max 입력은 무시
+        # 되고 여기 값들로 자동 계산된다(gnu_generator.compute_magnifier_pip,
+        # execute_plot_pipeline에서 plotdef 생성 직후 호출). main plot에는
+        # 중심 위치에 점선 원(circles 주석 재사용)으로 표시됨.
+        mag_frame = ttk.LabelFrame(body, text="돋보기 (중심+반지름+배율로 확대구간 자동계산 - 겹친 curve 구별용)")
+        mag_frame.pack(fill="x", padx=10, pady=5)
+        ttk.Checkbutton(
+            mag_frame, text="돋보기 모드 사용 (켜면 위 확대구간 입력 대신 이 값 사용)",
+            variable=self.pip_mag_on_var
+        ).pack(anchor="w", padx=5, pady=(5, 2))
+        ttk.Label(
+            mag_frame,
+            text="팁: gnuplot 창에서 좌클릭으로 좌표 확인, 'r'로 눈금자(ruler) 고정 후 이동하면 dx가 표시됨(반지름 값으로 활용)",
+            foreground="#666666", font=("", 8)
+        ).pack(anchor="w", padx=5, pady=(0, 4))
+
+        mag_center_row = ttk.Frame(mag_frame)
+        mag_center_row.pack(fill="x", padx=5, pady=2)
+        ttk.Label(mag_center_row, text="중심 X:").pack(side="left")
+        ttk.Entry(mag_center_row, textvariable=self.pip_mag_center_x_var, width=8).pack(side="left", padx=(4, 2))
+        ttk.Combobox(
+            mag_center_row, textvariable=self.pip_mag_center_x_mode_var, state="readonly", width=5,
+            values=["data", "pct"]
+        ).pack(side="left", padx=(0, 12))
+        ttk.Label(mag_center_row, text="중심 Y1:").pack(side="left")
+        ttk.Entry(mag_center_row, textvariable=self.pip_mag_center_y1_var, width=8).pack(side="left", padx=(4, 2))
+        ttk.Combobox(
+            mag_center_row, textvariable=self.pip_mag_center_y1_mode_var, state="readonly", width=5,
+            values=["data", "pct"]
+        ).pack(side="left")
+
+        mag_radius_row = ttk.Frame(mag_frame)
+        mag_radius_row.pack(fill="x", padx=5, pady=(0, 5))
+        ttk.Label(mag_radius_row, text="반지름 X:").pack(side="left")
+        ttk.Entry(mag_radius_row, textvariable=self.pip_mag_radius_x_var, width=8).pack(side="left", padx=(4, 2))
+        ttk.Combobox(
+            mag_radius_row, textvariable=self.pip_mag_radius_x_mode_var, state="readonly", width=5,
+            values=["data", "pct"]
+        ).pack(side="left", padx=(0, 12))
+        ttk.Label(mag_radius_row, text="배율:").pack(side="left")
+        ttk.Entry(mag_radius_row, textvariable=self.pip_mag_ratio_var, width=6).pack(side="left", padx=(4, 2))
+        ttk.Label(mag_radius_row, text="배").pack(side="left")
+
+        def _toggle_mag_entries(*_a):
+            _on = self.pip_mag_on_var.get()
+            _zstate = "disabled" if _on else "normal"
+            for _w in (xz_row, yz_row):
+                for _c in _w.winfo_children():
+                    if isinstance(_c, ttk.Entry):
+                        _c.config(state=_zstate)
+        self.pip_mag_on_var.trace_add("write", _toggle_mag_entries)
+        _toggle_mag_entries()
 
         # --- 표시 옵션 ---
         opt_frame = ttk.LabelFrame(body, text="표시 옵션")
@@ -3626,6 +3710,21 @@ class CathPlotGUI:
                 str(pip.get("y2min", "")).strip() and str(pip.get("y2max", "")).strip()):
             pip["y2min"], pip["y2max"] = y2min, y2max
 
+    def _collect_magnifier_dict(self):
+        """[추가 - 요청] "돋보기" tk 변수들을 pip["magnifier"] sub-dict로
+        모은다 - Template 저장용 dict와 _resolve_pip_config 양쪽에서 같이
+        재사용(중복 방지)."""
+        return {
+            "enabled": self.pip_mag_on_var.get(),
+            "center_x": self.pip_mag_center_x_var.get(),
+            "center_x_mode": self.pip_mag_center_x_mode_var.get(),
+            "center_y1": self.pip_mag_center_y1_var.get(),
+            "center_y1_mode": self.pip_mag_center_y1_mode_var.get(),
+            "radius_x": self.pip_mag_radius_x_var.get(),
+            "radius_x_mode": self.pip_mag_radius_x_mode_var.get(),
+            "magnification": self.pip_mag_ratio_var.get(),
+        }
+
     def _resolve_pip_config(self):
         """[추가 - 요청] PIP 팝업(open_pip_dialog)에서 고른 tk 변수들을,
         gnu_generator.PlotDefinition.pip이 기대하는 dict로 변환한다. source가
@@ -3663,6 +3762,7 @@ class CathPlotGUI:
             "source": self.pip_source_var.get(),
             "cached_name": self.pip_cached_name_var.get(),
             "pltfile_path": self.pip_pltfile_path_var.get(),
+            "magnifier": self._collect_magnifier_dict(),
         }
         if not pip["enabled"]:
             return pip
@@ -9008,6 +9108,34 @@ class CathPlotGUI:
                 extra_gnuplot=self.raw_gnuplot_text.get("1.0", "end-1c"),
                 pip=self._resolve_pip_config(),
             )
+
+            # [추가 - 요청] "돋보기(magnifier)" - pip["magnifier"]가 켜져
+            # 있으면, 중심/반지름/배율만으로 실제 xmin/xmax/y1min/y1max/
+            # y2min/y2max/size_w/size_h를 자동 계산해 pip dict를 덮어쓰고,
+            # main plot 위에 표시할 점선 원을 circles 주석 목록에 추가한다.
+            # plotdef가 막 만들어진 직후(curves/x_output_no/xlog 등 계산에
+            # 필요한 값이 전부 갖춰진 시점)에 해야 정확하다 - 아래 create_
+            # script/create_animation_script 호출들은 전부 circles=getattr(
+            # plotdef, "circles", [])로 매번 새로 읽으므로, 여기서 plotdef.
+            # circles를 갱신해두면 그 호출들에 자동으로 반영된다.
+            _mag_cfg = (plotdef.pip or {}).get("magnifier") or {}
+            if _mag_cfg.get("enabled"):
+                try:
+                    _mag_gen = GnuplotGenerator(self.plot_dir)
+                    _mag_pip, _mag_circle = _mag_gen.compute_magnifier_pip(plotdef, _mag_cfg, existing_pip=plotdef.pip)
+                    if _mag_pip is not None:
+                        plotdef.pip = _mag_pip
+                        plotdef.circles = list(plotdef.circles or []) + [_mag_circle]
+                except Exception as _mag_err:
+                    # [주의] execute_plot_pipeline에는 누적 warnings 리스트가
+                    # 없어(이 함수 범위엔 그런 속성/변수가 없음), 곧바로
+                    # 메시지박스로 알린다(다른 즉석 입력 오류 처리와 동일한
+                    # 방식) - 돋보기만 조용히 꺼진 채(수동 xmin/xmax 등은
+                    # 그대로 살아있는 원래 pip dict) 나머지 plot은 계속 진행.
+                    messagebox.showwarning(
+                        "돋보기 계산 실패",
+                        f"중심/반지름 값을 확인해주세요(숫자여야 함, 반지름>0).\n{_mag_err}"
+                    )
 
             # 5. Gnuplot 스크립트 생성 및 실행 (GnuplotGenerator의 실제 API인 create_script 사용)
             if mode == "Interactive":

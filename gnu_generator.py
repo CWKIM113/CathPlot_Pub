@@ -1329,7 +1329,164 @@ class GnuplotGenerator:
             axis_min = math.floor(data_min - span * 0.05)
             axis_max = math.ceil(data_max + span * 0.05)
         return axis_min, axis_max, step
-        
+
+    def _curve_y_range_in_x_window(self, plotdef, axis, x_lo, x_hi):
+        """[추가 - 요청] "돋보기(magnifier)" - 중심±반지름의 X 구간 "안에
+        실제로 있는" Y1(또는 Y2) 데이터의 min/max를 구한다. _nice_axis_range와
+        달리 X 필터가 axis=="x"일 때만 걸리는 게 아니라, 항상 [x_lo, x_hi]
+        구간으로 걸러서 그 안의 Y값만 모은다 - 여러 curve가 겹친 지점을
+        "확대해서 구별"하려는 목적상, PIP의 기존 관례(Y 비우면 메인 전체
+        Y범위를 그대로 물려받음)로는 세로로 전혀 안 좁혀져서 이 목적에 안
+        맞기 때문에 별도로 둔다. 파싱 방식(CathenaDatParser, 컬럼 분리 등)은
+        _nice_axis_range와 동일하게 맞춰 일관성을 유지한다."""
+        parser = CathenaDatParser()
+        values = []
+        default_x_col = getattr(plotdef, "x_output_no", 0)
+        for curve in plotdef.curves:
+            curve_axis = getattr(curve, "axis", "y1")
+            if curve_axis != axis:
+                continue
+            x_col_idx = curve.x_output_no if getattr(curve, "x_output_no", None) is not None else default_x_col
+            column = curve.output_no
+            try:
+                dat_info = parser.parse(curve.dat_file)
+            except Exception:
+                continue
+            try:
+                with open(curve.dat_file, "r", encoding="utf-8", errors="ignore") as data:
+                    file_lines = data.readlines()
+            except OSError:
+                continue
+            for row in file_lines[dat_info.data_start_line:]:
+                text = strip_inline_comment(row).strip()
+                if is_comment_or_blank(text):
+                    continue
+                fields = re.split(r'[,\s]+', text)
+                if not fields:
+                    continue
+                max_col = max(column, x_col_idx)
+                if len(fields) <= max_col:
+                    continue
+                try:
+                    x_val = float(fields[x_col_idx].replace("D", "E").replace("d", "e").replace(",", "")) + curve.x_shift
+                except (ValueError, IndexError):
+                    continue
+                if x_val < x_lo or x_val > x_hi:
+                    continue
+                try:
+                    value = float(fields[column].replace("D", "E").replace("d", "e").replace(",", ""))
+                except (ValueError, IndexError):
+                    continue
+                if math.isfinite(value):
+                    values.append(value)
+        if not values:
+            return None
+        return min(values), max(values)
+
+    def _resolve_magnifier_value(self, raw, mode, axis_lo, axis_hi):
+        """[추가 - 요청] "돋보기" 중심/반지름 입력을 "좌표값" 또는 "%"(현재
+        축 표시범위 대비) 중 어느 모드든 실제 데이터 값 하나로 변환한다.
+        중심의 %는 축의 0~100%(axis_lo가 0%) 기준, 반지름의 %는 "축 표시
+        범위(axis_hi-axis_lo)의 %만큼의 폭"으로 해석한다(전자는 위치, 후자는
+        길이라는 차이 - 호출부에서 is_length로 구분)."""
+        try:
+            v = float(str(raw).strip())
+        except (TypeError, ValueError):
+            return None
+        if mode == "pct":
+            return v / 100.0 * (axis_hi - axis_lo)
+        return v
+
+    def compute_magnifier_pip(self, plotdef, mag_cfg, existing_pip=None):
+        """[추가 - 요청] "돋보기(magnifier)" 핵심 계산 - 중심(X, Y1)+반지름(X)
+        +배율만 받아서, 기존 PIP dict가 필요로 하는 xmin/xmax/y1min/y1max/
+        y2min/y2max(실제 데이터에 맞게 자동)와 size_w/size_h(배율로 자동)를
+        계산해 돌려준다. main plot 위에 그릴 점선 원(circles 주석용) dict도
+        함께 반환한다. mag_cfg 키: center_x, center_x_mode("data"|"pct"),
+        center_y1, center_y1_mode, radius_x, radius_x_mode, magnification,
+        clip_shape(선택, 기본 "circle"), marker_on(선택, 기본 True).
+        existing_pip(선택)이 있으면 그 dict를 복사해 계산된 키만 덮어써서
+        pos_x/pos_y 등 사용자가 이미 잡아둔 다른 설정은 그대로 보존한다."""
+        _nice_x = self._nice_axis_range(plotdef, "x", is_log=getattr(plotdef, "xlog", False))
+        if not _nice_x:
+            return None, None
+        _ax_x_lo, _ax_x_hi, _ = _nice_x
+        _cx = self._resolve_magnifier_value(mag_cfg.get("center_x"), mag_cfg.get("center_x_mode", "data"), _ax_x_lo, _ax_x_hi)
+        _r = self._resolve_magnifier_value(mag_cfg.get("radius_x"), mag_cfg.get("radius_x_mode", "data"), _ax_x_lo, _ax_x_hi)
+        if _cx is None or _r is None or _r <= 0:
+            return None, None
+        _xmin, _xmax = _cx - _r, _cx + _r
+
+        _y1_window = self._curve_y_range_in_x_window(plotdef, "y1", _xmin, _xmax)
+        _y2_window = self._curve_y_range_in_x_window(plotdef, "y2", _xmin, _xmax)
+        # 실제 데이터 폭이 0(수평선 등)이면 size_h 계산이 0으로 죽지 않게
+        # 작은 여유를 둔다.
+        def _pad_span(lo_hi):
+            if not lo_hi:
+                return None
+            lo, hi = lo_hi
+            if hi <= lo:
+                pad = max(abs(lo) * 0.05, 0.5)
+                lo, hi = lo - pad, hi + pad
+            else:
+                pad = (hi - lo) * 0.08
+                lo, hi = lo - pad, hi + pad
+            return lo, hi
+
+        _y1_window = _pad_span(_y1_window)
+        _y2_window = _pad_span(_y2_window)
+
+        # [수정 - 근본 원인] "size_h가 100%로 폭주함" - 처음엔 size_h를
+        # "Y1 자동 확대 구간 폭 / main Y1 전체 범위"로 독립 계산했는데, 이
+        # 둘은 서로 무관한 값이라(Y1 자동 구간은 "겹친 커브가 잘 보이는
+        # 만큼"만 잡히므로 X 쪽 배율과 우연히도 안 맞음) 배율을 조금만
+        # 올려도 100%를 훌쩍 넘겨버렸다 - 근본적으로 돋보기 박스의 "겉
+        # 크기"(size_w/size_h)는 "원본 원이 실제 몇 배 커지는가"로만
+        # 정해져야지, 안에 무엇을 보여줄지(Y1 자동 구간)와는 독립이어야
+        # 한다. size_w(X 배율)를 구하고, size_h는 고정 물리 캔버스 비율
+        # (5.95in x 4.17in, 이 파일 다른 곳에서도 쓰는 "interactive" 캔버스
+        # 물리 크기 상수)로 그대로 환산해 "진짜 원(circle)"이 실제로 그
+        # 배율만큼 커지도록 한다.
+        _mag = self._resolve_magnifier_value(mag_cfg.get("magnification"), "data", 0, 0) or 1.0
+        _mag = max(_mag, 0.1)
+        _x_span = max(_ax_x_hi - _ax_x_lo, 1e-9)
+        _size_w = min(max((_xmax - _xmin) / _x_span * _mag, 0.05), 1.0)
+        _size_h = min(max(_size_w * (5.95 / 4.17), 0.05), 1.0)
+
+        _pip = dict(existing_pip or {})
+        _pip.setdefault("enabled", True)
+        _pip.setdefault("clip_shape", mag_cfg.get("clip_shape", "circle"))
+        _pip.setdefault("clip_rx", "50")
+        _pip.setdefault("clip_ry", "50")
+        _pip.setdefault("marker_on", mag_cfg.get("marker_on", True))
+        _pip.setdefault("font_scale", "0.6")
+        _pip.setdefault("title_on", True)
+        _pip.setdefault("legend_on", True)
+        _pip.setdefault("axis_title_on", True)
+        _pip.setdefault("opacity", "100")
+        _pip.setdefault("pos_x", "5")
+        _pip.setdefault("pos_y", "60")
+        _pip["xmin"] = f"{_xmin:.6g}"
+        _pip["xmax"] = f"{_xmax:.6g}"
+        _pip["size_w"] = f"{_size_w * 100:.4g}"
+        _pip["size_h"] = f"{_size_h * 100:.4g}"
+        if _y1_window:
+            _pip["ymin"] = f"{_y1_window[0]:.6g}"
+            _pip["ymax"] = f"{_y1_window[1]:.6g}"
+        if _y2_window:
+            _pip["y2min"] = f"{_y2_window[0]:.6g}"
+            _pip["y2max"] = f"{_y2_window[1]:.6g}"
+
+        _cy1 = self._resolve_magnifier_value(mag_cfg.get("center_y1"), mag_cfg.get("center_y1_mode", "data"),
+                                              *(self._nice_axis_range(plotdef, "y1", is_log=getattr(plotdef, "y1log", False))[:2]
+                                                if self._nice_axis_range(plotdef, "y1", is_log=getattr(plotdef, "y1log", False)) else (0, 1)))
+        _circle = {
+            "x": f"{_cx:.6g}", "y": f"{_cy1:.6g}" if _cy1 is not None else "0",
+            "rx": f"{_r:.6g}", "ry": "", "coord_mode": "data",
+            "color": "black", "dashtype": ".",
+        }
+        return _pip, _circle
+
     def _has_enhanced_markup(self, text):
         if not text: return False
         i, n = 0, len(text)
@@ -3484,9 +3641,14 @@ class GnuplotGenerator:
                 grx = _coord_clause(_double_val(rx_val), _mode, 0.10)
                 gry = _coord_clause(_double_val(ry_val), _mode, 0.10)
                 _color = (ell.get("color") or "").strip() or "black"
+                # [추가 - 요청] "돋보기 중심을 점선(dot)으로 표기" - 기존
+                # circles 주석(항상 실선)에 dashtype 키를 추가해 점선 등도
+                # 그릴 수 있게 한다(키가 없으면 기존과 동일하게 실선).
+                _dash = (ell.get("dashtype") or "").strip()
+                _dash_clause = f' dashtype "{_dash}"' if _dash else ""
                 lines.append(
                     f'set object {i+1} ellipse at {gx},{gy} size {grx},{gry} '
-                    f'front fillstyle empty border lc rgb "{_color}"'
+                    f'front fillstyle empty border lc rgb "{_color}"{_dash_clause}'
                 )
 
         # Legend box 테두리는 Frame(plot 외곽 border) 두께 이하여야 하므로,
