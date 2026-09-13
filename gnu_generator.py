@@ -4810,7 +4810,16 @@ class GnuplotGenerator:
             # 을 곱해 인셋 크기에 비례해 줄어들게 한다.
             _marker_shape = getattr(curve, "marker_shape", None)
             if marker_on and _marker_shape is not None and _marker_shape in MARKER_SYMBOL_MAP:
-                _n_kept = len(_kept_rows)
+                # [수정 - 버그(코드 리뷰로 발견)] "_kept_rows" 미정의 변수 참조 -
+                # 확대구간 클리핑을 Liang-Barsky 선분 클리핑 방식으로 재설계
+                # (원본 정점 필터링 -> 선분 교차 계산)하면서 옛 "_kept_rows"
+                # 리스트 자체가 사라졌는데, 이 마커 개수 추정 줄만 이름을 못
+                # 따라가 그대로 남아 있었음 - marker_on 켜고 marker_shape가
+                # 있는 curve가 하나라도 있으면 NameError로 plot 생성 자체가
+                # 실패했을 버그(아직 사용자 보고는 없었음 - 리뷰로 선제 발견).
+                # 같은 루프 안에서 방금 만든 _out_lines(점 좌표 줄 + 끊긴
+                # 구간을 나누는 빈 줄)에서 실제 좌표 줄만 세어 대체한다.
+                _n_kept = sum(1 for _l in _out_lines if _l)
                 _every = max(_n_kept // 10, 1)
                 _ps = (getattr(curve, "marker_size", 1.0) or 1.0) * MARKER_NATIVE_PS_SCALE.get(_marker_shape, 1.0) * marker_scale
                 fragments.append(
