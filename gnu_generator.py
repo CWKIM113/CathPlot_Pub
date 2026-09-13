@@ -4166,20 +4166,39 @@ class GnuplotGenerator:
                         _titled.append((_lcurve.color or DEFAULT_COLORS[_ci % len(DEFAULT_COLORS)], _lname))
                 _n_rows = len(_titled)
                 if _n_rows:
-                    _row_step = min(0.15, 0.62 / _n_rows)
+                    # [수정 - 사용자 보고] "글자 길이와 box 간격은? 너무 길면
+                    # box도 너무 길어질 텐데 제한치가 있어야" - box 폭에는
+                    # 이미 상한(92%)을 뒀었지만, 그건 "배경 박스"만 좁혔을
+                    # 뿐 글자 자체(gnuplot "with labels"는 문자열을 자르지
+                    # 않고 그대로 다 그림)는 안 줄어 여전히 박스는 물론
+                    # 인셋 전체 밖으로도 삐져나갈 수 있었음(실측 확인 - 긴
+                    # curve 이름 하나로 재현). 상한 폭(92%)에 실제로 들어갈
+                    # 글자 수를 먼저 계산해, 그보다 긴 이름은 "…"로 줄여서
+                    # (박스와 글자가 항상 서로 일치하는) 확실한 제한치가
+                    # 되게 한다.
+                    _char_frac = min(0.045, max(0.020, _font_leg * 0.006))
+                    _max_chars = max(int(0.92 / _char_frac), 6)
+
+                    def _clip_name(_n):
+                        return _n if len(_n) <= _max_chars else _n[:max(_max_chars - 1, 1)] + "…"
+                    _titled = [(_c, _clip_name(_n)) for _c, _n in _titled]
+                    # [수정 - 사용자 보고] "줄 상하 간격이 너무 큼" - 위쪽
+                    # 62%/줄당 최대 0.15이던 예산을 55%/줄당 최대 0.11로
+                    # 줄여 더 촘촘하게 붙인다(여전히 커브 개수에 반비례해서
+                    # 몇 개든 안쪽 axis frame을 넘지 않음).
+                    _row_step = min(0.11, 0.55 / _n_rows)
                     _lx = ix_hi - (ix_hi - ix_lo) * 0.03
                     _leg_rows = []
                     for _ri, (_lcolor, _lname) in enumerate(_titled):
                         _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
-                        _ly = iy1_hi - (iy1_hi - iy1_lo) * (0.09 + _row_step * _ri)
+                        _ly = iy1_hi - (iy1_hi - iy1_lo) * (0.08 + _row_step * _ri)
                         _leg_rows.append((_lx, _ly, _esc, _lcolor))
-                    # 배경 박스는 우측에 붙여서(네이티브의 "right top"과 같은
-                    # 인상) 안쪽 axis frame 폭의 오른쪽 65%만 차지한다(긴
-                    # curve 이름의 정확한 실제 폭은 재지 않으므로 근사값).
-                    _lbg_x0 = ix_hi - (ix_hi - ix_lo) * 0.66
+                    _max_len = max((len(n) for _, n in _titled), default=1)
+                    _box_w_frac = min(max(_char_frac * _max_len, 0.20), 0.92)
+                    _lbg_x0 = ix_hi - (ix_hi - ix_lo) * _box_w_frac
                     _lbg_x1 = ix_hi - (ix_hi - ix_lo) * 0.01
                     _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * 0.02
-                    _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * 0.07
+                    _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * 0.06
                     _lbg_corners = [(_lbg_x0, _lbg_y0), (_lbg_x1, _lbg_y0), (_lbg_x1, _lbg_y1), (_lbg_x0, _lbg_y1), (_lbg_x0, _lbg_y0)]
                     _lbg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _lbg_corners)
                     fragments.append(f"$PipFoldLegBg << EOD\n{_lbg_rows}\nEOD")
