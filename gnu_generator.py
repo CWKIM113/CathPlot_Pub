@@ -4007,10 +4007,23 @@ class GnuplotGenerator:
         _font_tic = max(9.0 * _fs, 3.5)
         _font_title = max(float(getattr(plotdef, "title_size", None) or 14) * _fs, 6.0)
         _font_axis = max(float(getattr(plotdef, "xlabel_size", None) or 11) * _fs, 5.0)
+        # [수정 - 사용자 요청] "legend만 빼먹은 보정(axis_shape_scale)도
+        # 반영해 줘요" - 네이티브 _render_legend_box가 legend에만 추가로
+        # 쓰는 보정: 인셋이 기준 비율(가로:세로=10:8)보다 유난히 가로로
+        # 좁으면 그 비율만큼 폰트를 한 번 더 줄인다(세로로 넓으면 손대지
+        # 않음 - 네이티브와 동일). axis_w_in/axis_h_in(인셋의 실제 물리
+        # 치수, inch)이 있을 때만 계산하고 없으면 보정 없음(1.0)으로
+        # 안전하게 넘어간다.
+        _REF_AXIS_RATIO = 10.0 / 8.0
+        _axis_shape_scale = 1.0
+        if axis_w_in and axis_h_in:
+            _cur_axis_ratio = axis_w_in / max(axis_h_in, 0.01)
+            if _cur_axis_ratio < _REF_AXIS_RATIO:
+                _axis_shape_scale = max((_cur_axis_ratio / _REF_AXIS_RATIO) ** 0.5, 0.5)
         # [수정 - 사용자 요청] "font 글자 하한을 가능한 작게" - 4pt ->
         # 3pt(gnuplot이 실제로 읽을 수 있게 그리는 실질 하한에 가까움)로
         # 더 낮춘다.
-        _font_leg = max(float(getattr(plotdef, "legend_size", None) or 9) * _fs * 0.6, 3.0)
+        _font_leg = max(float(getattr(plotdef, "legend_size", None) or 9) * _fs * _axis_shape_scale * 0.6, 3.0)
 
         # 배경(채워진 사각형) - PIP가 실제로 관측할 곡선보다 먼저(아래에)
         # 그려져야 하므로 이 overlay 목록의 맨 앞에 둔다.
@@ -4316,6 +4329,12 @@ class GnuplotGenerator:
                         _leg_right_side = True
                     else:
                         _leg_right_side = ("left" not in _lp)
+                    # [추가 - 사용자 요청] "legend 위치와 정렬은 자기의
+                    # main-plot을 따라가면 됨" - 좌/우(정렬)뿐 아니라 위/
+                    # 아래(위치)도 main의 legend_pos를 그대로 따른다(지금
+                    # 까지는 항상 위쪽 고정이었음). native _resolve_anchor와
+                    # 같은 방식으로 "top"/"bottom" 문자열 포함 여부로 판정.
+                    _leg_top_side = ("bottom" not in _lp)
                     _max_text_w = max(_text_w_frac(_n) for _, _n, _ in _titled)
                     _mk_col = ((ix_hi - ix_lo) * 0.09) if marker_on else 0.0
                     if _leg_right_side:
@@ -4333,10 +4352,17 @@ class GnuplotGenerator:
                     _leg_rows = []
                     for _ri, (_lcolor, _lname, _lmarker) in enumerate(_titled):
                         _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
-                        _ly = iy1_hi - (iy1_hi - iy1_lo) * (_frame_gap_frac + _char_gap_frac + _row_step * _ri)
+                        if _leg_top_side:
+                            _ly = iy1_hi - (iy1_hi - iy1_lo) * (_frame_gap_frac + _char_gap_frac + _row_step * _ri)
+                        else:
+                            _ly = iy1_lo + (iy1_hi - iy1_lo) * (_frame_gap_frac + _char_gap_frac + _row_step * _ri)
                         _leg_rows.append((_lx, _ly, _esc, _lcolor, _lmarker, _mk_x))
-                    _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * _frame_gap_frac
-                    _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * _char_gap_frac
+                    if _leg_top_side:
+                        _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * _frame_gap_frac
+                        _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * _char_gap_frac
+                    else:
+                        _lbg_y0 = iy1_lo + (iy1_hi - iy1_lo) * _frame_gap_frac
+                        _lbg_y1 = max(r[1] for r in _leg_rows) + (iy1_hi - iy1_lo) * _char_gap_frac
                     _lbg_corners = [(_lbg_x0, _lbg_y0), (_lbg_x1, _lbg_y0), (_lbg_x1, _lbg_y1), (_lbg_x0, _lbg_y1), (_lbg_x0, _lbg_y0)]
                     _lbg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _lbg_corners)
                     fragments.append(f"$PipFoldLegBg << EOD\n{_lbg_rows}\nEOD")
