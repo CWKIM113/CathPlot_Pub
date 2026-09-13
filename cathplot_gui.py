@@ -3477,8 +3477,17 @@ class CathPlotGUI:
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_x_var, width=6).pack(side="left", padx=(4, 8))
         ttk.Label(mag_box_row, text="Y:").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_y_var, width=6).pack(side="left", padx=(4, 12))
-        ttk.Label(mag_box_row, text="반지름(%, 원/사각형 공통 - 박스 폭의 절반):").pack(side="left")
+        ttk.Label(mag_box_row, text="반지름(%, 0~50 권장):").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_radius_var, width=6).pack(side="left", padx=(4, 2))
+        # [수정 - 사용자 보고 버그] "반지름을 100으로 넣었더니 큰 원 중심이
+        # 입력과 다르게 나옴 + 크기가 커서 축소했다는 메시지도 뜸" - 근본
+        # 원인: 반지름(%)은 "축 프레임 폭 대비" 이므로 지름은 그 2배 - 즉
+        # 50만 넘어도 지름이 축 프레임 전체(100%)를 넘어서 자동으로 100%로
+        # 눌리고, 그러면 박스가 축 프레임을 꽉 채워 더 이상 옮길 자리가
+        # 없어져 중심X/Y 입력이 사실상 무시된 것처럼 보였던 것(버그가 아니라
+        # "반지름 50 = 지름 100% = 축 전체" 라는 단위를 오해하신 것) - 값
+        # 자체는 그대로 두되(관례상 다른 %필드와 통일), 오해를 막기 위해
+        # 힌트에 권장 범위(0~50)를 명시한다.
         ttk.Label(mag_box_row, text="(비우면 중심X/Y1·배율에서 자동)", foreground="#888888", font=("", 8)).pack(side="left", padx=(6, 0))
 
         mag_preview_var = tk.StringVar(value="")
@@ -3509,7 +3518,12 @@ class CathPlotGUI:
                     mag_preview_var.set("? (큰원 반지름 값을 확인해 주세요)")
                     return
                 _size_h = min(max(_size_w * (5.95 / 4.17), 0.05), 1.0)
-                mag_preview_var.set(f"가로 {_size_w * 100:.1f}% / 세로 {_size_h * 100:.1f}%  (큰원 반지름 직접 입력값 기준)")
+                # [추가 - 사용자 보고 버그 예방] "반지름 100 넣었더니 중심이
+                # 입력과 다르게 나옴" - 지름(반지름의 2배)이 100%를 넘어
+                # 잘린 경우, 박스가 축 프레임을 꽉 채워 중심X/Y가 사실상
+                # 무시된 것처럼 보이므로 미리보기에서부터 경고한다.
+                _clip_note = "" if float(_box_r_raw) <= 50.0 else " ⚠ 반지름 50%를 넘으면 박스가 축 프레임 전체를 채워 중심 지정이 무시됩니다"
+                mag_preview_var.set(f"가로 {_size_w * 100:.1f}% / 세로 {_size_h * 100:.1f}%  (인셋 박스 반지름 직접 입력값 기준){_clip_note}")
                 return
             _r = _gen._resolve_magnifier_value(_mag_cfg.get("radius_x"), _mag_cfg.get("radius_x_mode", "data"), _xlo, _xhi, is_length=True)
             try:
