@@ -3920,7 +3920,8 @@ class GnuplotGenerator:
     def _build_pip_folded_overlay(self, plotdef, pip_xmin, pip_xmax, pip_y1min, pip_y1max,
                                    pip_y2min, pip_y2max, box, plot_dir_,
                                    clip_shape="rect", clip_rx=50.0, clip_ry=50.0, minimal=False,
-                                   pip_cfg=None, size_factor=1.0, font_scale=0.6, margins=None):
+                                   pip_cfg=None, size_factor=1.0, font_scale=0.6, margins=None,
+                                   marker_on=False, marker_scale=0.3, axis_w_in=None):
         """[추가 - PIP 렌더링 재설계] "R/u 직후 기본 화면은 깨끗해야 하는데
         확대(replot)는 그걸 위한 NaN 마스킹 때문에 막힌다"는 근본 충돌을
         피하기 위해, PIP(배경+테두리+자기 커브)를 별도 멀티플롯 패널이
@@ -4176,47 +4177,100 @@ class GnuplotGenerator:
                 for _ci, _lcurve in enumerate(plotdef.curves):
                     _lname = (_lcurve.title or "").strip()
                     if _lname:
-                        _titled.append((_lcurve.color or DEFAULT_COLORS[_ci % len(DEFAULT_COLORS)], _lname))
+                        _titled.append((_lcurve.color or DEFAULT_COLORS[_ci % len(DEFAULT_COLORS)], _lname,
+                                        getattr(_lcurve, "marker_shape", None)))
                 _n_rows = len(_titled)
                 if _n_rows:
-                    # [수정 - 사용자 보고] "글자 길이와 box 간격은? 너무 길면
-                    # box도 너무 길어질 텐데 제한치가 있어야" - box 폭에는
-                    # 이미 상한(92%)을 뒀었지만, 그건 "배경 박스"만 좁혔을
-                    # 뿐 글자 자체(gnuplot "with labels"는 문자열을 자르지
-                    # 않고 그대로 다 그림)는 안 줄어 여전히 박스는 물론
-                    # 인셋 전체 밖으로도 삐져나갈 수 있었음(실측 확인 - 긴
-                    # curve 이름 하나로 재현). 상한 폭(92%)에 실제로 들어갈
-                    # 글자 수를 먼저 계산해, 그보다 긴 이름은 "…"로 줄여서
-                    # (박스와 글자가 항상 서로 일치하는) 확실한 제한치가
-                    # 되게 한다.
+                    # [수정 - 사용자 지적] "main legend에서 이미 다 설계
+                    # 했던 건데 왜 여기선 안 되나" - 글자 폭을 문자수 근사
+                    # (font_pt*상수)로 추측하는 대신, main legend(_render_
+                    # legend_box)가 이미 쓰는 실측 함수(_measure_text_width_in
+                    # - PIL로 실제 폰트 파일을 읽어 렌더 폭을 inch로 잼)를
+                    # 그대로 재사용한다. 인셋의 실제 물리 폭(axis_w_in, 위에서
+                    # _render_pip_inset이 함께 넘겨줌)으로 나누면 main과 똑같이
+                    # "박스 폭 대비 몇 %"가 정확히 나온다 - 폰트/문자열이
+                    # 뭐든(긴 영문, 특수문자 등) 실제 렌더 폭 그대로라 추측
+                    # 오차로 인한 겹침이 구조적으로 없다. 측정 불가(폰트 파일
+                    # 없음 등)시에만 기존 문자수 근사로 안전하게 대체한다.
                     _char_frac = min(0.045, max(0.020, _font_leg * 0.006))
-                    _max_chars = max(int(0.92 / _char_frac), 6)
+                    _legend_font_name = getattr(plotdef, "legend_font", None) or "Malgun Gothic"
+
+                    def _text_w_frac(_s):
+                        # [수정 - 사용자 보고 버그] "마커가 글자에 가려 안
+                        # 보임" - PIL 실측은 이 "windows" 대화형 터미널의
+                        # 실제 렌더 폭과 완전히 같다는 보장이 없다(main
+                        # legend가 PDF/PNG 포맷마다 text_corr 보정치를 따로
+                        # 두는 것과 같은 이유 - 화면은 아직 실측 보정치가
+                        # 없음) - 15% 여유를 더해 실제가 추정보다 조금 더
+                        # 넓어도 박스/마커 간격이 항상 충분하게 한다.
+                        _measured = _measure_text_width_in(_s, _legend_font_name, _font_leg)
+                        if _measured is not None and axis_w_in and axis_w_in > 0:
+                            return (_measured / axis_w_in) * 1.15
+                        return _char_frac * len(_s)
+
+                    # 상한 폭에 안 들어가는 이름은 "…"로 줄인다(실측 기준
+                    # 으로 한 글자씩 줄이며 확인 - 문자수 근사와 달리 언어/
+                    # 폰트에 따라 문자당 폭이 달라도 항상 정확함). [수정 -
+                    # 사용자 보고 버그] "마커가 글자에 가려 안 보임" - marker_on
+                    # 이면 텍스트 왼쪽에 마커 기호+간격(_mk_gap, 아래)이 더
+                    # 붙는데 그 몫을 안 빼고 92%를 그대로 캡으로 쓰면 마커
+                    # 자리가 박스/축 frame 밖으로 밀려남 - marker_on일 때는
+                    # 그만큼 캡을 미리 줄여서 마커가 항상 안쪽에 들어오게 한다.
+                    _text_cap = 0.92 - (0.12 if marker_on else 0.0)
 
                     def _clip_name(_n):
-                        return _n if len(_n) <= _max_chars else _n[:max(_max_chars - 1, 1)] + "…"
-                    _titled = [(_c, _clip_name(_n)) for _c, _n in _titled]
+                        if _text_w_frac(_n) <= _text_cap:
+                            return _n
+                        _n2 = _n
+                        while len(_n2) > 1 and _text_w_frac(_n2 + "…") > _text_cap:
+                            _n2 = _n2[:-1]
+                        return _n2 + "…"
+                    _titled = [(_c, _clip_name(_n), _ms) for _c, _n, _ms in _titled]
                     # [수정 - 사용자 보고] "줄 상하 간격이 너무 큼" - 위쪽
                     # 62%/줄당 최대 0.15이던 예산을 55%/줄당 최대 0.11로
                     # 줄여 더 촘촘하게 붙인다(여전히 커브 개수에 반비례해서
                     # 몇 개든 안쪽 axis frame을 넘지 않음).
                     _row_step = min(0.11, 0.55 / _n_rows)
-                    _lx = ix_hi - (ix_hi - ix_lo) * 0.03
+                    _lx = ix_hi - (ix_hi - ix_lo) * 0.06
                     _leg_rows = []
-                    for _ri, (_lcolor, _lname) in enumerate(_titled):
+                    for _ri, (_lcolor, _lname, _lmarker) in enumerate(_titled):
                         _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
-                        _ly = iy1_hi - (iy1_hi - iy1_lo) * (0.08 + _row_step * _ri)
-                        _leg_rows.append((_lx, _ly, _esc, _lcolor))
-                    _max_len = max((len(n) for _, n in _titled), default=1)
-                    _box_w_frac = min(max(_char_frac * _max_len, 0.20), 0.92)
-                    _lbg_x0 = ix_hi - (ix_hi - ix_lo) * _box_w_frac
-                    _lbg_x1 = ix_hi - (ix_hi - ix_lo) * 0.01
-                    _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * 0.02
+                        _ly = iy1_hi - (iy1_hi - iy1_lo) * (0.11 + _row_step * _ri)
+                        _leg_rows.append((_lx, _ly, _esc, _lcolor, _lmarker))
+                    # [수정 - 사용자 지적] "main legend에서 이미 다 설계
+                    # 했던 건데" - main legend처럼 마커는 "그 줄 자기 텍스트
+                    # 앞"에 고정 간격을 두고 붙인다(박스 폭 역산이 아니라
+                    # 실측 폭 기준이라 이제 어느 줄이든 정확히 들어맞는다).
+                    _mk_gap = (ix_hi - ix_lo) * 0.06
+                    _leg_rows2 = []
+                    for (_lx, _ly, _esc, _lcolor, _lmarker) in _leg_rows:
+                        _text_w = _text_w_frac(_esc) * (ix_hi - ix_lo)
+                        _mk_x = _lx - _text_w - _mk_gap
+                        _leg_rows2.append((_lx, _ly, _esc, _lcolor, _lmarker, _mk_x))
+                    _leg_rows = _leg_rows2
+                    if marker_on:
+                        _leftmost = min(r[5] for r in _leg_rows) - (ix_hi - ix_lo) * 0.05
+                    else:
+                        _leftmost = min(_lx - _text_w_frac(_esc) * (ix_hi - ix_lo) for (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x) in _leg_rows) - (ix_hi - ix_lo) * 0.02
+                    _lbg_x0 = max(_leftmost, ix_lo)
+                    # [수정 - 사용자 보고] "legend box가 축 frame에 바로
+                    # 붙는 것 아닌지 - 약간 마진 필요" - 오른쪽/위쪽 여백을
+                    # 0.01/0.02(거의 0)에서 눈에 보이는 마진으로 늘린다.
+                    _lbg_x1 = ix_hi - (ix_hi - ix_lo) * 0.04
+                    _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * 0.05
                     _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * 0.06
                     _lbg_corners = [(_lbg_x0, _lbg_y0), (_lbg_x1, _lbg_y0), (_lbg_x1, _lbg_y1), (_lbg_x0, _lbg_y1), (_lbg_x0, _lbg_y0)]
                     _lbg_rows = "\n".join(f"{px:.6g} {py:.6g}" for px, py in _lbg_corners)
                     fragments.append(f"$PipFoldLegBg << EOD\n{_lbg_rows}\nEOD")
                     fragments.append('$PipFoldLegBg using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 border lc rgb "black" lw 0.8')
-                    for _li, (_lx, _ly, _esc, _lcolor) in enumerate(_leg_rows):
+                    if marker_on:
+                        for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x) in enumerate(_leg_rows):
+                            _sym = MARKER_SYMBOL_MAP.get(_lmarker)
+                            if not _sym:
+                                continue
+                            fragments.append(f'$PipFoldLegMk{_li} << EOD\n{_mk_x:.6g} {_ly:.6g} "{_sym}"\nEOD')
+                            fragments.append(f'$PipFoldLegMk{_li} using 1:2:3 notitle axes x1y1 with labels right font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
+                    for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x) in enumerate(_leg_rows):
                         fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
                         fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels right font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
         else:
@@ -4348,6 +4402,24 @@ class GnuplotGenerator:
             fragments.append(
                 f'"{_tmp_name}" using {_tx}:{_ty} notitle axes {axis_spec} with lines lw 1.0 lc rgb "{color}"'
             )
+            # [추가 - 요청] "Inset 크기에 따라 다르니까, PIP 입력에 마커
+            # on/off (원래 plot에 마커 있는 경우만) 넣어 두지" - 켜져 있고
+            # 이 curve에 실제로 marker_shape가 지정돼 있을 때만(원본에 마커
+            # 없는 curve는 지금까지처럼 선만) 같은 데이터를 "every N"으로
+            # 듬성듬성 골라 점으로 더 그린다(안쪽 axis frame용으로 이미
+            # 필터링된 파일을 그대로 재사용 - 새 파일 필요 없음). 크기는
+            # main curve가 쓰는 것과 같은 공식(marker_size * 도형별 보정)에,
+            # 예전 네이티브 인셋 마커가 쓰던 것과 같은 30% 하한(marker_scale)
+            # 을 곱해 인셋 크기에 비례해 줄어들게 한다.
+            _marker_shape = getattr(curve, "marker_shape", None)
+            if marker_on and _marker_shape is not None and _marker_shape in MARKER_SYMBOL_MAP:
+                _n_kept = len(_kept_rows)
+                _every = max(_n_kept // 10, 1)
+                _ps = (getattr(curve, "marker_size", 1.0) or 1.0) * MARKER_NATIVE_PS_SCALE.get(_marker_shape, 1.0) * marker_scale
+                fragments.append(
+                    f'"{_tmp_name}" using {_tx}:{_ty} every {_every} notitle axes {axis_spec} '
+                    f'with points pt {_fmt_pointtype(_marker_shape)} ps {_ps:.3f} lc rgb "{color}"'
+                )
             temp_files.append(_tmp_path)
         return fragments, temp_files
 
@@ -5347,6 +5419,23 @@ class GnuplotGenerator:
                         "minimal": bool(pip.get("minimal")),
                         "size_factor": min(1.0, max(size_w, size_h)),
                         "font_scale": font_scale,
+                        # [추가 - 요청] "PIP 입력에 마커 on/off" - 켜져 있으면
+                        # curve에 marker_shape가 있는 것만 인셋 안에도 마커를
+                        # 같이 찍는다. marker_scale은 legend 마커 기호가 이미
+                        # 쓰는 것과 같은 공식(font_scale*0.75*크기비율, 30%
+                        # 하한 - "예전엔 인셋 마커 크기 하한치가 있었다"는
+                        # 사용자 지적 반영)을 그대로 재사용한다.
+                        "marker_on": bool(pip.get("marker_on")),
+                        "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
+                        # [추가 - 사용자 지적] "main legend에서 이미 다
+                        # 설계했던 건데 왜 여기선 안 되나" - legend box/마커
+                        # 폭을 문자수 근사가 아니라 main legend와 같은 실측
+                        # (_measure_text_width_in, PIL로 실제 렌더 폭을 inch
+                        # 단위로 잼)으로 구하려면 인셋의 실제 물리 폭(inch)이
+                        # 필요하다 - fold overlay는 fmt=="interactive"에서만
+                        # 쓰이므로 원/타원 반지름 물리보정에 이미 쓰는 것과
+                        # 같은 고정 캔버스 폭(5.95in)을 그대로 쓴다.
+                        "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
                         "margins": {
                             "top": _inset_top_frac, "bottom": _inset_bottom_frac,
                             "left": _inset_left_frac, "right": _inset_right_frac,
@@ -5443,6 +5532,9 @@ class GnuplotGenerator:
                             "minimal": bool(pip.get("minimal")),
                             "size_factor": min(1.0, max(size_w, size_h)),
                             "font_scale": font_scale,
+                            "marker_on": bool(pip.get("marker_on")),
+                            "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
+                            "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
                             "margins": {
                                 "top": _inset_top_frac, "bottom": _inset_bottom_frac,
                                 "left": _inset_left_frac, "right": _inset_right_frac,
@@ -7170,6 +7262,9 @@ class GnuplotGenerator:
                             size_factor=_fold_ranges.get("size_factor", 1.0),
                             font_scale=_fold_ranges.get("font_scale", 0.6),
                             margins=_fold_ranges.get("margins"),
+                            marker_on=_fold_ranges.get("marker_on", False),
+                            marker_scale=_fold_ranges.get("marker_scale", 0.3),
+                            axis_w_in=_fold_ranges.get("axis_w_in"),
                         )
                         self._last_pip_fold_tempfiles = (getattr(self, "_last_pip_fold_tempfiles", None) or []) + _fold_tempfiles
                         _decls = [f for f in _fold_fragments if f.startswith("$") and "<< EOD" in f]

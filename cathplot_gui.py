@@ -846,6 +846,15 @@ class CathPlotGUI:
         # [추가 - 요청] "돋보기 형태로 위치/반지름만 주고, 그 안엔 curve만" -
         # 켜면 title/axis frame(테두리)/격자/tic 숫자를 전부 무시.
         self.pip_minimal_var = tk.BooleanVar(value=False)
+        # [추가 - 요청] "Inset 크기에 따라 다르니까, PIP 입력에 마커 on/off
+        # (원래 plot에 마커 있는 경우만) 넣어 두지" - 지금까지 inset 안
+        # curve는 항상 선(line)만 그리고 마커는 생략했는데(좁은 인셋에서
+        # 지저분해 보일 수 있어 1차 구현 때부터 의도적으로 제외), 사용자가
+        # 필요할 때 켤 수 있게 체크박스를 추가한다. 실제 효과는 원본 curve에
+        # marker_shape가 설정된 경우에만 나타난다(없는 curve는 켜도 선만
+        # 그대로 - _build_pip_folded_overlay가 각 curve의 marker_shape
+        # 유무로 자연스럽게 걸러줌).
+        self.pip_marker_on_var = tk.BooleanVar(value=False)
         # [수정 - 사용자 보고 버그] "in-plot title/tic font가 너무 작아짐" -
         # 0.35로 낮췄던 기본값을 0.6으로 되돌림(gnu_generator.py의 동일
         # 기본값과 함께 - legend 전용 축소는 별도 메커니즘이 담당).
@@ -2096,6 +2105,7 @@ class CathPlotGUI:
                 "y2min": self.pip_y2min_var.get(), "y2max": self.pip_y2max_var.get(),
                 "title_on": self.pip_title_on_var.get(), "axis_title_on": self.pip_axis_title_on_var.get(),
                 "legend_on": self.pip_legend_on_var.get(), "minimal": self.pip_minimal_var.get(),
+                "marker_on": self.pip_marker_on_var.get(),
                 "title_text": self.pip_title_text_var.get(), "xlabel_text": self.pip_xlabel_text_var.get(),
                 "ylabel_text": self.pip_ylabel_text_var.get(), "y2label_text": self.pip_y2label_text_var.get(),
                 "font_scale": self.pip_font_scale_var.get(), "opacity": self.pip_opacity_var.get(),
@@ -2373,6 +2383,7 @@ class CathPlotGUI:
             self.pip_axis_title_on_var.set(_pip_data.get("axis_title_on", self.pip_axis_title_on_var.get()))
             self.pip_legend_on_var.set(_pip_data.get("legend_on", self.pip_legend_on_var.get()))
             self.pip_minimal_var.set(_pip_data.get("minimal", self.pip_minimal_var.get()))
+            self.pip_marker_on_var.set(_pip_data.get("marker_on", self.pip_marker_on_var.get()))
             self.pip_title_text_var.set(_pip_data.get("title_text", self.pip_title_text_var.get()))
             self.pip_xlabel_text_var.set(_pip_data.get("xlabel_text", self.pip_xlabel_text_var.get()))
             self.pip_ylabel_text_var.set(_pip_data.get("ylabel_text", self.pip_ylabel_text_var.get()))
@@ -3367,6 +3378,11 @@ class CathPlotGUI:
         # 될 수 있다는 요청 - _build_pip_folded_overlay가 이 값을 읽어
         # 테두리/격자/tic 생성을 건너뜀).
         self._mk_check(opt_frame, "간단히 표시 (Curve만, 테두리/tic 생략)", self.pip_minimal_var, size=19, anchor="w", padx=5, pady=2)
+        # [추가 - 요청] "PIP 입력에 마커 on/off (원래 plot에 마커 있는
+        # 경우만)" - 원본 curve에 marker_shape가 없으면 켜도 효과가 없어
+        # 체크박스 자체는 항상 보이게 두되(어떤 curve가 마커를 쓰는지는
+        # 매번 바뀔 수 있어 동적 숨김/비활성은 과함), 라벨로 조건을 안내한다.
+        self._mk_check(opt_frame, "Marker 표시 (원본에 marker 있는 curve만)", self.pip_marker_on_var, size=19, anchor="w", padx=5, pady=2)
 
         # [추가 - 요청] "PIP 표시옵션에서 Plot Title/X/Y1/Y2 title을 default를
         # 제시하고 수정 가능하게 - 불러오는 in-plot의 원본 파일에 title 등이
@@ -3637,6 +3653,7 @@ class CathPlotGUI:
             "axis_title_on": self.pip_axis_title_on_var.get(),
             "legend_on": self.pip_legend_on_var.get(),
             "minimal": self.pip_minimal_var.get(),
+            "marker_on": self.pip_marker_on_var.get(),
             "title_text": self.pip_title_text_var.get(),
             "xlabel_text": self.pip_xlabel_text_var.get(),
             "ylabel_text": self.pip_ylabel_text_var.get(),
