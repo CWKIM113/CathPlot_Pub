@@ -4072,7 +4072,24 @@ class GnuplotGenerator:
         # 있으면(투명 PIP) 배경 채우기 자체를 생략해 main이 그대로 비쳐
         # 보이게 한다(테두리는 아래에서 그대로, 다만 점선으로 - 네이티브
         # no_bg 관례와 동일).
-        if opaque_bg:
+        # [수정 - 실측 재현, 사용자 보고 "잔상"] "불투명 PIP만 마우스로
+        # 이동/확대하면 곡선이 2겹으로 겹침(투명/PIP 없음은 정상)" - 실제
+        # windows 터미널에 PostMessage로 마우스 드래그를 직접 재현해 격리
+        # 확인: 이 흰색 배경 채우기(filledcurves fillstyle solid, "plot \"
+        # 재생 목록에 포함돼 gnuplot 네이티브 마우스 확대/이동이 내부적으로
+        # 다시 그릴 때마다 매번 같이 다시 칠해짐)가 원인으로 강하게 의심됨
+        # (이 파일 다른 곳에 이미 문서화된 "같은 자리를 배경색으로 두 번
+        # 칠하면 합성이 깨지는" 버그와 같은 계열). 완전불투명 rect는 이미
+        # 화면 고정(screen-anchored) "set object 7100"이 배경+테두리를
+        # 담당하고 있어(_render_pip_inset) 이 데이터 기반 채우기는 사실
+        # 중복이었다 - rect+opaque_bg일 때만 생략하고 object 7100(아래에서
+        # 더 이상 unset하지 않음)에 맡긴다. [주의 - 실측으로 확인, rect만
+        # 적용] 원/타원(ellipse)은 이 채우기가 "준비운동(warmup) plot"
+        # cairo/GDI 합성 버그 회피와도 얽혀 있어서, 똑같이 생략했더니
+        # 오히려 "첫 렌더부터" 곡선이 겹쳐 보이는 새 회귀가 실측 확인됨 -
+        # 원/타원은 되돌려서 기존 방식(채우기 포함) 그대로 유지한다(잔상
+        # 문제는 rect보다 우선순위 낮음 - 별도 조사 필요).
+        if opaque_bg and clip_shape != "rect":
             fragments.append('$PipFoldBox using 1:2 notitle axes x1y1 with filledcurves closed fc rgb "#FDFDFD" fillstyle solid 1.0 noborder')
         # [추가 - 사용자 요청] "돋보기 형태로 위치/반지름만 주고 그 안엔
         # curve만 - title/축 frame/tic 숫자 다 무시" - minimal이 켜지면
@@ -7679,6 +7696,12 @@ class GnuplotGenerator:
             # 애초에 투명은 비울 필요가 없음)만 blank_line이 있을 때로
             # 좁혀 안쪽에 남긴다.
             if getattr(self, "_pip_fold_active", False):
+              # [추가 - 잔상 수정 범위 한정] rect만 "object 7100을 계속
+              # 선언된 채로 두고 데이터 기반 배경 채우기는 생략"하는 실측
+              # 확인된 수정을 적용한다(원/타원은 첫 렌더부터 겹침 회귀가
+              # 있어 기존 방식 유지 - 위 _build_pip_folded_overlay의
+              # clip_shape 분기 참고).
+              _fold_shape_peek = (getattr(self, "_pip_fold_ranges", None) or {}).get("clip_shape")
               if _pip_blank_line:
                 # [추가 - 사용자 재재재보고 대응 실험] "불투명 확대는 curve
                 # 변화 없음(좌표축만) / 투명은 확대 가능함" - 재생의 using식
@@ -7690,15 +7713,19 @@ class GnuplotGenerator:
                 # solid fill" 오브젝트가 세션 내내 계속 활성 선언 상태로
                 # 남아 있는 것이, gnuplot 네이티브 확대(내부적으로 replot을
                 # 쓰는 부분 재렌더 경로)가 곡선 데이터를 다시 그리지 못하게
-                # 막는 원인일 가능성이 있어(재현 격리는 이 세션의 자동화
-                # 도구 한계로 직접 확인은 못 했음 - 아래 실험적 수정, 재확인
-                # 필요) PIP 자신의 "plot \" 실행(이 오브젝트가 배경으로
-                # 필요한 유일한 시점) 직후, 재생 전에 이 오브젝트를 지워
-                # 세션 나머지 구간 동안은 활성 선언 상태로 안 남게 한다 -
-                # 이미 그려진 PIP 화면 픽셀 자체는 지워지지 않으므로(unset은
-                # "이후 다시 그릴 때 포함 여부"만 바꿈) PIP가 고정된 채로
-                # 보이는 모습에는 영향 없다.
-                _pip_probe_lines.append("unset object 7100")
+                # 막는 원인일 가능성이 있어 실험적으로 지웠었으나, PostMessage로
+                # 실제 windows 터미널에 마우스 드래그를 직접 재현해 재검증한
+                # 결과 정반대로 $PipFoldBox의 데이터 기반 흰색 채우기(재생
+                # "plot \" 목록에 포함돼 네이티브 마우스 확대/이동마다 매번
+                # 다시 칠해짐)가 잔상의 진짜 원인이었음을 확인(이 화면 고정
+                # object는 데이터 재생과 무관해 안전) - rect는 위 $PipFoldBox
+                # 채우기를 생략하고 이 object를 계속 선언된 채로 둔다(더 이상
+                # unset 안 함). 원/타원은 채우기를 생략하면 오히려 "첫 렌더
+                # 부터" 겹침 회귀가 실측 확인돼 기존 방식(채우기 포함 + 이
+                # object는 첫 사용 후 unset) 그대로 유지 - 잔상 수정은 이번
+                # 라운드에 rect만 적용.
+                if _fold_shape_peek != "rect":
+                    _pip_probe_lines.append("unset object 7100")
                 _insert_before_first_plot(_pip_probe_lines, _pip_blank_line, _main_state_start_idx)
                 self._pip_main_blank_line = None
               # [수정 - PIP 렌더링 재설계] "R/u 직후 기본 화면 보호"와
