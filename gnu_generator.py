@@ -4666,30 +4666,96 @@ class GnuplotGenerator:
                 _e_rxf = clip_rx / 50.0
                 _e_ryf = clip_ry / 50.0
                 _apply_ellipse_filter = _is_ellipse and minimal
-                _kept_rows = []
+
+                def _ellipse_ok(_px, _py):
+                    if not (_apply_ellipse_filter and _e_hw > 0 and _e_hh > 0 and _e_rxf > 0 and _e_ryf > 0):
+                        return True
+                    _tx_norm = ((ix_lo + (_px - pxmin) / (pxmax - pxmin) * (ix_hi - ix_lo)) - _e_cx_dest) / _e_hw
+                    _ty_norm = ((dest_lo + (_py - src_ymin) / (src_ymax - src_ymin) * (dest_hi - dest_lo)) - _e_cy_dest) / _e_hh
+                    return (_tx_norm / _e_rxf) ** 2 + (_ty_norm / _e_ryf) ** 2 <= 1.0
+
+                # [수정 - 근본 원인, 사용자 보고 버그] "확대 구간에 실제
+                # 데이터점이 드문드문(sparse) 있는 curve는 인셋에서 선이
+                # 아예 안 보임(main엔 있는데)" - gnuplot의 "set table"은
+                # xrange/yrange 밖의 점을 "잘라서 경계에 새 점을 만들어
+                # 주는" 게 아니라, 원본 데이터 "정점(vertex)" 각각에
+                # i(안)/o(밖)/u(정의안됨) 표시만 붙여 그대로 다 내보낸다
+                # (gnuplot 자체의 사양) - 그래서 지금까지는 "i" 정점만
+                # 남기고 나머지는 버렸는데, 어떤 curve의 실제 데이터 정점이
+                # 이 좁은 확대구간 안에 1개 이하만 있으면(정점 사이 간격이
+                # 넓은 sparse 데이터에서 흔함 - 실측: X 0~1000 curve를
+                # X 120~220으로 확대하면 정점이 달랑 1개만 걸림) "i" 점이
+                # 0~1개뿐이라 선을 그릴 수조차 없어(with lines는 최소 2점
+                # 필요) 커브 전체가 통째로 사라졌다(실제 gnuplot 창으로
+                # 재현·확인). 근본 수정: "i" 필터로 정점만 골라내는 대신,
+                # 원본 정점을 순서 그대로 다 읽어서 "연속된 두 정점을 잇는
+                # 선분"마다 박스[pxmin:pxmax]x[src_ymin:src_ymax]와의 교차를
+                # 직접 계산(Liang-Barsky 선분 클리핑)한다 - 두 정점이 모두
+                # 밖이어도 그 사이 선이 박스를 관통하면 그 관통 구간만 정확히
+                # 살아남고, 한쪽만 안이면 경계까지 보간된다. 서로 이어지지
+                # 않는(박스를 벗어났다 다시 들어오는) 구간은 빈 줄로 끊어
+                # gnuplot이 엉뚱하게 이어 그리지 않게 한다(u 표시나 파일
+                # 경계도 같은 방식으로 끊음).
+                def _clip_liang_barsky(x0, y0, x1, y1, xlo, xhi, ylo, yhi):
+                    dx, dy = x1 - x0, y1 - y0
+                    t0, t1 = 0.0, 1.0
+                    for p, q in ((-dx, x0 - xlo), (dx, xhi - x0), (-dy, y0 - ylo), (dy, yhi - y0)):
+                        if p == 0:
+                            if q < 0:
+                                return None
+                            continue
+                        r = q / p
+                        if p < 0:
+                            if r > t1:
+                                return None
+                            t0 = max(t0, r)
+                        else:
+                            if r < t0:
+                                return None
+                            t1 = min(t1, r)
+                    if t0 > t1:
+                        return None
+                    return (x0 + t0 * dx, y0 + t0 * dy, x0 + t1 * dx, y0 + t1 * dy)
+
+                _raw_pts = []  # list of (x, y) or None(=hard break: u/malformed/EOF gap)
                 with open(_tmp_path, encoding="utf-8", errors="replace") as f:
                     for ln in f:
                         ln = ln.strip()
                         if not ln or ln.startswith("#"):
+                            _raw_pts.append(None)
                             continue
                         _parts = ln.split()
-                        if len(_parts) < 3 or _parts[2] != "i":
+                        if len(_parts) < 3 or _parts[2] == "u":
+                            _raw_pts.append(None)
                             continue
-                        if _apply_ellipse_filter and _e_hw > 0 and _e_hh > 0 and _e_rxf > 0 and _e_ryf > 0:
-                            try:
-                                _px, _py = float(_parts[0]), float(_parts[1])
-                            except ValueError:
-                                continue
-                            _tx_norm = ((ix_lo + (_px - pxmin) / (pxmax - pxmin) * (ix_hi - ix_lo)) - _e_cx_dest) / _e_hw
-                            _ty_norm = ((dest_lo + (_py - src_ymin) / (src_ymax - src_ymin) * (dest_hi - dest_lo)) - _e_cy_dest) / _e_hh
-                            if (_tx_norm / _e_rxf) ** 2 + (_ty_norm / _e_ryf) ** 2 > 1.0:
-                                continue
-                        _kept_rows.append(f"{_parts[0]} {_parts[1]}")
+                        try:
+                            _raw_pts.append((float(_parts[0]), float(_parts[1])))
+                        except ValueError:
+                            _raw_pts.append(None)
                 os.remove(_tmp_path)
-                if not _kept_rows:
+
+                _segments = []  # list of (x0,y0,x1,y1)
+                for _i in range(len(_raw_pts) - 1):
+                    _p0, _p1 = _raw_pts[_i], _raw_pts[_i + 1]
+                    if _p0 is None or _p1 is None:
+                        continue
+                    _clip = _clip_liang_barsky(_p0[0], _p0[1], _p1[0], _p1[1], pxmin, pxmax, src_ymin, src_ymax)
+                    if _clip is not None:
+                        _segments.append(_clip)
+                if not _segments:
+                    continue
+                _out_lines = []
+                for _cx0, _cy0, _cx1, _cy1 in _segments:
+                    if not (_ellipse_ok(_cx0, _cy0) and _ellipse_ok(_cx1, _cy1)):
+                        continue
+                    if _out_lines:
+                        _out_lines.append("")
+                    _out_lines.append(f"{_cx0:.6g} {_cy0:.6g}")
+                    _out_lines.append(f"{_cx1:.6g} {_cy1:.6g}")
+                if not _out_lines:
                     continue
                 with open(_tmp_path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(_kept_rows))
+                    f.write("\n".join(_out_lines))
             except Exception:
                 continue
             color = curve.color or DEFAULT_COLORS[plotdef.curves.index(curve) % len(DEFAULT_COLORS)]
