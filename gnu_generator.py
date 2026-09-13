@@ -1459,6 +1459,18 @@ class GnuplotGenerator:
         _mag = max(_mag, 0.1)
         _x_span = max(_ax_x_hi - _ax_x_lo, 1e-9)
         _size_w = min(max((_xmax - _xmin) / _x_span * _mag, 0.05), 1.0)
+        # [수정 - 사용자 요청] "큰원 반지름도 직접 입력" - box_radius(축
+        # 프레임 폭 대비 %, "반지름" 기준)를 명시적으로 넣으면 배율에서
+        # 계산한 크기 대신 이 값을 그대로 쓴다(비워두면 기존처럼 배율로
+        # 자동 계산 - "2번에 배율을 적용" 요청대로 기본값은 여전히 배율
+        # 기반이고, 입력하면 그 값이 우선함). clip_rx=50(기본, 박스에 꽉
+        # 차는 내접원)을 전제로 반지름의 2배 = 박스 가로 크기(지름)로 환산.
+        _box_r_raw = str(mag_cfg.get("box_radius", "") or "").strip()
+        if _box_r_raw:
+            try:
+                _size_w = min(max(float(_box_r_raw) / 100.0 * 2.0, 0.05), 1.0)
+            except (TypeError, ValueError):
+                pass
         _size_h = min(max(_size_w * (5.95 / 4.17), 0.05), 1.0)
 
         _pip = dict(existing_pip or {})
@@ -1472,8 +1484,6 @@ class GnuplotGenerator:
         _pip.setdefault("legend_on", True)
         _pip.setdefault("axis_title_on", True)
         _pip.setdefault("opacity", "100")
-        _pip.setdefault("pos_x", "5")
-        _pip.setdefault("pos_y", "60")
         _pip["xmin"] = f"{_xmin:.6g}"
         _pip["xmax"] = f"{_xmax:.6g}"
         _pip["size_w"] = f"{_size_w * 100:.4g}"
@@ -1512,6 +1522,37 @@ class GnuplotGenerator:
                 _cy1 = (_y1_window[0] + _y1_window[1]) / 2.0
             else:
                 _cy1 = 0.0
+
+        # [수정 - 사용자 요청] "PIP 위치 입력을 비활성화하고 돋보기 큰원
+        # 중심을 입력으로 - 중심(작은원과 큰원)은 서로 매칭되니까" - 기존엔
+        # 박스 위치(pos_x/pos_y, 축 프레임 좌측하단 기준 %)를 사용자가 PIP
+        # 팝업의 "위치(%)" 필드에 별도로 입력했는데(중심X/Y1과 완전히 무관한
+        # 값이라 "중심에 안 맞는 원" 혼란의 근본 원인이었음), 이제는 중심
+        # X/Y1(데이터 좌표)을 main plot의 실제 축 범위 기준 "축 프레임 %"로
+        # 그대로 환산해 큰 원의 중심으로 쓴다 - 즉 돋보기(큰 원)가 항상 그
+        # 확대한 지점 "바로 위"에 겹쳐서 나타난다(작은 원과 큰 원의 중심이
+        # 항상 일치). box_center_x/box_center_y(축 프레임 % - 0~100)를 명시
+        # 입력하면 그 값으로 덮어써서 필요하면 다른 자리로 옮길 수도 있다.
+        _y1_span = max(_ax_y1_hi - _ax_y1_lo, 1e-9)
+        _box_cx_frac = (_cx - _ax_x_lo) / _x_span
+        _box_cy_frac = (_cy1 - _ax_y1_lo) / _y1_span
+        _box_cx_raw = str(mag_cfg.get("box_center_x", "") or "").strip()
+        if _box_cx_raw:
+            try:
+                _box_cx_frac = float(_box_cx_raw) / 100.0
+            except (TypeError, ValueError):
+                pass
+        _box_cy_raw = str(mag_cfg.get("box_center_y", "") or "").strip()
+        if _box_cy_raw:
+            try:
+                _box_cy_frac = float(_box_cy_raw) / 100.0
+            except (TypeError, ValueError):
+                pass
+        _pos_x = min(max(_box_cx_frac * 100.0 - _size_w * 100.0 / 2.0, 0.0), 100.0 - _size_w * 100.0)
+        _pos_y = min(max(_box_cy_frac * 100.0 - _size_h * 100.0 / 2.0, 0.0), 100.0 - _size_h * 100.0)
+        _pip["pos_x"] = f"{_pos_x:.4g}"
+        _pip["pos_y"] = f"{_pos_y:.4g}"
+
         _circle = {
             "x": f"{_cx:.6g}", "y": f"{_cy1:.6g}",
             "rx": f"{_r:.6g}", "ry": "", "coord_mode": "data",
@@ -4655,8 +4696,17 @@ class GnuplotGenerator:
             _linestyle = curve.linestyle or DEFAULT_LINESTYLES[_idx_for_style % len(DEFAULT_LINESTYLES)]
             _dash_pat = _dash_pattern_for_fmt(_linestyle, "interactive")
             _dash_clause = f' dashtype ({_dash_pat})' if _dash_pat else ''
+            # [수정 - 사용자 제안] "투명이면 확대 구간 curve만 선 굵기를
+            # 달리해서 구별되게" - 배경을 투명(opaque_bg=False)으로 두면
+            # 그 자리의 원본(축소) curve가 그대로 비쳐 보이는데, 인셋 curve가
+            # 지금까지 항상 가는 실선(lw 1.0)이라 비쳐 보이는 원본과 겹쳐
+            # 잘 구별되지 않았다 - 배경이 투명일 때만 인셋 curve를 눈에 띄게
+            # 굵게(2.2) 그려서, 반투명 없이도 "이게 확대된 부분"임을 한눈에
+            # 알 수 있게 한다(불투명 배경일 때는 원본이 안 비치므로 그대로
+            # 1.0 유지).
+            _inset_curve_lw = 1.0 if opaque_bg else 2.2
             fragments.append(
-                f'"{_tmp_name}" using {_tx}:{_ty} notitle axes {axis_spec} with lines lw 1.0 lc rgb "{color}"{_dash_clause}'
+                f'"{_tmp_name}" using {_tx}:{_ty} notitle axes {axis_spec} with lines lw {_inset_curve_lw} lc rgb "{color}"{_dash_clause}'
             )
             # [추가 - 요청] "Inset 크기에 따라 다르니까, PIP 입력에 마커
             # on/off (원래 plot에 마커 있는 경우만) 넣어 두지" - 켜져 있고

@@ -848,6 +848,15 @@ class CathPlotGUI:
         self.pip_mag_radius_x_var = tk.StringVar(value="")
         self.pip_mag_radius_x_mode_var = tk.StringVar(value="data")
         self.pip_mag_ratio_var = tk.StringVar(value="4")
+        # [추가 - 요청] "PIP 위치 입력을 비활성화하고 돋보기 큰원 중심/
+        # 반지름을 입력으로 - 중심(작은원과 큰원)은 서로 매칭되니까" - 둘 다
+        # 비워두면 큰 원(인셋 박스)의 중심은 위 중심X/Y1(데이터 좌표를 축
+        # 프레임 %로 환산)과 자동으로 일치하고, 크기는 배율로 자동 계산됨
+        # (compute_magnifier_pip 참고) - 값을 넣으면 그 자리/크기를 직접
+        # 지정할 수 있음(축 프레임 % 기준, 반지름은 "%").
+        self.pip_mag_box_center_x_var = tk.StringVar(value="")
+        self.pip_mag_box_center_y_var = tk.StringVar(value="")
+        self.pip_mag_box_radius_var = tk.StringVar(value="")
         self.pip_title_on_var = tk.BooleanVar(value=False)
         # [추가 - 요청] "PIP PopUp에서 Plot Title과 Axis Title check box 분리"
         # - 기존엔 Plot Title(plotdef.title)만 껐다 켤 수 있었고, X/Y1/Y2축
@@ -2427,6 +2436,9 @@ class CathPlotGUI:
             self.pip_mag_radius_x_var.set(_mag_data.get("radius_x", self.pip_mag_radius_x_var.get()))
             self.pip_mag_radius_x_mode_var.set(_mag_data.get("radius_x_mode", self.pip_mag_radius_x_mode_var.get()))
             self.pip_mag_ratio_var.set(_mag_data.get("magnification", self.pip_mag_ratio_var.get()))
+            self.pip_mag_box_center_x_var.set(_mag_data.get("box_center_x", self.pip_mag_box_center_x_var.get()))
+            self.pip_mag_box_center_y_var.set(_mag_data.get("box_center_y", self.pip_mag_box_center_y_var.get()))
+            self.pip_mag_box_radius_var.set(_mag_data.get("box_radius", self.pip_mag_box_radius_var.get()))
 
             if "extra_gnuplot" in data:
                 self.raw_gnuplot_text.delete("1.0", "end")
@@ -3447,6 +3459,23 @@ class CathPlotGUI:
         # 마지막 실행 때 계산돼 채워진 값, Manual이면 사용자가 직접 넣은 값)
         # 를 그대로 재사용한다 - 아직 한 번도 실행 안 해 비어있으면 "?"로
         # 표시(추정 불가).
+        # [추가 - 사용자 요청] "PIP 위치 입력을 비활성화하고 돋보기 큰원
+        # 중심/반지름을 입력으로 - 중심(작은원과 큰원)은 서로 매칭되니까" -
+        # 위 PIP "위치(%)"/"가로·세로 크기" 필드 대신, 돋보기 전용으로 큰
+        # 원(인셋 박스) 자체의 중심(축 프레임 %)과 반지름(%)을 직접 넣을 수
+        # 있는 둘째 줄. 비워두면(기본) 중심은 위 중심X/Y1과 자동 일치, 반지름은
+        # 배율로 자동 계산 - 값을 넣으면 그 값이 우선한다(compute_magnifier_pip
+        # 참고).
+        mag_box_row = ttk.Frame(mag_frame)
+        mag_box_row.pack(fill="x", padx=5, pady=(0, 2))
+        ttk.Label(mag_box_row, text="큰원 중심(%) X:").pack(side="left")
+        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_x_var, width=6).pack(side="left", padx=(4, 8))
+        ttk.Label(mag_box_row, text="Y:").pack(side="left")
+        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_y_var, width=6).pack(side="left", padx=(4, 12))
+        ttk.Label(mag_box_row, text="반지름(%):").pack(side="left")
+        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_radius_var, width=6).pack(side="left", padx=(4, 2))
+        ttk.Label(mag_box_row, text="(비우면 중심X/Y1·배율에서 자동)", foreground="#888888", font=("", 8)).pack(side="left", padx=(6, 0))
+
         mag_preview_var = tk.StringVar(value="")
         mag_preview_row = ttk.Frame(mag_frame)
         mag_preview_row.pack(fill="x", padx=5, pady=(0, 5))
@@ -3467,6 +3496,16 @@ class CathPlotGUI:
                 return
             _gen = GnuplotGenerator(self.plot_dir)
             _mag_cfg = self._collect_magnifier_dict()
+            _box_r_raw = (_mag_cfg.get("box_radius") or "").strip()
+            if _box_r_raw:
+                try:
+                    _size_w = min(max(float(_box_r_raw) / 100.0 * 2.0, 0.05), 1.0)
+                except (TypeError, ValueError):
+                    mag_preview_var.set("? (큰원 반지름 값을 확인해 주세요)")
+                    return
+                _size_h = min(max(_size_w * (5.95 / 4.17), 0.05), 1.0)
+                mag_preview_var.set(f"가로 {_size_w * 100:.1f}% / 세로 {_size_h * 100:.1f}%  (큰원 반지름 직접 입력값 기준)")
+                return
             _r = _gen._resolve_magnifier_value(_mag_cfg.get("radius_x"), _mag_cfg.get("radius_x_mode", "data"), _xlo, _xhi, is_length=True)
             try:
                 _mag = float(_mag_cfg.get("magnification") or 1.0)
@@ -3481,7 +3520,7 @@ class CathPlotGUI:
             mag_preview_var.set(f"가로 {_size_w * 100:.1f}% / 세로 {_size_h * 100:.1f}%  (X축 전체 {_xhi - _xlo:.4g} 중 {2 * _r:.4g} 구간 기준)")
 
         for _v in (self.pip_mag_on_var, self.pip_mag_radius_x_var, self.pip_mag_radius_x_mode_var,
-                   self.pip_mag_ratio_var):
+                   self.pip_mag_ratio_var, self.pip_mag_box_radius_var):
             _v.trace_add("write", _update_mag_preview)
         _update_mag_preview()
 
@@ -3501,6 +3540,14 @@ class CathPlotGUI:
             for _c in size_row.winfo_children():
                 if isinstance(_c, (ttk.Entry, ttk.Combobox)):
                     _c.config(state=_zstate if isinstance(_c, ttk.Entry) else ("disabled" if _on else "readonly"))
+            # [추가 - 사용자 요청] "PIP 위치 입력을 비활성화하고" - 돋보기가
+            # 켜지면 박스 위치(pos_x/pos_y)는 항상 compute_magnifier_pip이
+            # 중심X/Y1(또는 아래 "큰원 중심" 직접 입력)에서 계산해 강제로
+            # 덮어쓰므로, 기존 "위치(%)" 입력칸은 더 이상 읽히지 않는다는
+            # 걸 명확히 보여주기 위해 같이 비활성화한다.
+            for _c in pos_row.winfo_children():
+                if isinstance(_c, ttk.Entry):
+                    _c.config(state=_zstate)
         self.pip_mag_on_var.trace_add("write", _toggle_mag_entries)
         _toggle_mag_entries()
 
@@ -3782,6 +3829,9 @@ class CathPlotGUI:
             "radius_x": self.pip_mag_radius_x_var.get(),
             "radius_x_mode": self.pip_mag_radius_x_mode_var.get(),
             "magnification": self.pip_mag_ratio_var.get(),
+            "box_center_x": self.pip_mag_box_center_x_var.get(),
+            "box_center_y": self.pip_mag_box_center_y_var.get(),
+            "box_radius": self.pip_mag_box_radius_var.get(),
         }
 
     def _resolve_pip_config(self):
