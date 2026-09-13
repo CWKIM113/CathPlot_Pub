@@ -4252,32 +4252,29 @@ class GnuplotGenerator:
                     # 다시 붙어버리는 문제가 있었음).
                     _frame_gap_frac = 0.025
                     _char_gap_frac = min(_row_step * 0.4, _char_frac)
-                    _lx = ix_hi - (ix_hi - ix_lo) * 0.06
+                    # [수정 - 사용자 보고 버그] "왼쪽 box 선과 title 사이가
+                    # 큼" - 지금까지 우측 정렬(right-justify)이었는데, 박스
+                    # 폭은 가장 긴 줄 기준이라 짧은 줄은 항상 왼쪽에 텍스트가
+                    # 시작 안 되는 빈 공간이 컸다(오른쪽 끝만 맞추면 왼쪽은
+                    # 줄마다 제각각 비게 됨). 실제 목록처럼 왼쪽 정렬로
+                    # 바꾼다 - 모든 줄이 같은 x(box 왼쪽에서 고정 간격)에서
+                    # 시작하고, 짧은 줄은 자연스럽게 오른쪽이 먼저 끝난다
+                    # (빈 공간이 있어도 "다음 내용이 이어질 자리"로 보여
+                    # 어색하지 않음). 부수효과로 마커 위치도 모든 줄에서
+                    # 같은 고정 x가 되어(마커+텍스트가 항상 나란히 시작)
+                    # 이전처럼 "가장 긴 줄만 마커가 글자에 가려짐" 문제 자체가
+                    # 구조적으로 없어진다.
+                    _max_text_w = max(_text_w_frac(_n) for _, _n, _ in _titled)
+                    _mk_col = ((ix_hi - ix_lo) * 0.09) if marker_on else 0.0
+                    _lbg_x0 = ix_lo + (ix_hi - ix_lo) * 0.04
+                    _lbg_x1 = min(_lbg_x0 + _mk_col + _max_text_w * (ix_hi - ix_lo) + (ix_hi - ix_lo) * 0.05, ix_hi - (ix_hi - ix_lo) * 0.02)
+                    _lx = _lbg_x0 + _mk_col + (ix_hi - ix_lo) * 0.015
+                    _mk_x = _lbg_x0 + (ix_hi - ix_lo) * 0.01
                     _leg_rows = []
                     for _ri, (_lcolor, _lname, _lmarker) in enumerate(_titled):
                         _esc = _lname.replace("\\", "\\\\").replace('"', '\\"')
                         _ly = iy1_hi - (iy1_hi - iy1_lo) * (_frame_gap_frac + _char_gap_frac + _row_step * _ri)
-                        _leg_rows.append((_lx, _ly, _esc, _lcolor, _lmarker))
-                    # [수정 - 사용자 지적] "main legend에서 이미 다 설계
-                    # 했던 건데" - main legend처럼 마커는 "그 줄 자기 텍스트
-                    # 앞"에 고정 간격을 두고 붙인다(박스 폭 역산이 아니라
-                    # 실측 폭 기준이라 이제 어느 줄이든 정확히 들어맞는다).
-                    _mk_gap = (ix_hi - ix_lo) * 0.06
-                    _leg_rows2 = []
-                    for (_lx, _ly, _esc, _lcolor, _lmarker) in _leg_rows:
-                        _text_w = _text_w_frac(_esc) * (ix_hi - ix_lo)
-                        _mk_x = _lx - _text_w - _mk_gap
-                        _leg_rows2.append((_lx, _ly, _esc, _lcolor, _lmarker, _mk_x))
-                    _leg_rows = _leg_rows2
-                    if marker_on:
-                        _leftmost = min(r[5] for r in _leg_rows) - (ix_hi - ix_lo) * 0.05
-                    else:
-                        _leftmost = min(_lx - _text_w_frac(_esc) * (ix_hi - ix_lo) for (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x) in _leg_rows) - (ix_hi - ix_lo) * 0.02
-                    _lbg_x0 = max(_leftmost, ix_lo)
-                    # [수정 - 사용자 보고] "legend box가 축 frame에 바로
-                    # 붙는 것 아닌지 - 약간 마진 필요" - 오른쪽/위쪽 여백을
-                    # 0.01/0.02(거의 0)에서 눈에 보이는 마진으로 늘린다.
-                    _lbg_x1 = ix_hi - (ix_hi - ix_lo) * 0.04
+                        _leg_rows.append((_lx, _ly, _esc, _lcolor, _lmarker, _mk_x))
                     _lbg_y1 = iy1_hi - (iy1_hi - iy1_lo) * _frame_gap_frac
                     _lbg_y0 = min(r[1] for r in _leg_rows) - (iy1_hi - iy1_lo) * _char_gap_frac
                     _lbg_corners = [(_lbg_x0, _lbg_y0), (_lbg_x1, _lbg_y0), (_lbg_x1, _lbg_y1), (_lbg_x0, _lbg_y1), (_lbg_x0, _lbg_y0)]
@@ -4290,10 +4287,10 @@ class GnuplotGenerator:
                             if not _sym:
                                 continue
                             fragments.append(f'$PipFoldLegMk{_li} << EOD\n{_mk_x:.6g} {_ly:.6g} "{_sym}"\nEOD')
-                            fragments.append(f'$PipFoldLegMk{_li} using 1:2:3 notitle axes x1y1 with labels right font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
+                            fragments.append(f'$PipFoldLegMk{_li} using 1:2:3 notitle axes x1y1 with labels left font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
                     for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x) in enumerate(_leg_rows):
                         fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
-                        fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels right font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
+                        fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels left font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
         else:
             ix_lo, ix_hi, iy1_lo, iy1_hi = x_lo, x_hi, y1_lo, y1_hi
             iy2_lo, iy2_hi = (y2_lo_hi if y2_lo_hi is not None else (None, None))
