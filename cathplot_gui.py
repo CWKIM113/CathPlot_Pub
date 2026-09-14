@@ -944,7 +944,7 @@ class CathPlotGUI:
                 tw.wm_overrideredirect(True)
                 tw.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
                 tk.Label(
-                    tw, text="프리셋 선택 또는 좌표 직접 입력 가능\n예: 70,90 (X,Y 0~100%, annotation과 동일)\n고급: graph 0.7,0.9 / screen 0.5,0.95",
+                    tw, text="프리셋 선택 또는 좌표 직접 입력 가능\n예: 70,90 (X,Y 0~100%, annotation과 동일)\n고급: graph 0.7,0.9 (axis frame 기준 0~1 비율)",
                     background="#ffffe0", relief="solid", borderwidth=1, font=("Consolas", 9),
                     padx=4, pady=2, justify="left"
                 ).pack()
