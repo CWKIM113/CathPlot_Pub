@@ -822,8 +822,16 @@ class CathPlotGUI:
         # 참고 - PDF/PNG/JPG/SVG는 자동 반영, EMF/Multi-Plot은 1차 구현
         # 범위 밖이라 항상 사각형). clip_rx/ry는 annotation의 Circle과 같은
         # 관례(%, 이 작은 plot 자신의 박스 기준 반지름, Ry 비우면 원).
+        # [수정 - 사용자 지적] "반지름 50%가 최대(꽉참)라는 게 안 와닿는다 -
+        # 반지름끼리 비교하면 100%가 꽉참이어야 하지 않나?" - 정확한 지적.
+        # 내부 저장값(pip["clip_rx"], gnu_generator.py의 모든 타원 수식)은
+        # "박스 전체 크기 대비 %"라는 기존 관례를 그대로 유지하되(기존
+        # Template과의 하위호환 - 저장된 숫자의 의미가 안 바뀜), 화면에 보여
+        # 주고 입력받는 이 tk 변수만 "박스 자신의 절반(반지름) 대비 %"(=100이
+        # 꽉참) 기준으로 두 배 스케일을 쓴다 - 아래 저장/불러오기 지점에서
+        # 서로 변환한다(÷2로 저장, ×2로 복원).
         self.pip_clip_shape_var = tk.StringVar(value="rect")
-        self.pip_clip_rx_var = tk.StringVar(value="50")
+        self.pip_clip_rx_var = tk.StringVar(value="100")
         self.pip_clip_ry_var = tk.StringVar(value="")
         self.pip_xmin_var = tk.StringVar(value="")
         self.pip_xmax_var = tk.StringVar(value="")
@@ -1346,6 +1354,12 @@ class CathPlotGUI:
         circle_btn_col = ttk.Frame(btn_f)
         circle_btn_col.pack(side="left", padx=15)
         ttk.Button(circle_btn_col, text="+ Add Circle", command=self.add_circle_row).pack(side="top", anchor="w")
+        # [추가 - 사용자 요청] "반지름 입력에 100%면 가득 찬다는 노트를" -
+        # PIP Radius(Rx,Ry)%와 같은 기준(100=꽉참)으로 통일했으므로(gnu_
+        # generator._build_plot_commands 참고), 그 사실을 여기서도 짧게
+        # 안내한다.
+        ttk.Label(circle_btn_col, text="%모드: 반지름 100=중심에서 축 가장자리까지",
+                  foreground="#888888", font=("", 8)).pack(side="top", anchor="w")
 
         # [수정] "Comment/Arrow 입력창이 안 보임 - 항상 빈 칸이 하나씩 나오게
         # 해야 함(어차피 안 지워지는 빈 칸이니 기본으로 둠)" - 시작할 때 매번
@@ -2124,7 +2138,8 @@ class CathPlotGUI:
                 "size_w": self.pip_size_w_var.get(), "size_h": self.pip_size_h_var.get(),
                 "size_unit": self.pip_size_unit_var.get(),
                 "clip_shape": self.pip_clip_shape_var.get(),
-                "clip_rx": self.pip_clip_rx_var.get(), "clip_ry": self.pip_clip_ry_var.get(),
+                "clip_rx": self._clip_pct_to_stored(self.pip_clip_rx_var.get()),
+                "clip_ry": self._clip_pct_to_stored(self.pip_clip_ry_var.get()),
                 "xmin": self.pip_xmin_var.get(), "xmax": self.pip_xmax_var.get(),
                 "ymin": self.pip_ymin_var.get(), "ymax": self.pip_ymax_var.get(),
                 "y2min": self.pip_y2min_var.get(), "y2max": self.pip_y2max_var.get(),
@@ -2397,8 +2412,14 @@ class CathPlotGUI:
             self.pip_size_h_var.set(_pip_data.get("size_h", self.pip_size_h_var.get()))
             self.pip_size_unit_var.set(_pip_data.get("size_unit", self.pip_size_unit_var.get()))
             self.pip_clip_shape_var.set(_pip_data.get("clip_shape", self.pip_clip_shape_var.get()))
-            self.pip_clip_rx_var.set(_pip_data.get("clip_rx", self.pip_clip_rx_var.get()))
-            self.pip_clip_ry_var.set(_pip_data.get("clip_ry", self.pip_clip_ry_var.get()))
+            # [수정 - 사용자 지적] 저장값은 여전히 "박스 전체 기준"(하위호환) -
+            # 화면 표시용 "반지름(박스 절반) 기준"으로 되돌려서 채운다. 키
+            # 자체가 없으면(구버전 Template 등) 변환하지 않고 현재 화면값
+            # 그대로 유지(폴백을 잘못 다시 변환하는 것 방지).
+            if "clip_rx" in _pip_data:
+                self.pip_clip_rx_var.set(self._clip_pct_from_stored(_pip_data.get("clip_rx")))
+            if "clip_ry" in _pip_data:
+                self.pip_clip_ry_var.set(self._clip_pct_from_stored(_pip_data.get("clip_ry")))
             self.pip_xmin_var.set(_pip_data.get("xmin", self.pip_xmin_var.get()))
             self.pip_xmax_var.set(_pip_data.get("xmax", self.pip_xmax_var.get()))
             self.pip_ymin_var.set(_pip_data.get("ymin", self.pip_ymin_var.get()))
@@ -3202,6 +3223,33 @@ class CathPlotGUI:
             y2r[0].strip() if y2r else None, y2r[1].strip() if y2r else None,
         )
 
+    @staticmethod
+    def _clip_pct_to_stored(raw):
+        """[추가 - 사용자 지적] 화면에 보이는 "반지름 %"(박스 자신의 절반
+        기준, 100=꽉참)를 gnu_generator.py가 기대하는 저장 관례("박스 전체
+        크기" 기준, 50=꽉참)로 변환 - 단순히 절반. 빈 값/숫자 아님은 그대로
+        돌려줘 기존 빈칸(Ry 비우면 원) 관례를 그대로 보존한다."""
+        raw = (raw or "").strip()
+        if not raw:
+            return raw
+        try:
+            return str(float(raw) / 2.0)
+        except (TypeError, ValueError):
+            return raw
+
+    @staticmethod
+    def _clip_pct_from_stored(raw):
+        """[추가 - 사용자 지적] 저장된 값(박스 전체 기준, 50=꽉참)을 화면
+        표시용(박스 절반=반지름 기준, 100=꽉참)으로 되돌린다 - 위 함수의
+        역변환(2배)."""
+        raw = (raw or "").strip()
+        if not raw:
+            return raw
+        try:
+            return str(float(raw) * 2.0)
+        except (TypeError, ValueError):
+            return raw
+
     def _pip_default_titles(self):
         """[추가 - 요청] PIP 팝업을 열 때 Plot Title/X/Y1/Y2 Title 입력칸에
         미리 채워줄 기본값을, source에 맞는 원본에서 가져온다 - "현재
@@ -3439,8 +3487,15 @@ class CathPlotGUI:
         # [수정 - 요청] "반지름 50%가 지름 100%라 마치 메인 plot 전체를
         # 말하는 것처럼 보여서 헷갈림" - 이 %의 기준은 메인 plot 전체가
         # 아니라 바로 위에서 W/H%로 정한 "in-plot(PIP) 박스 자신"의 폭/
-        # 높이임(반지름 50% = 그 박스에 꽉 차는 크기)을 라벨에 명시.
-        ttk.Label(clip_row, text="Radius(Rx,Ry) %(in-plot 박스 대비,50=꽉참):").pack(side="left")
+        # 높이임을 라벨에 명시.
+        # [수정 - 사용자 지적] "반지름끼리 비교하면 100%가 꽉참이어야
+        # 하지 않나?" - 맞는 지적: 예전엔 "박스 전체 크기 대비 %"라
+        # 50%가 꽉참이었음(반지름을 지름과 비교하는 셈이라 안 와닿음) -
+        # 이제 화면 입력은 "박스 자신의 절반(=박스의 반지름) 대비 %"로
+        # 바꿔 100%가 꽉참이 되도록 함(저장값은 하위호환을 위해 그대로
+        # 유지 - _clip_pct_to_stored/_clip_pct_from_stored가 화면↔저장
+        # 사이에서 변환).
+        ttk.Label(clip_row, text="Radius(Rx,Ry) %(in-plot 박스 대비,100=꽉참):").pack(side="left")
         clip_rx_entry = ttk.Entry(clip_row, textvariable=self.pip_clip_rx_var, width=6)
         clip_rx_entry.pack(side="left", padx=(4, 2))
         clip_ry_entry = ttk.Entry(clip_row, textvariable=self.pip_clip_ry_var, width=6)
@@ -3570,17 +3625,17 @@ class CathPlotGUI:
         ttk.Label(mag_box_row, text="Y:").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_y_var, width=6).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_box_row, self.pip_mag_box_center_y_mode_var).pack(side="left", padx=(0, 12))
-        ttk.Label(mag_box_row, text="반지름(%, 보통 10~20 · 50=축 전체를 채움):").pack(side="left")
+        ttk.Label(mag_box_row, text="반지름(%, 보통 20~40 · 100=축 전체를 채움):").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_radius_var, width=6).pack(side="left", padx=(4, 2))
-        # [수정 - 사용자 재보고] "반지름을 50으로 주면 원이 크게 나타남" -
-        # 반지름(%)은 "축 프레임 폭 대비"라 지름(그 2배)이 곧 박스 크기임 -
-        # 반지름 50%는 지름 100%, 즉 "축 프레임 전체를 채우는" 이론상 최대
-        # 값이라 "적당한 크기"가 아니라 "가장 큰 값"이었다(직전 수정에서
-        # "0~50 권장"이라고 잘못 안내했던 것도 이 오해를 부추김 - 50은 권장이
-        # 아니라 상한). 실측(반지름15→지름30%가 적당한 크기로 확인됨) 기준
-        # 으로 힌트를 "보통 10~20"으로 바로잡는다. 값 자체 계산은 그대로 두되
-        # (관례상 다른 %필드와 통일 - 50=꽉참이라는 표기는 기존 Radius(Rx,Ry)%
-        # 필드와도 일치), 힌트만 더 명확하게 수정.
+        # [수정 - 사용자 지적] "PIP Radius(Rx,Ry)%처럼 반지름끼리 비교해
+        # 100%가 꽉참이어야 헷갈리지 않는다" - 예전엔 이 반지름(%)이 "축
+        # 프레임 폭 대비"라 지름(그 2배)이 곧 박스 크기가 되는 관례였고,
+        # 그래서 반지름 50%가 이미 "축 전체를 채우는" 상한이었음(적당한
+        # 값이 아니라 최댓값이라 헷갈렸던 원인) - PIP Radius(Rx,Ry)%를
+        # "100=꽉참"으로 통일한 것과 똑같은 기준으로 여기도 맞춘다(더 이상
+        # 2배 안 함 - compute_magnifier_pip 참고). 실측 기준(반지름 15→지름
+        # 30%가 적당한 크기였음)을 새 기준(2배)으로 환산해 "보통 20~40"으로
+        # 힌트도 같이 바로잡는다.
         ttk.Label(mag_box_row, text="(비우면 중심X/Y1·배율에서 자동)", foreground="#888888", font=("", 8)).pack(side="left", padx=(6, 0))
 
         mag_preview_var = tk.StringVar(value="")
@@ -3606,16 +3661,20 @@ class CathPlotGUI:
             _box_r_raw = (_mag_cfg.get("box_radius") or "").strip()
             if _box_r_raw:
                 try:
-                    _size_w = min(max(float(_box_r_raw) / 100.0 * 2.0, 0.05), 1.0)
+                    # [수정 - 사용자 지적] "기준이 같아야 헷갈리지 않는다" -
+                    # PIP Radius(Rx,Ry)%(100=꽉참)와 동일하게 통일 - 반지름
+                    # %가 그대로 지름(=박스 가로 크기) %가 됨(더 이상 2배
+                    # 안 함, gnu_generator.compute_magnifier_pip과 동일).
+                    _size_w = min(max(float(_box_r_raw) / 100.0, 0.05), 1.0)
                 except (TypeError, ValueError):
-                    mag_preview_var.set("? (큰원 반지름 값을 확인해 주세요)")
+                    mag_preview_var.set("? (인셋 박스 반지름 값을 확인해 주세요)")
                     return
                 _size_h = min(max(_size_w * (5.95 / 4.17), 0.05), 1.0)
-                # [추가 - 사용자 보고 버그 예방] "반지름 100 넣었더니 중심이
-                # 입력과 다르게 나옴" - 지름(반지름의 2배)이 100%를 넘어
-                # 잘린 경우, 박스가 축 프레임을 꽉 채워 중심X/Y가 사실상
-                # 무시된 것처럼 보이므로 미리보기에서부터 경고한다.
-                _clip_note = "" if float(_box_r_raw) <= 50.0 else " ⚠ 반지름 50%를 넘으면 박스가 축 프레임 전체를 채워 중심 지정이 무시됩니다"
+                # [수정 - 사용자 보고 버그 예방, 기준 변경에 맞춤] 반지름이
+                # 100%를 넘으면(=지름이 축 프레임 전체를 넘음) 박스가 축
+                # 프레임을 꽉 채워 중심X/Y가 사실상 무시된 것처럼 보이므로
+                # 미리보기에서부터 경고한다.
+                _clip_note = "" if float(_box_r_raw) <= 100.0 else " ⚠ 반지름 100%를 넘으면 박스가 축 프레임 전체를 채워 중심 지정이 무시됩니다"
                 mag_preview_var.set(f"가로 {_size_w * 100:.1f}% / 세로 {_size_h * 100:.1f}%  (인셋 박스 반지름 직접 입력값 기준){_clip_note}")
                 return
             _r = _gen._resolve_magnifier_value(_mag_cfg.get("radius_x"), _mag_cfg.get("radius_x_mode", "data"), _xlo, _xhi, is_length=True)
@@ -3963,8 +4022,8 @@ class CathPlotGUI:
             "size_h": self.pip_size_h_var.get(),
             "size_unit": self.pip_size_unit_var.get(),
             "clip_shape": self.pip_clip_shape_var.get(),
-            "clip_rx": self.pip_clip_rx_var.get(),
-            "clip_ry": self.pip_clip_ry_var.get(),
+            "clip_rx": self._clip_pct_to_stored(self.pip_clip_rx_var.get()),
+            "clip_ry": self._clip_pct_to_stored(self.pip_clip_ry_var.get()),
             "xmin": self.pip_xmin_var.get(),
             "xmax": self.pip_xmax_var.get(),
             "ymin": self.pip_ymin_var.get(),
