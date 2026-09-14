@@ -132,7 +132,7 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/14/2026.")
+        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/15/2026.")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움
         # [수정 - 사용자 요청] "가로 길이도 flexible하게(노트북에선 가로를
@@ -1353,13 +1353,19 @@ class CathPlotGUI:
         # [추가] "Arrow 옆에 Circle(중심축 2개 타원 - 반지름 1개만 입력하면 원)"
         circle_btn_col = ttk.Frame(btn_f)
         circle_btn_col.pack(side="left", padx=15)
-        ttk.Button(circle_btn_col, text="+ Add Circle", command=self.add_circle_row).pack(side="top", anchor="w")
+        # [수정 - 사용자 요청] "+Add Circle 버튼 상하 위치를 옆 +Add Line/Arrow와
+        # 맞추고 아래 comment를 우측에 정리" - 버튼 아래에 안내 Label을 별도
+        # 줄로(side="top") 쌓으면 이 칸만 세로로 더 길어져 버튼이 다른 두
+        # 칸(Comment/Arrow - 버튼 하나뿐)보다 위쪽으로 붕 떠 보였음. 버튼과
+        # Label을 같은 행(side="left")에 나란히 두어 이 칸도 다른 칸과 같은
+        # 높이(버튼 한 줄)가 되게 하고, 안내문은 버튼 우측에 붙인다.
+        ttk.Button(circle_btn_col, text="+ Add Circle", command=self.add_circle_row).pack(side="left", anchor="w")
         # [추가 - 사용자 요청] "반지름 입력에 100%면 가득 찬다는 노트를" -
         # PIP Radius(Rx,Ry)%와 같은 기준(100=꽉참)으로 통일했으므로(gnu_
         # generator._build_plot_commands 참고), 그 사실을 여기서도 짧게
         # 안내한다.
         ttk.Label(circle_btn_col, text="%모드: 반지름 100=중심에서 축 가장자리까지",
-                  foreground="#888888", font=("", 8)).pack(side="top", anchor="w")
+                  foreground="#888888", font=("", 8)).pack(side="left", anchor="w", padx=(6, 0))
 
         # [수정] "Comment/Arrow 입력창이 안 보임 - 항상 빈 칸이 하나씩 나오게
         # 해야 함(어차피 안 지워지는 빈 칸이니 기본으로 둠)" - 시작할 때 매번
@@ -3320,9 +3326,15 @@ class CathPlotGUI:
         # [수정 - 사용자 요청] "PIP 입력창 세로를 조금 더 길게" - 상한을
         # 650 -> 700으로 올린다(화면이 작으면 여전히 비례해서 줄어들고,
         # 그래도 모자라면 스크롤이 안전망 - 구조는 그대로 유지).
+        # [수정 - 사용자 요청] "화면의 가로폭을 글자 안 잘리게 조금 더 키우고,
+        # 세로폭도 1줄 정도 더 키울 것" - 가로 760 -> 820(라벨/입력칸이 긴
+        # 줄, 예: "반지름(%, 보통 20~40 · 100=축 전체를 채움):"이 잘리던 것
+        # 방지), 세로는 위 이력과 같은 기준(한 줄 ≈ 27~30px)으로 상하한을
+        # 모두 30px씩 올림(420->450, 700->730) - 화면 크기 비례 계산 구조는
+        # 그대로 유지.
         _screen_h = dlg.winfo_screenheight()
-        _dlg_h = max(420, min(700, int((_screen_h - 100) * 0.85)))
-        dlg.geometry(f"760x{_dlg_h}")
+        _dlg_h = max(450, min(730, int((_screen_h - 100) * 0.85)))
+        dlg.geometry(f"820x{_dlg_h}")
 
         # [수정 - 요청] "팝업 안의 PIP 사용 체크박스는 없애고, 메인 창 PIP
         # 버튼 앞 체크박스 하나로 통일" - 여기 있던 중복 체크박스 제거
