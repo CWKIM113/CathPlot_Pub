@@ -7077,8 +7077,28 @@ class CathPlotGUI:
                 'frame': row,
             }
             func_surface_rows.append(data)
+
+            # [수정 - 사용자 보고 버그] "3D Function Surface 추가시 curve명이
+            # Z-title에 찍히지 않음" - 아래 _sync_default_titles는 체크된 첫
+            # curve/surface만 보고 Z title 기본값을 채우는데, Function
+            # Surface는 애초에 "포함할 Set" 체크박스 목록에 없는(파일과 무관한)
+            # 별도 목록이라 이 함수가 Function Surface의 존재 자체를 몰랐음 -
+            # curve/surface가 하나도 안 체크된 경우(Function Surface만으로
+            # 그리는 경우 포함) Function Surface의 Title(비어있으면 수식
+            # 자체)을 Z title 기본값으로 대신 쓰도록 trace를 추가한다. 행을
+            # 추가/삭제/Title·수식 수정할 때마다 다시 계산되게 함(_sync_
+            # default_titles는 이 함수보다 아래에서 정의되지만, 실제 호출은
+            # 항상 다이얼로그가 다 그려진 뒤(버튼 클릭/타이핑 시점)라 늦은
+            # 바인딩으로 문제없이 참조 가능).
+            data['title'].trace_add("write", lambda *_: _sync_default_titles())
+            data['expression'].trace_add("write", lambda *_: _sync_default_titles())
+
+            def _remove_row():
+                row.destroy()
+                func_surface_rows.remove(data)
+                _sync_default_titles()
             ttk.Button(row, text="X", width=2, style="Compact.TButton",
-                       command=lambda: (row.destroy(), func_surface_rows.remove(data))).pack(side="right", padx=3)
+                       command=_remove_row).pack(side="right", padx=3)
             ttk.Combobox(row, textvariable=data['style'], values=_style_choices_surface,
                          width=13, state="readonly").pack(side="right", padx=4)
             ttk.Label(row, text="Title:").pack(side="left", padx=(0, 2))
@@ -7089,6 +7109,7 @@ class CathPlotGUI:
             fs_expr_entry = ttk.Entry(row, textvariable=data['expression'], width=22)
             fs_expr_entry.pack(side="left", padx=2, fill="x", expand=True)
             fs_expr_entry.bind("<FocusIn>", lambda e: self.set_active_entry(fs_expr_entry))
+            _sync_default_titles()
 
         ttk.Button(func_surface_frame, text="+ Add Function Surface", command=add_func_surface_row).pack(anchor="w", padx=5, pady=(0, 2))
         ttk.Label(
@@ -7261,7 +7282,15 @@ class CathPlotGUI:
             elif _cur is not None:
                 new_zlabel = _cur.get("y2_title") or ""
             else:
-                new_zlabel = ""
+                # [수정 - 사용자 보고 버그] "3D Function Surface 추가시 curve명이
+                # Z-title에 찍히지 않음" - 체크된 curve/surface가 하나도 없으면
+                # (Function Surface만으로 그리는 경우 포함) 지금까지 여기서
+                # 무조건 빈 문자열로 떨어졌음 - Function Surface는 "포함할 Set"
+                # 체크박스 목록에 없는 별도 목록이라 이 함수가 그 존재 자체를
+                # 몰랐던 게 원인. 첫 번째 Function Surface 행의 Title(비어
+                # 있으면 수식 자체)을 대신 폴백으로 쓴다.
+                _fs = next((d for d in func_surface_rows if d['expression'].get().strip()), None)
+                new_zlabel = (_fs['title'].get().strip() or _fs['expression'].get().strip()) if _fs else ""
             if zlabel3d_var.get() == _auto_title["z"]:
                 zlabel3d_var.set(new_zlabel)
             _auto_title["z"] = new_zlabel
