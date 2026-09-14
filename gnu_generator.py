@@ -1477,12 +1477,17 @@ class GnuplotGenerator:
         # 프레임 폭 대비 %, "반지름" 기준)를 명시적으로 넣으면 배율에서
         # 계산한 크기 대신 이 값을 그대로 쓴다(비워두면 기존처럼 배율로
         # 자동 계산 - "2번에 배율을 적용" 요청대로 기본값은 여전히 배율
-        # 기반이고, 입력하면 그 값이 우선함). clip_rx=50(기본, 박스에 꽉
-        # 차는 내접원)을 전제로 반지름의 2배 = 박스 가로 크기(지름)로 환산.
+        # 기반이고, 입력하면 그 값이 우선함).
+        # [수정 - 사용자 지적] "기준이 같아야 헷갈리지 않는다" - PIP
+        # Radius(Rx,Ry)%를 "100=꽉참"으로 통일한 것과 같은 기준: 이 반지름도
+        # "축 프레임의 절반(=축 프레임의 반지름) 대비 %"로 봐서 100%가
+        # "반지름이 축 프레임 가장자리에 닿음(=지름이 축 프레임 전체를
+        # 채움)"이 되도록 한다 - 즉 반지름의 2배가 그대로 지름=박스 가로
+        # 크기(%)가 됨(예전엔 여기서 *2.0을 한 번 더 해서 50%가 꽉참이었음).
         _box_r_raw = str(mag_cfg.get("box_radius", "") or "").strip()
         if _box_r_raw:
             try:
-                _size_w = min(max(float(_box_r_raw) / 100.0 * 2.0, 0.05), 1.0)
+                _size_w = min(max(float(_box_r_raw) / 100.0, 0.05), 1.0)
             except (TypeError, ValueError):
                 pass
         _size_h = min(max(_size_w * (5.95 / 4.17), 0.05), 1.0)
@@ -3741,16 +3746,26 @@ class GnuplotGenerator:
                 # 자신의 원/타원 경계 장식(위 object 7100/7101, "size screen
                 # {_erx*2},{_ery*2}")도 같은 이유로 이미 2배를 해서 넘기고
                 # 있음 - 그쪽과의 일관성을 위해 UI는 그대로 "Radius"로 두고
-                # 코드에서 2배를 해 gnuplot에 넘긴다). 좌표값(data)/%(pct)
-                # 두 모드 다 선형 환산이라 원본 문자열 값을 2배 한 뒤
-                # _coord_clause에 넘기는 것만으로 그대로 반영된다.
+                # 코드에서 2배를 해 gnuplot에 넘긴다).
                 def _double_val(v):
                     try:
                         return str(float(v) * 2)
                     except (TypeError, ValueError):
                         return v
-                grx = _coord_clause(_double_val(rx_val), _mode, 0.10)
-                gry = _coord_clause(_double_val(ry_val), _mode, 0.10)
+                # [수정 - 사용자 지적] "PIP Radius(Rx,Ry)%의 '100=꽉참' 기준이
+                # 원/타원 전부(annotation 포함)에 똑같이 적용돼야 헷갈리지
+                # 않는다" - 좌표값(data) 모드는 그대로 2배(반지름 데이터값 ->
+                # 지름 데이터값, 단위 환산일 뿐 %와 무관해 그대로 둠). %(pct)
+                # 모드만 2배를 걸지 않고 입력값을 그대로 지름의 graph-fraction
+                # (0~100% = 축 전체 대비)으로 써서, "반지름 100% = 중심에서
+                # 축 가장자리까지 닿음"이 되도록 한다(예전엔 2배가 걸려
+                # 반지름 50%가 그 경계였음 - PIP와 같은 이유로 헷갈림).
+                if _mode == "data":
+                    grx = _coord_clause(_double_val(rx_val), _mode, 0.10)
+                    gry = _coord_clause(_double_val(ry_val), _mode, 0.10)
+                else:
+                    grx = _coord_clause(rx_val, _mode, 0.10)
+                    gry = _coord_clause(ry_val, _mode, 0.10)
                 _color = (ell.get("color") or "").strip() or "black"
                 # [추가 - 요청] "돋보기 중심을 점선(dot)으로 표기" - 기존
                 # circles 주석(항상 실선)에 dashtype 키를 추가해 점선 등도
