@@ -5317,62 +5317,77 @@ class GnuplotGenerator:
         if not pip.get("enabled"):
             return
 
+        _pip_name = (plotdef.title or "plot").strip() or "plot"
+        _pip_source = pip.get("source", "current")
         _override_curves = pip.get("curves")
+        # [수정 - 사용자 요청] "PIP 내 plot이 다르면 내용이 달라지므로 현재
+        # main-plot으로 대체하지 말고, PIP를 빼고 진행하지요" - source가
+        # "current"(기본값, 의도적으로 메인 자신을 보여주는 정상 경로)가
+        # 아닌데(=애초에 다른 plot/.plt 파일을 보여주려던 의도였는데) 그
+        # 소스를 못 찾거나 참조 파일이 없어졌으면, 예전처럼 main_cmd_list
+        # (메인 plot 자신의 곡선)로 조용히/경고만 남기고 대체하는 것은
+        # "완전히 다른 데이터를 마치 그 소스인 것처럼" 보여주는 셈이라
+        # 오해의 소지가 큼 - 아래 세 경우(참조 파일 소실/.plt 파싱 실패/
+        # cached 이름 못 찾음) 모두 대체하지 않고 이 PIP 인셋 자체를
+        # 그리지 않은 채(메인 plot은 정상 그대로 진행) 경고만 남긴다.
         # [수정 - 사용자 보고 버그, 실제 렌더링으로 재현·확인한 근본 원인]
-        # "PIP를 원으로 그렸는데 창에는 안 나타남(네모든 원이든) - 좌표는
-        # 나타남" - _override_curves(다른 plot/.plt 파일에서 가져온 curve
-        # 목록) 중 하나라도 dat_file이 실제로 없으면(가장 흔한 경우: .plt
-        # 파일이 참조하는 plot_dir/temp_sorted/*.dat는 CathPlot 자신이
-        # "일회성 캐시"로 명시하는 폴더라 - 창 닫을 때 "temp_sorted 캐시도
-        # 함께 비우기"로 지워질 수 있음 - 그 .plt를 나중에 다시 PIP 소스로
-        # 쓰면 파일이 이미 사라진 뒤일 수 있음), 그 dat_file을 참조하는
-        # "plot \" 명령 자체가 gnuplot에서 "Cannot find or open file" +
-        # "No data in plot" 오류로 죽는데, 실측 확인 결과 이 오류는 단순
-        # 경고가 아니라 그 지점에서 스크립트 전체 실행이 완전히 멈춰버림
-        # (아래 main state snapshot 재생, border/margin 복구, R키 바인딩
-        # 등 이 지점 "이후"의 모든 코드가 통째로 실행이 안 됨 - pngcairo로
-        # 직접 렌더링해 exit code/이후 print 마커 도달 여부로 확인). 이미
-        # 그려둔 PIP의 배경/테두리(set object)조차 이 실패한 plot 문이
-        # 맡은 "실제 화면에 칠하기" 단계까지 못 가서 하나도 안 보이고,
-        # main-plot 마우스 좌표가 "우연히" 살아있는 것처럼 보이는 것도 실은
-        # 이 수정 전 main-state-snapshot 재생 로직이 정상 작동해서가 아니라
-        # 스크립트가 죽기 전 마지막으로 성공한 게 main의 첫 plot이었을
-        # 뿐임(재현 실측으로 확인) - PIP 전체가 이렇게 스크립트를 함께
-        # 죽이는 것보다는, 파일이 없는 걸 미리 걸러내 안전하게 "현재
-        # plot"으로 대체하고 경고만 남기는 게 낫다.
+        # (아래 첫 번째 경우 한정) "PIP를 원으로 그렸는데 창에는 안
+        # 나타남(네모든 원이든) - 좌표는 나타남" - _override_curves(다른
+        # plot/.plt 파일에서 가져온 curve 목록) 중 하나라도 dat_file이
+        # 실제로 없으면, 그 dat_file을 참조하는 "plot \" 명령 자체가
+        # gnuplot에서 "Cannot find or open file" + "No data in plot"
+        # 오류로 죽는데, 실측 확인 결과 이 오류는 단순 경고가 아니라 그
+        # 지점에서 스크립트 전체 실행이 완전히 멈춰버림(아래 main state
+        # snapshot 재생, border/margin 복구, R키 바인딩 등 이 지점 "이후"의
+        # 모든 코드가 통째로 실행이 안 됨 - pngcairo로 직접 렌더링해 exit
+        # code/이후 print 마커 도달 여부로 확인) - 파일이 없는 걸 미리
+        # 걸러내 스크립트가 죽는 것만은 막아야 하므로, 이 PIP만 건너뛴다.
         if _override_curves and any(
             not os.path.exists(getattr(_c, "dat_file", "")) for _c in _override_curves
         ):
-            _pip_name = (plotdef.title or "plot").strip() or "plot"
             self.warnings.append(
                 f"'{_pip_name}'의 PIP가 참조하는 데이터 파일을 찾을 수 없어(예: 원본 plot의 "
-                f"임시 정렬 캐시가 이미 삭제됨) 현재 plot 자신의 곡선을 대신 보여줍니다 - "
-                f".plt 파일/저장된 plot이 아직 유효한지, 그 원본을 다시 그려서 새로 저장했는지 확인해 주세요."
+                f"임시 정렬 캐시가 이미 삭제됨) 이 PIP 인셋을 건너뜁니다(다른 plot의 내용을 "
+                f"메인 plot 것으로 잘못 바꿔 보여주는 것을 방지) - .plt 파일/저장된 plot이 "
+                f"아직 유효한지, 그 원본을 다시 그려서 새로 저장했는지 확인해 주세요."
             )
-            _override_curves = None
+            return
         if _override_curves:
             main_cmd_list = self._curve_cmd_list_for(
                 _override_curves, fmt, lines=lines,
                 y_range=(pip.get("ymin"), pip.get("ymax")),
                 y2_range=(pip.get("y2min"), pip.get("y2max")),
             )
-        elif pip.get("source") == "pltfile" and str(pip.get("pltfile_path", "")).strip():
+        elif _pip_source == "pltfile" and str(pip.get("pltfile_path", "")).strip():
             # [수정 - 사용자 보고 버그] "in-plot으로 .plt를 지정하면 그 파일이
             # 아니라 현재 main-plot을 불러옴" - source가 ".plt 파일"인데
             # pip["curves"]가 비어있으면(cathplot_gui._parse_plt_curves가
             # 그 파일에서 곡선을 하나도 못 찾은 경우 - 예: 예전엔 Cubic
             # Spline이 켜진 curve가 있으면 정규식이 아예 매치 못 했음, 이제
             # 고쳤지만 그 외에도 우리 자신의 생성 포맷과 조금이라도 다르면
-            # 여전히 실패할 수 있음) 아래에서 조용히 "현재 화면"(이 plot
-            # 자신의 curves)으로 대체되는데, 지금까지는 그 사실을 사용자가
-            # 전혀 알 수 없어 "완전히 다른 plot의 곡선이 나온다"는 혼란스러운
-            # 버그처럼 보였음 - 명확한 경고를 남긴다.
-            _pip_name = (plotdef.title or "plot").strip() or "plot"
+            # 여전히 실패할 수 있음) - [수정 - 사용자 요청] 예전엔 여기서
+            # 조용히 main 자신으로 대체됐는데, 위와 같은 이유로 이제 대체
+            # 없이 이 PIP만 건너뛴다.
             self.warnings.append(
                 f"'{_pip_name}'의 PIP가 지정된 .plt 파일에서 곡선을 하나도 찾지 못해 "
-                f"현재 plot 자신의 곡선을 대신 보여줍니다 - CathPlot이 직접 생성한 .plt "
-                f"파일인지, 형식이 바뀌지 않았는지 확인해 주세요."
+                f"이 PIP 인셋을 건너뜁니다 - CathPlot이 직접 생성한 .plt 파일인지, 형식이 "
+                f"바뀌지 않았는지, 파일이 이동/삭제되지 않았는지 확인해 주세요."
             )
+            return
+        elif _pip_source == "cached" and str(pip.get("cached_name", "")).strip():
+            # [수정 - 사용자 요청] "cached"(이미 그려진 plot) 소스를 못 찾는
+            # 경우(다른 세션/기기라 self.active_plots_cache에 없거나, 아직
+            # 한 번도 그 plot을 그린 적이 없는 경우 등)는 지금까지 여기서
+            # 아무 처리도 안 하고 main_cmd_list(메인 자신)로 조용히 흘러가
+            # 경고조차 없었음 - 위 pltfile 경우와 같은 이유로 이제 여기도
+            # 대체 없이 건너뛰기 + 경고로 통일한다.
+            self.warnings.append(
+                f"'{_pip_name}'의 PIP가 지정한 저장된 plot('{pip.get('cached_name', '')}')을 "
+                f"찾을 수 없어 이 PIP 인셋을 건너뜁니다(다른 세션/기기이거나 아직 그 plot을 "
+                f"한 번도 그리지 않았을 수 있음) - 먼저 그 plot을 한 번 그려서 화면에 띄운 뒤 "
+                f"다시 시도해 주세요."
+            )
+            return
 
         if not main_cmd_list:
             return
