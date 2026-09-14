@@ -1961,7 +1961,15 @@ class GnuplotGenerator:
 
         def _resolve_anchor(pos_raw):
             pos_raw = (pos_raw or "").strip()
-            is_raw = pos_raw.startswith("graph ") or pos_raw.startswith("screen ") or pos_raw.startswith("at ")
+            # [수정 - 사용자 요청] "screen"은 실제로는 "graph"와 완전히 같은
+            # 코드(숫자 두 개 -> axis frame 비율)를 타서 구분할 이유가 없고,
+            # 이미지 출력 등에는 의미가 안 맞을 수도 있다는 지적으로 입력
+            # 화면/설명서에서 이미 뺐음 - Template에 "screen ..."으로 저장된
+            # 사례가 없음을 확인(사용자)하고 파서에서도 마저 제거함. 지금
+            # "screen ..."을 입력하면 아래 is_pct/is_raw 둘 다 실패해
+            # 마지막 폴백(자리 키워드 없으면 center)으로 떨어짐 - 의도된
+            # 동작(더 이상 지원 안 함).
+            is_raw = pos_raw.startswith("graph ") or pos_raw.startswith("at ")
             is_pct = False
             if not is_raw and "," in pos_raw:
                 parts = [p.strip() for p in pos_raw.split(",")]
