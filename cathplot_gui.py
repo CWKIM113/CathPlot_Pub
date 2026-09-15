@@ -3765,25 +3765,27 @@ class CathPlotGUI:
         # 기본 15px 대신 Var list의 Y1/Y2 체크박스와 같은 19px로.
         # [수정 - 사용자 요청] "손대는 김에 Plot Title 표시, Axis Title 표시,
         # Legend 표시 등은 한줄에" -> "너무 줄이 많음" -> "마커표시도 같은
-        # 줄로" - 다섯 체크박스가 원래 다섯 줄을 차지했던 것을 전부 한 줄
-        # (side="left")로 묶는다(PIP 팝업 가로폭을 820으로 넓혀둔 것도 이
-        # 한 줄이 안 잘리게 하기 위함).
+        # 줄로" -> "간단히 표시는 다음 줄로 이동" - Plot Title/Axis Title/
+        # Legend/Marker 표시는 한 줄에, "간단히 표시"만 따로 다음 줄에 둔다.
         title_opt_row = ttk.Frame(opt_frame)
         title_opt_row.pack(fill="x")
         self._mk_check(title_opt_row, "Plot Title 표시", self.pip_title_on_var, size=19, anchor="w", side="left", padx=5, pady=2)
         self._mk_check(title_opt_row, "Axis Title 표시", self.pip_axis_title_on_var, size=19, anchor="w", side="left", padx=5, pady=2)
         self._mk_check(title_opt_row, "Legend 표시", self.pip_legend_on_var, size=19, anchor="w", side="left", padx=5, pady=2)
-        # [추가 - 요청] "원 안에 아무것도 없이 curve만 넣는 경우도 옵션으로" -
-        # 켜면 title/axis frame(테두리)/격자/tic 숫자를 전부 무시하고 배경+
-        # curve만 보이게 한다(원으로 확대할 때는 축 좌표 등이 오히려 방해가
-        # 될 수 있다는 요청 - _build_pip_folded_overlay가 이 값을 읽어
-        # 테두리/격자/tic 생성을 건너뜀).
-        self._mk_check(title_opt_row, "간단히 표시 (Curve만, 테두리/tic 생략)", self.pip_minimal_var, size=19, anchor="w", side="left", padx=5, pady=2)
         # [추가 - 요청] "PIP 입력에 마커 on/off (원래 plot에 마커 있는
         # 경우만)" - 원본 curve에 marker_shape가 없으면 켜도 효과가 없어
         # 체크박스 자체는 항상 보이게 두되(어떤 curve가 마커를 쓰는지는
         # 매번 바뀔 수 있어 동적 숨김/비활성은 과함), 라벨로 조건을 안내한다.
         self._mk_check(title_opt_row, "Marker 표시 (원본에 marker 있는 curve만)", self.pip_marker_on_var, size=19, anchor="w", side="left", padx=5, pady=2)
+
+        # [추가 - 요청] "원 안에 아무것도 없이 curve만 넣는 경우도 옵션으로" -
+        # 켜면 title/axis frame(테두리)/격자/tic 숫자를 전부 무시하고 배경+
+        # curve만 보이게 한다(원으로 확대할 때는 축 좌표 등이 오히려 방해가
+        # 될 수 있다는 요청 - _build_pip_folded_overlay가 이 값을 읽어
+        # 테두리/격자/tic 생성을 건너뜀). 위 요청대로 다음 줄에 별도로 둠.
+        minimal_opt_row = ttk.Frame(opt_frame)
+        minimal_opt_row.pack(fill="x")
+        self._mk_check(minimal_opt_row, "간단히 표시 (Curve만, 테두리/tic 생략)", self.pip_minimal_var, size=19, anchor="w", side="left", padx=5, pady=2)
 
         # [추가 - 요청] "PIP 표시옵션에서 Plot Title/X/Y1/Y2 title을 default를
         # 제시하고 수정 가능하게 - 불러오는 in-plot의 원본 파일에 title 등이
