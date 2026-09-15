@@ -3672,9 +3672,9 @@ class CathPlotGUI:
         # 이 줄은 입력 위젯이 아니라, 위에서 지금까지 입력한 중심/반지름/배율
         # (또는 인셋 박스 직접 지정값)으로 Plot을 실제로 실행하면 인셋이 얼마
         # 크기(축 프레임 대비 %)로 나올지, 실행 전에 미리 계산해서 보여주는
-        # "읽기 전용 미리보기"임 - 그 사실이 라벨만 보고 바로 드러나도록
-        # "(자동 계산, 참고용)"을 덧붙인다.
-        ttk.Label(mag_preview_row, text="→ 예상 인셋 크기(자동 계산, 참고용):", foreground="#666666").pack(side="left")
+        # "읽기 전용 미리보기"임 - [수정 - 사용자 지적] "(자동 계산, 참고용)"
+        # 보다 "(자체계산)"이 더 확실한 표현이라는 지적을 반영해 교체.
+        ttk.Label(mag_preview_row, text="→ 예상 인셋 크기 (자체계산 값):", foreground="#666666").pack(side="left")
         ttk.Label(mag_preview_row, textvariable=mag_preview_var, foreground="#0056b3").pack(side="left", padx=(4, 0))
 
         def _update_mag_preview(*_a):
