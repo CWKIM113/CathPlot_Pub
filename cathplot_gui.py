@@ -3674,7 +3674,7 @@ class CathPlotGUI:
         # 크기(축 프레임 대비 %)로 나올지, 실행 전에 미리 계산해서 보여주는
         # "읽기 전용 미리보기"임 - [수정 - 사용자 지적] "(자동 계산, 참고용)"
         # 보다 "(자체계산)"이 더 확실한 표현이라는 지적을 반영해 교체.
-        ttk.Label(mag_preview_row, text="→ 예상 인셋 크기 (자체계산 값):", foreground="#666666").pack(side="left")
+        ttk.Label(mag_preview_row, text="→ 예상 인셋 크기 (자체계산 값, 참고용):", foreground="#666666").pack(side="left")
         ttk.Label(mag_preview_row, textvariable=mag_preview_var, foreground="#0056b3").pack(side="left", padx=(4, 0))
 
         def _update_mag_preview(*_a):
