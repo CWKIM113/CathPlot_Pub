@@ -3637,7 +3637,12 @@ class CathPlotGUI:
         ttk.Label(mag_box_row, text="Y:").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_y_var, width=6).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_box_row, self.pip_mag_box_center_y_mode_var).pack(side="left", padx=(0, 12))
-        ttk.Label(mag_box_row, text="반지름(%, 보통 20~40 · 100=축 전체를 채움):").pack(side="left")
+        # [수정 - 사용자 지적] "라벨에 다 넣지 말고 반지름*(%) 처럼 짧게
+        # 쓰고 *로 아래에 설명" - 가운데점(·)이 뭘 구분하는지 불확실하고
+        # 라벨 자체도 길어 옆 입력칸과 함께 잘리기 쉬웠음 - 라벨은 "반지름*
+        # (%):"로 짧게 줄이고, "보통 20~40 권장"/"100=축 전체를 채움" 같은
+        # 자세한 뜻은 아래 각주(* ...) 한 줄로 옮긴다.
+        ttk.Label(mag_box_row, text="반지름* (%):").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_radius_var, width=6).pack(side="left", padx=(4, 2))
         # [수정 - 사용자 지적] "PIP Radius(Rx,Ry)%처럼 반지름끼리 비교해
         # 100%가 꽉참이어야 헷갈리지 않는다" - 예전엔 이 반지름(%)이 "축
@@ -3648,12 +3653,28 @@ class CathPlotGUI:
         # 2배 안 함 - compute_magnifier_pip 참고). 실측 기준(반지름 15→지름
         # 30%가 적당한 크기였음)을 새 기준(2배)으로 환산해 "보통 20~40"으로
         # 힌트도 같이 바로잡는다.
-        ttk.Label(mag_box_row, text="(비우면 중심X/Y1·배율에서 자동)", foreground="#888888", font=("", 8)).pack(side="left", padx=(6, 0))
+        # [수정 - 사용자 지적] "'(비우면 중심...)'이 너무 길어서 잘림 - 아래
+        # 줄에 *로 표기함이 좋을 듯" - 위에서 라벨 밖으로 뺀 반지름 설명과
+        # "비우면 자동" 설명을 한 각주 줄로 합쳐 별도 줄에 둔다(잘림 방지 +
+        # "*"가 위 "반지름*"을 가리키는 각주임을 명확히 함).
+        mag_box_note_row = ttk.Frame(mag_frame)
+        mag_box_note_row.pack(fill="x", padx=5, pady=(0, 2))
+        ttk.Label(
+            mag_box_note_row,
+            text="* 반지름(%): 보통 20~40 권장, 100=축 전체를 채움. 비우면(중심도 마찬가지) 위 중심X/Y1·배율에서 자동 계산됨",
+            foreground="#888888", font=("", 8)
+        ).pack(side="left")
 
         mag_preview_var = tk.StringVar(value="")
         mag_preview_row = ttk.Frame(mag_frame)
         mag_preview_row.pack(fill="x", padx=5, pady=(0, 5))
-        ttk.Label(mag_preview_row, text="→ 예상 인셋 크기:", foreground="#666666").pack(side="left")
+        # [수정 - 사용자 질문] "이 줄의 역할이 뭔지 불확실함(버튼도 아니고)" -
+        # 이 줄은 입력 위젯이 아니라, 위에서 지금까지 입력한 중심/반지름/배율
+        # (또는 인셋 박스 직접 지정값)으로 Plot을 실제로 실행하면 인셋이 얼마
+        # 크기(축 프레임 대비 %)로 나올지, 실행 전에 미리 계산해서 보여주는
+        # "읽기 전용 미리보기"임 - 그 사실이 라벨만 보고 바로 드러나도록
+        # "(자동 계산, 참고용)"을 덧붙인다.
+        ttk.Label(mag_preview_row, text="→ 예상 인셋 크기(자동 계산, 참고용):", foreground="#666666").pack(side="left")
         ttk.Label(mag_preview_row, textvariable=mag_preview_var, foreground="#0056b3").pack(side="left", padx=(4, 0))
 
         def _update_mag_preview(*_a):
