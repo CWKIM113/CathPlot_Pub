@@ -5803,9 +5803,12 @@ class CathPlotGUI:
         self.file_rows.append(info)
         row.pack(fill="x", padx=5, pady=0)
 
-        # [수정 - 사용자 요청] "Dat files 항목의 Browse 입력칸을 지금의
-        # 2배로 길게" - 60 -> 120으로.
-        ttk.Entry(row, textvariable=var, width=120).pack(side="left", padx=5)
+        # [수정 - 되돌림, 사용자 지적] "Dat files 항목의 Browse 입력칸을
+        # 지금의 2배로 길게" - 60 -> 120으로 늘렸던 건 그때 절대경로 전체가
+        # 표시돼 너무 길어서(알아보기 어려움)였는데, 이제 화면 표시를 cwd
+        # 기준 상대경로로 바꿔(_display_relpath 참고) 훨씬 짧아졌으므로 120은
+        # 과함(오히려 자리만 차지) - 원래 폭(60)으로 되돌린다.
+        ttk.Entry(row, textvariable=var, width=60).pack(side="left", padx=5)
         self._mk_btn(
             row, "Browse",
             lambda v=var, r_info=info: self.load_dat_file(v, r_info),
