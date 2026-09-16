@@ -661,8 +661,24 @@ class CathPlotGUI:
         # 의미가 겹쳤음).
         self._mk_btn(btn_container, "Template Save", self.save_template,
                      color="grey", fg="white", side="left", padx=5)
-        self._mk_btn(btn_container, "Template Load", self.load_template,
+        # [수정 - 사용자 요청] "load 할 때 바로 그리는 방법 가능하나요?" -
+        # Template을 저장해두고 나중에 불러와 "제대로 저장됐는지 확인"하는
+        # 용도로 자주 쓰시는데, 그때마다 Load 따로 + Plot 버튼 따로 눌러야
+        # 했음. 체크박스(기본 꺼짐 - 기존 동작 그대로 유지, Load만 하고
+        # 바로 그리고 싶지 않은 경우도 있으므로)를 켜두면 Load 성공 직후
+        # Interactive Plot까지 자동으로 이어서 실행한다. Batch Set 창 안의
+        # "Template Load"(그 항목을 배치 목록에 채우기만 하는 용도, 5392행
+        # 부근)는 이 체크박스와 무관하게 그대로 둔다(self.load_template을
+        # 직접 호출 - 자동 실행 대상 아님).
+        self.template_load_autoplot_var = tk.BooleanVar(value=False)
+        def _load_template_then_maybe_plot():
+            self.load_template()
+            if self.template_load_autoplot_var.get():
+                self.execute_plot_pipeline(mode="Interactive")
+        self._mk_btn(btn_container, "Template Load", _load_template_then_maybe_plot,
                      color="grey", fg="white", side="left", padx=5)
+        self._mk_check(btn_container, "Load 후 바로 그리기", self.template_load_autoplot_var,
+                        size=15, anchor="w", side="left", padx=(2, 5))
 
         # [수정] "좌우로 늘리지 말고 줄 중앙에 배치" - fill+expand로 버튼 자체가
         # 늘어졌던 걸, 양옆에 빈 스페이서(expand=True)를 둬서 버튼 크기는
@@ -2199,6 +2215,22 @@ class CathPlotGUI:
 
             assignments.append({
                 "filename": rel_path,
+                # [추가 - 사용자 보고 버그] "같은 dat인데 실행할 때마다
+                # temp_sorted 해시가 달라짐" - self.cwd(=os.getcwd())가
+                # CathPlot을 "어떻게 실행했는지"(exe 더블클릭 위치, 바로가기
+                # 시작 위치 등)에 따라 실행마다 달라질 수 있는데, 지금까지는
+                # Template을 저장할 때의 cwd 기준 상대경로만 저장해뒀다가
+                # 불러올 때 "그 시점의" cwd와 다시 합쳐 절대경로를 복원했음 -
+                # 저장 시점 cwd와 불러오는 시점 cwd가 다르면 같은 물리
+                # 파일인데도 복원되는 절대경로 문자열이 달라지고, 그 문자열을
+                # 그대로 해시하는 resort_dat_file 캐시 이름도 매번 달라져
+                # temp_sorted에 중복 캐시가 쌓였다. 저장 시점의 절대경로도
+                # 같이 남겨서, 불러올 때 이 경로가 실제로 존재하면(=같은
+                # 컴퓨터에서 다시 여는 흔한 경우) cwd와 무관하게 이 값을
+                # 그대로 쓰고, 없을 때만(다른 컴퓨터로 옮긴 경우 등) 기존의
+                # cwd-상대경로 복원으로 대체(하위호환 - 옛 Template은 이 키가
+                # 없어 자동으로 기존 동작 그대로).
+                "abs_filename": datfile,
                 "x_output_no": x_output_no,
                 "y1_output_nos": y1_nos,
                 "y2_output_nos": y2_nos,
@@ -2587,7 +2619,21 @@ class CathPlotGUI:
                     _rel_path = _fa.get("filename", "")
                     if not _rel_path:
                         continue
-                    _abs_path = _rel_path if os.path.isabs(_rel_path) else os.path.join(self.cwd, _rel_path)
+                    # [수정 - 사용자 보고 버그] "같은 dat인데 실행할 때마다
+                    # temp_sorted 해시가 달라짐" - self.cwd가 실행마다 달라질
+                    # 수 있어(위 _capture_file_assignments 주석 참고), cwd
+                    # 기준 상대경로만으로 복원하면 같은 컴퓨터에서 다시 열어도
+                    # 매번 다른 절대경로 문자열이 나올 수 있었다 - 저장 시점의
+                    # 절대경로(abs_filename)가 남아있고 지금도 실제로 존재하면
+                    # (같은 컴퓨터에서 다시 여는 흔한 경우) cwd와 무관하게 그
+                    # 값을 그대로 쓰고, 없을 때만(다른 컴퓨터로 옮긴 경우 등,
+                    # 또는 이 키가 없는 옛 Template) 기존처럼 cwd-상대경로로
+                    # 복원한다.
+                    _abs_hint = _fa.get("abs_filename", "")
+                    if _abs_hint and os.path.exists(_abs_hint):
+                        _abs_path = _abs_hint
+                    else:
+                        _abs_path = _rel_path if os.path.isabs(_rel_path) else os.path.join(self.cwd, _rel_path)
                     if not os.path.exists(_abs_path):
                         continue  # 템플릿 저장 이후 파일이 옮겨지거나 지워졌으면 조용히 건너뜀
 
