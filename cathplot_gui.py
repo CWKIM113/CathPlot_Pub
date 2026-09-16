@@ -1218,6 +1218,20 @@ class CathPlotGUI:
         ttk.Label(filename_f, text="Plot File Name", font=("Malgun Gothic", 9, "bold")).pack(side="left", padx=(0, 3))
         self.filename_entry = self._mk_entry(filename_f, self.filename_var, width=20, color="accent3")
         self.filename_entry.pack(side="left")
+        # [추가 - 사용자 요청] "같은 이름으로 계속 덮어쓰기 옵션" - PLOT을
+        # 누를 때마다 title_counters가 증가해 "{이름}_1, _2, _3..."으로 새
+        # .plt/이미지 파일이 계속 쌓이는데(여러 창을 나란히 비교하려는
+        # 의도된 기능), Template을 불러와 "제대로 저장됐는지"만 확인하는
+        # 반복 작업에서는 그 누적이 불필요하다는 지적 - 기본 꺼짐(기존 동작
+        # 그대로)이고, 켜면 항상 "{이름}_1"로 고정해 매번 덮어쓴다(execute_
+        # plot_pipeline 참고). [주의] 같은 제목의 이전 Interactive 창이 아직
+        # 떠 있으면 그 창은 옛 내용 그대로 남고 새 창이 같은 제목으로 하나
+        # 더 열림(창을 자동으로 닫지는 않음 - "여러 창 비교" 기존 동작과
+        # 충돌하지 않도록 강제 종료는 하지 않기로 함) - 켜서 쓰실 땐 이전
+        # 창을 직접 닫아가며 쓰시는 걸 권장.
+        self.plot_overwrite_var = tk.BooleanVar(value=False)
+        self._mk_check(filename_f, "덮어쓰기(번호 증가 안 함)", self.plot_overwrite_var,
+                        size=15, anchor="w", side="left", padx=(6, 0))
 
         # Row 4
         self.xlog_var = tk.BooleanVar(value=False)
@@ -9440,6 +9454,18 @@ class CathPlotGUI:
 
             if custom_filepath:
                 outfile = custom_filepath
+            elif self.plot_overwrite_var.get():
+                # [추가 - 사용자 요청] "같은 이름으로 계속 덮어쓰기 옵션" -
+                # 항상 "_1"로 고정해 번호를 증가시키지 않고, 파일 존재 여부와
+                # 무관하게(=덮어쓰기 의도가 명확하므로) 충돌 확인 팝업 없이
+                # 곧바로 그 자리에 다시 쓴다.
+                next_id = 1
+                base_name = f"{safe_title}_{next_id}"
+                outfile = os.path.join(
+                    self.plot_dir,
+                    f"{base_name}.plt" if target == "screen" else f"{base_name}.{fmt}"
+                )
+                self.title_counters[safe_title] = next_id
             else:
                 next_id = self.title_counters.get(safe_title, 0) + 1
                 base_name = f"{safe_title}_{next_id}"
