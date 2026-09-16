@@ -557,6 +557,18 @@ class CathPlotGUI:
         self.file_frame = ttk.LabelFrame(self.root, text="DAT Files", style=self.SECTION_STYLE["dat_files"])
         self.file_frame.pack(fill="x", padx=10, pady=0)
 
+        # [추가 - 사용자 요청] "Browse 칸에 절대경로 대신 상대경로만 보이게" -
+        # 각 dat 파일 행의 표시 텍스트를 cwd 기준 상대경로로 바꾸면(아래
+        # _display_relpath 참고), 서로 다른 case 폴더의 같은 이름 파일이
+        # 화면에서 항상 똑같이(예: "data/out111.dat") 보여 "지금 어느 case를
+        # 보고 있는지" 구분이 오히려 더 어려워질 수 있음(사용자 지적) - 그래서
+        # "기준이 되는 cwd 자체"를 이 라벨로 항상 보이게 해서, 상대경로(어떤
+        # 파일)와 이 라벨(어느 폴더 기준)을 같이 보면 헷갈리지 않게 한다.
+        ttk.Label(
+            self.file_frame, text=f"현재 작업 폴더(cwd): {self.cwd}",
+            foreground="#666666", font=("", 8)
+        ).pack(fill="x", padx=5, pady=(2, 0), anchor="w")
+
         # [수정 - 요청] "모든 block에서 가로 스크롤 가능하게 - 일부 입력이
         # 잘림" - 세로 스크롤바만 있던 이 canvas를 자기 전용 sub-frame으로
         # 감싸서, 그 안에 가로 스크롤바도 같이 넣는다(오른쪽의 세로
@@ -2642,7 +2654,7 @@ class CathPlotGUI:
                             _meta = self.parser.parse(_abs_path)
                         except Exception:
                             continue
-                        _target_info["var"].set(_abs_path)
+                        _target_info["var"].set(self._display_relpath(_abs_path))
                         _target_info["filename"] = _abs_path
                         _target_info["meta"] = _meta
                         try:
@@ -3296,6 +3308,20 @@ class CathPlotGUI:
             return str(float(raw) * 2.0)
         except (TypeError, ValueError):
             return raw
+
+    def _display_relpath(self, abs_path):
+        """[추가 - 사용자 요청] "Browse 칸에 절대경로 대신 상대경로만" - DAT
+        Files 각 행의 입력칸(화면 표시 전용 - info["filename"]이 실제 파일
+        접근에 쓰이는 절대경로를 따로 그대로 유지하므로 이건 순수하게
+        보여주기만 바꾸는 안전한 변경)에 cwd 기준 상대경로를 보여준다.
+        Template에 저장되는 상대경로(_capture_file_assignments의 rel_path)
+        와 완전히 같은 계산이라 "Template에 저장될 값 그대로"를 미리 보는
+        셈이기도 하다. cwd 밖(다른 드라이브 등 - relpath 계산 자체가 불가능한
+        경우)이면 절대경로를 그대로 보여준다."""
+        try:
+            return os.path.relpath(abs_path, self.cwd)
+        except ValueError:
+            return abs_path
 
     def _pip_default_titles(self):
         """[추가 - 요청] PIP 팝업을 열 때 Plot Title/X/Y1/Y2 Title 입력칸에
@@ -5850,7 +5876,7 @@ class CathPlotGUI:
         if r_info["x_var"].get().startswith(prefix):
             r_info["x_var"].set("")
 
-        var.set(filename)
+        var.set(self._display_relpath(filename))
         r_info["filename"] = filename
 
         # 1. 파서 수행
