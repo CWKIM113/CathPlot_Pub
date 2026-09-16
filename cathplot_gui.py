@@ -2229,22 +2229,6 @@ class CathPlotGUI:
 
             assignments.append({
                 "filename": rel_path,
-                # [추가 - 사용자 보고 버그] "같은 dat인데 실행할 때마다
-                # temp_sorted 해시가 달라짐" - self.cwd(=os.getcwd())가
-                # CathPlot을 "어떻게 실행했는지"(exe 더블클릭 위치, 바로가기
-                # 시작 위치 등)에 따라 실행마다 달라질 수 있는데, 지금까지는
-                # Template을 저장할 때의 cwd 기준 상대경로만 저장해뒀다가
-                # 불러올 때 "그 시점의" cwd와 다시 합쳐 절대경로를 복원했음 -
-                # 저장 시점 cwd와 불러오는 시점 cwd가 다르면 같은 물리
-                # 파일인데도 복원되는 절대경로 문자열이 달라지고, 그 문자열을
-                # 그대로 해시하는 resort_dat_file 캐시 이름도 매번 달라져
-                # temp_sorted에 중복 캐시가 쌓였다. 저장 시점의 절대경로도
-                # 같이 남겨서, 불러올 때 이 경로가 실제로 존재하면(=같은
-                # 컴퓨터에서 다시 여는 흔한 경우) cwd와 무관하게 이 값을
-                # 그대로 쓰고, 없을 때만(다른 컴퓨터로 옮긴 경우 등) 기존의
-                # cwd-상대경로 복원으로 대체(하위호환 - 옛 Template은 이 키가
-                # 없어 자동으로 기존 동작 그대로).
-                "abs_filename": datfile,
                 "x_output_no": x_output_no,
                 "y1_output_nos": y1_nos,
                 "y2_output_nos": y2_nos,
@@ -2633,21 +2617,18 @@ class CathPlotGUI:
                     _rel_path = _fa.get("filename", "")
                     if not _rel_path:
                         continue
-                    # [수정 - 사용자 보고 버그] "같은 dat인데 실행할 때마다
-                    # temp_sorted 해시가 달라짐" - self.cwd가 실행마다 달라질
-                    # 수 있어(위 _capture_file_assignments 주석 참고), cwd
-                    # 기준 상대경로만으로 복원하면 같은 컴퓨터에서 다시 열어도
-                    # 매번 다른 절대경로 문자열이 나올 수 있었다 - 저장 시점의
-                    # 절대경로(abs_filename)가 남아있고 지금도 실제로 존재하면
-                    # (같은 컴퓨터에서 다시 여는 흔한 경우) cwd와 무관하게 그
-                    # 값을 그대로 쓰고, 없을 때만(다른 컴퓨터로 옮긴 경우 등,
-                    # 또는 이 키가 없는 옛 Template) 기존처럼 cwd-상대경로로
-                    # 복원한다.
-                    _abs_hint = _fa.get("abs_filename", "")
-                    if _abs_hint and os.path.exists(_abs_hint):
-                        _abs_path = _abs_hint
-                    else:
-                        _abs_path = _rel_path if os.path.isabs(_rel_path) else os.path.join(self.cwd, _rel_path)
+                    # [수정 - 되돌림, 사용자 설명] "cwd 이후 구조는 같지만
+                    # dat 파일은 물리적으로 다른 경우가 대부분" - 같은 상대
+                    # 구조의 서로 다른 case 폴더에 CathPlot을 각각 실행해
+                    # 같은 Template을 적용하는 게 주된 사용 방식이라, 경로
+                    # 복원은 반드시 "지금(로드 시점)의" cwd 기준 상대경로여야
+                    # 함(저장 시점의 절대경로를 우선하면, case를 바꿔 다시
+                    # 열었을 때 새 case가 아니라 예전 case의 파일을 그대로
+                    # 참조하는 더 심각한 오류가 됨) - 한때 저장 시점 절대경로를
+                    # 우선하도록 바꿨던 시도를 원래의 cwd-상대경로 방식으로
+                    # 되돌린다(해시 불안정 문제는 resort_dat_file 쪽에서
+                    # 경로를 정규화하는 것으로 별도 해결 - 아래 참고).
+                    _abs_path = _rel_path if os.path.isabs(_rel_path) else os.path.join(self.cwd, _rel_path)
                     if not os.path.exists(_abs_path):
                         continue  # 템플릿 저장 이후 파일이 옮겨지거나 지워졌으면 조용히 건너뜀
 
@@ -8317,6 +8298,25 @@ class CathPlotGUI:
                 self.plot_dir = os.path.join(os.path.dirname(os.path.abspath(dat_file)), "plot")
 
             abs_dat_path = os.path.abspath(dat_file)
+            # [수정 - 사용자 보고 버그] "같은 물리 파일인데 실행할 때마다
+            # temp_sorted 해시가 달라짐" - 근본 원인은 self.cwd(=os.getcwd())
+            # 가 CathPlot을 "어떻게 실행했는지"(exe 더블클릭 위치, 바로가기
+            # 시작 위치 등)에 따라 실행마다 달라질 수 있다는 것 자체가 아니라
+            # (그건 의도된 동작 - 아래 참고), os.path.abspath()가 만드는
+            # 경로 "문자열"이 대소문자/짧은 8.3 경로 표기/심볼릭 링크·정션
+            # 등으로 같은 실제 파일을 가리켜도 다르게 나올 수 있다는 점.
+            # [주의 - 사용자 설명] 여기서 dat_file을 "어떤 파일로 볼지"
+            # 자체(cwd 기준 상대경로 해석)는 의도적으로 그대로 둬야 함 -
+            # "cwd 이후 폴더 구조는 같지만 dat 파일은 case마다 실제로 다른
+            # 물리 파일"이 주된 사용 방식이라, 다른 case 폴더에서 실행하면
+            # 그 case 자신의 dat를 가리켜야 정상이다(예전 case의 파일을
+            # 계속 참조하면 오히려 더 심각한 오류가 됨 - 한 번 시도했다가
+            # 되돌림). 대신 해시를 만들 때만 os.path.realpath(symlink/정션
+            # 실제 경로로 해석)+os.path.normcase(Windows에서 대소문자 통일)
+            # 로 정규화해서, 같은 실제 파일이면 문자열 표기가 달라도 항상
+            # 같은 해시가 나오게 한다 - "어떤 파일을 쓸지"는 안 바뀌고
+            # "그 파일을 무엇으로 해시할지"만 안정화됨.
+            _hash_path = os.path.normcase(os.path.realpath(abs_dat_path))
 
             # [수정 - 요청 철회] "원본 dat 폴더에 두자"는 처음 방향을 다시
             # plot_dir/temp_sorted로 되돌림 - 실제로는 원본 dat 파일들이
@@ -8353,7 +8353,7 @@ class CathPlotGUI:
             # 이제 그 "-N" 계산과 무관하게 항상 계산한다.
             base_name = os.path.basename(dat_file)
             name_root, ext = os.path.splitext(base_name)
-            path_hash = hashlib.md5(abs_dat_path.encode("utf-8")).hexdigest()[:6]
+            path_hash = hashlib.md5(_hash_path.encode("utf-8")).hexdigest()[:6]
 
             _basename_counts = {}
             for _info in getattr(self, "file_rows", []):
