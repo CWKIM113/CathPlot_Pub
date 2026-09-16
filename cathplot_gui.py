@@ -5808,7 +5808,14 @@ class CathPlotGUI:
         # 너무 길어서(알아보기 어려움)였는데, 이제 화면 표시를 cwd 기준
         # 상대경로로 바꿔(_display_relpath 참고) 훨씬 짧아짐 - 120은 과하고
         # (자리만 차지) 원래 값(60)은 다소 좁을 수 있어, 그 중간인 80으로.
-        ttk.Entry(row, textvariable=var, width=80).pack(side="left", padx=5)
+        dat_path_entry = ttk.Entry(row, textvariable=var, width=80)
+        dat_path_entry.pack(side="left", padx=5)
+        # [추가 - 사용자 요청] "Browse 칸에 직접 타이핑해서 다른 폴더의
+        # 파일로 바꿀 수 있나?" - Enter를 누르거나 이 칸에서 포커스가
+        # 벗어나는 시점에 한해 적용(매 키 입력마다 파일을 다시 읽으려 하면
+        # 타이핑 중간에 계속 "파일 없음" 경고가 뜨므로 곤란함).
+        dat_path_entry.bind("<Return>", lambda e, v=var, r_info=info: self._on_dat_entry_typed(e, v, r_info, silent=False))
+        dat_path_entry.bind("<FocusOut>", lambda e, v=var, r_info=info: self._on_dat_entry_typed(e, v, r_info, silent=True))
         self._mk_btn(
             row, "Browse",
             lambda v=var, r_info=info: self.load_dat_file(v, r_info),
@@ -5869,7 +5876,14 @@ class CathPlotGUI:
             return
         filename = os.path.abspath(filename)
         self.last_opened_dir = os.path.dirname(filename)
+        self._apply_selected_dat_file(var, r_info, filename)
 
+    def _apply_selected_dat_file(self, var, r_info, filename):
+        """[추가 - 요청 리팩터] load_dat_file(Browse 대화상자)과 아래
+        _on_dat_entry_typed(직접 타이핑) 둘 다 "파일이 하나 정해졌을 때
+        그 뒤에 할 일"(파서 실행/JSON 저장/변수 UI 갱신 등)은 완전히
+        같아서, 그 공통 부분만 뽑아낸 것 - filename은 항상 절대경로여야
+        한다(호출부 책임)."""
         datfile = r_info["filename"]
         prefix = f"{datfile}||"
 
@@ -5897,6 +5911,42 @@ class CathPlotGUI:
 
         self.update_title_from_first_file()
         self.show_variables()
+
+    def _on_dat_entry_typed(self, event, var, r_info, silent=False):
+        """[추가 - 사용자 요청] "Browse 칸에 직접 타이핑해서 다른 폴더의
+        파일로 바꿀 수 있나?" - 원래 설명서에는 "직접 타이핑 가능"이라
+        적혀 있었지만 실제로는 표시 전용이었던 것을 이번에 발견(정정)했는데,
+        Browse/Template Load가 기본이고 이건 필요할 때만 쓰는 보조 수단이라는
+        전제로, 아예 안 되는 것보다는 실제로 되게 해달라는 요청 - Enter(또는
+        포커스가 벗어날 때)에 한해 지금 칸에 적힌 텍스트를 실제 경로로
+        적용한다. 상대경로(현재 화면에 보이는 형식 그대로 - cwd 기준)와
+        절대경로 둘 다 입력 가능. [주의] Enter(silent=False)는 실패 시 경고
+        팝업을 띄우지만, 포커스 이탈(silent=True)은 조용히 원래 표시로만
+        되돌린다 - 그래야 Browse 버튼을 누를 때(버튼 클릭 자체가 먼저
+        FocusOut을 일으킴) 입력 중이던 텍스트 때문에 불필요한 경고가 먼저
+        뜨는 걸 피할 수 있다."""
+        raw = var.get().strip()
+        if not raw:
+            # 빈 칸으로 지운 것은 "취소"로 보고 원래 표시로 되돌린다.
+            var.set(self._display_relpath(r_info["filename"]) if r_info.get("filename") else "")
+            return
+        candidate = raw if os.path.isabs(raw) else os.path.join(self.cwd, raw)
+        candidate = os.path.abspath(candidate)
+        if not os.path.isfile(candidate):
+            if not silent:
+                messagebox.showwarning("파일 없음", f"경로를 찾을 수 없습니다:\n{candidate}\n\n(cwd 기준 상대경로 또는 절대경로를 입력해 주세요)")
+            var.set(self._display_relpath(r_info["filename"]) if r_info.get("filename") else "")
+            return
+        if os.path.abspath(candidate) == os.path.abspath(r_info.get("filename") or ""):
+            # 실제로 안 바뀌었으면(표시만 다시 정리) 그대로 재적용할 필요 없음.
+            var.set(self._display_relpath(candidate))
+            return
+        try:
+            self._apply_selected_dat_file(var, r_info, candidate)
+        except Exception as e:
+            if not silent:
+                messagebox.showerror("파일 읽기 실패", f"'{candidate}' 파일을 읽는 중 오류가 발생했습니다:\n{e}")
+            var.set(self._display_relpath(r_info["filename"]) if r_info.get("filename") else "")
 
     def load_variables_to_ui(self, dat_filepath, dat_info=None):
         if dat_info is None:
