@@ -5736,7 +5736,9 @@ class CathPlotGUI:
         self.file_rows.append(info)
         row.pack(fill="x", padx=5, pady=0)
 
-        ttk.Entry(row, textvariable=var, width=60).pack(side="left", padx=5)
+        # [수정 - 사용자 요청] "Dat files 항목의 Browse 입력칸을 지금의
+        # 2배로 길게" - 60 -> 120으로.
+        ttk.Entry(row, textvariable=var, width=120).pack(side="left", padx=5)
         self._mk_btn(
             row, "Browse",
             lambda v=var, r_info=info: self.load_dat_file(v, r_info),
