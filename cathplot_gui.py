@@ -1237,7 +1237,7 @@ class CathPlotGUI:
             activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
             relief="raised", bd=1, pady=1,
         )
-        marker_settings_btn.pack(side="left", padx=(30, 3))
+        marker_settings_btn.pack(side="left", padx=(44, 3))
         marker_settings_btn.configure(command=self._open_marker_settings_popup)
 
         # [수정] 기본값을 Auto로 변경 - 화면에서는 항상 검증된 scale=1.0 기준으로
@@ -1252,7 +1252,7 @@ class CathPlotGUI:
         # (Function/Marker가 비운 자리 대신) Auto X Range 행(원래 row=4,
         # 이제 row=5로 한 칸씩 밀림) 바로 위에 오게 한다.
         row3_f = ttk.Frame(self.plot_frame)
-        row3_f.grid(row=4, column=0, columnspan=6, sticky="we", padx=3, pady=0)
+        row3_f.grid(row=4, column=0, columnspan=2, sticky="w", padx=0, pady=0)
 
         frame_size_f = ttk.Frame(row3_f)
         frame_size_f.pack(side="left")
@@ -1277,10 +1277,12 @@ class CathPlotGUI:
         self.frame_unit_combo.pack(side="left", padx=(6, 0))
         self.toggle_frame_size_state()
 
-        # [수정] "Plot File Name은 우측 끝으로(right align)" - 같은 줄(row3_f)
-        # 안에서 Axis Frame Auto 묶음 오른쪽에 배치.
-        filename_f = ttk.Frame(row3_f)
-        filename_f.pack(side="right", padx=(10, 0))
+        # [수정 - 사용자 요청] "Plot File Name도 충분히 앞쪽으로(Plot Title의
+        # Font 칸 정도 위치로) 이동" - 우측 끝(right align) 대신, row3_f
+        # 밖으로 빼서 Plot Title Font 콤보(t_font_frame)와 같은 grid
+        # column=2에 직접 배치해 그 열과 자연스럽게 좌측 정렬되게 한다.
+        filename_f = ttk.Frame(self.plot_frame)
+        filename_f.grid(row=4, column=2, columnspan=4, sticky="w", padx=(5, 0), pady=0)
         self.filename_var = tk.StringVar(value="CathPlot")
         ttk.Label(filename_f, text="Plot File Name", font=("Malgun Gothic", 9, "bold")).pack(side="left", padx=(0, 3))
         self.filename_entry = self._mk_entry(filename_f, self.filename_var, width=20, color="accent3")
