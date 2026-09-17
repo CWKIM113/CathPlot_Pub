@@ -3982,9 +3982,18 @@ class CathPlotGUI:
         # curve만 보이게 한다(원으로 확대할 때는 축 좌표 등이 오히려 방해가
         # 될 수 있다는 요청 - _build_pip_folded_overlay가 이 값을 읽어
         # 테두리/격자/tic 생성을 건너뜀). 위 요청대로 다음 줄에 별도로 둠.
+        # [수정 - 사용자 지적] "라벨이 Legend/Title도 같이 꺼지는 걸 설명 안
+        # 함" - 실제로는 위 "Legend 표시"/"Plot Title 표시" 등을 따로 켜둬도
+        # 이 옵션이 켜지면 다 무시되고 Curve만 남음(gnu_generator.py의
+        # "if not minimal:" 분기에 title/axis title/legend가 모두 같이
+        # 묶여 있음) - 라벨에 이 점을 명시해 오해를 없앤다.
         minimal_opt_row = ttk.Frame(opt_frame)
         minimal_opt_row.pack(fill="x")
-        self._mk_check(minimal_opt_row, "간단히 표시 (Curve만, 테두리/tic 생략)", self.pip_minimal_var, size=19, anchor="w", side="left", padx=5, pady=2)
+        self._mk_check(
+            minimal_opt_row,
+            "간단히 표시 (Curve만 - 테두리/tic/Title/Legend 등 나머지는 위 설정과 무관하게 모두 생략)",
+            self.pip_minimal_var, size=19, anchor="w", side="left", padx=5, pady=2
+        )
 
         # [추가 - 요청] "PIP 표시옵션에서 Plot Title/X/Y1/Y2 title을 default를
         # 제시하고 수정 가능하게 - 불러오는 in-plot의 원본 파일에 title 등이
