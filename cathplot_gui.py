@@ -595,9 +595,13 @@ class CathPlotGUI:
         # 위젯 안에서 글자 자체가 어디에 쓰이는지(위젯 자신의 anchor 옵션,
         # 기본값 center)는 별개라 텍스트가 가운데로 쏠려 보였음 - 위젯
         # 옵션에도 anchor="w"를 줘야 글자가 왼쪽에 붙는다.
+        # [수정 - 사용자 요청] "진한 바다색으로도 구분 안되면 X버튼과 같은
+        # 진한 붉은색으로" - tk.Label 전환 후에도 화면에서 계속 안 보인다는
+        # 보고가 반복돼, 처음에 사용자가 미리 정해둔 대체 색(각 행 삭제
+        # "X" 버튼과 동일한 PALETTE["danger"] 진한 붉은색)으로 바꾼다.
         tk.Label(
             self.file_frame, text=f"현재 작업 폴더(cwd): {self.cwd}",
-            fg="#004d66", bg=self.PALETTE["bg"], font=("Malgun Gothic", 9, "bold"),
+            fg=self.PALETTE["danger"], bg=self.PALETTE["bg"], font=("Malgun Gothic", 9, "bold"),
             anchor="w"
         ).pack(fill="x", padx=5, pady=(2, 0), anchor="w")
 
@@ -666,8 +670,13 @@ class CathPlotGUI:
         # pack_propagate(False)를 걸고, 버튼을 그 안에 fill="both"로 채워
         # 넣는다(컨테이너가 잘리지 않는 한 버튼 자체 크기는 컨테이너를
         # 넘지 못함).
+        # [수정 - 사용자 지적] "+ 버튼이 아래로 치우쳤네?" - cwd 라벨이 이
+        # file_frame 안에서 위쪽(side="top")을 먼저 차지해서, 나머지
+        # 영역(canvas+스크롤바+버튼)의 세로 중앙(anchor 기본값)에 배치되면
+        # 실제 DAT 파일 행(캔버스 맨 위)보다 아래로 처져 보였음 -
+        # anchor="n"으로 바꿔 캔버스 상단과 같은 높이에서 시작하게 한다.
         add_file_btn_container = tk.Frame(self.file_frame, width=36, height=28, bg=self.PALETTE["bg"])
-        add_file_btn_container.pack(side="right", padx=1, pady=0)
+        add_file_btn_container.pack(side="right", padx=1, pady=0, anchor="n")
         add_file_btn_container.pack_propagate(False)
         self.add_file_btn = self._mk_btn(
             add_file_btn_container, "+", self.add_file_row,
@@ -3679,10 +3688,13 @@ class CathPlotGUI:
         clip_ry_entry.pack(side="left", padx=(2, 4))
         # [수정 - 사용자 요청] "PIP 창의 tip 등은 진한 이탤릭체 등으로 -
         # 잘 안보임" - 옅은 회색(gray)이라 눈에 잘 안 띄었음. 이 아래 PIP
-        # 팝업의 보조 설명 라벨들을 전부 진하게(굵게)+기울임으로 바꿔 잘
-        # 읽히게 한다(그래도 일반 라벨보다는 부차적임을 알 수 있게 완전
-        # 검정 대신 짙은 회색 #3a3a3a 유지).
-        ttk.Label(clip_row, text="(Ry 비우면 원)", foreground="#3a3a3a", font=("Malgun Gothic", 9, "bold italic")).pack(side="left")
+        # 팝업의 보조 설명 라벨들을 전부 짙은 회색(#3a3a3a)+기울임으로 바꿔
+        # 잘 읽히게 한다.
+        # [수정 - 사용자 지적] "팁 글자는 보통 진하기로(입력 설명과 구별
+        # 되게)" - 굵게(bold)까지 주면 오히려 실제 입력 라벨(각 필드 이름)
+        # 만큼 진해 보여 구분이 안 됐음 - 굵기는 보통으로 낮추고 기울임+
+        # 짙은 회색만 유지해 "부차적 설명"임이 한눈에 구별되게 한다.
+        ttk.Label(clip_row, text="(Ry 비우면 원)", foreground="#3a3a3a", font=("Malgun Gothic", 9, "italic")).pack(side="left")
 
         def _toggle_clip_entries(*_):
             _shape = self.pip_clip_shape_var.get()
@@ -3744,7 +3756,7 @@ class CathPlotGUI:
         ttk.Label(
             mag_frame,
             text="팁: gnuplot 창에서 좌클릭으로 좌표 확인, 'r'로 눈금자(ruler) 고정 후 이동하면 dx가 표시됨(반지름 값으로 활용)",
-            foreground="#3a3a3a", font=("Malgun Gothic", 8, "bold italic")
+            foreground="#3a3a3a", font=("Malgun Gothic", 8, "italic")
         ).pack(anchor="w", padx=5, pady=(0, 4))
 
         # [수정 - 사용자 요청] "data 대신 좌표값, pct 대신 %로" - 다른 곳
@@ -3864,7 +3876,7 @@ class CathPlotGUI:
         ttk.Label(
             mag_box_note_row,
             text="* 박스 반지름(%): 보통 20~40 권장, 100=축 전체를 채움. 비우면(박스 중심도 마찬가지) 위 확대 중심X/Y1·배율에서 자동 계산됨",
-            foreground="#3a3a3a", font=("Malgun Gothic", 8, "bold italic")
+            foreground="#3a3a3a", font=("Malgun Gothic", 8, "italic")
         ).pack(side="left")
 
         mag_preview_var = tk.StringVar(value="")
@@ -3877,7 +3889,7 @@ class CathPlotGUI:
         # "읽기 전용 미리보기"임 - [수정 - 사용자 지적] "(자동 계산, 참고용)"
         # 보다 "(자체계산)"이 더 확실한 표현이라는 지적을 반영해 교체.
         ttk.Label(mag_preview_row, text="→ 예상 인셋 크기 (자체계산 값, 참고용):",
-                  foreground="#3a3a3a", font=("Malgun Gothic", 9, "bold italic")).pack(side="left")
+                  foreground="#3a3a3a", font=("Malgun Gothic", 9, "italic")).pack(side="left")
         ttk.Label(mag_preview_row, textvariable=mag_preview_var, foreground="#0056b3").pack(side="left", padx=(4, 0))
 
         def _update_mag_preview(*_a):
@@ -4039,7 +4051,7 @@ class CathPlotGUI:
         ttk.Label(
             opt_frame,
             text="(기본은 메인 plot의 title과 동일 - 원본 파일에 title이 없거나 다르게 쓰려면 직접 수정)",
-            foreground="#3a3a3a", font=("Malgun Gothic", 9, "bold italic")
+            foreground="#3a3a3a", font=("Malgun Gothic", 9, "italic")
         ).pack(fill="x", padx=5, pady=(0, 4))
 
         # [수정 - 요청] "반투명에서 문제 있으면 슬라이더 대신 투명/불투명
