@@ -227,6 +227,15 @@ class CathPlotGUI:
         # Multi-Plot "선택 순서대로 배치"와 동일한 규칙). _ordered_selected_keys()
         # 가 이 리스트를 실제 그리기/legend/Batch Queue 순서로 변환한다.
         self._curve_order = []
+        # [추가 - 사용자 보고 버그] "Legend1 Curves로 순서를 바꾸면 Legend2도
+        # 같이 바뀜 - 각각 독립적으로" - 지금까지는 두 Legend의 "Curves"
+        # 팝업이 이 하나의 self._curve_order만 같이 건드려서 서로 분리될 수
+        # 없었음. 각 Legend 박스 "안에서의" 표시 순서만 따로 추적하는 두 개의
+        # 독립적인 리스트("1"=Legend1, "2"=Legend2) - 아직 한 번도 그 Legend의
+        # 팝업에서 순서를 안 바꾼 curve는 이 리스트에 없어도 되고, 그때는
+        # self._curve_order(원래 클릭 순서)를 그대로 기본값으로 쓴다
+        # (_legend_ordered_keys 참고).
+        self._legend_order = {"1": [], "2": []}
         self.legend_vars = {}
         self.file_xshift_vars = {}  # 파일당 하나의 X Shift (그 파일의 모든 curve에 공통 적용)
         self.marker_shape_vars = {}   # key_str -> StringVar (기본 "None" - 마커 없음)
@@ -564,9 +573,13 @@ class CathPlotGUI:
         # 보고 있는지" 구분이 오히려 더 어려워질 수 있음(사용자 지적) - 그래서
         # "기준이 되는 cwd 자체"를 이 라벨로 항상 보이게 해서, 상대경로(어떤
         # 파일)와 이 라벨(어느 폴더 기준)을 같이 보면 헷갈리지 않게 한다.
+        # [수정 - 사용자 요청] "진한 보라색 등으로 눈에 띄게" - 회색(#666666,
+        # 8pt)이라 눈에 잘 안 띄어서, 기존 팔레트의 PRINT 버튼과 같은 보라색
+        # (accent3, #7a4fb5)에 굵게+한 단계 큰 폰트로 강조한다(앱 전체 색
+        # 체계와 어울리게 새 색을 만들지 않고 기존 accent3 재사용).
         ttk.Label(
             self.file_frame, text=f"현재 작업 폴더(cwd): {self.cwd}",
-            foreground="#666666", font=("", 8)
+            foreground=self.PALETTE["accent3"], font=("Malgun Gothic", 9, "bold")
         ).pack(fill="x", padx=5, pady=(2, 0), anchor="w")
 
         # [수정 - 요청] "모든 block에서 가로 스크롤 가능하게 - 일부 입력이
@@ -682,7 +695,9 @@ class CathPlotGUI:
         # "Template Load"(그 항목을 배치 목록에 채우기만 하는 용도, 5392행
         # 부근)는 이 체크박스와 무관하게 그대로 둔다(self.load_template을
         # 직접 호출 - 자동 실행 대상 아님).
-        self.template_load_autoplot_var = tk.BooleanVar(value=False)
+        # [수정 - 사용자 요청] "Template Load시 바로 그리기를 기본으로" -
+        # 기본값 꺼짐 -> 켜짐으로 변경.
+        self.template_load_autoplot_var = tk.BooleanVar(value=True)
         def _load_template_then_maybe_plot():
             self.load_template()
             if self.template_load_autoplot_var.get():
@@ -1070,7 +1085,7 @@ class CathPlotGUI:
         legend1_curves_btn.pack(side="right", padx=(1, 3))
         legend1_curves_btn.configure(
             command=lambda: self._open_curve_select_popup(
-                legend1_curves_btn, "Legend1 Curves", _legend1_get, _legend1_set
+                legend1_curves_btn, "Legend1 Curves", _legend1_get, _legend1_set, "1"
             )
         )
 
@@ -1118,7 +1133,7 @@ class CathPlotGUI:
         legend2_curves_btn.pack(side="right", padx=(1, 3))
         legend2_curves_btn.configure(
             command=lambda: self._open_curve_select_popup(
-                legend2_curves_btn, "Legend2 Curves", _legend2_get, _legend2_set
+                legend2_curves_btn, "Legend2 Curves", _legend2_get, _legend2_set, "2"
             )
         )
 
@@ -2171,6 +2186,11 @@ class CathPlotGUI:
             # 그대로 매칭하고, Template Load는 output_no만 뽑아 recipe 방식으로
             # 재해석한다(둘 다 아래 소비하는 쪽 주석 참고).
             "curve_order": self._capture_curve_order(),
+            # [추가 - 사용자 보고 버그] "Legend1/Legend2 순서 독립적으로" -
+            # 위 curve_order(전체 그리기 순서)와는 별개로, 각 Legend 박스
+            # "안"의 표시 순서를 따로 저장한다(_capture_legend_order 참고).
+            "legend1_curve_order": self._capture_legend_order("1"),
+            "legend2_curve_order": self._capture_legend_order("2"),
 
             # --- Advanced: Raw gnuplot 입력창 내용 ---
             "extra_gnuplot": self.raw_gnuplot_text.get("1.0", "end-1c"),
@@ -2833,6 +2853,15 @@ class CathPlotGUI:
                     return _no_priority.get(no, len(_output_no_order))
 
                 self._curve_order = sorted(_selected_keys, key=_key_priority)
+
+            # [추가 - 사용자 보고 버그] "Legend1/Legend2 순서 독립적으로" -
+            # 위 curve_order와 별개로, 각 Legend 박스 안의 표시 순서도 저장돼
+            # 있으면 복원한다("legend1_curve_order" 키가 없는 구버전
+            # Template은 지금 상태(보통 curve_order 기본값)를 그대로 둠).
+            if "legend1_curve_order" in data:
+                self._restore_legend_order_from_data("1", data.get("legend1_curve_order"))
+            if "legend2_curve_order" in data:
+                self._restore_legend_order_from_data("2", data.get("legend2_curve_order"))
 
             messagebox.showinfo("Template", "템플릿을 불러왔습니다.")
         except Exception as e:
@@ -3532,15 +3561,22 @@ class CathPlotGUI:
         # 하단 모서리)에 맞게 수정.
         geo_frame = ttk.LabelFrame(body, text="위치(축 프레임 대비 %) / 크기")
         geo_frame.pack(fill="x", padx=10, pady=5)
+        # [수정 - 사용자 요청] "PIP popup 화면에서 입력 box들이 아래위가
+        # 예쁘게 정렬되게" - 각 줄의 첫 라벨("좌측 하단 X(%):"/"가로
+        # 크기(W):"/"프레임 모양:")이 길이가 서로 달라 그 뒤 입력칸이
+        # 줄마다 다른 x 위치에서 시작했음 - 제일 긴 라벨 기준으로 폭을
+        # 통일(anchor="w"로 왼쪽 정렬)해서 입력칸들이 세로로 한 줄에 맞게
+        # 정렬되도록 한다.
+        _GEO_LABEL_W = 13
         pos_row = ttk.Frame(geo_frame)
         pos_row.pack(fill="x", padx=5, pady=3)
-        ttk.Label(pos_row, text="좌측 하단 X(%):").pack(side="left")
+        ttk.Label(pos_row, text="좌측 하단 X(%):", width=_GEO_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(pos_row, textvariable=self.pip_pos_x_var, width=6).pack(side="left", padx=(4, 12))
         ttk.Label(pos_row, text="Y(%):").pack(side="left")
         ttk.Entry(pos_row, textvariable=self.pip_pos_y_var, width=6).pack(side="left", padx=(4, 0))
         size_row = ttk.Frame(geo_frame)
         size_row.pack(fill="x", padx=5, pady=(0, 5))
-        ttk.Label(size_row, text="가로 크기(W):").pack(side="left")
+        ttk.Label(size_row, text="가로 크기(W):", width=_GEO_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(size_row, textvariable=self.pip_size_w_var, width=6).pack(side="left", padx=(4, 8))
         ttk.Label(size_row, text="세로 크기(H):").pack(side="left")
         ttk.Entry(size_row, textvariable=self.pip_size_h_var, width=6).pack(side="left", padx=(4, 8))
@@ -3557,7 +3593,7 @@ class CathPlotGUI:
         # Ry 비우면 원). "원/타원"을 고르면 Rx/Ry 입력이 활성화된다.
         clip_row = ttk.Frame(geo_frame)
         clip_row.pack(fill="x", padx=5, pady=(0, 5))
-        ttk.Label(clip_row, text="프레임 모양:").pack(side="left")
+        ttk.Label(clip_row, text="프레임 모양:", width=_GEO_LABEL_W, anchor="w").pack(side="left")
         clip_shape_combo = ttk.Combobox(
             clip_row, textvariable=self.pip_clip_shape_var,
             values=["rect", "circle", "ellipse"], width=8, state="readonly"
@@ -3579,7 +3615,12 @@ class CathPlotGUI:
         clip_rx_entry.pack(side="left", padx=(4, 2))
         clip_ry_entry = ttk.Entry(clip_row, textvariable=self.pip_clip_ry_var, width=6)
         clip_ry_entry.pack(side="left", padx=(2, 4))
-        ttk.Label(clip_row, text="(Ry 비우면 원)", foreground="gray").pack(side="left")
+        # [수정 - 사용자 요청] "PIP 창의 tip 등은 진한 이탤릭체 등으로 -
+        # 잘 안보임" - 옅은 회색(gray)이라 눈에 잘 안 띄었음. 이 아래 PIP
+        # 팝업의 보조 설명 라벨들을 전부 진하게(굵게)+기울임으로 바꿔 잘
+        # 읽히게 한다(그래도 일반 라벨보다는 부차적임을 알 수 있게 완전
+        # 검정 대신 짙은 회색 #3a3a3a 유지).
+        ttk.Label(clip_row, text="(Ry 비우면 원)", foreground="#3a3a3a", font=("Malgun Gothic", 9, "bold italic")).pack(side="left")
 
         def _toggle_clip_entries(*_):
             _shape = self.pip_clip_shape_var.get()
@@ -3599,15 +3640,19 @@ class CathPlotGUI:
             text="확대 구간 (비우면: X는 항상 메인과 동일 / Y는 '현재 plot' 소스면 메인과 동일, 다른 소스면 자동)"
         )
         zoom_frame.pack(fill="x", padx=10, pady=5)
+        # [수정 - 사용자 요청] "확대구간 Xmin,Xmax를 아래 Y1min,Y1max에
+        # 정렬" - 두 줄의 첫 라벨("X min:"/"Y1 min:") 길이가 달라 입력칸
+        # 시작 위치가 어긋났음 - 폭을 통일.
+        _ZOOM_LABEL_W = 8
         xz_row = ttk.Frame(zoom_frame)
         xz_row.pack(fill="x", padx=5, pady=3)
-        ttk.Label(xz_row, text="X min:").pack(side="left")
+        ttk.Label(xz_row, text="X min:", width=_ZOOM_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(xz_row, textvariable=self.pip_xmin_var, width=8).pack(side="left", padx=(4, 12))
         ttk.Label(xz_row, text="X max:").pack(side="left")
         ttk.Entry(xz_row, textvariable=self.pip_xmax_var, width=8).pack(side="left", padx=(4, 0))
         yz_row = ttk.Frame(zoom_frame)
         yz_row.pack(fill="x", padx=5, pady=(0, 5))
-        ttk.Label(yz_row, text="Y1 min:").pack(side="left")
+        ttk.Label(yz_row, text="Y1 min:", width=_ZOOM_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(yz_row, textvariable=self.pip_ymin_var, width=8).pack(side="left", padx=(4, 12))
         ttk.Label(yz_row, text="Y1 max:").pack(side="left")
         ttk.Entry(yz_row, textvariable=self.pip_ymax_var, width=8).pack(side="left", padx=(4, 20))
@@ -3637,7 +3682,7 @@ class CathPlotGUI:
         ttk.Label(
             mag_frame,
             text="팁: gnuplot 창에서 좌클릭으로 좌표 확인, 'r'로 눈금자(ruler) 고정 후 이동하면 dx가 표시됨(반지름 값으로 활용)",
-            foreground="#666666", font=("", 8)
+            foreground="#3a3a3a", font=("Malgun Gothic", 8, "bold italic")
         ).pack(anchor="w", padx=5, pady=(0, 4))
 
         # [수정 - 사용자 요청] "data 대신 좌표값, pct 대신 %로" - 다른 곳
@@ -3654,15 +3699,26 @@ class CathPlotGUI:
 
         # [수정 - 사용자 요청] "두 줄로 나뉘어 있는데 한 줄로 합쳐줘요" -
         # 중심X/Y1 + 반지름X + 배율(대상 curve 쪽 4개 입력)을 한 줄로 합침.
+        # [수정 - 사용자 요청] "PIP popup 입력 box들이 아래위가 예쁘게
+        # 정렬되게" - 이 줄의 첫 라벨과 바로 아래 인셋 박스 줄의 첫 라벨의
+        # 길이가 서로 달라 그 뒤 입력칸 시작 위치가 어긋났음 - 더 긴 라벨
+        # 기준으로 폭을 통일한다.
+        # [수정 - 사용자 지적] "'중심'의 의미가 불분명함 - 좀 더 정확히" -
+        # 이 줄의 "중심"은 확대(zoom)할 대상 지점(메인 plot 데이터 좌표
+        # 기준)이고, 아래 줄의 "중심"은 그 결과물인 인셋 박스 자체가 화면
+        # 어디에 놓일지(위치)라 서로 다른 개념인데 둘 다 그냥 "중심"이라
+        # 헷갈렸음 - 이 줄은 "확대 중심"/"확대 반지름"으로, 아래 줄은
+        # "박스 중심"/"박스 반지름"으로 접두어를 서로 다르게 붙여 구분한다.
+        _MAG_LABEL_W = 15
         mag_center_row = ttk.Frame(mag_frame)
         mag_center_row.pack(fill="x", padx=5, pady=2)
-        ttk.Label(mag_center_row, text="중심 X:").pack(side="left")
+        ttk.Label(mag_center_row, text="확대 중심 X:", width=_MAG_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_center_x_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_center_row, self.pip_mag_center_x_mode_var).pack(side="left", padx=(0, 12))
-        ttk.Label(mag_center_row, text="중심 Y1:").pack(side="left")
+        ttk.Label(mag_center_row, text="확대 중심 Y1:").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_center_y1_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_center_row, self.pip_mag_center_y1_mode_var).pack(side="left", padx=(0, 12))
-        ttk.Label(mag_center_row, text="반지름 X:").pack(side="left")
+        ttk.Label(mag_center_row, text="확대 반지름 X:").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_radius_x_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_center_row, self.pip_mag_radius_x_mode_var).pack(side="left", padx=(0, 12))
         ttk.Label(mag_center_row, text="배율:").pack(side="left")
@@ -3698,19 +3754,24 @@ class CathPlotGUI:
         # 과 완전히 같은 방식(좌표값/% 선택, 기본 좌표값)으로 바꾼다.
         mag_box_row = ttk.Frame(mag_frame)
         mag_box_row.pack(fill="x", padx=5, pady=(0, 2))
-        ttk.Label(mag_box_row, text="인셋 박스 중심 X:").pack(side="left")
-        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_x_var, width=6).pack(side="left", padx=(4, 2))
+        # [수정 - 사용자 지적] "'중심'의 의미가 불분명함" - 위 줄("확대
+        # 중심")과 짝이 되도록 이 줄은 "박스 중심"/"박스 반지름"으로 통일
+        # (인셋 박스 자체가 화면에 놓일 위치/크기라는 뜻).
+        ttk.Label(mag_box_row, text="박스 중심 X:", width=_MAG_LABEL_W, anchor="w").pack(side="left")
+        # [수정 - 사용자 요청] "인셋박스 중심과 위 중심 입력의 box크기와
+        # 정렬" - 입력칸 폭도 위 확대 중심 줄(width=8)과 통일(예전엔 6).
+        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_x_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_box_row, self.pip_mag_box_center_x_mode_var).pack(side="left", padx=(0, 8))
         ttk.Label(mag_box_row, text="Y:").pack(side="left")
-        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_y_var, width=6).pack(side="left", padx=(4, 2))
+        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_y_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_box_row, self.pip_mag_box_center_y_mode_var).pack(side="left", padx=(0, 12))
         # [수정 - 사용자 지적] "라벨에 다 넣지 말고 반지름*(%) 처럼 짧게
         # 쓰고 *로 아래에 설명" - 가운데점(·)이 뭘 구분하는지 불확실하고
-        # 라벨 자체도 길어 옆 입력칸과 함께 잘리기 쉬웠음 - 라벨은 "반지름*
-        # (%):"로 짧게 줄이고, "보통 20~40 권장"/"100=축 전체를 채움" 같은
-        # 자세한 뜻은 아래 각주(* ...) 한 줄로 옮긴다.
-        ttk.Label(mag_box_row, text="반지름* (%):").pack(side="left")
-        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_radius_var, width=6).pack(side="left", padx=(4, 2))
+        # 라벨 자체도 길어 옆 입력칸과 함께 잘리기 쉬웠음 - 라벨은 "박스
+        # 반지름* (%):"로 짧게 줄이고, "보통 20~40 권장"/"100=축 전체를
+        # 채움" 같은 자세한 뜻은 아래 각주(* ...) 한 줄로 옮긴다.
+        ttk.Label(mag_box_row, text="박스 반지름* (%):").pack(side="left")
+        ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_radius_var, width=8).pack(side="left", padx=(4, 2))
         # [수정 - 사용자 지적] "PIP Radius(Rx,Ry)%처럼 반지름끼리 비교해
         # 100%가 꽉참이어야 헷갈리지 않는다" - 예전엔 이 반지름(%)이 "축
         # 프레임 폭 대비"라 지름(그 2배)이 곧 박스 크기가 되는 관례였고,
@@ -3728,8 +3789,8 @@ class CathPlotGUI:
         mag_box_note_row.pack(fill="x", padx=5, pady=(0, 2))
         ttk.Label(
             mag_box_note_row,
-            text="* 반지름(%): 보통 20~40 권장, 100=축 전체를 채움. 비우면(중심도 마찬가지) 위 중심X/Y1·배율에서 자동 계산됨",
-            foreground="#888888", font=("", 8)
+            text="* 박스 반지름(%): 보통 20~40 권장, 100=축 전체를 채움. 비우면(박스 중심도 마찬가지) 위 확대 중심X/Y1·배율에서 자동 계산됨",
+            foreground="#3a3a3a", font=("Malgun Gothic", 8, "bold italic")
         ).pack(side="left")
 
         mag_preview_var = tk.StringVar(value="")
@@ -3741,7 +3802,8 @@ class CathPlotGUI:
         # 크기(축 프레임 대비 %)로 나올지, 실행 전에 미리 계산해서 보여주는
         # "읽기 전용 미리보기"임 - [수정 - 사용자 지적] "(자동 계산, 참고용)"
         # 보다 "(자체계산)"이 더 확실한 표현이라는 지적을 반영해 교체.
-        ttk.Label(mag_preview_row, text="→ 예상 인셋 크기 (자체계산 값, 참고용):", foreground="#666666").pack(side="left")
+        ttk.Label(mag_preview_row, text="→ 예상 인셋 크기 (자체계산 값, 참고용):",
+                  foreground="#3a3a3a", font=("Malgun Gothic", 9, "bold italic")).pack(side="left")
         ttk.Label(mag_preview_row, textvariable=mag_preview_var, foreground="#0056b3").pack(side="left", padx=(4, 0))
 
         def _update_mag_preview(*_a):
@@ -3897,7 +3959,7 @@ class CathPlotGUI:
         ttk.Label(
             opt_frame,
             text="(기본은 메인 plot의 title과 동일 - 원본 파일에 title이 없거나 다르게 쓰려면 직접 수정)",
-            foreground="gray"
+            foreground="#3a3a3a", font=("Malgun Gothic", 9, "bold italic")
         ).pack(fill="x", padx=5, pady=(0, 4))
 
         # [수정 - 요청] "반투명에서 문제 있으면 슬라이더 대신 투명/불투명
@@ -4976,6 +5038,56 @@ class CathPlotGUI:
             result.append(f"{rel_path}||{out_no}")
         return result
 
+    def _capture_legend_order(self, legend_key):
+        """[추가 - 사용자 보고 버그] "Legend1 Curves로 순서를 바꾸면 Legend2도
+        같이 바뀜 - 각각 독립적으로" 요청에 따라 추가된 legend별 독립 순서
+        (self._legend_order[legend_key])를, _capture_curve_order와 동일한
+        표현("cwd 기준 상대경로||output_no")으로 저장한다. 그 Legend에서
+        아직 한 번도 순서를 안 바꿨으면(리스트가 비어있으면) 전체 클릭 순서
+        (_curve_order)를 그대로 저장해, 다시 불러왔을 때도 "아직 커스텀
+        안 한 상태"가 자연스럽게 유지되게 한다."""
+        base_keys, _y1, _y2 = self._ordered_selected_keys()
+        ordered_keys = self._legend_ordered_keys(legend_key, base_keys)
+        result = []
+        for key in ordered_keys:
+            d_file, out_no = key.split("||")
+            try:
+                rel_path = os.path.relpath(d_file, self.cwd)
+            except ValueError:
+                rel_path = d_file
+            result.append(f"{rel_path}||{out_no}")
+        return result
+
+    def _restore_legend_order_from_data(self, legend_key, entries):
+        """[추가 - 사용자 보고 버그] Legend별 독립 순서를 Template에서 복원한다.
+        curve_order 복원(load_template 안, 아래 참고)과 완전히 동일한 방식
+        (파일명 무관 - output_no만으로 매칭하는 "레시피" 방식)을 그대로
+        재사용해서, 서로 다른 dat 파일에 이 Template을 적용해도 legend 순서가
+        의미 있게 이어진다."""
+        _output_no_order = []
+        _seen_no = set()
+        for _entry in entries or []:
+            try:
+                _no = int(str(_entry).rsplit("||", 1)[1])
+            except (ValueError, IndexError):
+                continue
+            if _no not in _seen_no:
+                _seen_no.add(_no)
+                _output_no_order.append(_no)
+        _no_priority = {no: i for i, no in enumerate(_output_no_order)}
+        _selected_keys = [k for k, v in self.selected_y1_vars.items() if v.get()]
+        _selected_keys += [k for k, v in self.selected_y2_vars.items() if v.get()]
+        _selected_keys = list(dict.fromkeys(_selected_keys))
+
+        def _key_priority(k):
+            try:
+                no = int(k.split("||")[1])
+            except (ValueError, IndexError):
+                return len(_output_no_order)
+            return _no_priority.get(no, len(_output_no_order))
+
+        self._legend_order[legend_key] = sorted(_selected_keys, key=_key_priority)
+
     # ------------------------------------------------------------------
     # Batch Queue: 화면에서 지금 선택된 Y1/Y2/X (output_no=var_no 기준) 구성을
     # "레시피"로 캡처해서, 여러 dat 파일(상대경로)에 동일하게 적용하며
@@ -5300,7 +5412,23 @@ class CathPlotGUI:
             ))
         return result
 
-    def _open_curve_select_popup(self, anchor_widget, title, get_checked, set_checked):
+    def _legend_ordered_keys(self, legend_key, base_keys):
+        """[추가 - 사용자 보고 버그] "Legend1/Legend2 순서 독립적으로" -
+        base_keys(보통 _ordered_selected_keys()가 반환하는 전체 클릭 순서)를
+        legend_key("1"/"2")별 독립 순서(self._legend_order[legend_key])로
+        다시 정렬한다. 그 Legend에서 아직 한 번도 순서를 안 바꿨으면(리스트가
+        비어있으면) base_keys 순서를 그대로 기본값으로 써서(기존 동작과
+        동일한 첫인상), 리스트에 아직 없는 키(새로 선택된 curve 등)는 원래
+        자리 그대로 뒤에 이어붙인다."""
+        order = self._legend_order.get(legend_key) or []
+        if not order:
+            return list(base_keys)
+        base_set = set(base_keys)
+        ordered = [k for k in order if k in base_set]
+        ordered += [k for k in base_keys if k not in ordered]
+        return ordered
+
+    def _open_curve_select_popup(self, anchor_widget, title, get_checked, set_checked, legend_key):
         """Legend1/Legend2 공용 curve 선택 팝업. get_checked(key)/set_checked(key, bool)로
         체크 상태를 읽고 쓴다 - Legend1은 in_legend1_vars(bool), Legend2는
         legend_group_vars(문자열 "1"/"2")를 각각 다르게 저장하지만 이 함수는
@@ -5308,11 +5436,12 @@ class CathPlotGUI:
         창이 안 닫혀서 여러 개를 한 번에 고를 수 있다.
 
         [추가 - 요청] "선택한 순서대로 curve를 그려주기 - curves 선택 창에서도
-        바꿀 수 있게" - 이 팝업이 이미 지금 Y1/Y2로 선택된 모든 curve를 한
-        곳에 모아 보여주므로(Legend1/Legend2 어느 쪽에서 열어도 동일), 순서
-        조정도 여기서 같이 한다. 목록은 _curve_order(클릭 순서) 그대로 보여
-        주고, 각 줄의 ▲▼로 그 curve를 한 칸씩 옮기면 _curve_order 자체가
-        바뀐다 - 별도의 새 창을 만들지 않고 기존 Curves 팝업을 그대로 재사용."""
+        바꿀 수 있게" - 이 팝업이 지금 Y1/Y2로 선택된 모든 curve를 한 곳에
+        모아 보여주는 건 Legend1/Legend2 어느 쪽에서 열어도 동일하지만, [수정
+        - 사용자 보고 버그] "Legend1에서 순서를 바꾸면 Legend2도 같이 바뀜 -
+        각각 독립적으로" - 순서 자체(각 줄의 ▲▼로 옮기는 것)는 legend_key
+        ("1"=Legend1, "2"=Legend2)로 구분된 self._legend_order[legend_key]를
+        따로 건드리도록 바꿔, 한쪽에서 순서를 바꿔도 다른 쪽은 그대로다."""
         popup = tk.Toplevel(self.root)
         popup.title(title)
         popup.transient(self.root)
@@ -5323,18 +5452,20 @@ class CathPlotGUI:
         list_frame = ttk.Frame(popup)
         list_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-        keys, _y1_set, _y2_set = self._ordered_selected_keys()
+        _base_keys, _y1_set, _y2_set = self._ordered_selected_keys()
+        keys = self._legend_ordered_keys(legend_key, _base_keys)
 
         def _reopen():
             popup.destroy()
-            self._open_curve_select_popup(anchor_widget, title, get_checked, set_checked)
+            self._open_curve_select_popup(anchor_widget, title, get_checked, set_checked, legend_key)
 
         def _move(key, delta):
-            if key not in self._curve_order:
+            lst = self._legend_order.get(legend_key) or []
+            if key not in lst:
                 # 트래킹 안 된 키(프로그램적 선택 등 - 안전망): 지금 표시
                 # 순서를 그대로 기준선으로 등록한 뒤 옮긴다.
-                self._curve_order = list(keys)
-            lst = self._curve_order
+                lst = list(keys)
+            self._legend_order[legend_key] = lst
             i = lst.index(key)
             j = i + delta
             if 0 <= j < len(lst):
@@ -9432,6 +9563,14 @@ class CathPlotGUI:
                 messagebox.showwarning("경고", "그릴 Y 변수를 하나 이상 선택해주세요.")
                 return
 
+            # [추가 - 사용자 보고 버그] "Legend1/Legend2 순서 독립적으로" -
+            # 전체 그리기 순서(ordered_keys)와는 별개로, 각 Legend 박스 "안"의
+            # 표시 순서는 legend별 독립 순서(_legend_order)를 따로 반영한다 -
+            # CurveDefinition.legend1_order/legend2_order(정수 정렬키)로 넘겨
+            # gnu_generator가 각 박스를 그 값 기준으로 따로 정렬하게 함.
+            _legend1_index = {k: i for i, k in enumerate(self._legend_ordered_keys("1", ordered_keys))}
+            _legend2_index = {k: i for i, k in enumerate(self._legend_ordered_keys("2", ordered_keys))}
+
             curves = []
             temp_curves_info = []
 
@@ -9489,6 +9628,7 @@ class CathPlotGUI:
                     x_output_no=file_x_output_no,   # ← 추가: 파일별로 선택된 X변수 컬럼을 곡선에도 전달
                     legend_group=int(self.legend_group_vars[key].get()) if key in self.legend_group_vars else 1,
                     in_legend1=self.in_legend1_vars[key].get() if key in self.in_legend1_vars else True,
+                    legend1_order=_legend1_index.get(key, 0), legend2_order=_legend2_index.get(key, 0),
                     marker_shape=_marker_shape, marker_size=_marker_size, marker_max_count=_marker_max_count,
                     smooth_csplines=self.smooth_csplines_vars[key].get() if key in self.smooth_csplines_vars else False,
                     orig_dat_file=_orig_rel,

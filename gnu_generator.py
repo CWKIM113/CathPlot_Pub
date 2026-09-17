@@ -703,6 +703,18 @@ class CurveDefinition:
     x_output_no: int | None = None  # X축 컬럼 번호 (None인 경우 플롯 전역 x_output_no 참조)
     legend_group: int = 1  # 이 curve가 Legend1(1)/Legend2(2) 중 어디에 나타날지
     in_legend1: bool = True  # Legend1(box1)에 이 curve를 넣을지 (기본 포함)
+    # [추가 - 사용자 보고 버그] "Legend1 Curves로 순서를 바꾸면 Legend2도 같이
+    # 바뀜 - 각각 독립적으로" - 예전엔 이 두 박스 모두 plotdef.curves의 (하나뿐인)
+    # 전체 그리기 순서를 그대로 필터링해서 보여줬기 때문에(_render_legend_box
+    # 호출부의 group1_curves/group2_curves 참고) 어느 쪽에서 순서를 바꾸든 같은
+    # 리스트 하나를 건드리는 셈이라 서로 분리될 수 없었음. 그리기 순서(curves
+    # 리스트 자체의 순서 - 화면에 실제로 그려지는 Z-order 등)는 그대로 하나만
+    # 유지하고, "이 박스 안에서 몇 번째 줄에 나오는지"만 legend별로 따로 매길
+    # 수 있도록 정수 정렬키 두 개를 추가한다(기본값 0 - 이 필드를 아직 안 채우는
+    # 호출부(Batch 등)는 모든 curve가 0으로 동률이라 Python 정렬이 안정적으로
+    # 기존 순서를 그대로 보존함 - 회귀 없음).
+    legend1_order: int = 0
+    legend2_order: int = 0
     marker_shape: int | str | None = None  # gnuplot pointtype 번호 또는 유니코드 문자(Tri-Left/Right) (None = 마커 없음)
     marker_size: float = 1.0         # gnuplot pointsize
     marker_max_count: int | None = None  # None = Auto(20~30개 근처로 자동 계산)
@@ -3803,7 +3815,16 @@ class GnuplotGenerator:
         _legend_x_span = _axis_span("x", plotdef.xauto, plotdef.xmin, plotdef.xmax, getattr(plotdef, "xlog", False))
         _legend_y_span = _axis_span("y1", plotdef.yauto, plotdef.ymin, plotdef.ymax, getattr(plotdef, "y1log", False))
 
-        group1_curves = [c for c in plotdef.curves if getattr(c, "in_legend1", True)] + [
+        # [수정 - 사용자 보고 버그] "Legend1에서 순서를 바꾸면 Legend2도 같이
+        # 바뀜" - 예전엔 plotdef.curves(전체 그리기 순서 하나)를 그대로
+        # 필터링해서 두 박스가 사실상 같은 순서를 공유했음 - 이제 legend1_order
+        # (cathplot_gui.py가 Legend1 Curves 팝업에서 독립적으로 관리)로 따로
+        # 정렬한다. function_curves는 이 정렬 대상이 아니라(재정렬 UI가 아직
+        # 없음) 예전처럼 항상 데이터 curve들 뒤에 그대로 붙인다.
+        group1_curves = sorted(
+            [c for c in plotdef.curves if getattr(c, "in_legend1", True)],
+            key=lambda c: getattr(c, "legend1_order", 0)
+        ) + [
             fc for fc in getattr(plotdef, "function_curves", []) if getattr(fc, "in_legend1", True)
         ]
         if plotdef.legend_on and group1_curves:
@@ -3820,7 +3841,10 @@ class GnuplotGenerator:
                 axis_x_span=_legend_x_span, axis_y_span=_legend_y_span,
             )
 
-        group2_curves = [c for c in plotdef.curves if getattr(c, "legend_group", 1) == 2] + [
+        group2_curves = sorted(
+            [c for c in plotdef.curves if getattr(c, "legend_group", 1) == 2],
+            key=lambda c: getattr(c, "legend2_order", 0)
+        ) + [
             fc for fc in getattr(plotdef, "function_curves", []) if getattr(fc, "legend_group", 1) == 2
         ]
         if getattr(plotdef, "legend2_on", False) and group2_curves:
