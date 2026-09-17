@@ -664,7 +664,7 @@ class CathPlotGUI:
         # 크기는 Ω(13pt)보다 조금 더 키워 "+"가 잘 보이게 한다.
         self.add_file_btn = self._mk_btn(
             self.file_frame, "+", self.add_file_row,
-            color="secondary", btn_width=2, btn_pady=2, btn_padx=4, side="right", padx=3, pady=0,
+            color="secondary", btn_width=2, btn_pady=2, btn_padx=4, side="right", padx=1, pady=0,
         )
         self.add_file_btn.configure(font=("Consolas", 16, "bold"))
 
