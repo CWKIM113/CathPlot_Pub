@@ -161,7 +161,11 @@ class CathPlotGUI:
         # (위 참고) 이제 창이 좁아도 이 버튼들 자체는 항상 보이지만, 그
         # 뒤에 이어지는 Pos/Align/Box W/H 같은 필드까지 여유 있게 보이도록
         # 최소/최대 폭을 60px씩 살짝 올림(900->960, 1200->1260).
-        self._win_w = max(960, min(1260, self.root.winfo_screenwidth() - 80))
+        # [수정 - 사용자 요청] "DAT file 3개가 들어갈 정도로(=조금 줄여줘)" -
+        # 이후 Function/Marker를 별도 줄로 완전히 옮기면서 Legend 줄의 폭
+        # 압박이 더 줄어들어, 위에서 올렸던 폭을 다시 조금 낮춰도 됨
+        # (960->920, 1260->1220).
+        self._win_w = max(920, min(1220, self.root.winfo_screenwidth() - 80))
         self.root.geometry(f"{self._win_w}x1030")
         self.root.tk.call('tk', 'windowingsystem')
 
@@ -650,10 +654,18 @@ class CathPlotGUI:
         # 3->2)를 줄이고 btn_pady(버튼 자체 내부 상하 여백, 기존 0)를
         # 살짝 줘서 "+" 하나만 있는 버튼이 가로세로 비슷한 정사각형에
         # 가깝게 보이도록 조정.
+        # [수정 - 사용자 정정] "버튼을 줄이지 말고, 버튼은 원래 크기 그대로
+        # 두고 그 둘레 흰 여백(폭)만 줄이라는 말이었음" - btn_width/btn_padx는
+        # 원래 값(2/기본 8)으로 되돌리고, 버튼 바깥쪽 pack padx(버튼과 위
+        # 스크롤 영역/스크롤바 사이 여백)만 줄인다.
         self.add_file_btn = self._mk_btn(
             self.file_frame, "+", self.add_file_row,
-            color="secondary", btn_width=1, btn_pady=3, btn_padx=3, side="right", padx=5, pady=0,
+            color="secondary", btn_width=2, btn_pady=3, side="right", padx=1, pady=0,
         )
+        # [수정 - 사용자 요청] "+ 버튼의 +를 충분히 더 크게" - _mk_btn 공통
+        # 폰트(9pt)는 다른 버튼들과 통일하기 위한 것이라 여기만 별도로
+        # 키운다(버튼 자체 크기는 그대로, 안의 글자만 확대).
+        self.add_file_btn.configure(font=("Malgun Gothic", 16, "bold"))
 
         btn_container = ttk.Frame(self.root)
         btn_container.pack(fill="x", padx=10, pady=0)
