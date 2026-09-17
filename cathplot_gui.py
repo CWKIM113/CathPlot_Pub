@@ -426,7 +426,7 @@ class CathPlotGUI:
             font=("Malgun Gothic", 9, "bold"),
         )
 
-    def _mk_btn(self, parent, text, command, color="secondary", fg="white", btn_pady=0, btn_width=None, **pack_kw):
+    def _mk_btn(self, parent, text, command, color="secondary", fg="white", btn_pady=0, btn_width=None, btn_padx=8, **pack_kw):
         # [추가] "Curves/Marker/Browse/Template/Clean Past Plots 버튼도
         # 구별·강조" - ttk.Button은 배경색이 잘 안 먹는 환경이 확인돼서, 색을
         # 주는 모든 버튼을 이 헬퍼(tk.Button 기반)로 통일한다. color는
@@ -458,7 +458,7 @@ class CathPlotGUI:
             text=text, command=command,
             font=("Malgun Gothic", 9, "bold"), bg=bg, fg=fg,
             activebackground=dark, activeforeground=fg,
-            relief="raised", bd=1, padx=8, pady=btn_pady,
+            relief="raised", bd=1, padx=btn_padx, pady=btn_pady,
         )
         if btn_width is not None:
             kwargs["width"] = btn_width
@@ -579,12 +579,22 @@ class CathPlotGUI:
         # "기준이 되는 cwd 자체"를 이 라벨로 항상 보이게 해서, 상대경로(어떤
         # 파일)와 이 라벨(어느 폴더 기준)을 같이 보면 헷갈리지 않게 한다.
         # [수정 - 사용자 요청] "진한 보라색 등으로 눈에 띄게" -> "구분이 잘
-        # 안됨 - 진한 바다색으로" - accent3(보라, #7a4fb5)가 주변 색상들과
-        # 비슷해 보여 잘 안 띄었다는 재지적 - 진한 바다색(딥 틸/네이비,
-        # #004d66)으로 바꿔 확실히 구분되게 한다.
-        ttk.Label(
+        # 안됨 - 진한 바다색으로" -> "여전히 안 보임(내 눈이 이상한 건가?)" -
+        # 색상 자체 문제가 아니라 ttk.Label이 원인이었음: Windows 기본
+        # (vista) 테마가 ttk 위젯의 foreground 옵션을 실제 렌더링에서 조용히
+        # 무시하는 경우가 있음(이 코드베이스의 tk.Entry/tk.Button/
+        # tk.Checkbutton 전환 사례들과 동일한 문제 - cget()으로 읽으면 값은
+        # 맞게 나오지만 화면에는 반영이 안 됨). 테마 영향을 안 받는
+        # tk.Label로 바꿔 확실히 그 색으로 그려지게 한다.
+        # [수정 - 버그] fill="x"로 라벨 위젯 자체가 전체 폭으로 늘어나면서,
+        # pack()의 anchor="w"는 위젯의 "배치" 위치만 정할 뿐 그 늘어난
+        # 위젯 안에서 글자 자체가 어디에 쓰이는지(위젯 자신의 anchor 옵션,
+        # 기본값 center)는 별개라 텍스트가 가운데로 쏠려 보였음 - 위젯
+        # 옵션에도 anchor="w"를 줘야 글자가 왼쪽에 붙는다.
+        tk.Label(
             self.file_frame, text=f"현재 작업 폴더(cwd): {self.cwd}",
-            foreground="#004d66", font=("Malgun Gothic", 9, "bold")
+            fg="#004d66", bg=self.PALETTE["bg"], font=("Malgun Gothic", 9, "bold"),
+            anchor="w"
         ).pack(fill="x", padx=5, pady=(2, 0), anchor="w")
 
         # [수정 - 요청] "모든 block에서 가로 스크롤 가능하게 - 일부 입력이
@@ -642,7 +652,7 @@ class CathPlotGUI:
         # 가깝게 보이도록 조정.
         self.add_file_btn = self._mk_btn(
             self.file_frame, "+", self.add_file_row,
-            color="secondary", btn_width=2, btn_pady=3, side="right", padx=5, pady=0,
+            color="secondary", btn_width=1, btn_pady=3, btn_padx=3, side="right", padx=5, pady=0,
         )
 
         btn_container = ttk.Frame(self.root)
@@ -1051,7 +1061,7 @@ class CathPlotGUI:
             relief="raised", bd=1, pady=1,
         )
         legend1_curves_btn.pack(side="left", padx=(3, 8))
-        ttk.Label(legend1_row, text="Pos1:").pack(side="left", padx=2)
+        ttk.Label(legend1_row, text="Pos1:").pack(side="left", padx=(21, 2))
         legend_pos_combo = ttk.Combobox(legend1_row, textvariable=self.legend_pos_var, values=pos_list, width=10)
         legend_pos_combo.pack(side="left", padx=2)
         _add_legend_pos_hint(legend_pos_combo)
@@ -1120,7 +1130,7 @@ class CathPlotGUI:
             relief="raised", bd=1, pady=1,
         )
         legend2_curves_btn.pack(side="left", padx=(3, 8))
-        ttk.Label(legend2_row, text="Pos2:").pack(side="left", padx=2)
+        ttk.Label(legend2_row, text="Pos2:").pack(side="left", padx=(21, 2))
         legend2_pos_combo = ttk.Combobox(legend2_row, textvariable=self.legend2_pos_var, values=pos_list, width=10)
         legend2_pos_combo.pack(side="left", padx=2)
         _add_legend_pos_hint(legend2_pos_combo)
@@ -1171,38 +1181,25 @@ class CathPlotGUI:
         row2_f = ttk.Frame(self.plot_frame)
         row2_f.grid(row=2, column=3, columnspan=3, sticky="we", padx=3, pady=0)
 
-        # [수정 - 사용자 요청] "Curves/Function/Marker 버튼들을 좌측으로
-        # 이동" - legend1_row/legend2_row의 Curves 버튼과 같은 이유로, 줄
-        # 맨 끝(오른쪽 맞춤) 대신 이 줄의 맨 앞으로 옮겨 창이 좁아도 항상
-        # 보이게 한다(Function을 Marker보다 먼저 눌러볼 일이 많아 왼쪽에).
-        function_curves_btn = tk.Button(
-            row2_f, text="Function", width=7, font=("Malgun Gothic", 9, "bold"),
-            bg=self.PALETTE["secondary"], fg="white",
-            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=1, pady=1,
-        )
-        function_curves_btn.pack(side="left", padx=(3, 2))
-        function_curves_btn.configure(command=self._open_function_curves_popup)
-
-        marker_settings_btn = tk.Button(
-            row2_f, text="Marker", width=7, font=("Malgun Gothic", 9, "bold"),
-            bg=self.PALETTE["secondary"], fg="white",
-            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=1, pady=1,
-        )
-        marker_settings_btn.pack(side="left", padx=(1, 8))
-        marker_settings_btn.configure(command=self._open_marker_settings_popup)
-
-        ttk.Label(row2_f, text="Box Thick:").pack(side="left", padx=(3, 1))
-        ttk.Combobox(row2_f, textvariable=self.legend_thick_var, values=thick_list, width=3, state="readonly").pack(side="left", padx=2)
-
-        ttk.Label(row2_f, text="Font:").pack(side="left", padx=(8, 1))
+        # [수정 - 사용자 지적] "Function/Marker는 Legend box와 무관한데
+        # 마치 legend 입력으로 보임 - 뒤에 Box Thick까지 있어서 더더욱" -
+        # Function/Marker 버튼을 이 줄(Legend Box Thick/Font 전용 줄)에서
+        # 빼서 Axis Frame Auto 자리로 옮긴다(아래 참고). 이 줄엔 이제 원래
+        # 목적(Legend Box Thick/Font)만 남기되, [수정 - 사용자 요청]
+        # "Font 입력칸은 Legend2 On 체크박스에, Box Thick는 Pos2에 맞춘다" -
+        # 정렬을 위해 Font를 먼저(줄 맨 앞 = Legend2 On과 같은 시작 위치),
+        # Box Thick를 그다음(Pos2 위치와 맞도록 아래서 Curves-Pos2 간격을
+        # 조정)에 배치하도록 순서를 바꿈.
+        ttk.Label(row2_f, text="Legend Font:").pack(side="left", padx=(3, 1))
         legend_font_combo = ttk.Combobox(row2_f, textvariable=self.legend_font_var, values=font_list, width=12, state="readonly")
         legend_font_combo.pack(side="left", padx=1)
         self._disable_combobox_wheel(legend_font_combo)
         legend_size_combo = ttk.Combobox(row2_f, textvariable=self.legend_size_var, values=size_list, width=2, state="readonly")
         legend_size_combo.pack(side="left", padx=1)
         self._disable_combobox_wheel(legend_size_combo)
+
+        ttk.Label(row2_f, text="Box Thick:").pack(side="left", padx=(1, 1))
+        ttk.Combobox(row2_f, textvariable=self.legend_thick_var, values=thick_list, width=3, state="readonly").pack(side="left", padx=2)
 
         # Row 2
         ttk.Label(self.plot_frame, text="Y Left Title (Y1)", style="RowHead.TLabel").grid(row=2, column=0, padx=5, pady=0, sticky="w")
@@ -1216,6 +1213,33 @@ class CathPlotGUI:
         self.y2label_entry.grid(row=3, column=1, padx=5, pady=0, sticky="w")
         self.y2label_entry.bind("<FocusIn>", lambda e: self.set_active_entry(self.y2label_entry))
 
+        # [수정 - 사용자 지적] "Function/Marker는 Legend box와 무관한데
+        # legend 입력처럼 보임 - 한 줄 내려서 Axis Frame Auto 자리로" - 이
+        # 줄(row=3 우측)을 Function/Marker 전용으로 쓰고, 원래 여기 있던
+        # Axis Frame Auto 내용은 바로 아래(새 row=4)로 옮긴다(그 아래
+        # 코드 참고 - Auto X Range 이하 행들도 전부 한 칸씩 밀림).
+        func_marker_row = ttk.Frame(self.plot_frame)
+        func_marker_row.grid(row=3, column=3, columnspan=3, sticky="we", padx=3, pady=0)
+        function_curves_btn = tk.Button(
+            func_marker_row, text="Function", width=8, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=1, pady=1,
+        )
+        function_curves_btn.pack(side="left", padx=(3, 30))
+        function_curves_btn.configure(command=self._open_function_curves_popup)
+
+        # [수정 - 사용자 요청] "Function과 Marker 버튼은 더 띄워줘요, 충분히" -
+        # 서로 딱 붙어 보이지 않도록 둘 사이 간격을 넉넉히 줌.
+        marker_settings_btn = tk.Button(
+            func_marker_row, text="Marker", width=8, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=1, pady=1,
+        )
+        marker_settings_btn.pack(side="left", padx=(30, 3))
+        marker_settings_btn.configure(command=self._open_marker_settings_popup)
+
         # [수정] 기본값을 Auto로 변경 - 화면에서는 항상 검증된 scale=1.0 기준으로
         # 뜨게 하고, 인쇄/저장 시 특정 물리 크기가 필요할 때만 꺼서 W/H를 쓰도록 함
         self.frame_auto_var = tk.BooleanVar(value=True)
@@ -1223,8 +1247,12 @@ class CathPlotGUI:
         self.frame_height_var = tk.StringVar(value="8")
         self.frame_unit_var = tk.StringVar(value="cm")
 
+        # [수정 - 사용자 요청] "Axis Frame Auto 줄의 이후 내용은 Auto X
+        # Range 입력 줄 위에 추가" - row=3에 있던 이 내용을 row=4로 내려서
+        # (Function/Marker가 비운 자리 대신) Auto X Range 행(원래 row=4,
+        # 이제 row=5로 한 칸씩 밀림) 바로 위에 오게 한다.
         row3_f = ttk.Frame(self.plot_frame)
-        row3_f.grid(row=3, column=3, columnspan=3, sticky="we", padx=3, pady=0)
+        row3_f.grid(row=4, column=0, columnspan=6, sticky="we", padx=3, pady=0)
 
         frame_size_f = ttk.Frame(row3_f)
         frame_size_f.pack(side="left")
@@ -1282,88 +1310,88 @@ class CathPlotGUI:
         FMT_LIST = ["Normal", "Scientific", "Power10"]
 
         x_auto_f = ttk.Frame(self.plot_frame)
-        x_auto_f.grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        x_auto_f.grid(row=5, column=0, sticky="w", padx=5, pady=2)
         self._mk_check(x_auto_f, "Auto X Range", self.xauto_var, color="accent", side="left")
 
         x_log_f = ttk.Frame(self.plot_frame)
-        x_log_f.grid(row=4, column=1, sticky="w", padx=5, pady=2)
+        x_log_f.grid(row=5, column=1, sticky="w", padx=5, pady=2)
         self._mk_check(x_log_f, "Log", self.xlog_var, side="left")
         xfmt_combo = ttk.Combobox(x_log_f, textvariable=self.xfmt_var, values=FMT_LIST, width=7, state="readonly")
         xfmt_combo.pack(side="left", padx=(2, 0))
         self._disable_combobox_wheel(xfmt_combo)
 
         y1_auto_f = ttk.Frame(self.plot_frame)
-        y1_auto_f.grid(row=4, column=2, sticky="w", padx=5, pady=2)
+        y1_auto_f.grid(row=5, column=2, sticky="w", padx=5, pady=2)
         self._mk_check(y1_auto_f, "Auto Y1 (Left) Range", self.yauto_var, color="accent", side="left")
 
         y1_log_f = ttk.Frame(self.plot_frame)
-        y1_log_f.grid(row=4, column=3, sticky="w", padx=2, pady=2)
+        y1_log_f.grid(row=5, column=3, sticky="w", padx=2, pady=2)
         self._mk_check(y1_log_f, "Log", self.y1log_var, side="left")
         y1fmt_combo = ttk.Combobox(y1_log_f, textvariable=self.y1fmt_var, values=FMT_LIST, width=7, state="readonly")
         y1fmt_combo.pack(side="left", padx=(2, 0))
         self._disable_combobox_wheel(y1fmt_combo)
 
         y2_auto_f = ttk.Frame(self.plot_frame)
-        y2_auto_f.grid(row=4, column=4, sticky="w", padx=2, pady=2)
+        y2_auto_f.grid(row=5, column=4, sticky="w", padx=2, pady=2)
         self._mk_check(y2_auto_f, "Auto Y2 (Right) Range", self.y2auto_var, color="accent", side="left")
 
         y2_log_f = ttk.Frame(self.plot_frame)
-        y2_log_f.grid(row=4, column=5, sticky="w", padx=2, pady=2)
+        y2_log_f.grid(row=5, column=5, sticky="w", padx=2, pady=2)
         self._mk_check(y2_log_f, "Log", self.y2log_var, side="left")
         y2fmt_combo = ttk.Combobox(y2_log_f, textvariable=self.y2fmt_var, values=FMT_LIST, width=7, state="readonly")
         y2fmt_combo.pack(side="left", padx=(2, 0))
         self._disable_combobox_wheel(y2fmt_combo)
 
         # Row 5
-        ttk.Label(self.plot_frame, text="X Min/Max", style="RowHead.TLabel").grid(row=5, column=0, sticky="w", padx=5, pady=2)
+        ttk.Label(self.plot_frame, text="X Min/Max", style="RowHead.TLabel").grid(row=6, column=0, sticky="w", padx=5, pady=2)
         self.xmin_var = tk.StringVar()
         self.xmax_var = tk.StringVar()
         x_limit_f = ttk.Frame(self.plot_frame)
-        x_limit_f.grid(row=5, column=1, sticky="w", padx=5)
+        x_limit_f.grid(row=6, column=1, sticky="w", padx=5)
         self._mk_entry(x_limit_f, self.xmin_var, width=9, color="accent3").pack(side="left")
         ttk.Label(x_limit_f, text="~").pack(side="left", padx=2)
         self._mk_entry(x_limit_f, self.xmax_var, width=9, color="accent3").pack(side="left")
 
-        ttk.Label(self.plot_frame, text="Y1 Min/Max", style="RowHead.TLabel").grid(row=5, column=2, sticky="w", padx=5, pady=2)
+        ttk.Label(self.plot_frame, text="Y1 Min/Max", style="RowHead.TLabel").grid(row=6, column=2, sticky="w", padx=5, pady=2)
         self.ymin_var = tk.StringVar()
         self.ymax_var = tk.StringVar()
         y1_limit_f = ttk.Frame(self.plot_frame)
-        y1_limit_f.grid(row=5, column=3, sticky="w", padx=5)
+        y1_limit_f.grid(row=6, column=3, sticky="w", padx=5)
         self._mk_entry(y1_limit_f, self.ymin_var, width=9, color="accent3").pack(side="left")
         ttk.Label(y1_limit_f, text="~").pack(side="left", padx=2)
         self._mk_entry(y1_limit_f, self.ymax_var, width=9, color="accent3").pack(side="left")
 
-        ttk.Label(self.plot_frame, text="Y2 Min/Max", style="RowHead.TLabel").grid(row=5, column=4, sticky="w", padx=5, pady=2)
+        ttk.Label(self.plot_frame, text="Y2 Min/Max", style="RowHead.TLabel").grid(row=6, column=4, sticky="w", padx=5, pady=2)
         self.y2min_var = tk.StringVar()
         self.y2max_var = tk.StringVar()
         y2_limit_f = ttk.Frame(self.plot_frame)
-        y2_limit_f.grid(row=5, column=5, sticky="w", padx=5)
+        y2_limit_f.grid(row=6, column=5, sticky="w", padx=5)
         self._mk_entry(y2_limit_f, self.y2min_var, width=9, color="accent3").pack(side="left")
         ttk.Label(y2_limit_f, text="~").pack(side="left", padx=2)
         self._mk_entry(y2_limit_f, self.y2max_var, width=9, color="accent3").pack(side="left")
 
         # Row 6
-        ttk.Label(self.plot_frame, text="X Tics/Minor", style="RowHead.TLabel").grid(row=6, column=0, sticky="w", padx=5, pady=2)
+        ttk.Label(self.plot_frame, text="X Tics/Minor", style="RowHead.TLabel").grid(row=7, column=0, sticky="w", padx=5, pady=2)
         self.xtics_var = tk.StringVar()
         self.mxtics_var = tk.StringVar()
         x_tick_f = ttk.Frame(self.plot_frame)
-        x_tick_f.grid(row=6, column=1, sticky="w", padx=5)
+        x_tick_f.grid(row=7, column=1, sticky="w", padx=5)
         self._mk_entry(x_tick_f, self.xtics_var, width=9, color="accent3").pack(side="left")
         self._mk_entry(x_tick_f, self.mxtics_var, width=5, color="accent3").pack(side="left", padx=(5, 0))
 
-        ttk.Label(self.plot_frame, text="Y Left (Y1) Tics", style="RowHead.TLabel").grid(row=6, column=2, sticky="w", padx=5, pady=2)
+        ttk.Label(self.plot_frame, text="Y Left (Y1) Tics", style="RowHead.TLabel").grid(row=7, column=2, sticky="w", padx=5, pady=2)
         self.ytics_var = tk.StringVar()
         self.mytics_var = tk.StringVar()
         y1_tick_f = ttk.Frame(self.plot_frame)
-        y1_tick_f.grid(row=6, column=3, sticky="w", padx=5)
+        y1_tick_f.grid(row=7, column=3, sticky="w", padx=5)
         self._mk_entry(y1_tick_f, self.ytics_var, width=9, color="accent3").pack(side="left")
         self._mk_entry(y1_tick_f, self.mytics_var, width=5, color="accent3").pack(side="left", padx=(5, 0))
 
-        ttk.Label(self.plot_frame, text="Y Right (Y2) Tics", style="RowHead.TLabel").grid(row=6, column=4, sticky="w", padx=5, pady=2)
+        ttk.Label(self.plot_frame, text="Y Right (Y2) Tics", style="RowHead.TLabel").grid(row=7, column=4, sticky="w", padx=5, pady=2)
         self.y2tics_var = tk.StringVar()
         self.my2tics_var = tk.StringVar()
         y2_tick_f = ttk.Frame(self.plot_frame)
-        y2_tick_f.grid(row=6, column=5, sticky="w", padx=5)
+        y2_tick_f.grid(row=7, column=5, sticky="w", padx=5)
         self._mk_entry(y2_tick_f, self.y2tics_var, width=9, color="accent3").pack(side="left")
         self._mk_entry(y2_tick_f, self.my2tics_var, width=5, color="accent3").pack(side="left", padx=(5, 0))
 
@@ -1372,21 +1400,21 @@ class CathPlotGUI:
         self.minor_grid_var = tk.BooleanVar(value=False)
 
         major_grid_f = ttk.Frame(self.plot_frame)
-        major_grid_f.grid(row=7, column=0, sticky="w", padx=5, pady=2)
+        major_grid_f.grid(row=8, column=0, sticky="w", padx=5, pady=2)
         self._mk_check(
             major_grid_f, "Major Grid", self.major_grid_var,
             command=self.on_major_grid_toggled, side="left"
         )
 
         minor_grid_f = ttk.Frame(self.plot_frame)
-        minor_grid_f.grid(row=7, column=1, sticky="w", padx=5, pady=2)
+        minor_grid_f.grid(row=8, column=1, sticky="w", padx=5, pady=2)
         self.minor_grid_check = self._mk_check(
             minor_grid_f, "Minor Grid", self.minor_grid_var, side="left"
         )
 
         # Annotations Area
         self.anno_frame = ttk.LabelFrame(self.plot_frame, text="Multi Annotations", style=self.SECTION_STYLE["annotations"])
-        self.anno_frame.grid(row=8, column=0, columnspan=6, sticky="ew", padx=5, pady=2)
+        self.anno_frame.grid(row=9, column=0, columnspan=6, sticky="ew", padx=5, pady=2)
 
         self.c_list_frame = ttk.Frame(self.anno_frame)
         self.c_list_frame.pack(fill="x", padx=5)
@@ -1446,7 +1474,7 @@ class CathPlotGUI:
 
         # 고급: raw gnuplot 명령어 직접 입력 (여기 적은 내용은 생성되는 .plt 파일에 그대로 삽입됨)
         self.raw_gnuplot_frame = ttk.LabelFrame(self.plot_frame, text="Advanced: Raw gnuplot commands", style=self.SECTION_STYLE["advanced"])
-        self.raw_gnuplot_frame.grid(row=9, column=0, columnspan=6, sticky="ew", padx=5, pady=2)
+        self.raw_gnuplot_frame.grid(row=10, column=0, columnspan=6, sticky="ew", padx=5, pady=2)
         # [수정 - 요청] "Advanced block 입력에도 색 구분 테두리" - tk.Text는
         # 원래도 ttk가 아니라 highlightbackground/highlightcolor가 항상
         # 동작함(테마 영향 없음) - Advanced 섹션색(danger)으로 맞춤.
@@ -3660,13 +3688,13 @@ class CathPlotGUI:
         xz_row.pack(fill="x", padx=5, pady=3)
         ttk.Label(xz_row, text="X min:", width=_ZOOM_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(xz_row, textvariable=self.pip_xmin_var, width=8).pack(side="left", padx=(4, 12))
-        ttk.Label(xz_row, text="X max:").pack(side="left")
+        ttk.Label(xz_row, text="X max:", width=_ZOOM_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(xz_row, textvariable=self.pip_xmax_var, width=8).pack(side="left", padx=(4, 0))
         yz_row = ttk.Frame(zoom_frame)
         yz_row.pack(fill="x", padx=5, pady=(0, 5))
         ttk.Label(yz_row, text="Y1 min:", width=_ZOOM_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(yz_row, textvariable=self.pip_ymin_var, width=8).pack(side="left", padx=(4, 12))
-        ttk.Label(yz_row, text="Y1 max:").pack(side="left")
+        ttk.Label(yz_row, text="Y1 max:", width=_ZOOM_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(yz_row, textvariable=self.pip_ymax_var, width=8).pack(side="left", padx=(4, 20))
         # [수정 - 요청] "Y1/Y2를 같은 줄에" - 별도 행 대신 같은 yz_row에
         # 이어서 배치(간격만 좀 더 줌).
@@ -3734,7 +3762,10 @@ class CathPlotGUI:
         ttk.Label(mag_center_row, text="Y1:").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_center_y1_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_center_row, self.pip_mag_center_y1_mode_var).pack(side="left", padx=(0, 12))
-        ttk.Label(mag_center_row, text="확대 반지름 X:").pack(side="left")
+        # [수정 - 사용자 요청] "반지름 box도 정렬" - 아래 줄 "박스 반지름* (%):"
+        # 라벨과 텍스트 길이가 달라 입력칸 시작 위치가 어긋났음 - 폭 통일.
+        _MAG_RADIUS_LABEL_W = 16
+        ttk.Label(mag_center_row, text="확대 반지름 X:", width=_MAG_RADIUS_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_radius_x_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_center_row, self.pip_mag_radius_x_mode_var).pack(side="left", padx=(0, 12))
         ttk.Label(mag_center_row, text="배율:").pack(side="left")
@@ -3779,7 +3810,7 @@ class CathPlotGUI:
         # [수정 - 사용자 요청] "인셋박스 중심과 위 중심 입력의 box크기와
         # 정렬" - 입력칸 폭도 위 확대 중심 줄(width=8)과 통일(예전엔 6).
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_x_var, width=8).pack(side="left", padx=(4, 2))
-        _mk_mode_combo(mag_box_row, self.pip_mag_box_center_x_mode_var).pack(side="left", padx=(0, 8))
+        _mk_mode_combo(mag_box_row, self.pip_mag_box_center_x_mode_var).pack(side="left", padx=(0, 12))
         # [수정 - 사용자 지적] "박스쪽도 Y1이 맞지 않는지?" - 이 값도(위
         # "확대 중심 Y1"과 마찬가지로) Y1 축 기준 위치라 그냥 "Y:"보다
         # "Y1:"이 더 정확함.
@@ -3791,7 +3822,7 @@ class CathPlotGUI:
         # 라벨 자체도 길어 옆 입력칸과 함께 잘리기 쉬웠음 - 라벨은 "박스
         # 반지름* (%):"로 짧게 줄이고, "보통 20~40 권장"/"100=축 전체를
         # 채움" 같은 자세한 뜻은 아래 각주(* ...) 한 줄로 옮긴다.
-        ttk.Label(mag_box_row, text="박스 반지름* (%):").pack(side="left")
+        ttk.Label(mag_box_row, text="박스 반지름* (%):", width=_MAG_RADIUS_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_radius_var, width=8).pack(side="left", padx=(4, 2))
         # [수정 - 사용자 지적] "PIP Radius(Rx,Ry)%처럼 반지름끼리 비교해
         # 100%가 꽉참이어야 헷갈리지 않는다" - 예전엔 이 반지름(%)이 "축
