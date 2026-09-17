@@ -658,13 +658,21 @@ class CathPlotGUI:
         # 두고 그 둘레 흰 여백(폭)만 줄이라는 말이었음" - btn_width/btn_padx는
         # 원래 값(2/기본 8)으로 되돌리고, 버튼 바깥쪽 pack padx(버튼과 위
         # 스크롤 영역/스크롤바 사이 여백)만 줄인다.
+        # [수정 - 사용자 지적] "+ 버튼의 +는 커졌는데 네모 박스 자체도 커짐 -
+        # 박스는 안 키워도 됨(+ 글자만 키울 수는 없는지?)" - tk.Button의
+        # width는 "글자 폭" 단위라 폰트를 키우면 버튼 자체(박스) 크기도
+        # 같이 커짐. 박스 크기는 고정하고 그 안의 글자만 키우기 위해,
+        # 원래(9pt) 박스 픽셀 크기(36x28)로 고정한 컨테이너 프레임에
+        # pack_propagate(False)를 걸고, 버튼을 그 안에 fill="both"로 채워
+        # 넣는다(컨테이너가 잘리지 않는 한 버튼 자체 크기는 컨테이너를
+        # 넘지 못함).
+        add_file_btn_container = tk.Frame(self.file_frame, width=36, height=28, bg=self.PALETTE["bg"])
+        add_file_btn_container.pack(side="right", padx=1, pady=0)
+        add_file_btn_container.pack_propagate(False)
         self.add_file_btn = self._mk_btn(
-            self.file_frame, "+", self.add_file_row,
-            color="secondary", btn_width=2, btn_pady=3, side="right", padx=1, pady=0,
+            add_file_btn_container, "+", self.add_file_row,
+            color="secondary", btn_pady=0, fill="both", expand=True,
         )
-        # [수정 - 사용자 요청] "+ 버튼의 +를 충분히 더 크게" - _mk_btn 공통
-        # 폰트(9pt)는 다른 버튼들과 통일하기 위한 것이라 여기만 별도로
-        # 키운다(버튼 자체 크기는 그대로, 안의 글자만 확대).
         self.add_file_btn.configure(font=("Malgun Gothic", 16, "bold"))
 
         btn_container = ttk.Frame(self.root)
