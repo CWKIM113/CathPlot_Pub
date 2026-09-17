@@ -156,7 +156,12 @@ class CathPlotGUI:
         # - 가 세로 공간 부족으로 화면 밖에 밀려났을 가능성)로 보이므로,
         # 폭을 다시 올리는 대신 세로 required_height 클램프(아래)가 그
         # 스크롤바들 자리까지 확실히 포함하도록 두고 지켜본다.
-        self._win_w = max(900, min(1200, self.root.winfo_screenwidth() - 80))
+        # [수정 - 사용자 요청] "Curves가 다 보이도록 가로크기를 조금만 더
+        # 키울까요?" - Curves/Function/Marker 버튼을 각 줄 왼쪽으로 옮겨서
+        # (위 참고) 이제 창이 좁아도 이 버튼들 자체는 항상 보이지만, 그
+        # 뒤에 이어지는 Pos/Align/Box W/H 같은 필드까지 여유 있게 보이도록
+        # 최소/최대 폭을 60px씩 살짝 올림(900->960, 1200->1260).
+        self._win_w = max(960, min(1260, self.root.winfo_screenwidth() - 80))
         self.root.geometry(f"{self._win_w}x1030")
         self.root.tk.call('tk', 'windowingsystem')
 
@@ -573,13 +578,13 @@ class CathPlotGUI:
         # 보고 있는지" 구분이 오히려 더 어려워질 수 있음(사용자 지적) - 그래서
         # "기준이 되는 cwd 자체"를 이 라벨로 항상 보이게 해서, 상대경로(어떤
         # 파일)와 이 라벨(어느 폴더 기준)을 같이 보면 헷갈리지 않게 한다.
-        # [수정 - 사용자 요청] "진한 보라색 등으로 눈에 띄게" - 회색(#666666,
-        # 8pt)이라 눈에 잘 안 띄어서, 기존 팔레트의 PRINT 버튼과 같은 보라색
-        # (accent3, #7a4fb5)에 굵게+한 단계 큰 폰트로 강조한다(앱 전체 색
-        # 체계와 어울리게 새 색을 만들지 않고 기존 accent3 재사용).
+        # [수정 - 사용자 요청] "진한 보라색 등으로 눈에 띄게" -> "구분이 잘
+        # 안됨 - 진한 바다색으로" - accent3(보라, #7a4fb5)가 주변 색상들과
+        # 비슷해 보여 잘 안 띄었다는 재지적 - 진한 바다색(딥 틸/네이비,
+        # #004d66)으로 바꿔 확실히 구분되게 한다.
         ttk.Label(
             self.file_frame, text=f"현재 작업 폴더(cwd): {self.cwd}",
-            foreground=self.PALETTE["accent3"], font=("Malgun Gothic", 9, "bold")
+            foreground="#004d66", font=("Malgun Gothic", 9, "bold")
         ).pack(fill="x", padx=5, pady=(2, 0), anchor="w")
 
         # [수정 - 요청] "모든 block에서 가로 스크롤 가능하게 - 일부 입력이
@@ -1032,6 +1037,20 @@ class CathPlotGUI:
         legend1_row.grid(row=0, column=3, columnspan=3, padx=3, pady=0, sticky="we")
         self._mk_check(legend1_row, "Legend1 On", self.legend_on_var, side="left", padx=3)
         self._mk_check(legend1_row, "Box", self.legend_box_var, side="left", padx=3)
+        # [수정 - 사용자 요청] "Curves가 다 보이도록 가로크기를 조금만 더
+        # 키울까요? Curves/Function/Marker 버튼들을 좌측으로 이동해서
+        # 정렬하면 조금만 키워도 될 듯" - 이 버튼들이 전부 줄 맨 끝(오른쪽
+        # 맞춤)에 있어서, 창 폭이 조금만 좁아도(작은 화면 등) 아예 화면
+        # 밖으로 밀려나 안 보이고 이 구역엔 가로 스크롤바도 없어 접근 자체가
+        # 안 됐음(DAT Files/Available Variables 표와 달리) - Box 체크박스
+        # 바로 뒤(줄 앞쪽)로 옮겨서, 창이 조금 좁아도 항상 보이게 한다.
+        legend1_curves_btn = tk.Button(
+            legend1_row, text="Curves", width=7, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=1, pady=1,
+        )
+        legend1_curves_btn.pack(side="left", padx=(3, 8))
         ttk.Label(legend1_row, text="Pos1:").pack(side="left", padx=2)
         legend_pos_combo = ttk.Combobox(legend1_row, textvariable=self.legend_pos_var, values=pos_list, width=10)
         legend_pos_combo.pack(side="left", padx=2)
@@ -1072,17 +1091,9 @@ class CathPlotGUI:
                 self.in_legend1_vars[key] = tk.BooleanVar(value=True)
             self.in_legend1_vars[key].set(val)
 
-        legend1_curves_btn = tk.Button(
-            legend1_row, text="Curves", width=7, font=("Malgun Gothic", 9, "bold"),
-            bg=self.PALETTE["secondary"], fg="white",
-            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=1, pady=1,
-        )
-        # [수정 - 요청] "Curves와 Marker 버튼을 우측 맞춤" - legend1_row/
-        # legend2_row/row2_f가 전부 같은 grid 칸(row=0~2, column=3~5)에
-        # 쌓여 있어서, 셋 다 sticky="we"로 칸 전체 폭을 채우게 하고 버튼을
-        # side="right"로 packing하면 항상 같은 오른쪽 경계에서 맞춰진다.
-        legend1_curves_btn.pack(side="right", padx=(1, 3))
+        # [수정 - 사용자 요청] "Curves를 좌측으로 이동" - 버튼 자체는 위(Box
+        # 체크박스 바로 뒤)로 옮겼으니 여기서는 명령만 연결한다(_legend1_get/
+        # _legend1_set이 여기서만 정의돼 있어 configure는 이 위치에서 함).
         legend1_curves_btn.configure(
             command=lambda: self._open_curve_select_popup(
                 legend1_curves_btn, "Legend1 Curves", _legend1_get, _legend1_set, "1"
@@ -1100,6 +1111,15 @@ class CathPlotGUI:
         legend2_row.grid(row=1, column=3, columnspan=3, padx=3, pady=0, sticky="we")
         self._mk_check(legend2_row, "Legend2 On", self.legend2_on_var, side="left", padx=3)
         self._mk_check(legend2_row, "Box", self.legend2_box_var, side="left", padx=3)
+        # [수정 - 사용자 요청] "Curves를 좌측으로 이동" - legend1_row와 동일한
+        # 이유로 Box 체크박스 바로 뒤로 옮김.
+        legend2_curves_btn = tk.Button(
+            legend2_row, text="Curves", width=7, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=1, pady=1,
+        )
+        legend2_curves_btn.pack(side="left", padx=(3, 8))
         ttk.Label(legend2_row, text="Pos2:").pack(side="left", padx=2)
         legend2_pos_combo = ttk.Combobox(legend2_row, textvariable=self.legend2_pos_var, values=pos_list, width=10)
         legend2_pos_combo.pack(side="left", padx=2)
@@ -1124,13 +1144,6 @@ class CathPlotGUI:
                 self.legend_group_vars[key] = tk.StringVar(value="2")
             self.legend_group_vars[key].set("2" if val else "1")
 
-        legend2_curves_btn = tk.Button(
-            legend2_row, text="Curves", width=7, font=("Malgun Gothic", 9, "bold"),
-            bg=self.PALETTE["secondary"], fg="white",
-            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=1, pady=1,
-        )
-        legend2_curves_btn.pack(side="right", padx=(1, 3))
         legend2_curves_btn.configure(
             command=lambda: self._open_curve_select_popup(
                 legend2_curves_btn, "Legend2 Curves", _legend2_get, _legend2_set, "2"
@@ -1158,6 +1171,28 @@ class CathPlotGUI:
         row2_f = ttk.Frame(self.plot_frame)
         row2_f.grid(row=2, column=3, columnspan=3, sticky="we", padx=3, pady=0)
 
+        # [수정 - 사용자 요청] "Curves/Function/Marker 버튼들을 좌측으로
+        # 이동" - legend1_row/legend2_row의 Curves 버튼과 같은 이유로, 줄
+        # 맨 끝(오른쪽 맞춤) 대신 이 줄의 맨 앞으로 옮겨 창이 좁아도 항상
+        # 보이게 한다(Function을 Marker보다 먼저 눌러볼 일이 많아 왼쪽에).
+        function_curves_btn = tk.Button(
+            row2_f, text="Function", width=7, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=1, pady=1,
+        )
+        function_curves_btn.pack(side="left", padx=(3, 2))
+        function_curves_btn.configure(command=self._open_function_curves_popup)
+
+        marker_settings_btn = tk.Button(
+            row2_f, text="Marker", width=7, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=1, pady=1,
+        )
+        marker_settings_btn.pack(side="left", padx=(1, 8))
+        marker_settings_btn.configure(command=self._open_marker_settings_popup)
+
         ttk.Label(row2_f, text="Box Thick:").pack(side="left", padx=(3, 1))
         ttk.Combobox(row2_f, textvariable=self.legend_thick_var, values=thick_list, width=3, state="readonly").pack(side="left", padx=2)
 
@@ -1168,29 +1203,6 @@ class CathPlotGUI:
         legend_size_combo = ttk.Combobox(row2_f, textvariable=self.legend_size_var, values=size_list, width=2, state="readonly")
         legend_size_combo.pack(side="left", padx=1)
         self._disable_combobox_wheel(legend_size_combo)
-
-        # Marker는 줄 우측 끝에 정렬(끝 맞춤) - Curves 버튼(Legend1/2, width=7)과
-        # 크기를 통일해 달라는 요청으로 width=7 지정.
-        marker_settings_btn = tk.Button(
-            row2_f, text="Marker", width=7, font=("Malgun Gothic", 9, "bold"),
-            bg=self.PALETTE["secondary"], fg="white",
-            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=1, pady=1,
-        )
-        marker_settings_btn.pack(side="right", padx=(1, 3))
-        marker_settings_btn.configure(command=self._open_marker_settings_popup)
-
-        # [추가 - 요청] Function Curve(삼각함수/다항식/사용자정의 함수, Cubic
-        # Spline은 Var-list의 "SP" 체크박스로 별도 처리) - Marker 버튼과
-        # 동일한 스타일/크기로 바로 왼쪽에 배치.
-        function_curves_btn = tk.Button(
-            row2_f, text="Function", width=7, font=("Malgun Gothic", 9, "bold"),
-            bg=self.PALETTE["secondary"], fg="white",
-            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=1, pady=1,
-        )
-        function_curves_btn.pack(side="right", padx=(1, 3))
-        function_curves_btn.configure(command=self._open_function_curves_popup)
 
         # Row 2
         ttk.Label(self.plot_frame, text="Y Left Title (Y1)", style="RowHead.TLabel").grid(row=2, column=0, padx=5, pady=0, sticky="w")
@@ -3715,14 +3727,20 @@ class CathPlotGUI:
         ttk.Label(mag_center_row, text="확대 중심 X:", width=_MAG_LABEL_W, anchor="w").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_center_x_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_center_row, self.pip_mag_center_x_mode_var).pack(side="left", padx=(0, 12))
-        ttk.Label(mag_center_row, text="확대 중심 Y1:").pack(side="left")
+        # [수정 - 사용자 요청] "확대 중심 X: .... 뒤에 확대 중심 Y1 -> Y1로,
+        # 아래 박스 중심과 같은 방식으로" - 아래 "박스 중심" 줄이 두 번째
+        # 필드를 "박스 중심 Y:"로 안 쓰고 그냥 "Y:"로 줄인 것과 같은 방식으로
+        # 통일(반복되는 "확대 중심" 접두어를 생략).
+        ttk.Label(mag_center_row, text="Y1:").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_center_y1_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_center_row, self.pip_mag_center_y1_mode_var).pack(side="left", padx=(0, 12))
         ttk.Label(mag_center_row, text="확대 반지름 X:").pack(side="left")
         ttk.Entry(mag_center_row, textvariable=self.pip_mag_radius_x_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_center_row, self.pip_mag_radius_x_mode_var).pack(side="left", padx=(0, 12))
         ttk.Label(mag_center_row, text="배율:").pack(side="left")
-        ttk.Entry(mag_center_row, textvariable=self.pip_mag_ratio_var, width=6).pack(side="left", padx=(4, 2))
+        # [수정 - 사용자 요청] "배율 입력 박스 크기를 줄여줘요" - 보통 한두
+        # 자리 숫자(예: 4)만 들어가는데 width=6은 과했음 - 3으로 축소.
+        ttk.Entry(mag_center_row, textvariable=self.pip_mag_ratio_var, width=3).pack(side="left", padx=(4, 2))
         ttk.Label(mag_center_row, text="배").pack(side="left")
 
         # [추가 - 사용자 지적] "배율을 활용한 크기를 직관적으로 알기 어렵다" -
@@ -3762,7 +3780,10 @@ class CathPlotGUI:
         # 정렬" - 입력칸 폭도 위 확대 중심 줄(width=8)과 통일(예전엔 6).
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_x_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_box_row, self.pip_mag_box_center_x_mode_var).pack(side="left", padx=(0, 8))
-        ttk.Label(mag_box_row, text="Y:").pack(side="left")
+        # [수정 - 사용자 지적] "박스쪽도 Y1이 맞지 않는지?" - 이 값도(위
+        # "확대 중심 Y1"과 마찬가지로) Y1 축 기준 위치라 그냥 "Y:"보다
+        # "Y1:"이 더 정확함.
+        ttk.Label(mag_box_row, text="Y1:").pack(side="left")
         ttk.Entry(mag_box_row, textvariable=self.pip_mag_box_center_y_var, width=8).pack(side="left", padx=(4, 2))
         _mk_mode_combo(mag_box_row, self.pip_mag_box_center_y_mode_var).pack(side="left", padx=(0, 12))
         # [수정 - 사용자 지적] "라벨에 다 넣지 말고 반지름*(%) 처럼 짧게
@@ -3944,17 +3965,23 @@ class CathPlotGUI:
         if not self.pip_y2label_text_var.get().strip():
             self.pip_y2label_text_var.set(_def_y2label)
 
+        # [수정 - 사용자 요청] "Plot Title box와 Y1 title box, X title box와
+        # Y2 title box를 정렬" - "Plot Title:"(11자)와 "Y1 Title:"(9자),
+        # "X Title:"(8자)와 "Y2 Title:"(9자)의 길이가 서로 달라 입력칸 시작
+        # 위치가 어긋났음 - 첫 라벨/셋째 라벨 각각 폭을 통일.
+        _TITLE_LABEL_W1 = 11
+        _TITLE_LABEL_W2 = 9
         title_txt_row1 = ttk.Frame(opt_frame)
         title_txt_row1.pack(fill="x", padx=5, pady=(4, 2))
-        ttk.Label(title_txt_row1, text="Plot Title:").pack(side="left")
+        ttk.Label(title_txt_row1, text="Plot Title:", width=_TITLE_LABEL_W1, anchor="w").pack(side="left")
         ttk.Entry(title_txt_row1, textvariable=self.pip_title_text_var, width=16).pack(side="left", padx=(4, 12))
-        ttk.Label(title_txt_row1, text="X Title:").pack(side="left")
+        ttk.Label(title_txt_row1, text="X Title:", width=_TITLE_LABEL_W2, anchor="w").pack(side="left")
         ttk.Entry(title_txt_row1, textvariable=self.pip_xlabel_text_var, width=12).pack(side="left", padx=(4, 0))
         title_txt_row2 = ttk.Frame(opt_frame)
         title_txt_row2.pack(fill="x", padx=5, pady=(0, 2))
-        ttk.Label(title_txt_row2, text="Y1 Title:").pack(side="left")
+        ttk.Label(title_txt_row2, text="Y1 Title:", width=_TITLE_LABEL_W1, anchor="w").pack(side="left")
         ttk.Entry(title_txt_row2, textvariable=self.pip_ylabel_text_var, width=16).pack(side="left", padx=(4, 12))
-        ttk.Label(title_txt_row2, text="Y2 Title:").pack(side="left")
+        ttk.Label(title_txt_row2, text="Y2 Title:", width=_TITLE_LABEL_W2, anchor="w").pack(side="left")
         ttk.Entry(title_txt_row2, textvariable=self.pip_y2label_text_var, width=12).pack(side="left", padx=(4, 0))
         ttk.Label(
             opt_frame,
