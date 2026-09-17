@@ -653,36 +653,20 @@ class CathPlotGUI:
         # Windows 기본 테마에서 배경색이 잘 안 먹는 문제가 이미 여러 번
         # 확인된 상태라(_mk_btn 주석 참고), Browse/X와 같은 tk.Button 기반
         # 헬퍼로 통일해 확실히 색이 반영되게 한다.
-        # [수정 - 요청] "+ 버튼이 너무 넓음(폭 2/3 정도로), 높이는 좀 더
-        # 높게(1.3배 정도 - 정사각형이 되게)" - btn_width(글자 폭 기준
-        # 3->2)를 줄이고 btn_pady(버튼 자체 내부 상하 여백, 기존 0)를
-        # 살짝 줘서 "+" 하나만 있는 버튼이 가로세로 비슷한 정사각형에
-        # 가깝게 보이도록 조정.
-        # [수정 - 사용자 정정] "버튼을 줄이지 말고, 버튼은 원래 크기 그대로
-        # 두고 그 둘레 흰 여백(폭)만 줄이라는 말이었음" - btn_width/btn_padx는
-        # 원래 값(2/기본 8)으로 되돌리고, 버튼 바깥쪽 pack padx(버튼과 위
-        # 스크롤 영역/스크롤바 사이 여백)만 줄인다.
-        # [수정 - 사용자 지적] "+ 버튼의 +는 커졌는데 네모 박스 자체도 커짐 -
-        # 박스는 안 키워도 됨(+ 글자만 키울 수는 없는지?)" - tk.Button의
-        # width는 "글자 폭" 단위라 폰트를 키우면 버튼 자체(박스) 크기도
-        # 같이 커짐. 박스 크기는 고정하고 그 안의 글자만 키우기 위해,
-        # 원래(9pt) 박스 픽셀 크기(36x28)로 고정한 컨테이너 프레임에
-        # pack_propagate(False)를 걸고, 버튼을 그 안에 fill="both"로 채워
-        # 넣는다(컨테이너가 잘리지 않는 한 버튼 자체 크기는 컨테이너를
-        # 넘지 못함).
-        # [수정 - 사용자 지적] "+ 버튼이 아래로 치우쳤네?" - cwd 라벨이 이
-        # file_frame 안에서 위쪽(side="top")을 먼저 차지해서, 나머지
-        # 영역(canvas+스크롤바+버튼)의 세로 중앙(anchor 기본값)에 배치되면
-        # 실제 DAT 파일 행(캔버스 맨 위)보다 아래로 처져 보였음 -
-        # anchor="n"으로 바꿔 캔버스 상단과 같은 높이에서 시작하게 한다.
-        add_file_btn_container = tk.Frame(self.file_frame, width=36, height=28, bg=self.PALETTE["bg"])
-        add_file_btn_container.pack(side="right", padx=1, pady=0, anchor="n")
-        add_file_btn_container.pack_propagate(False)
+        # [수정 - 사용자 요청/시행착오] "+ 버튼이 너무 넓음" -> "박스는 그대로
+        # 두고 안의 + 글자만 키워달라" -> "글자를 키웠더니 네모박스 안에서
+        # + 위치가 아래로 치우침" -> "네모크기는 줄이고, 오메가 버튼을
+        # 참조할 것" - 고정 크기 컨테이너에 억지로 채워 넣는 방식(작은
+        # 박스에 큰 글자가 눌리며 중앙에서 벗어나 보임) 대신, 이미 잘
+        # 보이는 우측 상단 "Ω" 버튼(var_symbol_btn)과 같은 방식(고정폭
+        # tk.Button, width=3, Tk가 폰트+너비로 자연 계산한 박스 크기)으로
+        # 단순화 - 폰트는 사용자가 테스트에서 지목한 Consolas(굵게)로,
+        # 크기는 Ω(13pt)보다 조금 더 키워 "+"가 잘 보이게 한다.
         self.add_file_btn = self._mk_btn(
-            add_file_btn_container, "+", self.add_file_row,
-            color="secondary", btn_pady=0, fill="both", expand=True,
+            self.file_frame, "+", self.add_file_row,
+            color="secondary", btn_width=2, btn_pady=2, btn_padx=4, side="right", padx=3, pady=0,
         )
-        self.add_file_btn.configure(font=("Malgun Gothic", 16, "bold"))
+        self.add_file_btn.configure(font=("Consolas", 16, "bold"))
 
         btn_container = ttk.Frame(self.root)
         btn_container.pack(fill="x", padx=10, pady=0)
