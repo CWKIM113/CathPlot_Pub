@@ -132,7 +132,7 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/17/2026.")
+        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/21/2026.")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움
         # [수정 - 사용자 요청] "가로 길이도 flexible하게(노트북에선 가로를
