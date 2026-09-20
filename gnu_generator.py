@@ -4273,6 +4273,7 @@ class GnuplotGenerator:
     def _build_pip_folded_overlay(self, plotdef, pip_xmin, pip_xmax, pip_y1min, pip_y1max,
                                    pip_y2min, pip_y2max, box, plot_dir_,
                                    clip_shape="rect", clip_rx=50.0, clip_ry=50.0, minimal=False,
+                                   grid_on=True,
                                    pip_cfg=None, size_factor=1.0, font_scale=0.6, margins=None,
                                    marker_on=False, marker_scale=0.3, axis_w_in=None, axis_h_in=None,
                                    opaque_bg=True):
@@ -4530,17 +4531,21 @@ class GnuplotGenerator:
             )
             fragments.append('$PipFoldAxisFrame using 1:2 notitle axes x1y1 with lines lc rgb "gray40" lw 0.8')
 
-            _grid_fracs = (0.25, 0.5, 0.75)
-            _grid_segs = []
-            for _f in _grid_fracs:
-                _gx = ix_lo + _f * (ix_hi - ix_lo)
-                _grid_segs.append(((_gx, iy1_lo), (_gx, iy1_hi)))
-            for _f in _grid_fracs:
-                _gy = iy1_lo + _f * (iy1_hi - iy1_lo)
-                _grid_segs.append(((ix_lo, _gy), (ix_hi, _gy)))
-            for _gi, (_p0, _p1) in enumerate(_grid_segs):
-                fragments.append(f"$PipFoldGrid{_gi} << EOD\n{_p0[0]:.6g} {_p0[1]:.6g}\n{_p1[0]:.6g} {_p1[1]:.6g}\nEOD")
-                fragments.append(f'$PipFoldGrid{_gi} using 1:2 notitle axes x1y1 with lines lc rgb "gray70" lw 0.6 dashtype "."')
+            # [추가 - 사용자 요청] "PIP 인셋 grid도 on/off 옵션" - 간단히
+            # 표시(minimal)와 별개로, grid만 따로 끌 수 있게 한다(축
+            # 프레임/tic 숫자는 이 옵션과 무관하게 그대로 유지).
+            if grid_on:
+                _grid_fracs = (0.25, 0.5, 0.75)
+                _grid_segs = []
+                for _f in _grid_fracs:
+                    _gx = ix_lo + _f * (ix_hi - ix_lo)
+                    _grid_segs.append(((_gx, iy1_lo), (_gx, iy1_hi)))
+                for _f in _grid_fracs:
+                    _gy = iy1_lo + _f * (iy1_hi - iy1_lo)
+                    _grid_segs.append(((ix_lo, _gy), (ix_hi, _gy)))
+                for _gi, (_p0, _p1) in enumerate(_grid_segs):
+                    fragments.append(f"$PipFoldGrid{_gi} << EOD\n{_p0[0]:.6g} {_p0[1]:.6g}\n{_p1[0]:.6g} {_p1[1]:.6g}\nEOD")
+                    fragments.append(f'$PipFoldGrid{_gi} using 1:2 notitle axes x1y1 with lines lc rgb "gray70" lw 0.6 dashtype "."')
 
             # tic 숫자는 "여백 띠"(안쪽 axis frame과 바깥 박스 가장자리
             # 사이) 안에, axis frame 쪽으로 살짝 치우친 위치에 찍는다(네이티브
@@ -5376,6 +5381,20 @@ class GnuplotGenerator:
         _pip_name = (plotdef.title or "plot").strip() or "plot"
         _pip_source = pip.get("source", "current")
         _override_curves = pip.get("curves")
+        # [수정 - 사용자 보고 버그] "간단히 표시(Curve만)가 저장/인쇄/Batch
+        # 파일에는 적용 안 됨" - 이 값은 원래 "fold overlay" 경로
+        # (_build_pip_folded_overlay, 화면+원/타원+완전불투명 조합에서만
+        # 대체 적용됨)에서만 읽혔고, 대부분의 실제 경로(사각형, 저장/인쇄/
+        # Batch/Multi-Plot 전부)가 타는 이 네이티브 인셋 경로에는 아예
+        # 반영되지 않았음(실제 PNG 렌더링으로 재현 확인 - 켜도 테두리/tic/
+        # grid가 그대로 나옴). 아래 title/axis title/legend/border/tic/grid
+        # 를 모두 이 값으로 통일해서 끈다.
+        _minimal = bool(pip.get("minimal"))
+        # [추가 - 사용자 요청] "PIP 인셋 grid도 on/off 옵션" - 지금까지는
+        # 메인 화면의 Major/Minor Grid 설정을 그대로 물려받기만 했는데,
+        # 인셋 전용 독립 토글(pip_grid_on_var)을 추가한다. 간단히 표시가
+        # 켜지면 이 값과 무관하게 항상 꺼짐(위 _minimal이 우선).
+        _pip_grid_on = bool(pip.get("grid_on", True)) and not _minimal
         # [수정 - 사용자 요청] "PIP 내 plot이 다르면 내용이 달라지므로 현재
         # main-plot으로 대체하지 말고, PIP를 빼고 진행하지요" - source가
         # "current"(기본값, 의도적으로 메인 자신을 보여주는 정상 경로)가
@@ -5829,8 +5848,8 @@ class GnuplotGenerator:
         # 필요) 여백을 더 좁게, 켜져 있으면 그 글자가 겹치지 않을 정도로만
         # 살짝 넓힌다(정확한 텍스트 폭 계산 대신 실측 기반 고정 비율 - 이
         # 상태로 실제 렌더링해 겹침/잘림 없음 확인).
-        _title_shown = bool(pip.get("title_on")) and bool((plotdef.title or "").strip())
-        _axis_titles_shown = bool(pip.get("axis_title_on"))
+        _title_shown = (not _minimal) and bool(pip.get("title_on")) and bool((plotdef.title or "").strip())
+        _axis_titles_shown = (not _minimal) and bool(pip.get("axis_title_on"))
         # 사각형(rect) 기준 여백 - 모든 모양에 공통인 "최소 필요" 여백
         # (tic 숫자/title 텍스트가 안 겹칠 정도). 원/타원은 아래에서 이
         # 값을 그대로 쓰거나, 필요할 때만(모서리가 실제로 원/타원 밖으로
@@ -5897,7 +5916,7 @@ class GnuplotGenerator:
         # 있게 한다.
         _ofs_fs = max(font_scale, 0.6)
 
-        if pip.get("axis_title_on"):
+        if _axis_titles_shown:
             # [추가 - 요청] "tic 숫자와 축 title 사이 간격이 너무 넓음(최소,
             # 거의 0이 되게)" - gnuplot 6.0으로 직접 렌더링해 offset 부호를
             # 실측 확인함(xlabel은 y가 양수일수록, ylabel은 x가 양수일수록
@@ -6039,7 +6058,7 @@ class GnuplotGenerator:
         # 텍스트(pip.get("title_text"))가 있으면 우선 쓰고, 없으면(기존
         # Template 호환 포함) 지금까지처럼 메인 plot의 title을 그대로 쓴다.
         _pip_title_src = str(pip.get("title_text") or plotdef.title or "").strip()
-        if pip.get("title_on") and _pip_title_src:
+        if (not _minimal) and pip.get("title_on") and _pip_title_src:
             _title_txt = _pip_title_src.replace('"', '\\"')
             # 하한 이유는 아래 _xl_size와 동일(font_scale/_size_shrink가
             # 작을 때 Plot Title도 같이 뭉개질 정도로 작아지지 않게 방지).
@@ -6098,16 +6117,16 @@ class GnuplotGenerator:
         # 렌더)으로 top/right 쪽에 mirror tic이 원 밖으로 튀어나온 것 확인.
         # 인셋은 항상 자기 쪽(왼쪽 Y1/아래 X, y2 쓰면 오른쪽 Y2) tic만
         # 필요하므로 nomirror를 명시한다.
-        _x_tic_clause = f" {_x_tic_step:.6g}" if _x_tic_step else ""
-        _y_tic_clause = f" {_y_tic_step:.6g}" if _y_tic_step else ""
-        lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}" offset 0,{_tic_ofs:.2f} nomirror{_x_tic_clause}')
-        lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}" offset {_tic_ofs:.2f},0 nomirror{_y_tic_clause}')
-        if _uses_y2:
-            _y2_tic_clause = f" {_y2_tic_step:.6g}" if _y2_tic_step else ""
-            lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}" offset -{_tic_ofs:.2f},0 nomirror{_y2_tic_clause}')
-        else:
-            lines.append("unset y2tics")
-
+        # [이동 - 근본 원인 수정] "간단히 표시를 켜도 인셋 안에 tic 숫자가
+        # 그대로 남음" - 실측(고립된 최소 재현 gnuplot 스크립트로 직접
+        # 확인)으로 원인 확정: 여기(이 시점)에서 unset xtics/ytics를 해도,
+        # 그 뒤에 이어지는 set xrange/yrange/set autoscale y2(아래, main이
+        # "set link y2"를 쓰는 것과 맞물림으로 추정)가 tic 표시 상태를 다시
+        # 되돌려버려 최종 plot 시점엔 tic이 부활해 있었음. tic 숫자
+        # 표시/생략 결정은 그대로 두되, 실제 unset/set 커맨드 자체는 range/
+        # autoscale/border/grid 설정이 전부 끝난 뒤, "plot \" 바로 앞으로
+        # 옮겨서 이후 어떤 명령도 이걸 되돌리지 못하게 한다(아래 "plot \"
+        # 직전 참고).
         lines.append(f"set origin {origin_x:.4f},{origin_y:.4f}")
         lines.append(f"set size {size_w:.4f},{size_h:.4f}")
 
@@ -6229,10 +6248,15 @@ class GnuplotGenerator:
             # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - id 7100은
             # annotation(1번대)/Legend1(8000대)/Legend2(9000대)와 안 겹치도록
             # 새로 예약한 번호대.
+            # [수정 - 사용자 보고 버그] "간단히 표시가 켜져도 이 흰 배경
+            # 사각형 자신의 테두리(border lc rgb ...)는 gnuplot의 axis
+            # set/unset border와 무관한 별개 장식이라 그대로 남아있었음" -
+            # minimal이면 noborder로 바꿔 이 장식 테두리도 같이 없앤다.
+            _bg_border_clause = "noborder" if _minimal else f'border lc rgb "black" lw {_deco_lw:.2f}'
             lines.append(
                 f"set object 7100 rectangle from screen {origin_x:.4f},{origin_y:.4f} "
                 f"to screen {origin_x+size_w:.4f},{origin_y+size_h:.4f} "
-                f'behind fc rgb "white" fillstyle solid 1.0 border lc rgb "black" lw {_deco_lw:.2f}'
+                f'behind fc rgb "white" fillstyle solid 1.0 {_bg_border_clause}'
             )
             # [수정 - 사용자 보고 버그] "PIP 불투명, 사각형인데 왜 그림이
             # 겹치지?" - 원/타원 완전불투명은 이미 겪은 문제(behind 오브젝트가
@@ -6295,6 +6319,7 @@ class GnuplotGenerator:
                         "x": _rxr, "y1": _ryr, "y2": _ry2r if _uses_y2 else None,
                         "clip_shape": "rect", "clip_rx": 50.0, "clip_ry": 50.0,
                         "minimal": bool(pip.get("minimal")),
+                        "grid_on": bool(pip.get("grid_on", True)),
                         "size_factor": min(1.0, max(size_w, size_h)),
                         "font_scale": font_scale,
                         # [추가 - 요청] "PIP 입력에 마커 on/off" - 켜져 있으면
@@ -6364,6 +6389,7 @@ class GnuplotGenerator:
                         "x": _rxr2, "y1": _ryr2, "y2": _ry2r2 if _uses_y2 else None,
                         "clip_shape": "rect", "clip_rx": 50.0, "clip_ry": 50.0,
                         "minimal": bool(pip.get("minimal")),
+                        "grid_on": bool(pip.get("grid_on", True)),
                         "size_factor": min(1.0, max(size_w, size_h)),
                         "font_scale": font_scale,
                         "marker_on": bool(pip.get("marker_on")),
@@ -6455,6 +6481,7 @@ class GnuplotGenerator:
                             "x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None,
                             "clip_shape": _clip_shape, "clip_rx": _clip_rx, "clip_ry": _clip_ry,
                             "minimal": bool(pip.get("minimal")),
+                            "grid_on": bool(pip.get("grid_on", True)),
                             "size_factor": min(1.0, max(size_w, size_h)),
                             "font_scale": font_scale,
                             "marker_on": bool(pip.get("marker_on")),
@@ -6492,6 +6519,7 @@ class GnuplotGenerator:
                             "x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None,
                             "clip_shape": _clip_shape, "clip_rx": _clip_rx, "clip_ry": _clip_ry,
                             "minimal": bool(pip.get("minimal")),
+                            "grid_on": bool(pip.get("grid_on", True)),
                             "size_factor": min(1.0, max(size_w, size_h)),
                             "font_scale": font_scale,
                             "marker_on": bool(pip.get("marker_on")),
@@ -6537,7 +6565,7 @@ class GnuplotGenerator:
         # 원래 marker 전용이던 이 계산을 legend 호출보다 앞으로 옮김).
         _marker_ps_scale = max(font_scale * 0.75 * _size_factor, 0.3)
 
-        if pip.get("legend_on"):
+        if (not _minimal) and pip.get("legend_on"):
             # id 7500대(Legend1 8000대/Legend2 9000대와 안 겹치는 번호)로 inset
             # 전용 legend를 그림 - 위치는 1차 구현에선 "right top" 고정.
             # (다른 plot의 곡선을 보여주는 경우 _inset_curves를 씀)
@@ -6873,40 +6901,77 @@ class GnuplotGenerator:
         # [수정 - 사용자 보고 버그] main-plot과 동일하게(위 3025행 부근 참고)
         # back을 명시해 인셋 안에서도 curve/marker가 축 frame에 가려지지
         # 않게 한다.
-        lines.append(f"set border 31 back lw {_border_lw0 * font_scale:.3f}")
-        if _ellipse_native_ok:
-            # 위 주석 참고 - 인셋의 네모 축 테두리 "선"만 꺼서 원/타원
-            # 밖으로 삐져나오지 않게 한다(tic 두께는 위에서 이미 줄여둠).
+        # [수정 - 사용자 보고 버그] "간단히 표시"가 켜지면 테두리(및 원/타원
+        # 전용 장식 테두리)도 완전히 끈다 - tic와 마찬가지로 위 _minimal
+        # 참고. 그 외(장식 테두리 없이 tic 두께만 조정하는) 동작은 그대로.
+        if _minimal:
             lines.append("unset border")
-            # [추가 - 요청] "in-plot의 축frame은 curve처럼 진한 실선이어야
-            # 함(투명인 경우도 마찬가지)" - gnuplot 네이티브 border는 계속
-            # 꺼둔 채로(tic 두께에는 영향 없음), 대신 축 박스의 실제 네 변
-            # 위치(_inset_lmargin 등)에 curve와 같은 굵기의 장식용 사각형을
-            # 새로 그려 "굵은 실선 테두리"로 보이게 한다. 이 네 모서리는 위
-            # 적응형 여백 계산(_safety=0.85)이 항상 타원 안쪽에 들어오도록
-            # 이미 보장해주므로(볼록도형인 타원 안에 네 꼭짓점이 있으면 그
-            # 사이 직선도 항상 안쪽 - 기하학적으로 항상 성립), 원/타원
-            # 밖으로 삐져나갈 일이 없다. 불투명/투명 여부와 무관하게 항상
-            # 같은 굵은 실선(사용자 명시적 확인 - 점선/얇게로 바꿀 필요
-            # 없음).
-            # [수정 - 사용자 보고 버그] "PIP in-plot의 axis frame 선이
-            # main-plot보다 더 두꺼움" - 위에서 "curve와 같은 굵기"라고
-            # 적어놓고 실제로는 고정값 3.0을 박아뒀던 게 문제. curve
-            # 기본 lw(1.5)와 main-plot border lw(_border_lw0, 기본값도
-            # 1.5)가 원래 같은 기준(1.5)에서 출발하므로, 진짜 "curve/
-            # main-plot과 같은 굵기"가 되려면 하드코딩된 3.0이 아니라
-            # main-plot border 두께를 그대로 써야 한다(font_scale은 안
-            # 곱함 - 위 의도대로 인셋 크기/투명도와 무관하게 항상 같은
-            # 굵기 유지).
-            lines.append(
-                f"set object 7102 rectangle from screen {_inset_lmargin:.4f},{_inset_bmargin:.4f} "
-                f"to screen {_inset_rmargin:.4f},{_inset_tmargin:.4f} "
-                f'front fc rgb "black" fillstyle empty border lc rgb "black" lw {_border_lw0:.3f}'
-            )
+        else:
+            lines.append(f"set border 31 back lw {_border_lw0 * font_scale:.3f}")
+            if _ellipse_native_ok:
+                # 위 주석 참고 - 인셋의 네모 축 테두리 "선"만 꺼서 원/타원
+                # 밖으로 삐져나오지 않게 한다(tic 두께는 위에서 이미 줄여둠).
+                lines.append("unset border")
+                # [추가 - 요청] "in-plot의 축frame은 curve처럼 진한 실선이어야
+                # 함(투명인 경우도 마찬가지)" - gnuplot 네이티브 border는 계속
+                # 꺼둔 채로(tic 두께에는 영향 없음), 대신 축 박스의 실제 네 변
+                # 위치(_inset_lmargin 등)에 curve와 같은 굵기의 장식용 사각형을
+                # 새로 그려 "굵은 실선 테두리"로 보이게 한다. 이 네 모서리는 위
+                # 적응형 여백 계산(_safety=0.85)이 항상 타원 안쪽에 들어오도록
+                # 이미 보장해주므로(볼록도형인 타원 안에 네 꼭짓점이 있으면 그
+                # 사이 직선도 항상 안쪽 - 기하학적으로 항상 성립), 원/타원
+                # 밖으로 삐져나갈 일이 없다. 불투명/투명 여부와 무관하게 항상
+                # 같은 굵은 실선(사용자 명시적 확인 - 점선/얇게로 바꿀 필요
+                # 없음).
+                # [수정 - 사용자 보고 버그] "PIP in-plot의 axis frame 선이
+                # main-plot보다 더 두꺼움" - 위에서 "curve와 같은 굵기"라고
+                # 적어놓고 실제로는 고정값 3.0을 박아뒀던 게 문제. curve
+                # 기본 lw(1.5)와 main-plot border lw(_border_lw0, 기본값도
+                # 1.5)가 원래 같은 기준(1.5)에서 출발하므로, 진짜 "curve/
+                # main-plot과 같은 굵기"가 되려면 하드코딩된 3.0이 아니라
+                # main-plot border 두께를 그대로 써야 한다(font_scale은 안
+                # 곱함 - 위 의도대로 인셋 크기/투명도와 무관하게 항상 같은
+                # 굵기 유지).
+                lines.append(
+                    f"set object 7102 rectangle from screen {_inset_lmargin:.4f},{_inset_bmargin:.4f} "
+                    f"to screen {_inset_rmargin:.4f},{_inset_tmargin:.4f} "
+                    f'front fc rgb "black" fillstyle empty border lc rgb "black" lw {_border_lw0:.3f}'
+                )
         lines.append(f"set tics scale {_tic_major0 * font_scale:.3f}, {_tic_minor0 * font_scale:.3f}")
-        if _has_grid:
+        # [추가 - 사용자 요청] "PIP 인셋 grid도 on/off 옵션" - 메인의
+        # Major/Minor Grid 설정(_has_grid)이 켜져 있어도, 인셋 전용
+        # grid_on 체크(_pip_grid_on, 이미 _minimal도 반영됨)가 꺼져 있으면
+        # 인셋 grid는 그리지 않는다.
+        if _has_grid and _pip_grid_on:
             _grid_lw = max(_border_lw0 * font_scale * 0.7, 0.3)
             lines.append(f'{_grid_axes} lw {_grid_lw:.3f} dashtype "." , lw {_grid_lw:.3f} dashtype "."')
+        else:
+            # [수정 - 안전장치] 메인 plot의 "set grid ..."가 세션 전역
+            # 상태로 계속 켜져 있을 수 있어(unset xtics/ytics만으로는 grid
+            # 자체가 꺼진다는 보장이 없음), grid를 안 그릴 때는 인셋
+            # 범위에서도 명시적으로 unset해 확실히 안 남게 한다.
+            lines.append("unset grid")
+
+        # [이동 - 근본 원인 수정, 위 origin/size 근처 주석 참고] "간단히
+        # 표시"가 켜지면 tic 숫자도(border/title/legend와 함께) 전부
+        # 생략한다 - 위 range/autoscale/border/grid 설정이 전부 끝난
+        # 뒤(=이 시점)에 unset/set해야, 그 사이의 set xrange/yrange/set
+        # autoscale y2 등이 tic 표시 상태를 되돌리는 것을 피할 수 있다
+        # (실측으로 확인된 순서 의존성 - 위 _minimal 참고).
+        if _minimal:
+            lines.append("unset xtics")
+            lines.append("unset ytics")
+            lines.append("unset y2tics")
+        else:
+            _x_tic_clause = f" {_x_tic_step:.6g}" if _x_tic_step else ""
+            _y_tic_clause = f" {_y_tic_step:.6g}" if _y_tic_step else ""
+            lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}" offset 0,{_tic_ofs:.2f} nomirror{_x_tic_clause}')
+            lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}" offset {_tic_ofs:.2f},0 nomirror{_y_tic_clause}')
+            if _uses_y2:
+                _y2_tic_clause = f" {_y2_tic_step:.6g}" if _y2_tic_step else ""
+                lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}" offset -{_tic_ofs:.2f},0 nomirror{_y2_tic_clause}')
+            else:
+                lines.append("unset y2tics")
 
         # [추가 - 사용자 보고 버그, 실측(pngcairo)으로 근본 원인 확인] "원/타원
         # PIP가 불투명인데 화면엔 투명하게(경계선만) 보임 - main 곡선이
@@ -8260,6 +8325,7 @@ class GnuplotGenerator:
                           clip_rx=_fold_ranges.get("clip_rx", 50.0),
                           clip_ry=_fold_ranges.get("clip_ry", 50.0),
                           minimal=_fold_ranges.get("minimal", False),
+                          grid_on=_fold_ranges.get("grid_on", True),
                           size_factor=_fold_ranges.get("size_factor", 1.0),
                           font_scale=_fold_ranges.get("font_scale", 0.6),
                           margins=_fold_ranges.get("margins"),
