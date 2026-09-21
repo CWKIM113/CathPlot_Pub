@@ -1068,26 +1068,45 @@ class GnuplotGenerator:
                 used_idx.add(best_i)
                 selected.append(pts[best_i])
 
-        # [수정 - 사용자 보고 버그] "shift 했더라도 min/max 지점은 항상 표기
-        # 필요한데 첫점이 0 근방에도 안 찍힘" - 위 idx==0/n-1 보정(
-        # _refine_marker_index)은 "이미 선택된" 경계점이 다른 곳으로 옮겨지는
-        #것만 막을 뿐,애초에 경계점이 target으로 선택되는지는 보장하지
-        # 않았다. shared_x_range(다른 curve와 맞추는 공통 X범위, 또는 Auto
-        # "보기 좋은" 여유 범위/수동 입력 범위)를 쓰면 이 curve 자신의
-        # 실제 x_min/x_max와 target 격자가 어긋나 이 curve의 경계점을
-        # "가장 가까운 target"으로 뽑는 target 자체가 없을 수 있어(재현:
-        # 공통범위 기준 등간격 target 중 이 curve 범위 안에 드는 값들이
-        # 경계와 거리가 있는 경우) 경계점이 마커 후보에서 통째로 빠졌다.
-        # target_count 등간격 로직과 무관하게, 실제 데이터의 x_min/x_max
-        # 지점은 항상 강제로 포함시킨다(target_count를 다소 넘어가도 무방).
-        idx_min = min(range(len(pts)), key=lambda i: pts[i][0])
-        idx_max = max(range(len(pts)), key=lambda i: pts[i][0])
-        if idx_min not in used_idx:
-            used_idx.add(idx_min)
-            selected.append(pts[idx_min])
-        if idx_max not in used_idx:
-            used_idx.add(idx_max)
-            selected.append(pts[idx_max])
+        # [수정 - 사용자 보고 버그 + 사용자 지적] "shift 했더라도 min/max
+        # 지점은 항상 표기 필요한데 첫점이 0 근방에도 안 찍힘" - 위
+        # idx==0/n-1 보정(_refine_marker_index)은 "이미 선택된" 경계점이
+        # 다른 곳으로 옮겨지는 것만 막을 뿐, 애초에 경계점이 target으로
+        # 선택되는지는 보장하지 않았다. shared_x_range(다른 curve와 맞추는
+        # 공통 X범위, 또는 Auto "보기 좋은" 여유 범위/수동 입력 범위)를
+        # 쓰면 이 curve 자신의 실제 x_min/x_max와 target 격자가 어긋나 이
+        # curve의 경계점을 "가장 가까운 target"으로 뽑는 target 자체가
+        # 없을 수 있어 경계점이 마커 후보에서 통째로 빠졌었다.
+        # 처음엔 이 curve의 절대 x_min/x_max를 강제로 넣었으나(사용자
+        # 지적) shared_x_range가 이 curve의 실제 데이터보다 좁을 때(다른
+        # curve 기준으로 축이 잘려 이 curve 일부가 plot 밖으로 나가는
+        # 경우) 절대 min/max점이 현재 plot에 아예 안 보이는 범위 밖에
+        # 찍혀 "화면엔 안 보이는" 마커가 되고, 정작 화면에 보이는
+        # 경계(현재 plot 범위와 이 curve 범위의 교집합 끝)에는 마커가
+        # 안 남는 문제가 있었다. 이 curve의 절대 min/max 대신, "이 plot에
+        # 실제로 보이는 범위(ref_min~ref_max와 이 curve 데이터 범위의
+        # 교집합)"의 시작/끝에 가장 가까운 실제 데이터 점을 찾아 그 점을
+        # 강제 포함시킨다 - Auto든 수동이든 여러 dat를 같이 그리든, 항상
+        # 화면에 실제로 보이는 시작/끝 지점에 마커가 남는다.
+        _lo_bound = max(ref_min, x_min)
+        _hi_bound = min(ref_max, x_max)
+        if _lo_bound <= _hi_bound:
+            def _nearest_idx(target_x):
+                best_i, best_d = None, None
+                for i, (px, _) in enumerate(pts):
+                    d = abs(math.log10(px) - math.log10(target_x)) if (is_log_x and px > 0 and target_x > 0) else abs(px - target_x)
+                    if best_d is None or d < best_d:
+                        best_i, best_d = i, d
+                return best_i
+
+            idx_lo = _nearest_idx(_lo_bound)
+            idx_hi = _nearest_idx(_hi_bound)
+            if idx_lo is not None and idx_lo not in used_idx:
+                used_idx.add(idx_lo)
+                selected.append(pts[idx_lo])
+            if idx_hi is not None and idx_hi not in used_idx:
+                used_idx.add(idx_hi)
+                selected.append(pts[idx_hi])
 
         selected.sort(key=lambda p: p[0])
         return selected
