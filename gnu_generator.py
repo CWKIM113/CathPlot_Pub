@@ -966,7 +966,7 @@ class GnuplotGenerator:
                 pass  # 숫자로 파싱 안 되면(예: 비워둠) 그대로 둠 - gnuplot이 알아서 처리
         return min_str, max_str
 
-    def _select_marker_points(self, curve, x_col_idx, y_col_idx, target_count, is_log_x, shared_x_range=None):
+    def _select_marker_points(self, curve, x_col_idx, y_col_idx, target_count, is_log_x, shared_x_range=None, y_bounds=None):
         """curve의 실제 (x,y) 데이터를 읽어서 마커로 찍을 점들을 고른다.
         - 데이터가 target_count보다 적으면 전부 반환
         - 많으면, X축이 log면 log(x) 공간에서, 아니면 x 값 그대로에서
@@ -978,6 +978,12 @@ class GnuplotGenerator:
           목표 개수를 쓰면 좁은 범위의 curve가 상대적으로 촘촘해지는 문제가
           있었음. 공통 범위 기준으로 목표를 잡고 이 curve의 실제 범위 안에
           드는 것만 남기면, 걸치는 구간만큼만 비례해서 마커를 받게 된다.
+        - y_bounds(이 curve가 속한 축의 실제 set yrange/y2range 값, (lo,hi))가
+          주어지면, 아래 "가시범위 경계" 강제포함 로직이 X뿐 아니라 Y도
+          그 범위 안에 있는 점만 고른다(사용자 지적: "Y도 data 안에서 min/max를
+          잡을 수도 있다" - yauto는 항상 curve 전체 데이터로 계산되어 무관하지만,
+          Y를 수동으로 데이터보다 좁게 지정한 경우 X범위 안이어도 Y가 잘려
+          안 보이는 점을 경계 마커로 잘못 고를 수 있어서 대비함).
         x_shift는 여기서 이미 반영해서 반환한다(실제 plot에 그려지는 좌표 기준)."""
         try:
             parser = CathenaDatParser()
@@ -1098,10 +1104,26 @@ class GnuplotGenerator:
         # 가까운 점" - 즉 하한쪽은 "_lo_bound 이상인 점들 중 가장 작은
         # 값", 상한쪽은 "_hi_bound 이하인 점들 중 가장 큰 값"으로 바꿔야
         # 항상 화면 안쪽의 점이 선택된다.
+        # [수정 - 사용자 지적] "Y도 data 안에서 min/max를 잡을 수도 있으니
+        # 확인" - yauto(Y 자동범위)는 이 curve 전체 데이터로 계산되므로
+        # X범위 안이면 Y는 항상 그 자동범위 안에 들어와 무관하지만, Y를
+        # 수동으로 데이터보다 좁게 지정한 경우엔 X범위 안에 있는 점이라도
+        # Y값이 그 수동범위 밖이면 실제 화면에서 안 보인다 - y_bounds가
+        # 주어지면 X범위 필터에 Y범위 필터도 같이 걸어서, 진짜로 화면에
+        # 보이는 점만 경계 후보로 남긴다.
         _lo_bound = max(ref_min, x_min)
         _hi_bound = min(ref_max, x_max)
+        _y_lo, _y_hi = (y_bounds if y_bounds else (None, None))
+
+        def _y_ok(py):
+            if _y_lo is not None and py < _y_lo:
+                return False
+            if _y_hi is not None and py > _y_hi:
+                return False
+            return True
+
         if _lo_bound <= _hi_bound:
-            _in_range = [i for i, (px, _) in enumerate(pts) if _lo_bound <= px <= _hi_bound]
+            _in_range = [i for i, (px, py) in enumerate(pts) if _lo_bound <= px <= _hi_bound and _y_ok(py)]
             if _in_range:
                 idx_lo = min(_in_range, key=lambda i: pts[i][0])
                 idx_hi = max(_in_range, key=lambda i: pts[i][0])
@@ -4042,7 +4064,8 @@ class GnuplotGenerator:
                 # var_x가 0~1000이고 통합구간이 0~2000이어도, 10개로 지정했으면
                 # 0~1000 안에 10개를 그대로 채움)
                 effective_shared_range = None if is_manual_count else shared_x_range
-                marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, is_log_x, shared_x_range=effective_shared_range)
+                _y_bounds = (_y2_min_val, _y2_max_val) if is_y2 else (_y1_min_val, _y1_max_val)
+                marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, is_log_x, shared_x_range=effective_shared_range, y_bounds=_y_bounds)
                 if marker_pts:
                     marker_size = getattr(curve, "marker_size", 1.0) * line_scale * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
                     _y_shift = self._marker_y_shift_for_curve(plotdef, marker_shape, is_y2, marker_size, fmt)
