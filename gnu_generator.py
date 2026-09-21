@@ -1157,6 +1157,18 @@ class GnuplotGenerator:
         n = len(pts)
         if n < 2 * window + 3:
             return idx
+        # [수정 - 사용자 보고 버그] "marker가 시작점(x=min)에서 안 찍힘" -
+        # 경계점(idx=0 또는 n-1)은 한쪽 이웃이 아예 없어 _local_deviation
+        # (앞뒤 이웃 평균과의 차이)을 계산할 수 없다. 그런데 아래 lo/hi
+        # 클램프(lo=max(1,...), hi=min(n-2,...))가 idx=0/n-1 자체를 loop
+        # 범위와 "그대로 유지" 기본값 조건(lo<=idx<=hi) 양쪽에서 모두
+        # 제외시켜서, target이 정확히 시작/끝 데이터를 가리켜도 이 함수가
+        # 무조건 다른(안쪽) 점으로 옮겨버렸다(실제 렌더링으로 재현 확인 -
+        # 시작점에 마커가 전혀 안 찍힘). 경계점은애초에 "국소 평탄화"
+        # 대상이 아니므로(비교할 앞/뒤 짝이 없음), 보정하지 않고 원래
+        # 선택된 그대로 반환한다.
+        if idx == 0 or idx == n - 1:
+            return idx
         lo = max(1, idx - window)
         hi = min(n - 2, idx + window)
         if lo > hi:
