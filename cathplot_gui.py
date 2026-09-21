@@ -3405,6 +3405,97 @@ class CathPlotGUI:
             y2r[0].strip() if y2r else None, y2r[1].strip() if y2r else None,
         )
 
+    def _parse_plt_display_flags(self, plt_path):
+        """[추가 - 사용자 요청] "PIP 소스가 cached/pltfile이면 original을 몰라
+        자동 인식이 안 된다"는 한계를 없애기 위해, ".plt 파일" 소스일 때도
+        그 원본이 실제로 grid/legend/marker를 썼는지 감지한다(_parse_plt_
+        titles/_parse_plt_ranges와 같은 방식 - 우리 자신의 생성 포맷 전용,
+        PIP 인셋 구간 이전 "메인" 부분만 봄). 반환: (grid_on, legend_on,
+        marker_on) 각각 bool 또는(판단 불가 시) None - 호출부는 None이면
+        그 항목의 자동 동기화를 건너뛴다."""
+        try:
+            with open(plt_path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            return (None, None, None)
+        marker_sep = "# --- PIP (부분 확대) inset ---"
+        idx = text.find(marker_sep)
+        main_text = text[:idx] if idx >= 0 else text
+
+        _grid_matches = re.findall(r'^\s*(set grid\b[^\n]*|unset grid)\s*$', main_text, re.MULTILINE)
+        grid_on = _grid_matches[-1].startswith("set grid") if _grid_matches else None
+
+        # legend는 _parse_plt_curves가 쓰는 것과 같은 "set arrow ID ... \n set label ID" 짝
+        # (legend 항목 하나당 하나씩 남음)이 하나라도 있으면 legend가 있던 것으로 본다.
+        _legend_pair_re = re.compile(
+            r'set arrow (\d+) from graph [^\n]*?'
+            r'lc rgb "([^"]+)" lw [\d.]+(?:\s+dashtype \(([^)]+)\))?\s*\n'
+            r'(?:set label \d+ "(?:[^"\\]|\\.)*" at graph[^\n]*\n)?'
+            r'set label \1 "((?:[^"\\]|\\.)*)" at graph'
+        )
+        legend_on = bool(_legend_pair_re.search(main_text))
+
+        marker_on = "with points pt " in main_text
+
+        return (grid_on, legend_on, marker_on)
+
+    def _resolve_pip_original_flags(self):
+        """[추가 - 사용자 요청] "cached/pltfile도 original을 보고 자동 인식해야"
+        - PIP 표시 옵션(Plot Title/Axis Title/Legend/Grid/Marker) 체크박스의
+        기본값/비활성화 판단에 쓸, "PIP가 실제로 보여줄 원본"의 title/axis
+        title/legend/grid/marker 유무를 소스별로 알아낸다. 판단 불가한
+        항목은 None(호출부가 자동 동기화를 건너뛰는 신호)으로 둔다.
+        - source="current": 메인 화면 tk 변수를 그대로 읽음(가장 흔한 경우).
+        - source="cached": self.active_plots_cache에 이미 들어있는 완성된
+          PlotDefinition 객체(title/legend_on/major_grid/curves 등을 이미
+          속성으로 갖고 있음)에서 직접 읽음 - 추가 파싱 불필요.
+        - source="pltfile": 그 .plt 파일을 _parse_plt_titles/_parse_plt_
+          display_flags로 파싱해서 읽음(우리 자신의 생성 포맷 전용 파서).
+        """
+        source = self.pip_source_var.get()
+        flags = {"title": None, "axis_title": None, "legend": None, "grid": None, "marker": None}
+
+        if source == "current":
+            flags["title"] = bool(self.title_var.get().strip())
+            flags["axis_title"] = bool(
+                self.xlabel_var.get().strip() or self.ylabel_var.get().strip() or self.y2label_var.get().strip()
+            )
+            flags["legend"] = self.legend_on_var.get()
+            flags["grid"] = self.major_grid_var.get()
+            try:
+                _sel_keys = self._ordered_selected_keys()[0]
+            except Exception:
+                _sel_keys = []
+            flags["marker"] = any(
+                self.marker_shape_vars[k].get() != "None" for k in _sel_keys if k in self.marker_shape_vars
+            )
+        elif source == "cached":
+            name = self.pip_cached_name_var.get()
+            pd = self.active_plots_cache.get(name)
+            if pd is not None:
+                flags["title"] = bool((pd.title or "").strip())
+                flags["axis_title"] = bool(
+                    (pd.xlabel or "").strip() or (pd.ylabel or "").strip() or (pd.y2label or "").strip()
+                )
+                flags["legend"] = bool(getattr(pd, "legend_on", False))
+                flags["grid"] = bool(getattr(pd, "major_grid", False))
+                flags["marker"] = any(
+                    getattr(c, "marker_shape", None) is not None for c in getattr(pd, "curves", []) or []
+                )
+        elif source == "pltfile":
+            path = self.pip_pltfile_path_var.get()
+            if path and os.path.exists(path):
+                titles = self._parse_plt_titles(path)
+                if titles is not None:
+                    t, xl, yl, y2l = titles
+                    flags["title"] = bool((t or "").strip())
+                    flags["axis_title"] = bool((xl or "").strip() or (yl or "").strip() or (y2l or "").strip())
+                grid_on, legend_on, marker_on = self._parse_plt_display_flags(path)
+                flags["grid"] = grid_on
+                flags["legend"] = legend_on
+                flags["marker"] = marker_on
+        return flags
+
     @staticmethod
     def _clip_pct_to_stored(raw):
         """[추가 - 사용자 지적] 화면에 보이는 "반지름 %"(박스 자신의 절반
@@ -4007,23 +4098,25 @@ class CathPlotGUI:
         # Legend/Marker 표시는 한 줄에, "간단히 표시"만 따로 다음 줄에 둔다.
         title_opt_row = ttk.Frame(opt_frame)
         title_opt_row.pack(fill="x")
-        # [추가 - 사용자 요청] "Plot Title/Axis Title도 original 보고 기본
-        # 체크 - 다만 PIP 전용 텍스트를 직접 입력할 수도 있으니 회색(비활성)
-        # 은 안 되고, 메인에 내용이 있으면 기본값만 체크로" - 사용자가 이
-        # 세션에서 아직 직접 건드리지 않았으면 메인의 실제 제목/축 제목
-        # 유무를 그대로 반영한다.
+        # [추가 - 사용자 요청] "Plot Title/Axis Title/Legend/Grid/Marker 표시도
+        # original 보고 기본 체크/비활성화" - Plot Title/Axis Title은 PIP
+        # 전용 텍스트를 직접 입력할 수도 있어 비활성화(회색)는 부적절하고,
+        # original에 내용이 있으면 기본값만 체크. Legend/Marker/Grid는
+        # original에 없으면 비활성화(Grid는 회색 대신 기본 체크만 - Title과
+        # 같은 취급, 사용자 지적 반영)까지 한다. 어느 항목이든 사용자가 한
+        # 번이라도 직접 건드리거나 Template이 명시한 값이 있으면 그 뒤로는
+        # 자동 동기화하지 않는다.
         # [수정 - 사용자 지적] "original plot은 main plot이 아닐 수도 있음" -
-        # PIP 소스가 "현재 plot"(current)일 때만 "메인 화면=original"이
-        # 성립한다. cached/pltfile 소스는 그 원본의 실제 title/legend/grid를
-        # 알아내기 더 복잡해(캐시된 PlotDefinition/파싱 필요) 이 자동 동기화
-        # 대상에서 제외하고, 그때는 기존(마지막으로 쓰던) 값을 그대로 둔다.
-        _pip_src_is_current = (self.pip_source_var.get() == "current")
-        if _pip_src_is_current and not self._pip_title_user_set:
-            self.pip_title_on_var.set(bool(self.title_var.get().strip()))
-        if _pip_src_is_current and not self._pip_axis_title_user_set:
-            self.pip_axis_title_on_var.set(bool(
-                self.xlabel_var.get().strip() or self.ylabel_var.get().strip() or self.y2label_var.get().strip()
-            ))
+        # PIP 소스가 "현재 plot"뿐 아니라 "cached"(이미 그려진 plot)/
+        # "pltfile"(.plt 파일)일 수도 있어, 그 실제 원본의 title/axis title/
+        # legend/grid/marker 유무를 소스별로 알아내는 _resolve_pip_original_
+        # flags()를 통해 판단한다(판단 불가 항목은 None - 그 항목은 자동
+        # 동기화/비활성화를 건너뛰고 마지막 값·항상 활성 상태를 유지).
+        _orig_flags = self._resolve_pip_original_flags()
+        if _orig_flags["title"] is not None and not self._pip_title_user_set:
+            self.pip_title_on_var.set(_orig_flags["title"])
+        if _orig_flags["axis_title"] is not None and not self._pip_axis_title_user_set:
+            self.pip_axis_title_on_var.set(_orig_flags["axis_title"])
         self._mk_check(
             title_opt_row, "Plot Title 표시", self.pip_title_on_var, size=19, anchor="w", side="left", padx=5, pady=2,
             command=lambda: setattr(self, "_pip_title_user_set", True)
@@ -4033,55 +4126,35 @@ class CathPlotGUI:
             command=lambda: setattr(self, "_pip_axis_title_user_set", True)
         )
         # [추가 - 사용자 요청] "Legend box도 original에 없으면 회색으로" -
-        # 메인 자체가 Legend On이 꺼져 있으면 보여줄 legend 내용이 없으므로
-        # Marker와 같은 방식으로 비활성화한다(사용자가 직접 건드리거나
-        # Template이 명시한 적 있으면 그 값을 유지 - grid_on과 같은 패턴).
-        # [수정 - 사용자 지적] "original plot은 main plot이 아닐 수도 있음" -
-        # cached/pltfile 소스는 그 원본의 실제 Legend 여부를 알 수 없으니
-        # 이 자동 동기화/비활성화 판단 대상에서 제외(항상 활성 상태로 두고
-        # 마지막 값을 그대로 유지).
-        if _pip_src_is_current and not self._pip_legend_user_set:
-            self.pip_legend_on_var.set(self.legend_on_var.get())
+        # original이 Legend On이 아니면 보여줄 legend 내용이 없으므로
+        # Marker와 같은 방식으로 비활성화한다.
+        if _orig_flags["legend"] is not None and not self._pip_legend_user_set:
+            self.pip_legend_on_var.set(_orig_flags["legend"])
         pip_legend_chk = self._mk_check(
             title_opt_row, "Legend 표시", self.pip_legend_on_var, size=19, anchor="w", side="left", padx=5, pady=2,
             command=lambda: setattr(self, "_pip_legend_user_set", True)
         )
-        pip_legend_chk.configure(state=("normal" if (not _pip_src_is_current or self.legend_on_var.get()) else "disabled"))
+        pip_legend_chk.configure(state=("normal" if (_orig_flags["legend"] is None or _orig_flags["legend"]) else "disabled"))
         # [수정 - 사용자 지적] "Marker 표시 체크박스 설명이 애매함" - "원본에
         # marker 있는 curve만"이 무엇을 뜻하는지 불명확했음 - "인셋에도
         # 표시"로 동작을 명시한다. [추가 - 사용자 지적] "원본에 marker가
         # 없으면 체크박스를 회색으로(즉 사용 못하게)" - 켜도 효과가 없는
         # 상황을 라벨 설명 대신 비활성화(disabled)로 직접 보여주는 게 더
-        # 명확함 - 회색이면 조건 설명 자체가 불필요해지므로 괄호 설명은
-        # 뺀다. 현재 선택된 curve 중 marker가 하나라도 설정돼 있으면 활성.
-        # [수정 - 사용자 지적] "original plot은 main plot이 아닐 수도 있음" -
-        # 여기서 보는 marker 정보는 메인 화면(현재 선택된 curve)의 것이라,
-        # PIP 소스가 cached/pltfile이면 실제 원본과 다를 수 있다 - 그런
-        # 경우는 판단 근거가 부정확하므로 비활성화하지 않고 항상 활성으로 둔다.
+        # 명확함 - 회색이면 조건 설명 자체가 불필요해지므로 괄호 설명은 뺀다.
         pip_marker_chk = self._mk_check(title_opt_row, "Marker 인셋에도 표시", self.pip_marker_on_var, size=19, anchor="w", side="left", padx=5, pady=2)
-        try:
-            _sel_keys_for_marker = self._ordered_selected_keys()[0]
-        except Exception:
-            _sel_keys_for_marker = []
-        _any_marker_set = any(
-            self.marker_shape_vars[k].get() != "None"
-            for k in _sel_keys_for_marker if k in self.marker_shape_vars
-        )
-        pip_marker_chk.configure(state=("normal" if (not _pip_src_is_current or _any_marker_set) else "disabled"))
+        pip_marker_chk.configure(state=("normal" if (_orig_flags["marker"] is None or _orig_flags["marker"]) else "disabled"))
         # [추가 - 사용자 요청] "PIP 인셋 grid도 on/off 옵션" - 메인 화면의
         # Major/Minor Grid 설정과 무관하게 인셋만 따로 켜고 끌 수 있게 함.
-        # [수정 - 사용자 지적] "무조건 check 되어 있으면 곤란 - 메인 grid
-        # 설정을 보고 프로그램이 자동으로 on/off를 표기해야" - 사용자가 이
-        # 체크박스를 이번 세션에서 아직 직접 건드리지 않았고 Template도
-        # 명시적으로 값을 지정한 적 없으면(_pip_grid_user_set=False), 팝업을
-        # 열 때마다 메인의 Major Grid 설정을 그대로 반영해서 보여준다 -
-        # 한 번이라도 직접 클릭하거나 Template이 값을 지정하면 그 뒤로는
-        # 사용자가 고른 값을 그대로 유지(자동 동기화 중단).
-        # [수정 - 사용자 지적] "original plot은 main plot이 아닐 수도 있음" -
-        # cached/pltfile 소스면 원본의 실제 grid 여부를 알 수 없으니 이
-        # 자동 동기화도 "현재 plot" 소스일 때만 적용한다.
-        if _pip_src_is_current and not self._pip_grid_user_set:
-            self.pip_grid_on_var.set(self.major_grid_var.get())
+        # [수정 - 사용자 지적] "무조건 check 되어 있으면 곤란 - original을
+        # 보고 프로그램이 자동으로 on/off를 표기해야(Title과 같은 방식 -
+        # 비활성화는 하지 않고 기본값만)" - 사용자가 이 체크박스를 이번
+        # 세션에서 아직 직접 건드리지 않았고 Template도 명시적으로 값을
+        # 지정한 적 없으면(_pip_grid_user_set=False), 팝업을 열 때마다
+        # original의 grid 유무를 그대로 반영해서 보여준다 - 한 번이라도
+        # 직접 클릭하거나 Template이 값을 지정하면 그 뒤로는 사용자가 고른
+        # 값을 그대로 유지(자동 동기화 중단).
+        if _orig_flags["grid"] is not None and not self._pip_grid_user_set:
+            self.pip_grid_on_var.set(_orig_flags["grid"])
         pip_grid_chk = self._mk_check(
             title_opt_row, "Grid 표시", self.pip_grid_on_var, size=19, anchor="w", side="left", padx=5, pady=2,
             command=lambda: setattr(self, "_pip_grid_user_set", True)
