@@ -3340,7 +3340,16 @@ class GnuplotGenerator:
         # 블록 자체를 axis_w_in/axis_h_in이 확정된 뒤로 옮긴다(_render_circles
         # 참고, 아래로 이동).
 
-        tic_size = int(9 * f_scale * _mp_font_fix)
+        # [수정 - 사용자 보고 버그] "tic 숫자 font가 고정인데, axis title
+        # (Label) 폰트/크기 변경에도 안 바뀜 - 처음부터 Legend(9pt)보다도
+        # 작아 보였음" - 원인 확인: 여기 "9"는 plotdef의 어떤 필드도 참조
+        # 하지 않는 리터럴 상수였다(title_size/xlabel_size는 각각
+        # plotdef.title_size/xlabel_size를 그대로 쓰는 것과 달리, tic만
+        # 이렇게 고정돼 있어 사용자가 뭘 바꿔도 반응하지 않았음). 사용자
+        # 제안대로 "대략 Legend 크기 정도"인 plotdef.legend_size(기본값도
+        # 마침 "9"라 기존 기본 설정에서는 화면이 그대로 유지됨)를 기준으로
+        # 바꿔 이제 Legend 크기를 바꾸면 tic도 같이 커지고 작아지게 한다.
+        tic_size = int(float(getattr(plotdef, "legend_size", None) or 9) * f_scale * _mp_font_fix)
         if getattr(plotdef, "is_print_mode", False):
             tic_major_scale, tic_minor_scale = PRINT_TIC_MAJOR_SCALE, PRINT_TIC_MINOR_SCALE
             # [수정 - 버그] "PNG의 major tic이 EMF 대비 약 2배로 길게 나옴,
@@ -6194,7 +6203,11 @@ class GnuplotGenerator:
         # 3.5로 낮춰 title/legend와 비슷한 범위까지는 비례가 유지되게 하고,
         # 정말 읽기 힘들어지는 극단적으로 작은 경우에만(그 밑으로는 어차피
         # 글자 자체가 뭉개짐) 최후 안전장치로만 작동하게 한다.
-        _tic_size = max(9 * font_scale, 3.5)
+        # [수정 - 사용자 보고 버그] 위 main plot의 tic_size와 같은 문제 -
+        # "9"가 plotdef의 어떤 필드도 참조 안 하는 리터럴 상수였다. 같은
+        # 방식으로 plotdef.legend_size(기본값도 "9"라 기존 화면은 그대로
+        # 유지) 기준으로 바꾼다.
+        _tic_size = max(float(getattr(plotdef, "legend_size", None) or 9) * font_scale, 3.5)
         # [수정 - 사용자 보고 버그] "font_scale을 0.3으로 줄이면 x-tic 숫자가
         # frame에서 너무 떨어져서 title에 겹침" - 원인: 이 offset(tic를
         # 축 쪽으로 당기는 힘)만 위 xlabel/ylabel과 달리 여전히 font_scale에
