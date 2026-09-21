@@ -1085,28 +1085,32 @@ class GnuplotGenerator:
         # 경계(현재 plot 범위와 이 curve 범위의 교집합 끝)에는 마커가
         # 안 남는 문제가 있었다. 이 curve의 절대 min/max 대신, "이 plot에
         # 실제로 보이는 범위(ref_min~ref_max와 이 curve 데이터 범위의
-        # 교집합)"의 시작/끝에 가장 가까운 실제 데이터 점을 찾아 그 점을
-        # 강제 포함시킨다 - Auto든 수동이든 여러 dat를 같이 그리든, 항상
-        # 화면에 실제로 보이는 시작/끝 지점에 마커가 남는다.
+        # 교집합)" 안에 있는 점들 중 그 시작/끝에 해당하는 실제 데이터
+        # 점을 찾아 그 점을 강제 포함시킨다 - Auto든 수동이든 여러 dat를
+        # 같이 그리든, 항상 화면에 실제로 보이는 시작/끝 지점에 마커가
+        # 남는다.
+        # [수정 - 사용자 지적] "197.54는 200보다 큰 가장 작은 점이 아니라
+        # 200에 가장 가까운 점을 고른 것" - 처음엔 "경계에 가장 가까운
+        # 점"(거리 기준)을 찾았는데, 그러면 경계보다 바깥쪽(예: 200보다
+        # 작은 197.54)이 더 가까울 때 그 점을 고르게 되고, 그 점은
+        # set xrange로 실제 화면에서 잘려나가 안 보이는 점이라 의미가
+        # 없었다. "경계보다 안쪽(가시 범위 내)에 있는 점들 중 경계에 가장
+        # 가까운 점" - 즉 하한쪽은 "_lo_bound 이상인 점들 중 가장 작은
+        # 값", 상한쪽은 "_hi_bound 이하인 점들 중 가장 큰 값"으로 바꿔야
+        # 항상 화면 안쪽의 점이 선택된다.
         _lo_bound = max(ref_min, x_min)
         _hi_bound = min(ref_max, x_max)
         if _lo_bound <= _hi_bound:
-            def _nearest_idx(target_x):
-                best_i, best_d = None, None
-                for i, (px, _) in enumerate(pts):
-                    d = abs(math.log10(px) - math.log10(target_x)) if (is_log_x and px > 0 and target_x > 0) else abs(px - target_x)
-                    if best_d is None or d < best_d:
-                        best_i, best_d = i, d
-                return best_i
-
-            idx_lo = _nearest_idx(_lo_bound)
-            idx_hi = _nearest_idx(_hi_bound)
-            if idx_lo is not None and idx_lo not in used_idx:
-                used_idx.add(idx_lo)
-                selected.append(pts[idx_lo])
-            if idx_hi is not None and idx_hi not in used_idx:
-                used_idx.add(idx_hi)
-                selected.append(pts[idx_hi])
+            _in_range = [i for i, (px, _) in enumerate(pts) if _lo_bound <= px <= _hi_bound]
+            if _in_range:
+                idx_lo = min(_in_range, key=lambda i: pts[i][0])
+                idx_hi = max(_in_range, key=lambda i: pts[i][0])
+                if idx_lo not in used_idx:
+                    used_idx.add(idx_lo)
+                    selected.append(pts[idx_lo])
+                if idx_hi not in used_idx:
+                    used_idx.add(idx_hi)
+                    selected.append(pts[idx_hi])
 
         selected.sort(key=lambda p: p[0])
         return selected
