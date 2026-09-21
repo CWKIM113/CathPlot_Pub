@@ -1067,6 +1067,28 @@ class GnuplotGenerator:
                 best_i = self._refine_marker_index(pts, best_i, used_idx)
                 used_idx.add(best_i)
                 selected.append(pts[best_i])
+
+        # [수정 - 사용자 보고 버그] "shift 했더라도 min/max 지점은 항상 표기
+        # 필요한데 첫점이 0 근방에도 안 찍힘" - 위 idx==0/n-1 보정(
+        # _refine_marker_index)은 "이미 선택된" 경계점이 다른 곳으로 옮겨지는
+        #것만 막을 뿐,애초에 경계점이 target으로 선택되는지는 보장하지
+        # 않았다. shared_x_range(다른 curve와 맞추는 공통 X범위, 또는 Auto
+        # "보기 좋은" 여유 범위/수동 입력 범위)를 쓰면 이 curve 자신의
+        # 실제 x_min/x_max와 target 격자가 어긋나 이 curve의 경계점을
+        # "가장 가까운 target"으로 뽑는 target 자체가 없을 수 있어(재현:
+        # 공통범위 기준 등간격 target 중 이 curve 범위 안에 드는 값들이
+        # 경계와 거리가 있는 경우) 경계점이 마커 후보에서 통째로 빠졌다.
+        # target_count 등간격 로직과 무관하게, 실제 데이터의 x_min/x_max
+        # 지점은 항상 강제로 포함시킨다(target_count를 다소 넘어가도 무방).
+        idx_min = min(range(len(pts)), key=lambda i: pts[i][0])
+        idx_max = max(range(len(pts)), key=lambda i: pts[i][0])
+        if idx_min not in used_idx:
+            used_idx.add(idx_min)
+            selected.append(pts[idx_min])
+        if idx_max not in used_idx:
+            used_idx.add(idx_max)
+            selected.append(pts[idx_max])
+
         selected.sort(key=lambda p: p[0])
         return selected
 
