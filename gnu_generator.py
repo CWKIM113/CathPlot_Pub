@@ -1113,7 +1113,24 @@ class GnuplotGenerator:
         # 보이는 점만 경계 후보로 남긴다.
         _lo_bound = max(ref_min, x_min)
         _hi_bound = min(ref_max, x_max)
+
+        # [수정 - 사용자 보고 버그] "template 불러와서 plot 중 '<' not
+        # supported between instances of 'float' and 'str'" - 수동 Y범위일
+        # 때 y_bounds로 넘어오는 값(_y1_min_val 등)이 _safe_manual_range의
+        # 반환값 그대로라 실수(float)가 아니라 문자열(빈 문자열 포함)이라서
+        # 아래 _y_ok의 비교(py < _y_lo)가 float와 str을 비교하다 죽었다.
+        # 여기서 안전하게 float로 변환하고, 변환 안 되면(빈 문자열/None 등)
+        # "제한 없음"으로 취급한다.
+        def _to_float_or_none(v):
+            if v is None or v == "":
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
         _y_lo, _y_hi = (y_bounds if y_bounds else (None, None))
+        _y_lo, _y_hi = _to_float_or_none(_y_lo), _to_float_or_none(_y_hi)
 
         def _y_ok(py):
             if _y_lo is not None and py < _y_lo:
