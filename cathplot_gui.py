@@ -2238,20 +2238,36 @@ class CathPlotGUI:
             "comment_on": self.comment_on_var.get(),
             "arrow_on": self.arrow_on_var.get(),
             "circle_on": self.circle_on_var.get(),
+            # [수정 - 사용자 보고 버그] "Batch Set 결과에 왜 화면 중심쯤에
+            # 화살표/원이 나타나지?" - 화면엔 항상 빈 Comment/Arrow/Circle
+            # 입력줄이 기본으로 하나씩 떠 있는데(add_comment_row 등을
+            # create_widgets에서 초기 호출), 실제 plot(Interactive 등)에
+            # 쓰는 _collect_annotations/_collect_arrows/_collect_circles는
+            # 이 빈 줄을 걸러내지만 여기(Template Save가 쓰는 원본
+            # 직렬화)는 그 필터 없이 self.comment_list/arrow_list/
+            # circle_list를 통째로 그대로 저장했다 - 그래서 아무 내용도
+            # 안 채운 빈 줄이 "좌표 빈 문자열"인 채로 Template에 실제
+            # annotation처럼 저장되고, Batch Set이 이를 읽어 그리면서
+            # 좌표가 빈 값이라 임의의(대략 화면 중앙) 위치에 화살표/원이
+            # 그려졌다. 같은 기준(내용이 실제로 채워졌는지)으로 여기도
+            # 걸러서 저장한다.
             "annotations": [
                 {"txt": c['txt'].get(), "x": c['x'].get(), "y": c['y'].get(), "ang": c['ang'].get(),
                  "coord_mode": c['coord_mode'].get(), "color": c['color'].get()}
                 for c in self.comment_list
+                if c['txt'].get().strip() and c['x'].get().strip() and c['y'].get().strip()
             ],
             "arrows": [
                 {"x1": a['x1'].get(), "y1": a['y1'].get(), "x2": a['x2'].get(), "y2": a['y2'].get(), "type": a['type'].get(),
                  "coord_mode": a['coord_mode'].get(), "color": a['color'].get(), "size": a['size'].get()}
                 for a in self.arrow_list
+                if a['x1'].get().strip() and a['y1'].get().strip() and a['x2'].get().strip() and a['y2'].get().strip()
             ],
             "circles": [
                 {"x": e['x'].get(), "y": e['y'].get(), "rx": e['rx'].get(), "ry": e['ry'].get(),
                  "coord_mode": e['coord_mode'].get(), "color": e['color'].get()}
                 for e in self.circle_list
+                if e['x'].get().strip() and e['y'].get().strip() and e['rx'].get().strip()
             ],
 
             # --- var_no(output_no) 기준 curve 스타일: Color/Linestyle/Linewidth/Shift ---
@@ -3091,10 +3107,19 @@ class CathPlotGUI:
             frame_auto=data.get("frame_auto", True), frame_width=data.get("frame_width", ""),
             frame_height=data.get("frame_height", ""), frame_unit=data.get("frame_unit", "in"),
             curves=curves,
+            # [수정 - 사용자 보고 버그] 아래 세 목록 모두 "내용이 실제로
+            # 채워진 항목만" 남기도록 방어적으로 다시 거른다 - 이전에는
+            # Template Save(_template_dict)가 화면에 항상 떠 있는 빈
+            # 기본 입력줄까지 좌표 빈 문자열인 채로 그대로 저장해서, 이미
+            # 저장된 예전 Template들에 이런 "내용 없는" annotation이
+            # 섞여 있을 수 있다(원인은 저장 쪽에서 고쳤지만, 이미 저장된
+            # 파일들은 그대로 남아있으므로 읽는 쪽에서도 한 번 더 막아야
+            # 안전함).
             annotations=(
                 [{"text": c["txt"], "x": c["x"], "y": c["y"], "angle": c["ang"],
                   "coord_mode": c.get("coord_mode", "pct"), "color": COLOR_MAP.get(c.get("color", "Auto"), "")}
-                 for c in data.get("annotations", [])]
+                 for c in data.get("annotations", [])
+                 if str(c.get("txt", "")).strip() and str(c.get("x", "")).strip() and str(c.get("y", "")).strip()]
                 if data.get("comment_on", True) else []
             ),
             arrows=(
@@ -3102,13 +3127,16 @@ class CathPlotGUI:
                   "head": head_label_map.get(a["type"], "Forward"),
                   "coord_mode": a.get("coord_mode", "pct"), "color": COLOR_MAP.get(a.get("color", "Auto"), ""),
                   "head_size": self.ARROW_SIZE_MAP.get(a.get("size", "M"), self.ARROW_SIZE_MAP["M"])}
-                 for a in data.get("arrows", [])]
+                 for a in data.get("arrows", [])
+                 if str(a.get("x1", "")).strip() and str(a.get("y1", "")).strip()
+                 and str(a.get("x2", "")).strip() and str(a.get("y2", "")).strip()]
                 if data.get("arrow_on", True) else []
             ),
             circles=(
                 [{"x": e["x"], "y": e["y"], "rx": e["rx"], "ry": e.get("ry", ""),
                   "coord_mode": e.get("coord_mode", "pct"), "color": COLOR_MAP.get(e.get("color", "Auto"), "")}
-                 for e in data.get("circles", [])]
+                 for e in data.get("circles", [])
+                 if str(e.get("x", "")).strip() and str(e.get("y", "")).strip() and str(e.get("rx", "")).strip()]
                 if data.get("circle_on", True) else []
             ),
             is_print_mode=True,
@@ -5141,7 +5169,16 @@ class CathPlotGUI:
             for w in _pip_src_warn:
                 res["warnings"].append(f"{tname}: PIP {w}")
 
-        raw_name = (data.get("filename") or "").strip() or os.path.splitext(tname)[0]
+        # [수정 - 사용자 보고 버그] "Batch Set 결과가 원본dat파일명(Plot_File_
+        # Name)+batchset으로 나와서, 같은 dat 파일에서 만든 여러 template(예:
+        # 16개)이 실제로는 6개 파일로만 저장되며 서로 덮어씀 - 어떤 template을
+        # 열어도 그 결과가 (파일명이 겹친) 다른 template의 그림(엉뚱한
+        # Annotation/Legend 이름 등)으로 보이는 것도 전부 이 충돌이 근본
+        # 원인" - Plot_File_Name은 같은 dat 파일로 만든 여러 template이
+        # 흔히 공유하는 값이라 고유 식별자가 못 된다. 반면 template 자신의
+        # json 파일명은 사용자가 각각 구분해서 저장한 것이므로 항상 서로
+        # 다르다 - 출력 파일명은 항상 이 json 파일명 기준으로 만든다.
+        raw_name = os.path.splitext(tname)[0]
         safe_name = "".join(c for c in raw_name if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
         outfile = os.path.join(self.plot_dir, f"{safe_name}_batchset.{fmt}")
 
