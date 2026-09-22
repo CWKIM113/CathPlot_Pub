@@ -94,11 +94,14 @@ MARKER_SHAPE_MAP = {
     "None": (None, None),
     "Circle": (6, 7),
     "Square": (4, 5),
+    # [수정 - 사용자 요청] "marker 순서를 다이아몬드를 세모 앞으로" - 표시
+    # 순서(=이 dict의 키 순서를 그대로 쓰는 MARKER_SHAPE_LIST, 콤보박스
+    # 목록 순서)만 바꾼다. 각 gnuplot pointtype 번호 자체는 그대로.
+    "Diamond": (12, 13),
     "Triangle": (8, 9),
     "Tri-Down": (10, 11),
     "Tri-Left": ("◁", "◀"),
     "Tri-Right": ("▷", "▶"),
-    "Diamond": (12, 13),
     "Cross": (1, 1),
     "Star": (3, 3),
 }
