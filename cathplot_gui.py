@@ -5005,6 +5005,31 @@ class CathPlotGUI:
             width=6, state="readonly"
         ).pack(side="left")
 
+        # [추가 - 사용자 요청] "batch set에서 만들어지는 이미지파일명에 대한
+        # 사용자 선택 옵션 - template와 같은 파일명+batch, Plot_File_title+
+        # batch... 같은 파일이 존재하면 _#로 추가" - 출력 파일명을 무엇
+        # 기준으로 만들지 고를 수 있게 한다. "Template 파일명"(기본, 서로
+        # 다른 template은 항상 서로 다른 json 파일명이라 고유함이 보장됨)과
+        # "Plot Title"(원본 dat 파일명 기반이라 같은 dat로 만든 여러
+        # template이 흔히 겹침 - 그래서 겹치면 자동으로 "_2","_3"...을
+        # 붙여 절대 서로 덮어쓰지 않게 한다).
+        ttk.Label(btn_row, text="  이름 기준:").pack(side="left", padx=(10, 2))
+        NAME_MODE_DISPLAY = {"template": "Template 파일명", "title": "Plot Title"}
+        NAME_MODE_FROM_DISPLAY = {v: k for k, v in NAME_MODE_DISPLAY.items()}
+        name_mode_display_var = tk.StringVar(value=NAME_MODE_DISPLAY["template"])
+        ttk.Combobox(
+            btn_row, textvariable=name_mode_display_var,
+            values=list(NAME_MODE_DISPLAY.values()), width=13, state="readonly"
+        ).pack(side="left")
+
+        # [추가 - 사용자 요청] "굳이 batchset을 안 붙여도 될 듯한데... 아니면
+        # 간단히 bat만 붙이든지" - 접미사 자체를 직접 입력할 수 있게 한다
+        # (기본 "_bat"로 짧게, 완전히 비우면 접미사 없이 이름 그대로 저장 -
+        # 그래도 같은 이름이 이미 있으면 자동으로 "_2","_3"...는 그대로 붙음).
+        ttk.Label(btn_row, text=" 접미사:").pack(side="left", padx=(6, 2))
+        suffix_var = tk.StringVar(value="_bat")
+        ttk.Entry(btn_row, textvariable=suffix_var, width=8).pack(side="left")
+
         # [추가] "3D도 Batch에 연동" - 2D Template 각각에 3D curve/surface 적격
         # 조건(Y1 1개+Y2 1개, 또는 surface)이 있으면, 여기서 고른 3D Template(회전각/
         # Style/Marker 등)을 그대로 적용해서 3D 이미지도 같이 만든다. 3D Template은
@@ -5095,7 +5120,9 @@ class CathPlotGUI:
                 elif _choice == "saveas":
                     save_list()
             dlg.destroy()
-            self._run_batch_set_async(list(queue_list), fmt_var.get(), td3_path_var.get() or None)
+            _name_mode = NAME_MODE_FROM_DISPLAY.get(name_mode_display_var.get(), "template")
+            self._run_batch_set_async(list(queue_list), fmt_var.get(), td3_path_var.get() or None,
+                                       name_mode=_name_mode, out_suffix=suffix_var.get())
 
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
@@ -5196,7 +5223,7 @@ class CathPlotGUI:
         )
         return outfile
 
-    def _process_one_batch_set_item(self, tpath, fmt, td3_data):
+    def _process_one_batch_set_item(self, tpath, fmt, td3_data, name_mode="template", reserved_names=None, reserved_lock=None, out_suffix="_batchset"):
         """_run_batch_set의 항목 하나(템플릿 1개)를 처리해서 결과를 dict로
         반환한다(공유 리스트에 직접 쓰지 않음 - ThreadPoolExecutor로 여러
         항목을 동시에 처리해도, 결과 취합은 항상 메인(관리) 스레드의
@@ -5242,18 +5269,42 @@ class CathPlotGUI:
             for w in _pip_src_warn:
                 res["warnings"].append(f"{tname}: PIP {w}")
 
-        # [수정 - 사용자 보고 버그] "Batch Set 결과가 원본dat파일명(Plot_File_
-        # Name)+batchset으로 나와서, 같은 dat 파일에서 만든 여러 template(예:
-        # 16개)이 실제로는 6개 파일로만 저장되며 서로 덮어씀 - 어떤 template을
-        # 열어도 그 결과가 (파일명이 겹친) 다른 template의 그림(엉뚱한
-        # Annotation/Legend 이름 등)으로 보이는 것도 전부 이 충돌이 근본
-        # 원인" - Plot_File_Name은 같은 dat 파일로 만든 여러 template이
-        # 흔히 공유하는 값이라 고유 식별자가 못 된다. 반면 template 자신의
-        # json 파일명은 사용자가 각각 구분해서 저장한 것이므로 항상 서로
-        # 다르다 - 출력 파일명은 항상 이 json 파일명 기준으로 만든다.
-        raw_name = os.path.splitext(tname)[0]
-        safe_name = "".join(c for c in raw_name if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
-        outfile = os.path.join(self.plot_dir, f"{safe_name}_batchset.{fmt}")
+        # [수정 - 사용자 보고 버그, 이후 요청으로 선택 옵션화] "Batch Set
+        # 결과가 원본dat파일명(Plot_File_Name)+batchset으로 나와서, 같은
+        # dat 파일에서 만든 여러 template(예: 16개)이 실제로는 6개 파일로만
+        # 저장되며 서로 덮어씀" - Plot_File_Name은 같은 dat 파일로 만든
+        # 여러 template이 흔히 공유하는 값이라 고유 식별자가 못 된다.
+        # 기본은 template 자신의 json 파일명(항상 서로 다름) 기준으로
+        # 만들되, 사용자가 "Plot Title" 기준을 직접 고르면 그 값을 쓴다
+        # (요청). 접미사("_batchset")도 "굳이 안 붙여도 될 듯... 아니면
+        # 간단히 bat만"이라는 요청에 따라 직접 입력(기본 "_bat", 비우면
+        # 접미사 없음)할 수 있게 함. 이름이 겹치면(디스크에 이미 있던
+        # 파일 포함, 또는 접미사를 비워 같은 template 이름끼리 겹치는
+        # 경우) "_2","_3"...를 붙여 절대 서로 덮어쓰지 않는다 - 후보
+        # 파일명 자체가 실제로 존재하는지(디스크 + 이번 배치에서 이미
+        # 예약된 이름) 직접 확인하는 방식이라 접미사 유무와 무관하게
+        # 항상 안전하다.
+        if name_mode == "title":
+            raw_name = (data.get("filename") or "").strip() or os.path.splitext(tname)[0]
+        else:
+            raw_name = os.path.splitext(tname)[0]
+        base_safe_name = "".join(c for c in raw_name if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
+        _suffix = "".join(c for c in (out_suffix or "") if c.isalnum() or c in ("_", "-"))
+
+        def _candidate_stem(n):
+            base = base_safe_name if n <= 1 else f"{base_safe_name}_{n}"
+            return f"{base}{_suffix}"
+
+        safe_stem = _candidate_stem(1)
+        if reserved_names is not None and reserved_lock is not None:
+            with reserved_lock:
+                n = 1
+                safe_stem = _candidate_stem(n)
+                while safe_stem in reserved_names or os.path.exists(os.path.join(self.plot_dir, f"{safe_stem}.{fmt}")):
+                    n += 1
+                    safe_stem = _candidate_stem(n)
+                reserved_names.add(safe_stem)
+        outfile = os.path.join(self.plot_dir, f"{safe_stem}.{fmt}")
 
         try:
             plotdef, font_warn = self._check_and_fix_fonts(plotdef)
@@ -5268,7 +5319,7 @@ class CathPlotGUI:
             res["errors"].append(f"{tname}: 저장 실패 ({e})")
 
         if td3_data is not None:
-            outfile_3d = os.path.join(self.plot_dir, f"{safe_name}_batchset_3D.{fmt}")
+            outfile_3d = os.path.join(self.plot_dir, f"{safe_stem}_3D.{fmt}")
             try:
                 result = self._render_3d_from_template_data(data, td3_data, outfile_3d, fmt)
                 if result:
@@ -5280,7 +5331,7 @@ class CathPlotGUI:
 
         return res
 
-    def _run_batch_set(self, template_paths, fmt, progress_callback=None, td3_path=None):
+    def _run_batch_set(self, template_paths, fmt, progress_callback=None, td3_path=None, name_mode="template", out_suffix="_batchset"):
         """template_paths(각각 완전한 plot 사양이 담긴 *.json)를 병렬로 처리해서
         이미지로 저장한다. self.xxx_var.get() 같은 Tkinter 접근을 안 하므로
         백그라운드 스레드에서 호출해도 안전함.
@@ -5311,10 +5362,22 @@ class CathPlotGUI:
                 td3_path = None
                 td3_data = None
 
+        # [추가 - 사용자 요청] "이름 기준(Plot Title)을 고르면 같은 dat
+        # 파일에서 만든 여러 template이 흔히 같은 이름으로 겹침 - 그 경우
+        # 서로 덮어쓰지 않고 자동으로 _2, _3...을 붙여야 함" - 여러
+        # template이 ThreadPoolExecutor로 동시에 처리되므로, "이번
+        # 배치에서 이미 이 파일명을 예약했다"를 스레드 안전하게 기록/
+        # 조회할 lock 하나를 만들어 각 작업자에게 넘긴다(실제 충돌 검사는
+        # _process_one_batch_set_item 안에서 디스크의 실제 파일 존재 여부
+        # 까지 함께 확인).
+        _reserved_lock = threading.Lock()
+        _reserved_names = set()
+
         done = 0
         with ThreadPoolExecutor(max_workers=_BATCH_MAX_WORKERS) as executor:
             futures = {
-                executor.submit(self._process_one_batch_set_item, tpath, fmt, td3_data): tpath
+                executor.submit(self._process_one_batch_set_item, tpath, fmt, td3_data,
+                                 name_mode, _reserved_names, _reserved_lock, out_suffix): tpath
                 for tpath in template_paths
             }
             for future in as_completed(futures):
@@ -5346,7 +5409,7 @@ class CathPlotGUI:
             msg += f"\n\n경고 {len(warnings)}건이 로그에 기록되었습니다: {log_path}"
         self.root.after(0, lambda m=msg: messagebox.showinfo("Batch Set", m))
 
-    def _run_batch_set_async(self, template_paths, fmt, td3_path=None):
+    def _run_batch_set_async(self, template_paths, fmt, td3_path=None, name_mode="template", out_suffix="_batchset"):
         """Batch Set을 백그라운드 스레드에서 실행하며 진행창을 보여준다."""
         job_id = self._register_batch_job("Batch Set", len(template_paths))
 
@@ -5378,7 +5441,8 @@ class CathPlotGUI:
 
         def worker():
             try:
-                self._run_batch_set(template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path)
+                self._run_batch_set(template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path,
+                                     name_mode=name_mode, out_suffix=out_suffix)
             finally:
                 # [추가 - 요청] 작업이 끝났으니(성공/오류 무관) 실행 중 목록에서
                 # 뺀다. dict 조작은 메인 스레드에서만 하도록 after(0, ...)로 넘김.
