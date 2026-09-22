@@ -5218,6 +5218,21 @@ class CathPlotGUI:
             res["errors"].append(f"{tname}: {e}")
             return res
 
+        # [수정 - 사용자 보고 버그] "Batch Set으로 1plot을 그리면 title/tic/
+        # legend 폰트가 그림 대비 너무 작음" - execute_plot_pipeline(화면의
+        # PLOT/SAVE/PRINT 버튼이 쓰는 경로)은 "Axis Frame Auto가 켜진 채로
+        # 파일 출력하면 항상 기준 10x8cm로 계산"하는 로직이 있는데(그렇게
+        # 안 하면 create_script가 Auto를 "11.7x8.3in 인쇄 페이지" 크기로
+        # 가정해버려 캔버스가 훨씬 커지고, 절대 pt 크기인 폰트는 그대로라
+        # 상대적으로 작아 보임), Batch Set/Queue는 이 함수에서 바로
+        # create_script를 불러 그 로직을 거치지 않는다 - template에 저장된
+        # frame_auto가 True(흔한 기본값)면 그대로 Auto로 렌더링돼 이 문제가
+        # 재현된다. 같은 해석(Auto -> 10x8cm Manual)을 여기서도 적용한다.
+        if plotdef.frame_auto:
+            plotdef.frame_auto = False
+            plotdef.frame_width, plotdef.frame_height = self._compute_auto_frame_size_cm(for_print=True)
+            plotdef.frame_unit = "cm"
+
         # [추가 - 사용자 질문/요청] PIP가 ".plt 파일" 소스를 쓰는데 그 파일이
         # 참조하던 dat(정렬 캐시나 원본)를 이 기기/폴더에서 못 찾은 경우
         # (_resolve_pip_dict_for_batch가 채워둠) - 조용히 빠지지 않고 다른
@@ -6123,6 +6138,15 @@ class CathPlotGUI:
             x_output_no=x_output_no,
             extra_gnuplot=settings.get("extra_gnuplot", ""),
         )
+
+        # [수정 - 사용자 보고 버그] Batch Set과 동일한 이유 - Axis Frame
+        # Auto면 execute_plot_pipeline과 같은 기준(10x8cm)으로 확정해서
+        # Auto의 "11.7x8.3in 인쇄 페이지" 가정 때문에 폰트가 상대적으로
+        # 작아 보이는 문제를 막는다.
+        if plotdef.frame_auto:
+            plotdef.frame_auto = False
+            plotdef.frame_width, plotdef.frame_height = self._compute_auto_frame_size_cm(for_print=True)
+            plotdef.frame_unit = "cm"
 
         base_stem = os.path.splitext(os.path.basename(abs_path))[0]
         outfile = os.path.join(self.plot_dir, f"{base_stem}_batch.{fmt}")
