@@ -3713,7 +3713,15 @@ class GnuplotGenerator:
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
         lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{_ylabel_size_emit}" offset {_ylabel_offset:.2f},0 {ylabel_enh}')
 
-        if plotdef.y2label:
+        # [수정 - 사용자 보고 버그] "Y2 unselect/All Clear 해도 이전 y2
+        # title이 그대로 남아있음" - 여기는 지금까지 plotdef.y2label
+        # 문자열이 비어있는지만 봤지, Y2 축이 실제로 쓰이는지(uses_y2)는
+        # 전혀 확인하지 않았다. GUI의 y2label 입력칸 자체가 Y2 변수를
+        # 선택 해제해도 즉시 안 비워지는 경우가 있어(값이 남아있음), Y2를
+        # 전혀 안 쓰는 plot에도 예전 title이 그대로 그려졌다. uses_y2가
+        # False면(=이 plot에 실제 y2 curve가 하나도 없으면) 텍스트가
+        # 남아있어도 title 자체를 안 그리도록 방어적으로 막는다.
+        if plotdef.y2label and uses_y2:
             # [수정 - 버그] "MFLO:R-SDRT1>L-STLF1" 같은 y2 title이 tic 숫자와
             # 겹침(port/land 공통) - 실제 저장 파일(out111_L.emf)로 재현해서
             # 원인을 찾음: 바로 위 y1 주석의 "Y2는 왼쪽 -"라는 가정이 틀렸었음
