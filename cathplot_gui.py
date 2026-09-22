@@ -5644,9 +5644,30 @@ class CathPlotGUI:
             foreground="#555555"
         ).pack(padx=10, pady=(4, 0), anchor="w")
 
+        # [추가 - 사용자 요청] "마커를 선택하면 auto로 순서대로 속빈 마커/
+        # 다음 set은 속이찬 마커로 순서대로" - 여러 curve를 매번 손으로
+        # 하나씩 고르지 않아도, 한 번 눌러서 Curve 순서(위 목록과 동일한
+        # _ordered_keys)대로 서로 다른 모양을 자동 배정한다. 도형
+        # 목록(None 제외)을 한 바퀴 돌 때는 속 빈(hollow) 버전을, 그
+        # 다음(curve 수가 도형 수보다 많을 때) 바퀴는 같은 도형의 속 찬
+        # (filled) 버전을 이어서 배정해 - 도형 수(None 제외 10개) x 2(빈/
+        # 참) = 20개 조합을 다 쓸 때까지 최대한 서로 다르게 보이도록 한다.
+        # 이미 골라둔 값이 있어도 항상 이 순서로 다시 채운다(예측 가능한
+        # 한 번의 초기화 버튼).
+        def _auto_assign_markers():
+            shapes = [s for s in MARKER_SHAPE_LIST if s != "None"]
+            n_shapes = len(shapes)
+            if n_shapes == 0:
+                return
+            for i, key in enumerate(_ordered_keys):
+                lap, shape_idx = divmod(i, n_shapes)
+                self.marker_shape_vars[key].set(shapes[shape_idx])
+                self.marker_fill_vars[key].set(bool(lap % 2 == 1))
+
         btn_row = ttk.Frame(popup)
         btn_row.pack(fill="x", padx=10, pady=8)
         ttk.Button(btn_row, text="완료", command=popup.destroy).pack(side="right")
+        ttk.Button(btn_row, text="Auto(순서대로 배정)", command=_auto_assign_markers).pack(side="right", padx=(0, 6))
 
     # ------------------------------------------------------------------
     # Function Curve(2D) - 데이터 파일 없이 gnuplot 수식(삼각함수/다항식/
