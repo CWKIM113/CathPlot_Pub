@@ -3003,7 +3003,24 @@ class CathPlotGUI:
             raise ValueError("이 템플릿에는 파일/변수 지정(file_assignments)이 없습니다 "
                               "(Template Save 시 화면에 dat 파일이 로드되어 있지 않았을 수 있음).")
 
-        style_by_no = {item["output_no"]: item for item in data.get("curve_styles", [])}
+        # [수정 - 사용자 보고 버그] "Batch Set 결과 Legend Title이 원본
+        # 변수명으로 나타남(개별 화면에서는 사용자가 고친 이름이 제대로
+        # 나옴)" - curve_styles 각 항목엔 사용자가 고친 legend 텍스트가
+        # "legend" 필드로, 그리고 어느 파일의 것인지 구분하는 "file"
+        # 필드도 같이 저장돼 있는데(레시피 필드의 file은 "여러 파일에
+        # 재사용" 용도인 Batch Queue에서는 의도적으로 무시하지만, Batch
+        # Set은 template 하나하나가 이미 특정 파일 조합 전용이라 이 값을
+        # 그대로 써야 함), 여기서는 output_no만으로 매칭해서 그 두 필드를
+        # 전혀 안 썼다 - 같은 output_no를 쓰는 파일이 이 template 안에
+        # 여러 개면(흔함) 스타일이 서로 뒤섞이는 문제도 같이 있었음.
+        # "파일||output_no"로 먼저 찾고(정확한 매칭), 없으면(file 필드가
+        # 없는 예전 template 호환용) output_no만으로 한 번 더 시도한다.
+        style_by_file_no = {}
+        style_by_no = {}
+        for item in data.get("curve_styles", []):
+            style_by_no[item["output_no"]] = item
+            if item.get("file"):
+                style_by_file_no[f'{item["file"]}||{item["output_no"]}'] = item
 
         curves = []
         default_x_output_no = 0
@@ -3034,9 +3051,10 @@ class CathPlotGUI:
                 for var_item in var_list:
                     # 숫자(output_no) 형식이 기본이지만, 혹시 남아있는 예전 dict 형식도 방어적으로 지원
                     output_no = var_item["output_no"] if isinstance(var_item, dict) else var_item
-                    style = style_by_no.get(output_no, {})
+                    style = style_by_file_no.get(f"{rel_path}||{output_no}") or style_by_no.get(output_no, {})
                     var_obj = var_by_no.get(output_no)
-                    legend_text = var_obj.display_name if var_obj else f"var_{output_no}"
+                    _saved_legend = str(style.get("legend", "")).strip()
+                    legend_text = _saved_legend or (var_obj.display_name if var_obj else f"var_{output_no}")
                     try:
                         # [수정 - 요청] "선택한 순서대로 curve 그리기"가 Batch
                         # Set에도 반영되도록, 여기서는 (order_key, curve)
