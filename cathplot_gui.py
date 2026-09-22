@@ -5535,12 +5535,15 @@ class CathPlotGUI:
         # Max# 칸에는 정수만 입력되도록 (빈 값은 허용 - Auto 의미)
         vcmd = (popup.register(lambda s: s == "" or s.isdigit()), "%P")
 
-        seen = set()
+        # [수정 - 사용자 보고 버그] "Marker 순서가 Curves(선택 순서)와 안
+        # 맞고 dat list 순서로 나옴" - selected_y1_vars/selected_y2_vars
+        # dict를 그대로 돌면 그 dict의 삽입 순서(=화면에 나열된 dat 변수
+        # 목록 순서)를 따르게 되는데, 이는 Legend/curve_order 등 다른
+        # 곳에서 이미 쓰는 "사용자가 클릭(선택)한 순서"(_ordered_selected_
+        # keys)와 다르다 - 같은 기준으로 통일한다.
+        _ordered_keys, _y1_set, _y2_set = self._ordered_selected_keys()
         any_added = False
-        for key, var in list(self.selected_y1_vars.items()) + list(self.selected_y2_vars.items()):
-            if not var.get() or key in seen:
-                continue
-            seen.add(key)
+        for key in _ordered_keys:
             any_added = True
 
             if key not in self.marker_shape_vars:
