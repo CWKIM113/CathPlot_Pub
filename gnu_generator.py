@@ -1451,19 +1451,32 @@ class GnuplotGenerator:
                 axis_max = axis_min * 10
             return axis_min, axis_max, step
 
-        # [수정] 선형축은 계산된 min/max를 정수로 취한다. Min은 데이터 자체가
-        # 정수면(예: x_min=0) 패딩 없이 그대로 사용해서 0부터 시작하는 등
-        # 자연스러운 값이 유지되게 한다. [버그 수정] 이전엔 min/max가 둘 다
-        # 정수면 max에도 패딩을 아예 안 줘서 데이터가 축 끝에 딱 붙어버리는
-        # 문제가 있었음(예: 실 데이터 min=310,max=360인데 축도 그대로
-        # 310~360) - Max는 정수여도 항상 여유를 준다.
-        data_min_is_int = abs(data_min - round(data_min)) < 1e-9
-        if data_min_is_int:
-            axis_min = float(round(data_min))
-            axis_max = math.ceil(data_max + span * 0.05)
+        # [수정 - 사용자 보고 버그] "y1 auto range가 데이터(7.00~7.134)보다
+        # 훨씬 넓게(7~8) 잡히고, tic도 너무 많이(0.05 간격으로 8~9년로 좍)
+        # 나옴" - 원인: 아래에서 min/max를 항상 "정수(1의 배수)"로만
+        # 내림/올림했는데, 이건 위에서 방금 계산한 tic 간격(step, 예:
+        # 0.05)과 완전히 다른 기준이라 - 데이터 폭이 1보다 훨씬 좁아도
+        # 축은 무조건 정수 경계까지 넓어지고, 그 넓어진(1에 가까운) 폭에
+        # step(0.05 같은 작은 값)을 그대로 적용하면 tic이 수십 개가
+        # 찍혔다. "정수" 대신 "위에서 이미 계산한 step의 배수"로
+        # 내림/올림하면, 데이터 폭에 비례해 자연스럽게 소수 자리까지
+        # 반영되면서 tic 개수도 항상 일정하게 유지된다(요청하신 "5, 0.5,
+        # 0.05 등 기준" 아이디어와 동일한 효과 - step 자체가 이미 1-2-2.5-5
+        # 계열로 "보기 좋은" 값이므로 별도 기준표가 필요 없음). 기존에
+        # min이 "정수"면 패딩 없이 그대로 쓰던 동작은 "min이 step의
+        # 배수"면 패딩 없이 그대로 쓰는 것으로 그대로 유지(0부터 시작하는
+        # 흔한 경우는 예전과 동일하게 동작).
+        _round_unit = step if step > 0 else 1.0
+        _min_over_unit = data_min / _round_unit
+        data_min_is_nice = abs(_min_over_unit - round(_min_over_unit)) < 1e-6
+        if data_min_is_nice:
+            axis_min = round(_min_over_unit) * _round_unit
+            axis_max = math.ceil((data_max + span * 0.05) / _round_unit) * _round_unit
         else:
-            axis_min = math.floor(data_min - span * 0.05)
-            axis_max = math.ceil(data_max + span * 0.05)
+            axis_min = math.floor((data_min - span * 0.05) / _round_unit) * _round_unit
+            axis_max = math.ceil((data_max + span * 0.05) / _round_unit) * _round_unit
+        if axis_min >= axis_max:
+            axis_max = axis_min + _round_unit
         return axis_min, axis_max, step
 
     def _curve_y_range_in_x_window(self, plotdef, axis, x_lo, x_hi):
