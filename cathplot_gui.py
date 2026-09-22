@@ -103,6 +103,10 @@ MARKER_SHAPE_MAP = {
     "Tri-Left": ("◁", "◀"),
     "Tri-Right": ("▷", "▶"),
     "Cross": (1, 1),
+    # [추가 - 사용자 요청] "gnuplot에 오각형도 있는지 -> Pentagon을 별
+    # 앞에 추가" - 실제 gnuplot(pngcairo)으로 pointtype 14/15가 속
+    # 빈/채운 오각형임을 렌더링으로 확인 후 추가.
+    "Pentagon": (14, 15),
     "Star": (3, 3),
 }
 MARKER_SHAPE_LIST = list(MARKER_SHAPE_MAP.keys())
@@ -862,6 +866,9 @@ class CathPlotGUI:
         # 하는 방안은 없는지?" - Y2를 실제로 쓰더라도(legend로만 구분)
         # 오른쪽 축 tic 눈금/숫자를 완전히 끌 수 있는 옵션.
         self.y2tics_on_var = tk.BooleanVar(value=True)
+        # [추가 - 사용자 요청] "Tic num 체크박스는 y1에도 있나요?" - Y2와
+        # 같은 옵션을 Y1(왼쪽 축)에도 적용.
+        self.ytics_on_var = tk.BooleanVar(value=True)
 
         self.legend_on_var = tk.BooleanVar(value=True)
         self.legend_box_var = tk.BooleanVar(value=True)
@@ -1390,6 +1397,8 @@ class CathPlotGUI:
         y1fmt_combo = ttk.Combobox(y1_log_f, textvariable=self.y1fmt_var, values=FMT_LIST, width=7, state="readonly")
         y1fmt_combo.pack(side="left", padx=(2, 0))
         self._disable_combobox_wheel(y1fmt_combo)
+        # [추가 - 사용자 요청] Y2와 동일한 "Tics" 표시/숨김 옵션을 Y1에도.
+        self._mk_check(y1_log_f, "Tics", self.ytics_on_var, side="left")
 
         y2_auto_f = ttk.Frame(self.plot_frame)
         y2_auto_f.grid(row=5, column=4, sticky="w", padx=2, pady=2)
@@ -2234,6 +2243,7 @@ class CathPlotGUI:
             "yauto": self.yauto_var.get(),
             "y2auto": self.y2auto_var.get(),
             "y2tics_on": self.y2tics_on_var.get(),
+            "ytics_on": self.ytics_on_var.get(),
             "xlog": self.xlog_var.get(), "y1log": self.y1log_var.get(), "y2log": self.y2log_var.get(),
             "xfmt": self.xfmt_var.get(), "y1fmt": self.y1fmt_var.get(), "y2fmt": self.y2fmt_var.get(),
             "xmin": self.xmin_var.get(), "xmax": self.xmax_var.get(),
@@ -2704,6 +2714,7 @@ class CathPlotGUI:
             self.yauto_var.set(data.get("yauto", self.yauto_var.get()))
             self.y2auto_var.set(data.get("y2auto", self.y2auto_var.get()))
             self.y2tics_on_var.set(data.get("y2tics_on", self.y2tics_on_var.get()))
+            self.ytics_on_var.set(data.get("ytics_on", self.ytics_on_var.get()))
             self.xmin_var.set(data.get("xmin", self.xmin_var.get()))
             self.xmax_var.set(data.get("xmax", self.xmax_var.get()))
             self.ymin_var.set(data.get("ymin", self.ymin_var.get()))
@@ -3116,7 +3127,7 @@ class CathPlotGUI:
             ymin=data.get("ymin", ""), ymax=data.get("ymax", ""),
             y2min=data.get("y2min", ""), y2max=data.get("y2max", ""),
             xtics=data.get("xtics", ""), ytics=data.get("ytics", ""), y2tics=data.get("y2tics", ""),
-            y2tics_on=data.get("y2tics_on", True),
+            y2tics_on=data.get("y2tics_on", True), ytics_on=data.get("ytics_on", True),
             mxtics=data.get("mxtics", ""), mytics=data.get("mytics", ""), my2tics=data.get("my2tics", ""),
             major_grid=data.get("major_grid", True), minor_grid=data.get("minor_grid", False),
             legend_on=data.get("legend_on", True), legend_box=data.get("legend_box", True),
@@ -5977,7 +5988,7 @@ class CathPlotGUI:
             "ylabel": self.ylabel_var.get(),
             "y2label": self.y2label_var.get(),
             "xauto": self.xauto_var.get(), "yauto": self.yauto_var.get(), "y2auto": self.y2auto_var.get(),
-            "y2tics_on": self.y2tics_on_var.get(),
+            "y2tics_on": self.y2tics_on_var.get(), "ytics_on": self.ytics_on_var.get(),
             "xlog": self.xlog_var.get(), "y1log": self.y1log_var.get(), "y2log": self.y2log_var.get(),
             "xfmt": self.xfmt_var.get(), "y1fmt": self.y1fmt_var.get(), "y2fmt": self.y2fmt_var.get(),
             "xmin": self.xmin_var.get(), "xmax": self.xmax_var.get(),
@@ -6076,7 +6087,7 @@ class CathPlotGUI:
             y2label=settings["y2label"],
             output_format="Batch",
             xauto=settings["xauto"], yauto=settings["yauto"], y2auto=settings["y2auto"],
-            y2tics_on=settings.get("y2tics_on", True),
+            y2tics_on=settings.get("y2tics_on", True), ytics_on=settings.get("ytics_on", True),
             xlog=settings.get("xlog", False), y1log=settings.get("y1log", False), y2log=settings.get("y2log", False),
             xfmt=settings.get("xfmt", "Normal"), y1fmt=settings.get("y1fmt", "Normal"), y2fmt=settings.get("y2fmt", "Normal"),
             xmin=settings["xmin"], xmax=settings["xmax"],
@@ -10165,6 +10176,7 @@ class CathPlotGUI:
                 ytics=self.ytics_var.get(),
                 y2tics=self.y2tics_var.get(),
                 y2tics_on=self.y2tics_on_var.get(),
+                ytics_on=self.ytics_on_var.get(),
                 mxtics=self.mxtics_var.get(),
                 mytics=self.mytics_var.get(),
                 my2tics=self.my2tics_var.get(),

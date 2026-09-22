@@ -469,6 +469,8 @@ MARKER_Y_OFFSET = {
     12: 0.075, 13: 0.075,  # Diamond
     1: 0.04,                # Cross(+)
     3: 0.01,                # Star
+    14: 0.075, 15: 0.075,  # Pentagon - [추가] 아직 실측 전, Diamond와 비슷한 크기의
+                            # 닫힌 다각형이라 같은 값을 임시로 사용(재보고 있으면 조정)
     "◁": 0.075, "◀": 0.075, "▷": 0.075, "▶": 0.075,  # Tri-Left/Right
 }
 # [수정 - 사용자 재보고, "반대 방향" 가정이 틀렸음을 실측으로 확인] 예전
@@ -496,6 +498,7 @@ MARKER_Y_OFFSET_SCREEN = {
     12: 0.09, 13: 0.09,     # Diamond
     1: 0.06,                 # Cross(+) - 아직 화면 미확인
     3: 0.02,                 # Star - 아직 화면 미확인
+    14: 0.09, 15: 0.09,     # Pentagon - 아직 화면 미확인, Diamond와 같은 값 임시 사용
     "◁": 0.11, "◀": 0.11, "▷": 0.11, "▶": 0.11,  # Tri-Left/Right - 아직 화면 미확인
 }
 # 위와 같은 이유로, 기호별 em-box 잉크 크기 차이를 보정하는 폰트 크기 배율
@@ -803,6 +806,9 @@ class PlotDefinition:
     # 눈금/숫자 자체를 완전히 숨기고 싶을 때(Y2는 legend로만 구분하고
     # 축은 안 보이게) 끄는 옵션. 기본은 True(기존과 동일하게 항상 표시).
     y2tics_on: bool = True
+    # [추가 - 사용자 요청] "Tic num 체크박스는 y1에도 있나요?" - Y2와
+    # 같은 개념을 Y1(왼쪽 축)에도 적용.
+    ytics_on: bool = True
 
     mxtics: str = ""
     mytics: str = ""
@@ -3075,7 +3081,11 @@ class GnuplotGenerator:
         # Log scale 축은 자동 계산된 선형 tic 간격(예: '5')을 그대로 쓰면 10의
         # 거듭제곱이 아닌 이상한 위치에 눈금이 찍히므로, 사용자가 Tics를 직접
         # 입력하지 않았다면 log에서는 'auto'(gnuplot이 알아서 10^n 배치)를 사용
-        if plotdef.ytics:
+        if not getattr(plotdef, "ytics_on", True):
+            # [추가 - 사용자 요청] "Tic num 체크박스는 y1에도 있나요?" -
+            # Y2와 동일한 이유로 Y1(왼쪽 축) tic/숫자도 완전히 끌 수 있게.
+            lines.append("unset ytics")
+        elif plotdef.ytics:
             lines.append(f"set ytics {plotdef.ytics}")
         elif getattr(plotdef, "y1log", False):
             lines.append("set ytics auto")
@@ -3084,7 +3094,7 @@ class GnuplotGenerator:
         else:
             lines.append("set ytics auto")
         _y1fmt = _tic_fmt_clause(getattr(plotdef, "y1fmt", "Normal"), getattr(plotdef, "y1log", False))
-        if _y1fmt:
+        if _y1fmt and getattr(plotdef, "ytics_on", True):
             lines.append(f'set format y "{_y1fmt}"')
         if not getattr(plotdef, "y2tics_on", True):
             # [추가 - 사용자 요청] "y2 data 선택 있어도 tic 및 num을 안
@@ -3440,7 +3450,10 @@ class GnuplotGenerator:
         # gnuplot이 직전 상태(PIP의 nomirror)를 그대로 물려받아 상단 tic이
         # 계속 안 보이는 것으로 보임 - 매번 명시적으로 mirror를 켠다.
         lines.append(f"set xtics font '{plotdef.xlabel_font},{tic_size}' mirror")
-        lines.append(f"set ytics font '{plotdef.ylabel_font},{tic_size}'")
+        # [수정] set y2tics font와 동일한 이유 - ytics_on이 꺼져 있으면
+        # 이 줄(폰트 지정) 자체가 tic을 다시 켜므로 건너뛴다.
+        if getattr(plotdef, "ytics_on", True):
+            lines.append(f"set ytics font '{plotdef.ylabel_font},{tic_size}'")
         # [수정 - 사용자 보고 버그] "y2tics_on=False로 위에서 unset y2tics를
         # 했는데도 y2 tic이 다시 보임" - "set y2tics font ..."는 폰트만
         # 지정하는 것 같지만 gnuplot에서는 이 명령 자체가 y2tics를 다시
@@ -3841,7 +3854,12 @@ class GnuplotGenerator:
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
             lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{_y2label_size_emit}" offset {_y2label_offset:.2f},0 {y2label_enh}')
 
-        lines.append("set ytics nomirror")
+        # [수정 - 사용자 보고 버그] 같은 이유(set Xtics 뒤에 어떤 옵션이든
+        # 붙으면 gnuplot이 tic을 다시 켬)로, ytics_on이 꺼져 있으면 이
+        # "nomirror" 전용 줄도 건너뛴다(실제 렌더링으로 재현 확인 -
+        # unset ytics 뒤에 "set ytics nomirror"만 있어도 tic이 다시 보임).
+        if getattr(plotdef, "ytics_on", True):
+            lines.append("set ytics nomirror")
 
         lines.append("unset key")  # 두 legend 모두 수동으로 직접 그리므로 네이티브 key는 항상 끔
 
