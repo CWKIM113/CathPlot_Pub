@@ -275,10 +275,16 @@ class CathPlotGUI:
         self.y1_title_auto = True
         self.y2_title_auto = True
         self.x_title_auto = True
+        # [추가 - 사용자 보고 버그] "Axis Title처럼, 사용자가 입력한 경우
+        # Plot Title도 계속 사용하게" - X/Y1/Y2 축 제목과 같은 "칸이
+        # 비어있으면 자동(파일에서 따라옴), 사용자가 뭔가 입력하면 그
+        # 값을 유지" 규칙을 Plot Title에도 그대로 적용한다.
+        self.plot_title_auto = True
 
         self._updating_y1 = False
         self._updating_y2 = False
         self._updating_x = False
+        self._updating_title = False
 
         self.layout_var = tk.StringVar(value="Auto")  # 미선언으로 인한 에러 차단
         self.orientation_var = tk.StringVar(value="portrait")
@@ -1606,6 +1612,7 @@ class CathPlotGUI:
         self.ylabel_var.trace_add("write", lambda *args: self.on_y1_title_changed(*args))
         self.y2label_var.trace_add("write", lambda *args: self.on_y2_title_changed(*args))
         self.xlabel_var.trace_add("write", lambda *args: self.on_x_title_changed(*args))
+        self.title_var.trace_add("write", lambda *args: self.on_plot_title_changed(*args))
 
         # [수정] content_height(Text 위젯이 포함된 raw_gnuplot_frame 때문에
         # winfo_reqheight()가 실제보다 작게 잡히는 경우가 있어, 맨 아래 행
@@ -6405,11 +6412,22 @@ class CathPlotGUI:
         if target_files:
             first_filename = target_files[0]["filename"]
             base_name = os.path.splitext(os.path.basename(first_filename))[0]
-            self.title_var.set(base_name)
-            self.filename_var.set(base_name)
         else:
-            self.title_var.set("CathPlot")
-            self.filename_var.set("CathPlot")
+            base_name = "CathPlot"
+        # [수정 - 사용자 보고 버그] "Axis Title처럼, 사용자가 입력한 경우
+        # Plot Title도 계속 사용하게 해 줘요. 지금은 Dat File명으로 바뀜" -
+        # 지금까지는 파일이 바뀔 때마다 Plot Title을 무조건 새 파일명으로
+        # 덮어써서, 사용자가 직접 고친 제목도 파일을 추가/삭제/재선택할
+        # 때마다 사라졌음. X/Y1/Y2 축 제목과 같은 규칙(칸이 비어있을 때만
+        # 자동으로 파일명을 따라가고, 사용자가 뭔가 입력해두면 그 값을
+        # 유지)을 Plot Title에도 적용한다. filename_var(저장 파일명
+        # 기본값)는 기존처럼 항상 최신 파일명을 따라간다(제목과 별개로,
+        # 저장할 때 파일명 제안 용도라 계속 최신이 유용함).
+        self.filename_var.set(base_name)
+        if self.plot_title_auto:
+            self._updating_title = True
+            self.title_var.set(base_name)
+            self._updating_title = False
 
     # [추가] "%"(0~100 graph 비율)와 "좌표값"(실제 데이터 값, 화면 좌하단
     # 커서 좌표 그대로 입력) 두 모드를 각 행에서 토글로 고를 수 있게 한다 -
@@ -6946,6 +6964,10 @@ class CathPlotGUI:
     def on_x_title_changed(self, *args):
         if self._updating_x: return
         self.x_title_auto = (self.xlabel_var.get().strip() == "")
+
+    def on_plot_title_changed(self, *args):
+        if self._updating_title: return
+        self.plot_title_auto = (self.title_var.get().strip() == "")
 
     def on_y1_title_changed(self, *args):
         if self._updating_y1: return
