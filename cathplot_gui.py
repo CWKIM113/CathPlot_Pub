@@ -4674,7 +4674,12 @@ class CathPlotGUI:
         os.makedirs(template_dir, exist_ok=True)
 
         queue_list = []
-        listbox = tk.Listbox(dlg, width=90, height=14)
+        # [수정 - 사용자 요청] "여러 파일을 한번에 선택되게(ctrl+click,
+        # shift+click), Add Template의 입력 선택창처럼" - 기본
+        # selectmode("browse")는 한 번에 하나만 선택되는데, "extended"로
+        # 바꾸면 탐색기/파일 선택 대화상자와 같은 방식으로 Shift(범위)/
+        # Ctrl(개별 추가)로 여러 줄을 한 번에 선택할 수 있다.
+        listbox = tk.Listbox(dlg, width=90, height=14, selectmode="extended")
         listbox.pack(fill="both", expand=True, padx=10, pady=5)
 
         # [추가 - 요청] "Run Batch Set 실행 시 지금 구성한 순서를 저장할지
@@ -4707,11 +4712,22 @@ class CathPlotGUI:
 
         def remove_selected():
             sel = listbox.curselection()
+            if not sel:
+                return
+            first_idx = sel[0]
             for idx in reversed(sel):
                 listbox.delete(idx)
                 del queue_list[idx]
-            if sel:
-                list_dirty[0] = True
+            list_dirty[0] = True
+            # [추가 - 사용자 요청] "Remove Selected도 하나 지우면 list의
+            # 다음 json이 자동 선택되게" - 삭제된 자리로 올라온(원래
+            # 다음 순번) 항목을 이어서 선택해, 여러 개를 연달아 지울 때
+            # 매번 다시 클릭할 필요가 없게 한다.
+            if queue_list:
+                next_idx = min(first_idx, len(queue_list) - 1)
+                listbox.selection_set(next_idx)
+                listbox.activate(next_idx)
+                listbox.see(next_idx)
 
         def move(delta):
             sel = listbox.curselection()
@@ -5885,7 +5901,12 @@ class CathPlotGUI:
         ).pack(fill="x", padx=10, pady=(10, 5))
 
         queue_list = []
-        listbox = tk.Listbox(dlg, width=90, height=14)
+        # [수정 - 사용자 요청] "여러 파일을 한번에 선택되게(ctrl+click,
+        # shift+click), Add Template의 입력 선택창처럼" - 기본
+        # selectmode("browse")는 한 번에 하나만 선택되는데, "extended"로
+        # 바꾸면 탐색기/파일 선택 대화상자와 같은 방식으로 Shift(범위)/
+        # Ctrl(개별 추가)로 여러 줄을 한 번에 선택할 수 있다.
+        listbox = tk.Listbox(dlg, width=90, height=14, selectmode="extended")
         listbox.pack(fill="both", expand=True, padx=10, pady=5)
 
         def add_files():
