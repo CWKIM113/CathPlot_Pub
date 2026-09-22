@@ -270,6 +270,15 @@ class CathPlotGUI:
         self.multi_counters = {}
         self.active_plots_cache = {}
         self.plot_processes = []
+        # [추가 - 사용자 보고 버그] "덮어쓰기 plot 이후 replot 하면 plt
+        # 파일은 update 되지만 화면의 창은 같은 이름으로 추가만 됨(이전
+        # 창은 안 닫힘)" - "덮어쓰기(번호 증가 안 함)" 옵션은 항상 같은
+        # base_name(예: "out111_1")으로 .plt를 다시 쓰는데, Interactive는
+        # 매번 새 gnuplot 프로세스/창을 띄우므로 같은 제목의 창이 그대로
+        # 겹쳐 쌓였다 - 이 dict로 "그 base_name으로 마지막에 연 창"을
+        # 기억해두고, 덮어쓰기로 같은 이름을 다시 그릴 때 그 이전 창을
+        # 먼저 닫는다.
+        self.plot_process_by_title = {}
         self.history_plots = []  # 멀티플롯 이력 바인딩용 배열 생성
 
         self.y1_title_auto = True
@@ -9982,6 +9991,21 @@ class CathPlotGUI:
                     f"{base_name}.plt" if target == "screen" else f"{base_name}.{fmt}"
                 )
                 self.title_counters[safe_title] = next_id
+                # [수정 - 사용자 보고 버그] "덮어쓰기 후 replot하면 이전
+                # 창이 안 닫히고 같은 이름 창이 또 생김" - 덮어쓰기는 항상
+                # 같은 base_name을 쓰므로, 그 이름으로 이전에 열어둔 창이
+                # 아직 살아있으면(프로세스가 아직 안 끝났으면) 새로 열기
+                # 전에 먼저 닫는다(다른 이름의 창들은 비교용으로 그대로
+                # 둔다는 기존 방침은 그대로 유지 - 이 이름 하나만 정리).
+                if target == "screen":
+                    _prev_proc = self.plot_process_by_title.get(base_name)
+                    if _prev_proc is not None and _prev_proc.poll() is None:
+                        try:
+                            subprocess.run(["taskkill", "/F", "/T", "/PID", str(_prev_proc.pid)], capture_output=True, **_no_console_kwargs())
+                        except Exception:
+                            pass
+                        if _prev_proc in self.plot_processes:
+                            self.plot_processes.remove(_prev_proc)
             else:
                 next_id = self.title_counters.get(safe_title, 0) + 1
                 base_name = f"{safe_title}_{next_id}"
@@ -10422,6 +10446,7 @@ class CathPlotGUI:
                 # 문제가 있었음 - 실제 저장되는 plt 파일명(safe_title)을 그대로 사용
                 self.plot_processes.append(generator.last_process)
                 self.active_plots_cache[f"{safe_title}_{curr_id}"] = plotdef
+                self.plot_process_by_title[base_name] = generator.last_process
 
             if plotdef not in self.history_plots:
                 self.history_plots.append(plotdef)
