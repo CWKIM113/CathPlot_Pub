@@ -798,6 +798,11 @@ class PlotDefinition:
     xtics: str = ""
     ytics: str = ""
     y2tics: str = ""
+    # [추가 - 사용자 요청] "y2 data 선택 있어도 tic 및 num을 안 그리게
+    # 하는 방안은 없는지?" - Y2를 실제로 쓰면서도 오른쪽 축의 tic
+    # 눈금/숫자 자체를 완전히 숨기고 싶을 때(Y2는 legend로만 구분하고
+    # 축은 안 보이게) 끄는 옵션. 기본은 True(기존과 동일하게 항상 표시).
+    y2tics_on: bool = True
 
     mxtics: str = ""
     mytics: str = ""
@@ -3081,7 +3086,13 @@ class GnuplotGenerator:
         _y1fmt = _tic_fmt_clause(getattr(plotdef, "y1fmt", "Normal"), getattr(plotdef, "y1log", False))
         if _y1fmt:
             lines.append(f'set format y "{_y1fmt}"')
-        if uses_y2:
+        if not getattr(plotdef, "y2tics_on", True):
+            # [추가 - 사용자 요청] "y2 data 선택 있어도 tic 및 num을 안
+            # 그리게 하는 방안은 없는지?" - Y2를 실제로 쓰더라도(legend로만
+            # 구분) 오른쪽 축 tic/숫자를 완전히 숨기고 싶을 때. uses_y2와
+            # 무관하게 최우선으로 적용한다.
+            lines.append("unset y2tics")
+        elif uses_y2:
             if plotdef.y2tics:
                 lines.append(f"set y2tics {plotdef.y2tics}")
             elif getattr(plotdef, "y2log", False):
@@ -3430,7 +3441,13 @@ class GnuplotGenerator:
         # 계속 안 보이는 것으로 보임 - 매번 명시적으로 mirror를 켠다.
         lines.append(f"set xtics font '{plotdef.xlabel_font},{tic_size}' mirror")
         lines.append(f"set ytics font '{plotdef.ylabel_font},{tic_size}'")
-        lines.append(f"set y2tics font '{plotdef.y2label_font},{tic_size}'")
+        # [수정 - 사용자 보고 버그] "y2tics_on=False로 위에서 unset y2tics를
+        # 했는데도 y2 tic이 다시 보임" - "set y2tics font ..."는 폰트만
+        # 지정하는 것 같지만 gnuplot에서는 이 명령 자체가 y2tics를 다시
+        # 켠다(이 세션에서 여러 번 겪은 "나중 명령이 이전 unset을 되돌리는"
+        # 문제와 동일 패턴) - y2tics_on이 꺼져 있으면 이 줄 자체를 건너뛴다.
+        if getattr(plotdef, "y2tics_on", True):
+            lines.append(f"set y2tics font '{plotdef.y2label_font},{tic_size}'")
 
         title_size = int(float(plotdef.title_size) * _title_f_scale * _mp_font_fix)
         xlabel_size = int(float(plotdef.xlabel_size) * _title_f_scale * _mp_font_fix)

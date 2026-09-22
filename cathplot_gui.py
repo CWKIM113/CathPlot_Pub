@@ -858,6 +858,10 @@ class CathPlotGUI:
         self.xauto_var = tk.BooleanVar(value=True)
         self.yauto_var = tk.BooleanVar(value=True)
         self.y2auto_var = tk.BooleanVar(value=True)
+        # [추가 - 사용자 요청] "y2 data 선택 있어도 tic 및 num을 안 그리게
+        # 하는 방안은 없는지?" - Y2를 실제로 쓰더라도(legend로만 구분)
+        # 오른쪽 축 tic 눈금/숫자를 완전히 끌 수 있는 옵션.
+        self.y2tics_on_var = tk.BooleanVar(value=True)
 
         self.legend_on_var = tk.BooleanVar(value=True)
         self.legend_box_var = tk.BooleanVar(value=True)
@@ -1397,6 +1401,9 @@ class CathPlotGUI:
         y2fmt_combo = ttk.Combobox(y2_log_f, textvariable=self.y2fmt_var, values=FMT_LIST, width=7, state="readonly")
         y2fmt_combo.pack(side="left", padx=(2, 0))
         self._disable_combobox_wheel(y2fmt_combo)
+        # [추가 - 사용자 요청] "y2 tic/숫자를 아예 안 그리게" - Y2를 실제로
+        # 쓰더라도 오른쪽 축 눈금 자체를 완전히 숨기는 옵션.
+        self._mk_check(y2_log_f, "Tics", self.y2tics_on_var, side="left")
 
         # Row 5
         ttk.Label(self.plot_frame, text="X Min/Max", style="RowHead.TLabel").grid(row=6, column=0, sticky="w", padx=5, pady=2)
@@ -2226,6 +2233,7 @@ class CathPlotGUI:
             "xauto": self.xauto_var.get(),
             "yauto": self.yauto_var.get(),
             "y2auto": self.y2auto_var.get(),
+            "y2tics_on": self.y2tics_on_var.get(),
             "xlog": self.xlog_var.get(), "y1log": self.y1log_var.get(), "y2log": self.y2log_var.get(),
             "xfmt": self.xfmt_var.get(), "y1fmt": self.y1fmt_var.get(), "y2fmt": self.y2fmt_var.get(),
             "xmin": self.xmin_var.get(), "xmax": self.xmax_var.get(),
@@ -2695,6 +2703,7 @@ class CathPlotGUI:
             self.y2fmt_var.set(data.get("y2fmt", self.y2fmt_var.get()))
             self.yauto_var.set(data.get("yauto", self.yauto_var.get()))
             self.y2auto_var.set(data.get("y2auto", self.y2auto_var.get()))
+            self.y2tics_on_var.set(data.get("y2tics_on", self.y2tics_on_var.get()))
             self.xmin_var.set(data.get("xmin", self.xmin_var.get()))
             self.xmax_var.set(data.get("xmax", self.xmax_var.get()))
             self.ymin_var.set(data.get("ymin", self.ymin_var.get()))
@@ -3107,6 +3116,7 @@ class CathPlotGUI:
             ymin=data.get("ymin", ""), ymax=data.get("ymax", ""),
             y2min=data.get("y2min", ""), y2max=data.get("y2max", ""),
             xtics=data.get("xtics", ""), ytics=data.get("ytics", ""), y2tics=data.get("y2tics", ""),
+            y2tics_on=data.get("y2tics_on", True),
             mxtics=data.get("mxtics", ""), mytics=data.get("mytics", ""), my2tics=data.get("my2tics", ""),
             major_grid=data.get("major_grid", True), minor_grid=data.get("minor_grid", False),
             legend_on=data.get("legend_on", True), legend_box=data.get("legend_box", True),
@@ -5946,6 +5956,7 @@ class CathPlotGUI:
             "ylabel": self.ylabel_var.get(),
             "y2label": self.y2label_var.get(),
             "xauto": self.xauto_var.get(), "yauto": self.yauto_var.get(), "y2auto": self.y2auto_var.get(),
+            "y2tics_on": self.y2tics_on_var.get(),
             "xlog": self.xlog_var.get(), "y1log": self.y1log_var.get(), "y2log": self.y2log_var.get(),
             "xfmt": self.xfmt_var.get(), "y1fmt": self.y1fmt_var.get(), "y2fmt": self.y2fmt_var.get(),
             "xmin": self.xmin_var.get(), "xmax": self.xmax_var.get(),
@@ -6044,6 +6055,7 @@ class CathPlotGUI:
             y2label=settings["y2label"],
             output_format="Batch",
             xauto=settings["xauto"], yauto=settings["yauto"], y2auto=settings["y2auto"],
+            y2tics_on=settings.get("y2tics_on", True),
             xlog=settings.get("xlog", False), y1log=settings.get("y1log", False), y2log=settings.get("y2log", False),
             xfmt=settings.get("xfmt", "Normal"), y1fmt=settings.get("y1fmt", "Normal"), y2fmt=settings.get("y2fmt", "Normal"),
             xmin=settings["xmin"], xmax=settings["xmax"],
@@ -10131,6 +10143,7 @@ class CathPlotGUI:
                 xtics=self.xtics_var.get(),
                 ytics=self.ytics_var.get(),
                 y2tics=self.y2tics_var.get(),
+                y2tics_on=self.y2tics_on_var.get(),
                 mxtics=self.mxtics_var.get(),
                 mytics=self.mytics_var.get(),
                 my2tics=self.my2tics_var.get(),
