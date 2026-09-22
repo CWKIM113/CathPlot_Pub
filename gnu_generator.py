@@ -1380,6 +1380,20 @@ class GnuplotGenerator:
                 try:
                     val_str = fields[column].replace("D", "E").replace("d", "e").replace(",", "")
                     value = float(val_str)
+                    # [수정 - 사용자 보고 버그] "Auto X-range가 shift 적용 전
+                    # 원본 데이터 범위로 잡힘" - axis=="x"일 때 column은
+                    # x_col_idx와 같아서 여기서 다시 읽는 값이 바로 위
+                    # x_val_check(아직 shift 반영 전)와 동일한데, 정작 이
+                    # 값(value)이 그대로 Auto 범위 계산용 values 목록에
+                    # 들어가고 있었다 - x_shift는 위 필터(x_min/x_max가
+                    # 있을 때만 쓰는 x_val)에만 반영되고 있어서, 수동 X
+                    # 제한이 없는 보통의 Auto 경우엔 shift가 통째로
+                    # 무시된 채로 범위가 잡혔다(실제 플롯에 그려지는
+                    # 좌표는 이미 shift가 반영된 값인데, 축 범위만
+                    # shift 이전 값 기준으로 계산되던 불일치). X축
+                    # 계산일 때만 여기서도 shift를 더해준다.
+                    if axis == "x":
+                        value += curve.x_shift
                 except (ValueError, IndexError):
                     continue
 
@@ -2996,6 +3010,22 @@ class GnuplotGenerator:
                 _y2_min_val, _y2_max_val, _y2_step_val = y2min, y2max, y2_auto_tics
             else:
                 lines.append("set autoscale y2")
+        elif getattr(plotdef, "y1log", False):
+            # [수정 - 사용자 보고 버그] "Y1 log에서 plot 오류: you must clear
+            # nonlinear x or y before linking it" - Y2 미사용 시 지금까지는
+            # 무조건 "set link y2"를 썼는데, 위(2913-2918줄)에서 Y1이 log이면
+            # Y2도 강제로 "set logscale y2"를 미리 내보내고 있어서, gnuplot이
+            # "set link y2" 시점에 Y2가 이미 log(비선형)라 링크를 거부하고
+            # 에러로 죽었다(실제 gnuplot 6.0으로 재현: set link와 log는 순서를
+            # 어떻게 바꿔도 같이 못 씀 - 격리 테스트로 확인). Y2가 실제로는
+            # 안 쓰이니 "link"로 실시간 연동할 필요 자체가 없다 - link 대신
+            # 이 Y1의 실제 확정 범위를 Y2에도 그대로 고정값으로 넣어주면(로그
+            # 스케일은 위에서 이미 맞춰뒀으니) 링크 없이도 같은 범위로
+            # 보이면서 에러도 안 난다(격리 테스트로 정상 렌더링 확인).
+            if plotdef.yauto:
+                lines.append(f"set y2range [{self._format_number(_y1_min_val)}:{self._format_number(_y1_max_val)}]")
+            else:
+                lines.append(f"set y2range [{_y1_min_val}:{_y1_max_val}]")
         else:
             lines.append("set link y2")
         if uses_y2 and plotdef.y2tics:
