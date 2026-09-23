@@ -3785,12 +3785,15 @@ class GnuplotGenerator:
             # 약 -4.66pt/unit) - target_gap_pt를 키울수록(간격을 더 벌리고
             # 싶을수록) offset은 오히려 "빼야"(더 음수) 한다.
             _PT_PER_OFFSET_UNIT = 4.05
-            # [수정 - 사용자 요청] "tic num 3자리는 많은 게 아닌데... 기본을
-            # 좀 더 넓혀줘요" - 최소치(0.5*tic_size)를 그대로 기본값으로
-            # 쓰면 흔한 3자리 tic조차 좁아 보인다는 지적 - 기본 계수를
-            # 0.75*tic_size로 올려 여유를 둔다(최대치 1.0*title_size는
-            # 사용자가 "1.0 is good"으로 확정한 그대로 유지).
-            _target_gap_pt = min(0.75 * tic_size, 1.0 * ylabel_size)
+            # [수정 - 사용자 요청, 실측 기반 재조정] "tic num 3~4자리가
+            # 보통인데 기본 공식이 여전히 좁다" - Y1을 3자리 tic으로
+            # 강제해 Y2(3자리)와 직접 비교 실측(PyMuPDF)한 결과 두 축의
+            # gap 자체는 이미 비슷(Y1 14.9pt vs Y2 13.3pt, 축 간 비대칭
+            # 문제는 아님)했으나 절대값이 부족하다는 판단 - 0.75*tic_size였던
+            # 기본 계수를 1.0*tic_size로 추가 상향(최대치 1.0*title_size는
+            # "1.0 is good"으로 확정한 그대로 유지 - tic 폰트가 title
+            # 폰트보다 커지는 특이 설정에서만 상한이 작동).
+            _target_gap_pt = min(1.0 * tic_size, 1.0 * ylabel_size)
             _y1_tick_chars = self._axis_tick_char_count(plotdef, "y1")
             _ylabel_offset -= (_target_gap_pt - 4.0) / _PT_PER_OFFSET_UNIT
             # [수정 - 사용자 요청] "보통 tic 자릿수는 3~4개가 보통" - 기준
@@ -3941,9 +3944,9 @@ class GnuplotGenerator:
                 # PT_PER_OFFSET_UNIT 환산 상수를 쓰는 것과 같은 근거 -
                 # 두 축 모두 같은 gnuplot 폰트/터미널 메트릭을 공유).
                 _PT_PER_OFFSET_UNIT = 4.05
-                # [수정 - 사용자 요청, Y1과 동일] 기본 계수를 0.75*tic_size로
-                # 상향(최대치 1.0*title_size는 그대로).
-                _target_gap_pt = min(0.75 * tic_size, 1.0 * y2label_size)
+                # [수정 - 사용자 요청, Y1과 동일] 기본 계수를 1.0*tic_size로
+                # 추가 상향(최대치 1.0*title_size는 그대로).
+                _target_gap_pt = min(1.0 * tic_size, 1.0 * y2label_size)
                 _y2_tick_chars = self._axis_tick_char_count(plotdef, "y2")
                 _y2label_offset += (_target_gap_pt - 4.0) / _PT_PER_OFFSET_UNIT
                 # [수정 - 사용자 요청, Y1과 동일] 기준 자릿수 2 -> 3.
