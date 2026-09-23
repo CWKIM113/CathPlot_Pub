@@ -10193,7 +10193,22 @@ class GnuplotGenerator:
         if style_raw.lower() == "pm3d":
             return f'{expr} {_title_clause} with pm3d'
         fs_style = self._3D_STYLE_MAP.get(style_raw, "lines")
-        return f'{expr} {_title_clause} with {fs_style} palette'
+        # [추가 - 사용자 요청] "3D도 2D처럼 Line Style/마커 분리" - curve/
+        # surface와 동일하게 Function Surface도 marker_shape/marker_size를
+        # 지원한다. 데이터 파일이 없는 네이티브 함수 플롯이라(splot <expr>)
+        # curve처럼 별도 데이터블록으로 마커만 솎아낼 방법이 없으므로,
+        # gnuplot이 함수를 직접 샘플링하는 "with points/linespoints pt N"에
+        # 그대로 pt/ps를 붙인다(격자 전체 샘플 지점에 마커가 찍힘 - Max#
+        # 제한 개념 자체가 없음, _collect_3d_state 주석 참고).
+        _fs_pt_clause = ""
+        if fs_style in ("points", "linespoints"):
+            _fs_marker_pt = fs.get("marker_shape")
+            _fs_marker_size = fs.get("marker_size")
+            if _fs_marker_pt is not None:
+                _fs_pt_clause += f" pt {_fmt_pointtype(_fs_marker_pt)}"
+            if _fs_marker_size:
+                _fs_pt_clause += f" ps {_fs_marker_size}"
+        return f'{expr} {_title_clause} with {fs_style}{_fs_pt_clause} palette'
 
     def create_3d_script(self, curves_3d, outfile, fmt="interactive",
                           xlabel="", ylabel="", zlabel="", title="",
