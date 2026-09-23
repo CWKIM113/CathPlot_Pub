@@ -172,7 +172,19 @@ class CathPlotGUI:
         # 이후 Function/Marker를 별도 줄로 완전히 옮기면서 Legend 줄의 폭
         # 압박이 더 줄어들어, 위에서 올렸던 폭을 다시 조금 낮춰도 됨
         # (960->920, 1260->1220).
-        self._win_w = max(920, min(1220, self.root.winfo_screenwidth() - 80))
+        # [수정 - 사용자 요청] "Dat list의 Color/Style을 팝업으로 옮겼으니
+        # 창 폭도 더 줄여보자, 대신 다른 줄이 넘치면 알려달라" - 실제
+        # 병목은 Dat list가 아니라 legend1_row/legend2_row였음(각 699px,
+        # 최대폭 1220px보다 이미 넘치는 상태였음 - Xvfb 헤드리스 실측으로
+        # 확인). Box W/H, Legend Font/Size, Box Thick를 전부 "Legend
+        # Detail" 팝업(_open_legend_detail_popup)으로 옮겨 그 두 줄을
+        # 562px까지 줄이고 나서 다시 실측(plot_frame 필요 폭 1164~1176px)
+        # 해 최대폭을 그만큼만 남기고 낮춘다(1220->1190, 여유 ~15~25px).
+        # 최소폭(920)은 원래도 이 요청과 무관한 별개 이슈(아주 작은 화면
+        # 에서는 이 최소폭보다도 legend 줄이 넓어 스크롤 없이 잘렸었는데,
+        # 이번 축소로 그 문제도 완화는 됐지만 완전히 해결된 건 아님)라
+        # 그대로 둔다.
+        self._win_w = max(920, min(1190, self.root.winfo_screenwidth() - 80))
         self.root.geometry(f"{self._win_w}x1030")
         self.root.tk.call('tk', 'windowingsystem')
 
@@ -1065,7 +1077,10 @@ class CathPlotGUI:
 
         font_list = ["Malgun Gothic", "Arial", "Times New Roman", "Courier New", "Consolas"]
         size_list = ["6", "8", "9", "10", "11", "12", "14", "16", "18", "20"]
-        thick_list = ["0.8","1.0","1.2","1.5","2.0","2.5","3.0","4.0"]
+        # [수정 - 사용자 요청] thick_list(Box Thick 콤보값)는 "상세 내용은
+        # popup으로" 요청에 따라 _open_legend_detail_popup으로 옮겨져
+        # 이제 이 메서드(create_widgets)에서는 안 쓰인다(팝업 쪽에 동일
+        # 값으로 다시 정의돼 있음).
         pos_list = ["right top", "right bottom", "left top", "left bottom", "center top", "center bottom", "center center", "outside right"]
 
         # Row 0
@@ -1143,28 +1158,15 @@ class CathPlotGUI:
         ttk.Label(legend1_row, text="Align:").pack(side="left", padx=(4, 1))
         ttk.Combobox(legend1_row, textvariable=self.legend_align_var, values=["Auto", "Left", "Right"],
                      width=5, state="readonly").pack(side="left", padx=1)
-        # [추가] "자동 추정이 안 맞을 때만 쓰는 Legend box 크기 직접 입력(axis
-        # 대비 %) - 비우면 기존처럼 자동" - 위치 입력칸(Pos1/Align) 바로
-        # 옆에 배치. Print/Save 전용(화면엔 적용 안 됨)임을 마우스오버
-        # 팝업으로 알려준다.
-        # [수정 - 요청] "Box W/H%에서 %가 이상함(항상 %인 것처럼 보이는데 실제로는
-        # 숫자만 넣으면 좌표값 차이, %를 붙여야 비율)" - 라벨을 실제 동작(둘 다
-        # 가능)에 맞게 "%"를 빼고 "Box W/H:"로 표기(자세한 규칙은 마우스오버
-        # 힌트에 이미 있음).
-        ttk.Label(legend1_row, text="Box W/H:").pack(side="left", padx=(4, 1))
-        _l1_boxw_entry = self._mk_entry(legend1_row, self.legend_box_width_pct_var, width=4, color="accent3")
-        _l1_boxw_entry.pack(side="left", padx=1)
-        _l1_boxh_entry = self._mk_entry(legend1_row, self.legend_box_height_pct_var, width=4, color="accent3")
-        _l1_boxh_entry.pack(side="left", padx=1)
-        _box_size_hint = ("Print/Save 전용(화면 미리보기엔 적용 안 됨)\n"
-                           "비우면 폰트 기준 자동 추정(기본) - 자동 추정이\n"
-                           "안 맞을 때만 직접 지정\n"
-                           "숫자만: X/Y 데이터 좌표값 차이(인터랙티브 창에서\n"
-                           "  커서로 읽은 값 참고- 예: 200)\n"
-                           "%로 끝나면: axis 대비 비율 - 예: 30%\n"
-                           "(좌표값은 axis 범위가 나중에 바뀌면 비율도 같이 바뀜)")
-        _add_hint(_l1_boxw_entry, _box_size_hint)
-        _add_hint(_l1_boxh_entry, _box_size_hint)
+        # [수정 - 사용자 요청] "창 폭을 줄이려면 Legend1/2 줄이 먼저 줄어야
+        # 하고, 상세 내용은 popup으로, 전체적으로 깔끔한 입력 모양이
+        # 중요함" - Font/Size/Box Thick/Box W/H처럼 "자동 추정이 안 맞을
+        # 때만 쓰는" 고급/저빈도 입력들을 이 줄과 아래 row2_f에서 전부
+        # 빼서 별도 "Detail" 팝업(_open_legend_detail_popup, Legend1/2
+        # 공용)으로 옮긴다 - 이 줄엔 자주 쓰는 On/Box/Curves/Pos/Align만
+        # 남는다. 그 팝업을 여는 버튼 자체도 이 줄에 넣으면(84px) 다시
+        # 이 줄이 병목이 되므로, row=2(옛 row2_f 자리, 이제 비어 있음)에
+        # 따로 둔다 - 아래 참고.
 
         def _legend1_get(key):
             if key not in self.in_legend1_vars:
@@ -1212,13 +1214,8 @@ class CathPlotGUI:
         ttk.Label(legend2_row, text="Align:").pack(side="left", padx=(4, 1))
         ttk.Combobox(legend2_row, textvariable=self.legend2_align_var, values=["Auto", "Left", "Right"],
                      width=5, state="readonly").pack(side="left", padx=1)
-        ttk.Label(legend2_row, text="Box W/H:").pack(side="left", padx=(4, 1))
-        _l2_boxw_entry = self._mk_entry(legend2_row, self.legend2_box_width_pct_var, width=4, color="accent3")
-        _l2_boxw_entry.pack(side="left", padx=1)
-        _l2_boxh_entry = self._mk_entry(legend2_row, self.legend2_box_height_pct_var, width=4, color="accent3")
-        _l2_boxh_entry.pack(side="left", padx=1)
-        _add_hint(_l2_boxw_entry, _box_size_hint)
-        _add_hint(_l2_boxh_entry, _box_size_hint)
+        # [수정 - 사용자 요청] Legend1과 동일하게 Box W/H는 Detail 팝업으로
+        # 이동(이 줄 폭을 줄이기 위해).
         def _legend2_get(key):
             if key not in self.legend_group_vars:
                 self.legend_group_vars[key] = tk.StringVar(value="2")
@@ -1249,32 +1246,23 @@ class CathPlotGUI:
         ttk.Combobox(x_font_frame, textvariable=self.xlabel_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
         ttk.Combobox(x_font_frame, textvariable=self.xlabel_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
 
-        # [수정] "입력 줄들이 너무 길다" - Axis Frame Auto 줄(원래 row=2)을
-        # Plot File Name 자리(row=3)로 내리고, Plot File Name은 같은 줄
-        # 우측으로 옮김. 비어진 row=2 자리엔 legend1/2 줄에서 뺀 Box Thick/
-        # Font/Marker를 옮겨와 배치한다(각 줄 길이를 줄이기 위한 재배치).
-        row2_f = ttk.Frame(self.plot_frame)
-        row2_f.grid(row=2, column=3, columnspan=3, sticky="we", padx=3, pady=0)
-
-        # [수정 - 사용자 지적] "Function/Marker는 Legend box와 무관한데
-        # 마치 legend 입력으로 보임 - 뒤에 Box Thick까지 있어서 더더욱" -
-        # Function/Marker 버튼을 이 줄(Legend Box Thick/Font 전용 줄)에서
-        # 빼서 Axis Frame Auto 자리로 옮긴다(아래 참고). 이 줄엔 이제 원래
-        # 목적(Legend Box Thick/Font)만 남기되, [수정 - 사용자 요청]
-        # "Font 입력칸은 Legend2 On 체크박스에, Box Thick는 Pos2에 맞춘다" -
-        # 정렬을 위해 Font를 먼저(줄 맨 앞 = Legend2 On과 같은 시작 위치),
-        # Box Thick를 그다음(Pos2 위치와 맞도록 아래서 Curves-Pos2 간격을
-        # 조정)에 배치하도록 순서를 바꿈.
-        ttk.Label(row2_f, text="Legend Font:").pack(side="left", padx=(3, 1))
-        legend_font_combo = ttk.Combobox(row2_f, textvariable=self.legend_font_var, values=font_list, width=12, state="readonly")
-        legend_font_combo.pack(side="left", padx=1)
-        self._disable_combobox_wheel(legend_font_combo)
-        legend_size_combo = ttk.Combobox(row2_f, textvariable=self.legend_size_var, values=size_list, width=2, state="readonly")
-        legend_size_combo.pack(side="left", padx=1)
-        self._disable_combobox_wheel(legend_size_combo)
-
-        ttk.Label(row2_f, text="Box Thick:").pack(side="left", padx=(1, 1))
-        ttk.Combobox(row2_f, textvariable=self.legend_thick_var, values=thick_list, width=3, state="readonly").pack(side="left", padx=2)
+        # [수정 - 사용자 요청] "상세 내용은 popup으로" - 원래 이 자리(row=2,
+        # col=3~5)에 있던 Legend Font/Size/Box Thick 줄(row2_f)을 완전히
+        # 제거하고 _open_legend_detail_popup 팝업으로 옮겼다. 그 팝업을
+        # 여는 버튼만 이 (이제 비어있던) 자리에 혼자 두면 legend1_row/
+        # legend2_row 폭에 얹히지 않아 그 두 줄이 더 짧아진다.
+        legend_detail_row = ttk.Frame(self.plot_frame)
+        legend_detail_row.grid(row=2, column=3, columnspan=3, sticky="w", padx=3, pady=0)
+        legend_detail_btn = tk.Button(
+            legend_detail_row, text="Legend Detail", width=13, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=1, pady=1,
+            command=self._open_legend_detail_popup,
+        )
+        legend_detail_btn.pack(side="left", padx=(3, 3))
+        # 버튼 라벨만으론 안에 뭐가 있는지 안 보이니 마우스오버 힌트로 보충.
+        _add_hint(legend_detail_btn, "Legend Font/Size, Box Thick(공용), Legend1/2 Box W/H")
 
         # Row 2
         ttk.Label(self.plot_frame, text="Y Left Title (Y1)", style="RowHead.TLabel").grid(row=2, column=0, padx=5, pady=0, sticky="w")
@@ -1306,14 +1294,16 @@ class CathPlotGUI:
 
         # [수정 - 사용자 요청] "Function과 Marker 버튼은 더 띄워줘요, 충분히" -
         # 서로 딱 붙어 보이지 않도록 둘 사이 간격을 넉넉히 줌.
+        # [수정 - 사용자 요청] "Marker 팝업에 Color/Style도 통합" - 버튼
+        # 라벨도 넓어진 역할에 맞게 "Curve"로 변경.
         marker_settings_btn = tk.Button(
-            func_marker_row, text="Marker", width=8, font=("Malgun Gothic", 9, "bold"),
+            func_marker_row, text="Curve", width=8, font=("Malgun Gothic", 9, "bold"),
             bg=self.PALETTE["secondary"], fg="white",
             activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
             relief="raised", bd=1, pady=1,
         )
         marker_settings_btn.pack(side="left", padx=(44, 3))
-        marker_settings_btn.configure(command=self._open_marker_settings_popup)
+        marker_settings_btn.configure(command=self._open_curve_settings_popup)
 
         # [수정] 기본값을 Auto로 변경 - 화면에서는 항상 검증된 scale=1.0 기준으로
         # 뜨게 하고, 인쇄/저장 시 특정 물리 크기가 필요할 때만 꺼서 W/H를 쓰도록 함
@@ -5750,16 +5740,82 @@ class CathPlotGUI:
                         pass
         return recipe, x_output_no
 
-    def _open_marker_settings_popup(self):
-        """Marker 설정 팝업 - Y1/Y2로 선택된 각 curve마다 한 행씩, Shape(모양)/
-        Size(크기)/Fill/Max Count(최대 마커 개수, 비우면 Auto)를 보여준다.
-        헤더와 입력칸 정렬은 고정 픽셀 폭 프레임으로 맞춘다(변수 표의 Color/
-        Style과 동일한 방식)."""
+    def _open_legend_detail_popup(self):
+        """Legend 상세 설정 팝업 - [수정 - 사용자 요청] "창 폭을 줄이려면
+        Legend1/2 줄이 먼저 줄어야 하고, 상세 내용은 popup으로, 전체적으로
+        깔끔한 입력 모양이 중요함" - Legend1/2 줄(legend1_row/legend2_row)과
+        옛 row2_f에 있던 "자동 추정이 안 맞을 때만 쓰는" 저빈도 입력
+        (Legend Font/Size, Box Thick, Box W/H)을 모두 여기로 모았다.
+        Box Thick는 Legend1/2가 공유(기존과 동일), Box W/H는 Legend별로
+        따로 입력한다."""
         popup = tk.Toplevel(self.root)
-        popup.title("Marker Settings")
+        popup.title("Legend Detail")
         popup.transient(self.root)
 
-        CURVE_PX, SHAPE_PX, SIZE_PX, FILL_PX, MAX_PX = 160, 100, 55, 50, 65
+        # create_widgets()의 font_list/size_list와 동일 - 팝업이 별도
+        # 메서드라 그 지역변수를 그대로 쓸 수 없어 다시 정의한다.
+        font_list = ["Malgun Gothic", "Arial", "Times New Roman", "Courier New", "Consolas"]
+        size_list = ["6", "8", "9", "10", "11", "12", "14", "16", "18", "20"]
+        thick_list = ["0.8", "1.0", "1.2", "1.5", "2.0", "2.5", "3.0", "4.0"]
+
+        body = ttk.Frame(popup)
+        body.pack(fill="both", expand=True, padx=10, pady=10)
+
+        font_row = ttk.Frame(body)
+        font_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(font_row, text="Legend Font:").pack(side="left", padx=(0, 2))
+        font_combo = ttk.Combobox(font_row, textvariable=self.legend_font_var, values=font_list, width=14, state="readonly")
+        font_combo.pack(side="left", padx=2)
+        self._disable_combobox_wheel(font_combo)
+        size_combo = ttk.Combobox(font_row, textvariable=self.legend_size_var, values=size_list, width=3, state="readonly")
+        size_combo.pack(side="left", padx=2)
+        self._disable_combobox_wheel(size_combo)
+
+        thick_row = ttk.Frame(body)
+        thick_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(thick_row, text="Box Thick (Legend1/2 공용):").pack(side="left", padx=(0, 2))
+        thick_combo = ttk.Combobox(thick_row, textvariable=self.legend_thick_var, values=thick_list, width=4, state="readonly")
+        thick_combo.pack(side="left", padx=2)
+        self._disable_combobox_wheel(thick_combo)
+
+        ttk.Separator(body, orient="horizontal").pack(fill="x", pady=6)
+
+        boxwh_l1_row = ttk.Frame(body)
+        boxwh_l1_row.pack(fill="x", pady=2)
+        ttk.Label(boxwh_l1_row, text="Legend1 Box W/H:", width=18, anchor="w").pack(side="left")
+        self._mk_entry(boxwh_l1_row, self.legend_box_width_pct_var, width=5, color="accent3").pack(side="left", padx=1)
+        self._mk_entry(boxwh_l1_row, self.legend_box_height_pct_var, width=5, color="accent3").pack(side="left", padx=1)
+
+        boxwh_l2_row = ttk.Frame(body)
+        boxwh_l2_row.pack(fill="x", pady=2)
+        ttk.Label(boxwh_l2_row, text="Legend2 Box W/H:", width=18, anchor="w").pack(side="left")
+        self._mk_entry(boxwh_l2_row, self.legend2_box_width_pct_var, width=5, color="accent3").pack(side="left", padx=1)
+        self._mk_entry(boxwh_l2_row, self.legend2_box_height_pct_var, width=5, color="accent3").pack(side="left", padx=1)
+
+        ttk.Label(
+            body,
+            text=("Print/Save 전용(화면 미리보기엔 적용 안 됨). 비우면 폰트 기준 자동 추정(기본) -\n"
+                  "자동 추정이 안 맞을 때만 직접 지정.\n"
+                  "숫자만: X/Y 데이터 좌표값 차이(인터랙티브 창에서 커서로 읽은 값 참고 - 예: 200)\n"
+                  "%로 끝나면: axis 대비 비율 - 예: 30% (axis 범위가 나중에 바뀌면 비율도 같이 바뀜)"),
+            foreground="#555555", justify="left"
+        ).pack(anchor="w", pady=(8, 0))
+
+        ttk.Button(popup, text="완료", command=popup.destroy).pack(anchor="e", padx=10, pady=8)
+
+    def _open_curve_settings_popup(self):
+        """Curve 설정 팝업(옛 Marker 설정 팝업) - Y1/Y2로 선택된 각 curve마다
+        한 행씩, Color/Style(원래 Dat list에 인라인으로 있던 것 - "선택된
+        curve에만 의미 있는 속성이니 Marker처럼 팝업으로 옮기는 게 더
+        깔끔하고 Dat list 가로 공간도 확보된다"는 사용자 요청으로 이관)과
+        기존 Shape(모양)/Size(크기)/Fill/Max Count(최대 마커 개수, 비우면
+        Auto)를 한 곳에서 보여준다. 헤더와 입력칸 정렬은 고정 픽셀 폭
+        프레임으로 맞춘다."""
+        popup = tk.Toplevel(self.root)
+        popup.title("Curve Settings")
+        popup.transient(self.root)
+
+        CURVE_PX, COLOR_PX, STYLE_PX, SHAPE_PX, SIZE_PX, FILL_PX, MAX_PX = 160, 65, 65, 100, 55, 50, 65
 
         def _cell(parent, px, height=20):
             f = tk.Frame(parent, width=px, height=height)
@@ -5770,6 +5826,8 @@ class CathPlotGUI:
         header_f = ttk.Frame(popup)
         header_f.pack(fill="x", padx=10, pady=(10, 2))
         ttk.Label(_cell(header_f, CURVE_PX), text="Curve", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, COLOR_PX), text="Color", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, STYLE_PX), text="Style", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, SHAPE_PX), text="Shape", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, SIZE_PX), text="Size", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, FILL_PX), text="Fill", font=("Consolas", 9, "bold")).pack(side="left")
@@ -5808,6 +5866,13 @@ class CathPlotGUI:
                 self.marker_maxcount_vars[key] = tk.StringVar(value="")
             if key not in self.marker_fill_vars:
                 self.marker_fill_vars[key] = tk.BooleanVar(value=False)
+            # [추가 - 사용자 요청] Dat list에서 옮겨온 Color/Style - 보통
+            # show_variables()가 먼저 이 key를 lazy-init해두지만, 방어적으로
+            # 여기서도 동일하게 없으면 만든다(Marker 쪽 변수들과 같은 패턴).
+            if key not in self.color_vars:
+                self.color_vars[key] = tk.StringVar(value="Auto")
+            if key not in self.linestyle_vars:
+                self.linestyle_vars[key] = tk.StringVar(value="Auto")
 
             label = self.legend_vars[key].get() if key in self.legend_vars else key
             row_f = ttk.Frame(list_frame)
@@ -5815,6 +5880,18 @@ class CathPlotGUI:
 
             curve_cell = _cell(row_f, CURVE_PX)
             ttk.Label(curve_cell, text=label).pack(side="left")
+
+            color_cell = _cell(row_f, COLOR_PX)
+            color_combo = ttk.Combobox(color_cell, textvariable=self.color_vars[key],
+                                        values=COLOR_LIST, state="readonly")
+            color_combo.pack(side="left", fill="both", expand=True)
+            self._disable_combobox_wheel(color_combo)
+
+            style_cell = _cell(row_f, STYLE_PX)
+            style_combo = ttk.Combobox(style_cell, textvariable=self.linestyle_vars[key],
+                                        values=STYLE_LIST, state="readonly")
+            style_combo.pack(side="left", fill="both", expand=True)
+            self._disable_combobox_wheel(style_combo)
 
             shape_cell = _cell(row_f, SHAPE_PX)
             shape_combo = ttk.Combobox(shape_cell, textvariable=self.marker_shape_vars[key],
@@ -7158,23 +7235,15 @@ class CathPlotGUI:
             y2_hdr_f.pack_propagate(False)
             y2_hdr_f.pack(side="left")
             ttk.Label(y2_hdr_f, text="Y2", font=("Consolas", 10, "bold")).place(relx=0.5, x=_HDR_NUDGE_PX, rely=0.5, anchor="center")
-            # [수정 - 요청] "Color/Style box 폭을 1자, 2자씩 줄이기" - Color는
-            # 최장 옵션 글자수(7자)는 그대로지만 여유를 1자만큼 줄이고,
-            # Style은 위에서 "Short-Dash"->"Short-D"로 축약해 최장 옵션이
-            # 10자->7자가 된 만큼(+ 추가로 2자분) 같이 줄임.
-            COLOR_COL_PX = 57   # 최장 옵션(Magenta/Purple/Orange, 7자) 기준 - 1자(~8px)만큼 축소
-            STYLE_COL_PX = 50   # 최장 옵션(Short-D/Dash-2D, 7자) 기준 - 축약 반영 + 2자만큼 추가 축소
-            # [수정] height=18이 "Color"/"Style" 글자(Consolas 10 bold) 높이보다
-            # 낮아서 아래쪽이 잘리고 X/Y1/Y2보다 낮게 보이던 문제 - 데이터 행
-            # 셀(height=22)과 맞춰서 헤더도 22로 통일
-            color_hdr_f = tk.Frame(header_f, width=COLOR_COL_PX, height=22)
-            color_hdr_f.pack_propagate(False)
-            color_hdr_f.pack(side="left")
-            ttk.Label(color_hdr_f, text="Color", font=("Consolas",10,"bold")).pack(side="left")
-            style_hdr_f = tk.Frame(header_f, width=STYLE_COL_PX, height=22)
-            style_hdr_f.pack_propagate(False)
-            style_hdr_f.pack(side="left")
-            ttk.Label(style_hdr_f, text="Style", font=("Consolas",10,"bold")).pack(side="left")
+            # [수정 - 사용자 요청] "Color/Style은 선택된 curve에만 의미가
+            # 있으니 Dat list가 아니라 Marker처럼 팝업에서 고르는 게 더
+            # 깔끔함, 가로 공간도 확보" - 이 Dat list의 인라인 Color/Style
+            # Combobox(및 헤더)를 제거하고, "Curve" 팝업(옛 Marker 팝업,
+            # _open_curve_settings_popup)에 Color/Style 컬럼을 새로 추가해
+            # 그쪽으로 통합했다. self.color_vars/self.linestyle_vars 상태
+            # 자체(아래 key_str 루프의 lazy-init)는 그대로 유지 - plot 생성/
+            # 템플릿 저장 코드가 이 dict를 그대로 읽으므로 값 저장 방식은
+            # 변경 없음.
             # [추가 - 요청] "Cubic Spline" 체크박스 열 - Y1/Y2와 같은 좁은
             # 폭으로 맨 뒤에 붙인다(새 필드를 위한 넓은 칸을 새로 만들 자리가
             #없다는 요청 그대로 - 짧은 헤더 "SP"만, 원래 "Spl"에서 변경).
@@ -7285,20 +7354,6 @@ class CathPlotGUI:
                 y2_cell_f.pack(side="left")
                 c_y2 = self._mk_check(y2_cell_f, "", self.selected_y2_vars[key_str], size=19, command=make_y_excl_cmd(key_str, "Y2", file_x_var), no_pack=True)
                 c_y2.place(relx=0.5, rely=0.5, anchor="center")
-
-                color_cell_f = tk.Frame(row_frame, width=COLOR_COL_PX, height=22)
-                color_cell_f.pack_propagate(False)
-                color_cell_f.pack(side="left", padx=(2,0))
-                color_combo = ttk.Combobox(color_cell_f, textvariable=self.color_vars[key_str], values=COLOR_LIST, state="readonly")
-                color_combo.pack(side="left", fill="both", expand=True)
-                self._disable_combobox_wheel(color_combo)
-
-                style_cell_f = tk.Frame(row_frame, width=STYLE_COL_PX, height=22)
-                style_cell_f.pack_propagate(False)
-                style_cell_f.pack(side="left", padx=0)
-                style_combo = ttk.Combobox(style_cell_f, textvariable=self.linestyle_vars[key_str], values=STYLE_LIST, state="readonly")
-                style_combo.pack(side="left", fill="both", expand=True)
-                self._disable_combobox_wheel(style_combo)
 
                 smooth_cell_f = tk.Frame(row_frame, width=SMOOTH_COL_PX, height=22)
                 smooth_cell_f.pack_propagate(False)
