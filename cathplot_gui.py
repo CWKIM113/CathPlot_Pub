@@ -7249,11 +7249,23 @@ class CathPlotGUI:
             #없다는 요청 그대로 - 짧은 헤더 "SP"만, 원래 "Spl"에서 변경).
             # [수정 - 요청] "SP box 뒤 여분을 0으로" - Y1/Y2와 동일 폭으로
             # 맞춰 여백 없이 통일.
-            SMOOTH_COL_PX = 22
+            # [수정 - 사용자 요청] "SP는 뜻이 애매하니 SPL 등으로" - "SP"만
+            # 으론 무슨 뜻인지 안 보여서 "SPL"로 되돌림(그 전엔 "Spl"이었다가
+            # 폭 절감 때문에 "SP"로 줄였던 이력 - 이번엔 폭 절감보다 의미
+            # 전달이 우선이라는 요청). 글자 수가 늘어(2자->3자) Y1/Y2와
+            # 같은 22px 폭으로는 잘려서, 이 칸만 살짝 넓힌다(22->30, 실측
+            # 확인 - "SPL" 자체 폭 24px + 아래 체크박스 정렬용 nudge(-4px)
+            # 감안하면 26px는 왼쪽이 살짝 잘림).
+            SMOOTH_COL_PX = 30
             smooth_hdr_f = tk.Frame(header_f, width=SMOOTH_COL_PX, height=22)
             smooth_hdr_f.pack_propagate(False)
             smooth_hdr_f.pack(side="left")
-            ttk.Label(smooth_hdr_f, text="SP", font=("Consolas", 10, "bold")).place(relx=0.5, x=_HDR_NUDGE_PX, rely=0.5, anchor="center")
+            # [수정] _HDR_NUDGE_PX(-4)는 X/Y1/Y2/SP처럼 1~2글자 라벨을 그
+            # 아래 체크박스 indicator와 맞추기 위한 보정값인데, "SPL"(3글자)
+            # 에 그대로 쓰면 폭이 넓어져(실측 26px) 30px 칸 왼쪽으로 살짝
+            # (2px) 잘려 나감 - 체크박스와의 완벽한 정렬보다 글자가 안
+            # 잘리는 게 우선이라 이 라벨만 nudge 없이(x=0) 중앙 정렬한다.
+            ttk.Label(smooth_hdr_f, text="SPL", font=("Consolas", 10, "bold")).place(relx=0.5, rely=0.5, anchor="center")
 
             for pv in meta.variables:
                 title = pv.signals[0].name if pv.signals else f"OUTPUT {pv.output_no}"
