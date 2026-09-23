@@ -8060,13 +8060,13 @@ class CathPlotGUI:
         # 사용자가 자유롭게 바꿀 수 있게 하면 그 매칭이 깨짐 - 그래서 이름
         # 표시용 별도 필드를 새로 둔다).
         # [추가 - 사용자 요청] "3D Marker 개수도 2D처럼 한 화면상 최대개수를
-        # 정해요(기본 및 최대수 사용자 입력)" - 각 행 맨 끝에 MaxNo.(2D의 Max#와
-        # 동일한 의미 - 비우면 Auto~25개) 입력칸을 추가한다. 자리를 만들려고
-        # Style(LinesPoint) 입력박스를 2/3 정도로, size·모양(Shape) 칸도 같이
-        # 줄였고, MaxNo/Shape/Size/Style 네 칸 사이 여백(padx)을 전부 동일하게
-        # 맞춰 균등 간격으로 보이게 한다(정수만 입력 - 2D Max#와 동일한 검증).
+        # 정해요(기본 및 최대수 사용자 입력)" - MaxNo.(2D의 Max#와 동일한
+        # 의미 - 비우면 Auto~25개) 입력값 검증(정수만 - 2D Max#와 동일).
+        # [수정 - 사용자 요청] "3D에서도 커버특성을 묶어서 정리" 이후로는
+        # curve/surface/manual 각 줄이 아니라 Set Detail 팝업 한 곳에서만
+        # MaxNo를 입력받으므로, 이 변수는 그 팝업(아래 _open_3d_curve_
+        # detail_popup)에서만 쓰인다.
         _maxno_vcmd = (dialog.register(lambda s: s == "" or s.isdigit()), "%P")
-        _MAXNO_PADX = 3
 
         for c in eligible:
             srow = ttk.Frame(set_frame)
@@ -8176,8 +8176,20 @@ class CathPlotGUI:
                 _add_detail_row(f"[Curve] {c['label']}", style_var_row, size_var, shape_var, maxno_var, _style_choices_curve)
             for v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var in surface_check_vars:
                 _add_detail_row(f"[Surface] {s['label']}", style_var_row, size_var, shape_var, maxno_var, _style_choices_surface)
+            # [추가 - 사용자 요청] "3D Curve 직접 추가" 섹션도 같은 이유로
+            # Style/Size/Shape/MaxNo를 여기로 옮긴다(Dat/X/Y/Z/이름은 "이
+            # 줄이 어떤 데이터인지" 정하는 핵심이라 그 섹션에 인라인으로
+            # 남겨둠 - Function Surface는 애초에 Shape/Size/MaxNo 자체가
+            # 없는 순수 수식 곡면이라 Style 하나만 있고 이미 간결해서 제외).
+            # manual_curve_rows는 이 함수보다 아래에서 정의되지만(late
+            # binding), 팝업은 항상 버튼 클릭 시점(다이얼로그가 다 그려진
+            # 뒤)에만 열리므로 그때는 이미 채워져 있어 문제없다.
+            for d in manual_curve_rows:
+                _mc_title = d['title'].get().strip()
+                _mc_label = _mc_title if _mc_title else f"{d['file_label'].get()} (X={d['x'].get()},Y={d['y'].get()},Z={d['z'].get()})"
+                _add_detail_row(f"[Manual] {_mc_label}", d['style'], d['size'], d['shape'], d['maxcount'], _style_choices_curve)
 
-            if not curve_check_vars and not surface_check_vars:
+            if not curve_check_vars and not surface_check_vars and not manual_curve_rows:
                 ttk.Label(list_frame, text="(curve/surface 없음)").pack(padx=5, pady=10)
 
             ttk.Label(
@@ -8309,18 +8321,13 @@ class CathPlotGUI:
 
             ttk.Button(row, text="X", width=2, style="Compact.TButton",
                        command=lambda: (row.destroy(), manual_curve_rows.remove(data))).pack(side="right", padx=3)
-            # [추가 - 사용자 요청] "3D Marker 개수도 2D처럼 최대개수를 정해요" -
-            # 포함할 Set 목록과 동일하게 맨 끝에 MaxNo. 입력칸 추가(비우면 Auto).
-            maxcount_entry = ttk.Entry(row, textvariable=maxcount_var, width=5,
-                                       validate="key", validatecommand=_maxno_vcmd)
-            maxcount_entry.pack(side="right", padx=_MAXNO_PADX)
-            ttk.Label(row, text="MaxNo.").pack(side="right", padx=(_MAXNO_PADX, 0))
-            ttk.Combobox(row, textvariable=shape_var, values=MARKER_SHAPE_LIST,
-                         width=6, state="readonly").pack(side="right", padx=_MAXNO_PADX)
-            ttk.Combobox(row, textvariable=size_var, values=MARKER_SIZE_LIST,
-                         width=3, state="readonly").pack(side="right", padx=_MAXNO_PADX)
-            ttk.Combobox(row, textvariable=style_var, values=_style_choices_curve,
-                         width=8, state="readonly").pack(side="right", padx=_MAXNO_PADX)
+            # [수정 - 사용자 요청] "3D에서도 커버특성을 묶어서 정리" - Style/
+            # Size/Shape(Marker 모양)/MaxNo는 더 이상 이 줄에 inline으로
+            # 넣지 않고 "Set Detail" 팝업(_open_3d_curve_detail_popup)의
+            # [Manual] 섹션에서 편집한다. 이 줄엔 "어떤 데이터인지"를 정하는
+            # Dat/X/Y/Z/이름만 남긴다(위 style_var/shape_var/size_var/
+            # maxcount_var 자체는 그대로 유지 - data dict에 담겨 다운스트림
+            # 3D 렌더링에서 그대로 참조됨).
             ttk.Label(row, text="이름:").pack(side="left", padx=(6, 0))
             t_entry = ttk.Entry(row, textvariable=title_var, width=12)
             t_entry.pack(side="left", padx=2)
