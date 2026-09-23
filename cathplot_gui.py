@@ -5062,6 +5062,46 @@ class CathPlotGUI:
         # 상태로 되돌림)에 맞게 "미선택"으로 라벨만 변경.
         ttk.Button(td3_row, text="미선택", command=lambda: (td3_path_var.set(""), td3_label.config(text="", foreground="#555555"))).pack(side="left")
 
+        # [추가 - 사용자 요청] "batch set에서 axis frame 크기를 이미지 선택처럼
+        # 입력으로 주는 건 어떨까요? (template에 없으니까...)" - CathPlot을 막
+        # 띄우고(메인 화면 값을 따로 맞출 겨를 없이) 바로 Batch Set부터 여는
+        # 경우가 흔해서(자동화 워크플로), 메인 화면의 공용 Axis Frame 위젯 값을
+        # 그냥 읽어오는 방식(Multi-Plot과 동일한 방식) 대신, Batch Set 다이얼로그
+        # 안에 별도 입력칸을 둔다. 체크 해제(기본값) 시엔 지금까지와 동일하게
+        # 각 template 자신의 frame 설정(Auto면 10x8cm, Manual이면 그 값)을 그대로
+        # 쓰고, 체크하면 여기 입력한 크기를 모든 template에 공통으로 덮어쓴다.
+        common_frame_row = ttk.Frame(dlg)
+        common_frame_row.pack(fill="x", padx=10, pady=(0, 5))
+        common_frame_var = tk.BooleanVar(value=False)
+        common_frame_w_var = tk.StringVar(value="10.00")
+        common_frame_h_var = tk.StringVar(value="8.00")
+        common_frame_unit_var = tk.StringVar(value="cm")
+
+        common_frame_chk = ttk.Checkbutton(common_frame_row, text="공통 Axis Frame 크기 사용", variable=common_frame_var)
+        common_frame_chk.pack(side="left")
+        cf_w_entry = ttk.Entry(common_frame_row, textvariable=common_frame_w_var, width=6)
+        cf_w_entry.pack(side="left", padx=(8, 2))
+        ttk.Label(common_frame_row, text="x").pack(side="left")
+        cf_h_entry = ttk.Entry(common_frame_row, textvariable=common_frame_h_var, width=6)
+        cf_h_entry.pack(side="left", padx=(2, 4))
+        cf_unit_combo = ttk.Combobox(common_frame_row, textvariable=common_frame_unit_var, values=["cm", "in"], width=4, state="readonly")
+        cf_unit_combo.pack(side="left")
+
+        def _update_common_frame_state(*_a):
+            state = "normal" if common_frame_var.get() else "disabled"
+            cf_w_entry.config(state=state)
+            cf_h_entry.config(state=state)
+            cf_unit_combo.config(state=("readonly" if common_frame_var.get() else "disabled"))
+        common_frame_var.trace_add("write", _update_common_frame_state)
+        _update_common_frame_state()
+
+        ttk.Label(
+            common_frame_row,
+            text="  (체크 해제 시 개별 template 설정 사용. 프레임 크기를 바꿔도 폰트 크기는\n"
+                 "  자동으로 비례하지 않으니 필요하면 각 template의 Font 크기도 같이 조정하세요)",
+            foreground="#555555", justify="left"
+        ).pack(side="left")
+
         def _confirm_save_before_run(target_path):
             """[수정 - 요청] "제안된 이름을 거절(아니오)하면 그냥 저장 없이
             넘어가는 게 아니라, 다른 파일명을 직접 넣을 수 있어야" - 기존엔
@@ -5121,8 +5161,17 @@ class CathPlotGUI:
                     save_list()
             dlg.destroy()
             _name_mode = NAME_MODE_FROM_DISPLAY.get(name_mode_display_var.get(), "template")
+            _common_frame = None
+            if common_frame_var.get():
+                _cf_w = (common_frame_w_var.get() or "").strip()
+                _cf_h = (common_frame_h_var.get() or "").strip()
+                try:
+                    float(_cf_w); float(_cf_h)
+                    _common_frame = (_cf_w, _cf_h, common_frame_unit_var.get())
+                except ValueError:
+                    messagebox.showwarning("Batch Set", "공통 Axis Frame 크기가 숫자가 아닙니다. 개별 template 설정으로 진행합니다.")
             self._run_batch_set_async(list(queue_list), fmt_var.get(), td3_path_var.get() or None,
-                                       name_mode=_name_mode, out_suffix=suffix_var.get())
+                                       name_mode=_name_mode, out_suffix=suffix_var.get(), common_frame=_common_frame)
 
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
@@ -5223,7 +5272,7 @@ class CathPlotGUI:
         )
         return outfile
 
-    def _process_one_batch_set_item(self, tpath, fmt, td3_data, name_mode="template", reserved_names=None, reserved_lock=None, out_suffix="_batchset"):
+    def _process_one_batch_set_item(self, tpath, fmt, td3_data, name_mode="template", reserved_names=None, reserved_lock=None, out_suffix="_batchset", common_frame=None):
         """_run_batch_set의 항목 하나(템플릿 1개)를 처리해서 결과를 dict로
         반환한다(공유 리스트에 직접 쓰지 않음 - ThreadPoolExecutor로 여러
         항목을 동시에 처리해도, 결과 취합은 항상 메인(관리) 스레드의
@@ -5255,7 +5304,16 @@ class CathPlotGUI:
         # create_script를 불러 그 로직을 거치지 않는다 - template에 저장된
         # frame_auto가 True(흔한 기본값)면 그대로 Auto로 렌더링돼 이 문제가
         # 재현된다. 같은 해석(Auto -> 10x8cm Manual)을 여기서도 적용한다.
-        if plotdef.frame_auto:
+        # [추가 - 사용자 요청] "batch set에서 axis frame 크기를 공통 입력으로
+        # 주는 방안" - common_frame이 주어지면(Batch Set 다이얼로그에서 체크한
+        # 경우) 각 template 자신의 frame_auto/width/height와 무관하게 이 크기를
+        # 전부 동일하게 덮어쓴다(Multi-Plot이 메인 화면의 공용 Axis Frame 값을
+        # 모든 선택 plot에 일괄 적용하는 것과 같은 원칙). 지정 안 하면(기본,
+        # 체크 해제) 기존처럼 template 개별 설정을 따르되 Auto는 10x8cm로 resolve.
+        if common_frame is not None:
+            plotdef.frame_auto = False
+            plotdef.frame_width, plotdef.frame_height, plotdef.frame_unit = common_frame
+        elif plotdef.frame_auto:
             plotdef.frame_auto = False
             plotdef.frame_width, plotdef.frame_height = self._compute_auto_frame_size_cm(for_print=True)
             plotdef.frame_unit = "cm"
@@ -5331,7 +5389,7 @@ class CathPlotGUI:
 
         return res
 
-    def _run_batch_set(self, template_paths, fmt, progress_callback=None, td3_path=None, name_mode="template", out_suffix="_batchset"):
+    def _run_batch_set(self, template_paths, fmt, progress_callback=None, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None):
         """template_paths(각각 완전한 plot 사양이 담긴 *.json)를 병렬로 처리해서
         이미지로 저장한다. self.xxx_var.get() 같은 Tkinter 접근을 안 하므로
         백그라운드 스레드에서 호출해도 안전함.
@@ -5377,7 +5435,7 @@ class CathPlotGUI:
         with ThreadPoolExecutor(max_workers=_BATCH_MAX_WORKERS) as executor:
             futures = {
                 executor.submit(self._process_one_batch_set_item, tpath, fmt, td3_data,
-                                 name_mode, _reserved_names, _reserved_lock, out_suffix): tpath
+                                 name_mode, _reserved_names, _reserved_lock, out_suffix, common_frame): tpath
                 for tpath in template_paths
             }
             for future in as_completed(futures):
@@ -5409,7 +5467,7 @@ class CathPlotGUI:
             msg += f"\n\n경고 {len(warnings)}건이 로그에 기록되었습니다: {log_path}"
         self.root.after(0, lambda m=msg: messagebox.showinfo("Batch Set", m))
 
-    def _run_batch_set_async(self, template_paths, fmt, td3_path=None, name_mode="template", out_suffix="_batchset"):
+    def _run_batch_set_async(self, template_paths, fmt, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None):
         """Batch Set을 백그라운드 스레드에서 실행하며 진행창을 보여준다."""
         job_id = self._register_batch_job("Batch Set", len(template_paths))
 
@@ -5442,7 +5500,7 @@ class CathPlotGUI:
         def worker():
             try:
                 self._run_batch_set(template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path,
-                                     name_mode=name_mode, out_suffix=out_suffix)
+                                     name_mode=name_mode, out_suffix=out_suffix, common_frame=common_frame)
             finally:
                 # [추가 - 요청] 작업이 끝났으니(성공/오류 무관) 실행 중 목록에서
                 # 뺀다. dict 조작은 메인 스레드에서만 하도록 after(0, ...)로 넘김.
