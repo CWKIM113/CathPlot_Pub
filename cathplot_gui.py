@@ -7040,7 +7040,20 @@ class CathPlotGUI:
         ttk.Combobox(row, textvariable=mode_display_var, values=["%", "좌표값"], width=5, state="readonly").pack(side="left", padx=(1, 2))
 
     def remove_row(self, target_list, frame):
+        # [수정 - 사용자 보고 버그] "행을 추가했다가 지우면 첫 줄 다음에 빈
+        # 줄이 남는다(2줄 이상 추가한 뒤 지우면 한 줄 빼고 다 지워진 것처럼
+        # 보임)" - pack 기반 destroy() 자체는 위젯 트리/목록에서 정확히
+        # 제거되지만(Xvfb 헤드리스로 첫/중간/마지막 줄 삭제, 5~7줄에서
+        # 연속 삭제까지 재현해봐도 목록 개수·위치는 항상 정상이었음 -
+        # 이 로직 자체의 버그는 아님), Windows Tk가 중첩된 canvas/frame
+        # 구조에서 destroy() 직후 화면을 즉시 다시 그리지 않고 남겨두는
+        # (다음 이벤트가 올 때까지 미뤄지는) 경우가 있어 그 사이 예전
+        # 픽셀이 남아있는 것으로 보인다. destroy 직후 명시적으로
+        # update_idletasks()를 불러 갱신을 강제한다(값싸고 안전한 조치 -
+        # 이 자체가 원인이 아니었더라도 부작용 없음).
+        parent = frame.master
         frame.destroy()
+        parent.update_idletasks()
         for item in target_list:
             if item['frame'] == frame:
                 target_list.remove(item)
@@ -7054,6 +7067,12 @@ class CathPlotGUI:
                 self.add_arrow_row()
             elif target_list is self.circle_list:
                 self.add_circle_row()
+        # anno_frame(Multi Annotations)이 plot_canvas 안에 있어, 내용이
+        # 줄어들면 그 canvas의 scrollregion도 즉시 다시 계산되게 한다
+        # (plot_frame의 <Configure> 바인딩에 맡기면 Windows에서 타이밍이
+        # 밀릴 수 있어 여기서도 한 번 더 직접 강제).
+        if hasattr(self, "plot_canvas"):
+            self.plot_canvas.configure(scrollregion=self.plot_canvas.bbox("all"))
 
     #def remove_row(self, target_list, frame):
     #    container = frame.master  # c_list_frame 또는 a_list_frame
@@ -8249,7 +8268,12 @@ class CathPlotGUI:
             data['expression'].trace_add("write", lambda *_: _sync_default_titles())
 
             def _remove_row():
+                # [수정 - 사용자 보고 버그] 2D remove_row와 동일 이유 -
+                # destroy 직후 update_idletasks()로 Windows Tk 리페인트
+                # 지연을 강제 해소.
+                parent = row.master
                 row.destroy()
+                parent.update_idletasks()
                 func_surface_rows.remove(data)
                 _sync_default_titles()
             ttk.Button(row, text="X", width=2, style="Compact.TButton",
@@ -8319,8 +8343,10 @@ class CathPlotGUI:
                 _fn = _mc_label_to_file.get(file_label_var.get())
                 return [f"{no}:{name}" for no, name in _mc_file_var_choices.get(_fn, [])]
 
+            # [수정 - 사용자 보고 버그] 2D remove_row와 동일 이유 - destroy
+            # 직후 update_idletasks()로 Windows Tk 리페인트 지연 해소.
             ttk.Button(row, text="X", width=2, style="Compact.TButton",
-                       command=lambda: (row.destroy(), manual_curve_rows.remove(data))).pack(side="right", padx=3)
+                       command=lambda: (row.destroy(), row.master.update_idletasks(), manual_curve_rows.remove(data))).pack(side="right", padx=3)
             # [수정 - 사용자 요청] "3D에서도 커버특성을 묶어서 정리" - Style/
             # Size/Shape(Marker 모양)/MaxNo는 더 이상 이 줄에 inline으로
             # 넣지 않고 "Set Detail" 팝업(_open_3d_curve_detail_popup)의
@@ -8470,7 +8496,8 @@ class CathPlotGUI:
             data = {'txt': tk.StringVar(), 'x': tk.StringVar(), 'y': tk.StringVar(), 'z': tk.StringVar(),
                     'color': tk.StringVar(value="Auto"), 'frame': row}
             anno3d_list.append(data)
-            ttk.Button(row, text="X", width=2, style="Compact.TButton", command=lambda: (row.destroy(), anno3d_list.remove(data))).pack(side="right", padx=3)
+            # [수정 - 사용자 보고 버그] 2D remove_row와 동일 이유.
+            ttk.Button(row, text="X", width=2, style="Compact.TButton", command=lambda: (row.destroy(), row.master.update_idletasks(), anno3d_list.remove(data))).pack(side="right", padx=3)
             ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
             ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 3))
             txt3d_entry = ttk.Entry(row, textvariable=data['txt'], width=14)
@@ -8488,7 +8515,8 @@ class CathPlotGUI:
                     'x2': tk.StringVar(), 'y2': tk.StringVar(), 'z2': tk.StringVar(),
                     'color': tk.StringVar(value="Auto"), 'size': tk.StringVar(value="M"), 'frame': row}
             arrow3d_list.append(data)
-            ttk.Button(row, text="X", width=2, style="Compact.TButton", command=lambda: (row.destroy(), arrow3d_list.remove(data))).pack(side="right", padx=3)
+            # [수정 - 사용자 보고 버그] 2D remove_row와 동일 이유.
+            ttk.Button(row, text="X", width=2, style="Compact.TButton", command=lambda: (row.destroy(), row.master.update_idletasks(), arrow3d_list.remove(data))).pack(side="right", padx=3)
             ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
             ttk.Combobox(row, textvariable=data['size'], values=list(self.ARROW_SIZE_MAP.keys()), width=4, state="readonly").pack(side="right", padx=2)
             ttk.Label(row, text="[Arrow]", foreground="darkred").pack(side="left", padx=(0, 3))
