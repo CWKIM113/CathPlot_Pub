@@ -139,7 +139,7 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/21/2026.")
+        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/23/2026.")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움
         # [수정 - 사용자 요청] "가로 길이도 flexible하게(노트북에선 가로를
@@ -452,7 +452,7 @@ class CathPlotGUI:
             font=("Malgun Gothic", 9, "bold"),
         )
 
-    def _mk_btn(self, parent, text, command, color="secondary", fg="white", btn_pady=0, btn_width=None, btn_padx=8, **pack_kw):
+    def _mk_btn(self, parent, text, command, color="secondary", fg="white", btn_pady=0, btn_width=None, btn_padx=8, grid_kw=None, **pack_kw):
         # [추가] "Curves/Marker/Browse/Template/Clean Past Plots 버튼도
         # 구별·강조" - ttk.Button은 배경색이 잘 안 먹는 환경이 확인돼서, 색을
         # 주는 모든 버튼을 이 헬퍼(tk.Button 기반)로 통일한다. color는
@@ -489,7 +489,17 @@ class CathPlotGUI:
         if btn_width is not None:
             kwargs["width"] = btn_width
         b = tk.Button(parent, **kwargs)
-        b.pack(**pack_kw)
+        # [추가 - 사용자 요청] "Format을 이름 기준과 정확히 정렬" - 서로 다른
+        # 줄(버튼 개수가 다름)에 있는 두 요소를 픽셀 단위로 정확히 맞추려면
+        # grid의 "같은 컬럼은 모든 행에서 항상 같은 x에서 시작" 특성이
+        # 필요함(pack은 그런 보장이 없고, 렌더링 후 winfo_x()로 재는 방식은
+        # 다이얼로그가 아직 화면에 map되기 전이라 실측 실패 확인됨) -
+        # grid_kw가 주어지면 pack 대신 grid를 쓴다(기존 호출부는 전부
+        # pack_kw만 쓰므로 동작 그대로 유지).
+        if grid_kw is not None:
+            b.grid(**grid_kw)
+        else:
+            b.pack(**pack_kw)
         return b
 
     def _bind_hscroll_wheel(self, canvas):
@@ -4676,7 +4686,11 @@ class CathPlotGUI:
         # 필요한 최소 높이가 늘어났는데 창 크기는 그대로라 아래쪽(listbox나
         # 안내 문구)이 잘려 보였음 - 폭도 넓혀 한 줄에 든 요소들이 넉넉하게
         # 보이도록, 높이도 늘어난 줄 수만큼 키운다.
-        dlg.geometry("700x620")
+        # [수정 - 사용자 요청] "가로크기를 줄여서 접미사 박스가 안 잘릴
+        # 정도로" - 실측 winfo_reqwidth()(모든 위젯이 실제로 필요로 하는
+        # 최소 폭)가 719px이었음 - 여유를 조금만 둔 730px로 맞춘다(800은
+        # 필요 이상으로 넓었음).
+        dlg.geometry("730x620")
 
         ttk.Label(
             dlg,
@@ -4930,8 +4944,18 @@ class CathPlotGUI:
                 return
             _apply_list_file(path)
 
-        btn_row = ttk.Frame(dlg)
-        btn_row.pack(fill="x", padx=10, pady=5)
+        # [수정 - 사용자 보고 버그] "이름기준을 위 Format에 정렬하라니까 왜
+        # 못 알아듣지?" - pack()은 서로 다른(별개) Frame 두 줄의 시작 x를
+        # 픽셀 단위로 맞춰준다는 보장이 없고(버튼 개수/폭이 줄마다 달라
+        # "대충 비슷한 위치"에 그침), 렌더링 후 위젯의 winfo_x()를 읽어
+        # 맞추는 방식도 다이얼로그가 아직 화면에 map되기 전이라 항상 0을
+        # 반환해 실패했음(실측 확인) - 두 줄을 하나의 grid_frame 안에서
+        # grid(row=0/1, column=...)로 배치한다. grid는 "같은 컬럼은 모든
+        # 행에서 항상 같은 x에서 시작"이 보장되므로, Format과 이름 기준을
+        # 같은 컬럼(옆의 버튼 개수가 서로 달라도)에 두면 폰트/DPI와 무관하게
+        # 항상 정확히 일치한다.
+        grid_frame = ttk.Frame(dlg)
+        grid_frame.pack(fill="x", padx=10, pady=5)
         # [수정 - 요청] "Batch Set 버튼들도 색상을 넣는 게 어떨지" - Batch
         # Queue와 같은 방식(_mk_btn, tk.Button 기반 - ttk.Button 렌더링 버그
         # 우회책이기도 함)으로 통일, 높이도 Batch Queue와 맞춤.
@@ -4941,10 +4965,14 @@ class CathPlotGUI:
         # 다른 대부분의 색상 버튼-Curves/Marker/Browse/Template 등-이 이미
         # 쓰는 값)으로 되돌림. Batch Set/Batch Queue/M-P(Multi Save-Print)
         # 세 창 모두 동일 적용해 서로 높이가 계속 일치하도록 함.
-        self._mk_btn(btn_row, "+ Add Templates...", add_files, color="grey", btn_pady=0, side="left", padx=5)
-        self._mk_btn(btn_row, "Remove Selected", remove_selected, color="grey", btn_pady=0, side="left", padx=5)
-        self._mk_btn(btn_row, "▲", lambda: move(-1), color="grey", btn_pady=0, btn_width=3, side="left", padx=2)
-        self._mk_btn(btn_row, "▼", lambda: move(1), color="grey", btn_pady=0, btn_width=3, side="left", padx=2)
+        self._mk_btn(grid_frame, "+ Add Templates...", add_files, color="grey", btn_pady=0,
+                     grid_kw=dict(row=0, column=0, padx=5, sticky="w"))
+        self._mk_btn(grid_frame, "Remove Selected", remove_selected, color="grey", btn_pady=0,
+                     grid_kw=dict(row=0, column=1, padx=5, sticky="w"))
+        self._mk_btn(grid_frame, "▲", lambda: move(-1), color="grey", btn_pady=0, btn_width=3,
+                     grid_kw=dict(row=0, column=2, padx=2, sticky="w"))
+        self._mk_btn(grid_frame, "▼", lambda: move(1), color="grey", btn_pady=0, btn_width=3,
+                     grid_kw=dict(row=0, column=3, padx=2, sticky="w"))
 
         # [수정 - 요청] "메모장으로 열어 고친 뒤 List Load를 또 눌러야 하는
         # 게 아니라, 저장하고 닫으면 그대로 불러오기(load)까지 되도록" -
@@ -4994,28 +5022,29 @@ class CathPlotGUI:
 
             threading.Thread(target=worker, daemon=True).start()
 
-        ttk.Label(btn_row, text="  Format:").pack(side="left", padx=(20, 2))
+        # [수정 - 사용자 요청] "Format도 약간 더 왼쪽으로" - 버튼들 바로
+        # 옆(컬럼4)에 최소 여백만 두고 배치.
+        ttk.Label(grid_frame, text="Format:").grid(row=0, column=4, padx=(12, 2), sticky="w")
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
         # png가 default여야 함" - 기본 포맷을 png로 변경, jpg 추가, 순서를
         # png/pdf/jpg/svg/emf/eps로 통일.
         fmt_var = tk.StringVar(value="png")
         ttk.Combobox(
-            btn_row, textvariable=fmt_var, values=["png", "pdf", "jpg", "svg", "emf", "eps"],
+            grid_frame, textvariable=fmt_var, values=["png", "pdf", "jpg", "svg", "emf", "eps"],
             width=6, state="readonly"
-        ).pack(side="left")
+        ).grid(row=0, column=5, sticky="w")
 
         # [수정 - 사용자 보고 버그] "Format box는 그 위치 그대로 두고 이름
-        # 기준 등을 Format에 맞춰 바로 아래에, 즉 Edit in Notepad의 우측에" -
-        # Format은 원래 있던 btn_row에 그대로 두고, 이름 기준/접미사는 새
-        # 줄을 따로 만드는 대신 그 바로 아래 줄인 btn_row2(List Save/List
-        # Load/Edit in Notepad)의 오른쪽에 이어 붙인다 - 두 버튼 줄의 폭이
-        # 비슷해서 자연스럽게 Format 아래쪽에 놓인다.
-        btn_row2 = ttk.Frame(dlg)
-        btn_row2.pack(fill="x", padx=10, pady=(0, 5))
-        self._mk_btn(btn_row2, "List Save...", save_list, color="grey", btn_pady=0, side="left", padx=5)
-        self._mk_btn(btn_row2, "List Load...", load_list, color="grey", btn_pady=0, side="left", padx=5)
-        edit_btn = self._mk_btn(btn_row2, "Edit in Notepad...", edit_list_notepad, color="grey", btn_pady=0, side="left", padx=5)
-        name_suffix_row = btn_row2
+        # 기준 등을 Format에 맞춰 바로 아래에" - List Save/List Load/Edit in
+        # Notepad를 grid_frame의 1행(row=1)에 놓고, 이름 기준/접미사는 Format과
+        # 같은 컬럼(4,5)에 이어서 놓아 항상 픽셀 단위로 정확히 아래에 오게 한다.
+        self._mk_btn(grid_frame, "List Save...", save_list, color="grey", btn_pady=0,
+                     grid_kw=dict(row=1, column=0, padx=5, pady=(5, 0), sticky="w"))
+        self._mk_btn(grid_frame, "List Load...", load_list, color="grey", btn_pady=0,
+                     grid_kw=dict(row=1, column=1, padx=5, pady=(5, 0), sticky="w"))
+        edit_btn = self._mk_btn(grid_frame, "Edit in Notepad...", edit_list_notepad, color="grey", btn_pady=0,
+                                 grid_kw=dict(row=1, column=2, columnspan=2, padx=5, pady=(5, 0), sticky="w"))
+        name_suffix_row = grid_frame
 
         # [추가 - 사용자 요청] "batch set에서 만들어지는 이미지파일명에 대한
         # 사용자 선택 옵션 - template와 같은 파일명+batch, Plot_File_Name+
@@ -5030,22 +5059,24 @@ class CathPlotGUI:
         # 잘못 표시했었는데, 실제로 쓰는 값은 title_var(그래프 위에 표시되는
         # 제목)가 아니라 filename_var(Plot File Name - plot 창 이름과
         # 동일한 값)라서 혼동을 막기 위해 이름을 바로잡음.
-        ttk.Label(name_suffix_row, text="이름 기준:").pack(side="left", padx=(0, 2))
+        ttk.Label(name_suffix_row, text="이름 기준:").grid(row=1, column=4, padx=(12, 2), pady=(5, 0), sticky="w")
         NAME_MODE_DISPLAY = {"template": "Template 파일명", "title": "Plot File Name"}
         NAME_MODE_FROM_DISPLAY = {v: k for k, v in NAME_MODE_DISPLAY.items()}
         name_mode_display_var = tk.StringVar(value=NAME_MODE_DISPLAY["template"])
         ttk.Combobox(
             name_suffix_row, textvariable=name_mode_display_var,
             values=list(NAME_MODE_DISPLAY.values()), width=14, state="readonly"
-        ).pack(side="left")
+        ).grid(row=1, column=5, pady=(5, 0), sticky="w")
 
         # [추가 - 사용자 요청] "굳이 batchset을 안 붙여도 될 듯한데... 아니면
         # 간단히 bat만 붙이든지" - 접미사 자체를 직접 입력할 수 있게 한다
         # (기본 "_bat"로 짧게, 완전히 비우면 접미사 없이 이름 그대로 저장 -
         # 그래도 같은 이름이 이미 있으면 자동으로 "_2","_3"...는 그대로 붙음).
-        ttk.Label(name_suffix_row, text="  접미사:").pack(side="left", padx=(10, 2))
+        ttk.Label(name_suffix_row, text="  접미사:").grid(row=1, column=6, pady=(5, 0), sticky="w")
         suffix_var = tk.StringVar(value="_bat")
-        ttk.Entry(name_suffix_row, textvariable=suffix_var, width=7).pack(side="left")
+        # [수정 - 사용자 요청] "접미사 박스도 줄이고 딱 맞게" - "_bat"(4글자)
+        # 기준으로 딱 맞는 폭으로 축소(기존 7 -> 5).
+        ttk.Entry(name_suffix_row, textvariable=suffix_var, width=5).grid(row=1, column=7, padx=(2, 0), pady=(5, 0), sticky="w")
 
         # [추가] "3D도 Batch에 연동" - 2D Template 각각에 3D curve/surface 적격
         # 조건(Y1 1개+Y2 1개, 또는 surface)이 있으면, 여기서 고른 3D Template(회전각/
@@ -5126,10 +5157,14 @@ class CathPlotGUI:
 
         common_frame_note_row = ttk.Frame(dlg)
         common_frame_note_row.pack(fill="x", padx=10, pady=(0, 5))
+        # [수정 - 사용자 요청] "아래 comment도 비례하지 않으니 는 위로 붙이고,
+        # 필요하면 각.... 등은 다음 줄로" - 줄바꿈 지점을 "자동으로" 뒤가
+        # 아니라 "비례하지 않으니," 뒤로 옮긴다(1행은 위 체크박스 줄과 더
+        # 붙어 보이게, 2행은 "필요하면"부터 시작).
         ttk.Label(
             common_frame_note_row,
-            text="(체크 해제 시 개별 template 설정 사용. 프레임 크기를 바꿔도 폰트 크기는 자동으로\n"
-                 "비례하지 않으니, 필요하면 각 template의 Font 크기도 같이 조정하세요)",
+            text="(체크 해제 시 개별 template 설정 사용. 프레임 크기를 바꿔도 폰트 크기는 자동으로 비례하지 않으니,\n"
+                 "필요하면 각 template의 Font 크기도 같이 조정하세요)",
             foreground="#555555", justify="left"
         ).pack(side="left")
 
@@ -5204,14 +5239,13 @@ class CathPlotGUI:
             self._run_batch_set_async(list(queue_list), fmt_var.get(), td3_path_var.get() or None,
                                        name_mode=_name_mode, out_suffix=suffix_var.get(), common_frame=_common_frame)
 
-        # [수정 - 사용자 요청] "Run Batch Set/취소 버튼은 좀 더 키우고" -
-        # 다른 보조 버튼들(3D 선택/미선택 등)은 이번에 compact(btn_pady=0)로
-        # 줄인 반면, 이 둘은 다이얼로그의 최종 실행/취소를 결정하는 주된
-        # 액션이라 오히려 더 눈에 띄게 크게(btn_pady=10, btn_width로 폭도 확보).
+        # [수정 - 사용자 요청] "Run Batch Set/취소 버튼은 좀 더 키우고" ->
+        # 이후 "너무 크네" - btn_pady=10/큰 btn_width는 과했음, 다른 보조
+        # 버튼(btn_pady=0)보다는 살짝 크되 과하지 않은 중간값으로 조정.
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
-        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", btn_pady=10, btn_width=10, side="right", padx=5)
-        self._mk_btn(run_row, "Run Batch Set", run_batch_set, color="accent", btn_pady=10, btn_width=16, side="right", padx=5)
+        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", btn_pady=3, btn_width=8, side="right", padx=5)
+        self._mk_btn(run_row, "Run Batch Set", run_batch_set, color="accent", btn_pady=3, btn_width=13, side="right", padx=5)
 
     def _render_3d_from_template_data(self, data, td3_data, outfile, fmt):
         """[추가] "3D도 Batch에 연동" - 2D Template의 data(file_assignments/
