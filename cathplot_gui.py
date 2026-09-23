@@ -3075,6 +3075,20 @@ class CathPlotGUI:
             if item.get("file"):
                 style_by_file_no[f'{item["file"]}||{item["output_no"]}'] = item
 
+        # [추가 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을 건너뛰고
+        # 순차적으로" - 이 템플릿에 저장된 모든 curve_styles를 훑어(아직 실제로
+        # 이 그림에 포함될지 필터링 전이라도, curve_styles는 이미 이 템플릿
+        # 전용이라 과다 포함되어도 안전 - 없는 라벨을 제외해봤자 그냥 무시됨)
+        # marker_on=True이고 Shape를 Auto가 아닌 특정 모양으로 직접 고른
+        # 것들의 라벨을 모아, 아래 Auto 재계산 2차 패스에서 그 모양들을
+        # 건너뛰게 한다.
+        _excluded_shapes_2d = set()
+        for item in data.get("curve_styles", []):
+            if self._infer_marker_on(item):
+                _lbl = item.get("marker_shape_label", "Auto")
+                if _lbl != "Auto":
+                    _excluded_shapes_2d.add(_lbl)
+
         curves = []
         default_x_output_no = 0
         for fa in file_assignments:
@@ -3162,7 +3176,8 @@ class CathPlotGUI:
         _auto_rank = 0
         for _key, _curve, _needs_auto in curves:
             if _needs_auto:
-                _curve.marker_shape, _ = self._resolve_marker_shape("Auto", False, True, _auto_rank)
+                _curve.marker_shape, _ = self._resolve_marker_shape(
+                    "Auto", False, True, _auto_rank, excluded_shapes=_excluded_shapes_2d)
                 _auto_rank += 1
         curves = [c for _key, c, _needs_auto in curves]
 
@@ -5329,8 +5344,16 @@ class CathPlotGUI:
         # _marker_auto_rank와 동일한 개념. curves 다음 surfaces 순서로 매김
         # (아래 curves_final/surfaces_final 구성과 같은 순서).
         _marker_auto_rank_box = [0]
+        # [추가 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을 건너뛰고
+        # 순차적으로" - 화면(대화형) 경로와 동일하게, marker_ons=True이고
+        # Shape를 Auto가 아닌 특정 모양으로 지정한 라벨들을 모아 Auto
+        # 배정에서 제외한다.
+        _excluded_shapes_3d = {
+            _shp for _lbl, _shp in shapes.items()
+            if _shp != "Auto" and bool(marker_ons.get(_lbl, False))
+        }
 
-        def _with_marker(item):
+        def _with_marker(item, force_no_marker=False):
             item = dict(item)
             _label = item["label"]
             if _label in (line_styles or {}):
@@ -5339,22 +5362,27 @@ class CathPlotGUI:
             elif _label in legacy_styles:
                 _line_style_label, _marker_on = self._legacy_style_to_line_style_and_marker_on(legacy_styles[_label])
             else:
-                _line_style_label, _marker_on = "Lines", False
+                _line_style_label, _marker_on = "Auto", False
+            # [수정 - 사용자 요청] "Surface는 Shape/On 숨김"(화면 대화형 경로와
+            # 동일 이유) - Batch Set 헤드리스 경로도 surface에는 항상 마커를
+            # 끈다(예전 template에 marker_on=True가 저장돼 있어도 무시).
+            if force_no_marker:
+                _marker_on = False
             _shape_label = shapes.get(_label, "Auto")
             _marker_shape, _used_auto = self._resolve_marker_shape(
-                _shape_label, False, _marker_on, _marker_auto_rank_box[0])
+                _shape_label, False, _marker_on, _marker_auto_rank_box[0], excluded_shapes=_excluded_shapes_3d)
             if _used_auto:
                 _marker_auto_rank_box[0] += 1
             item["marker_shape"] = _marker_shape
             item["marker_size"] = MARKER_SIZE_MAP.get(sizes.get(_label, ""), _legacy_size)
-            item["style"] = self._resolve_3d_internal_style(_line_style_label, _marker_on)
+            item["style"], item["line_dash"] = self._resolve_3d_internal_style(_line_style_label, _marker_on)
             item["title"] = titles.get(_label, "").strip() or _label
             _mc_str = str(maxcounts.get(_label, "") or "").strip()
             item["marker_max_count"] = int(_mc_str) if _mc_str else None
             return item
 
         curves_final = [_with_marker(c) for c in eligible]
-        surfaces_final = [_with_marker(s) for s in surfaces]
+        surfaces_final = [_with_marker(s, force_no_marker=True) for s in surfaces]
 
         def _parse_opt_float(s):
             s = (s or "").strip()
@@ -6469,13 +6497,20 @@ class CathPlotGUI:
         # 이 그림의 최종 curve 순서라 별도 재정렬이 없으므로(Template Load와
         # 달리) 이 루프 안에서 바로 매겨도 된다.
         _marker_auto_rank = 0
+        # [추가 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을 건너뛰고
+        # 순차적으로" - recipe 전체에서 marker_on=True이고 직접 특정 모양을
+        # 고른 항목들의 라벨을 모아 Auto 배정에서 제외.
+        _excluded_shapes = {
+            item.get("marker_shape_label", "Auto") for item in recipe
+            if self._infer_marker_on(item) and item.get("marker_shape_label", "Auto") != "Auto"
+        }
         for item in recipe:
             var_obj = var_by_no.get(item["output_no"])
             legend_text = var_obj.display_name if var_obj else f"var_{item['output_no']}"
             try:
                 _marker_shape, _used_auto = self._resolve_marker_shape(
                     item.get("marker_shape_label", "Auto"), item.get("marker_fill", False),
-                    self._infer_marker_on(item), _marker_auto_rank,
+                    self._infer_marker_on(item), _marker_auto_rank, excluded_shapes=_excluded_shapes,
                 )
                 if _used_auto:
                     _marker_auto_rank += 1
@@ -8194,9 +8229,15 @@ class CathPlotGUI:
         # 두고, _collect_3d_state에서 (line_style, marker_on) 조합을 그
         # 4가지 중 하나로 변환해서 넘기므로 렌더링 로직 자체는 안 건드린다
         # (points=Line Style None+On, linespoints=Lines+On, lines=Lines+Off).
-        _LINE_STYLE_DISPLAY_MAP = {"lines": "Lines", "none": "None", "pm3d": "Color Palette"}
-        _line_style_choices_curve = ["Lines", "None"]
-        _line_style_choices_surface = ["Lines", "None", "Color Palette"]
+        # [수정 - 사용자 요청] "3D도 2D처럼 line style 필요함(Color Palette는
+        # 다른 문제로 선택사항)" - "Lines" 한 가지로 뭉쳐놨던 선택지를 2D와
+        # 동일한 STYLE_LIST(Auto/Solid/Dash/Dot/Dash-D/Short-D/Dash-2D)로
+        # 넓히고, 선을 아예 안 그리는 "None"만 그대로 별도 항목으로 남긴다
+        # (Color Palette는 원래부터 surface 전용의 독립된 선택지라 그대로
+        # 유지 - 이번 변경과 무관). 실제 dashtype 적용은 gnu_generator의
+        # line_dash 필드로 전달(아래 _resolve_3d_internal_style 참고).
+        _line_style_choices_curve = STYLE_LIST + ["None"]
+        _line_style_choices_surface = STYLE_LIST + ["None", "Color Palette"]
         # 하위호환/최종 변환 로직은 self._legacy_style_to_line_style_and_marker_on /
         # self._resolve_3d_internal_style로 클래스 메서드화(Batch Set 헤드리스
         # 3D 렌더링 경로와 공유하기 위함 - 아래 사용처 참고).
@@ -8277,7 +8318,7 @@ class CathPlotGUI:
             shape_var = tk.StringVar(value="Auto")
             marker_on_var = tk.BooleanVar(value=False)
             size_var = tk.StringVar(value="M")
-            style_var_row = tk.StringVar(value=_LINE_STYLE_DISPLAY_MAP["lines"])
+            style_var_row = tk.StringVar(value="Auto")
             title_var_row = tk.StringVar(value="")
             maxno_var = tk.StringVar(value="")
             self._mk_btn(srow, "▼", lambda fr=srow: _move_3d_row(curve_check_vars, curve_check_frames, fr, 1),
@@ -8302,7 +8343,7 @@ class CathPlotGUI:
             shape_var = tk.StringVar(value="Auto")
             marker_on_var = tk.BooleanVar(value=False)
             size_var = tk.StringVar(value="M")
-            style_var_row = tk.StringVar(value=_LINE_STYLE_DISPLAY_MAP["lines"])
+            style_var_row = tk.StringVar(value="Auto")
             title_var_row = tk.StringVar(value="")
             maxno_var = tk.StringVar(value="")
             self._mk_btn(srow, "▼", lambda fr=srow: _move_3d_row(surface_check_vars, surface_check_frames, fr, 1),
@@ -8354,7 +8395,7 @@ class CathPlotGUI:
             list_frame = ttk.Frame(popup)
             list_frame.pack(fill="both", expand=True, padx=10)
 
-            def _add_detail_row(label_text, style_var_row, shape_var, marker_on_var, size_var, maxno_var, style_choices):
+            def _add_detail_row(label_text, style_var_row, shape_var, marker_on_var, size_var, maxno_var, style_choices, show_marker=True):
                 row_f = ttk.Frame(list_frame)
                 row_f.pack(fill="x", pady=1)
                 ttk.Label(_cell(row_f, NAME_PX), text=label_text).pack(side="left")
@@ -8362,12 +8403,22 @@ class CathPlotGUI:
                                             values=style_choices, state="readonly")
                 style_combo.pack(side="left", fill="both", expand=True)
                 self._disable_combobox_wheel(style_combo)
-                shape_combo = ttk.Combobox(_cell(row_f, SHAPE_PX), textvariable=shape_var,
-                                            values=MARKER_SHAPE_LIST, state="readonly")
-                shape_combo.pack(side="left", fill="both", expand=True)
-                self._disable_combobox_wheel(shape_combo)
-                on_cell = _cell(row_f, ON_PX)
-                self._mk_check(on_cell, "", marker_on_var, side="left")
+                # [수정 - 사용자 요청] "3D surface plot에서는 shape이 의미 있는지
+                # 검토 필요함" -> "Surface/Function Surface는 Shape/On 숨김" -
+                # 마커 25개 선택 로직(_select_marker_points_3d)이 1D 곡선
+                # 전용이라 grid(격자)인 surface에 적용하면 마커가 한쪽 행에만
+                # 몰려 찍혀 surface 전체를 대표하지 못함(사용자 확인). 열 정렬은
+                # 그대로 유지하기 위해 칸(_cell)은 만들되 위젯만 생략한다.
+                if show_marker:
+                    shape_combo = ttk.Combobox(_cell(row_f, SHAPE_PX), textvariable=shape_var,
+                                                values=MARKER_SHAPE_LIST, state="readonly")
+                    shape_combo.pack(side="left", fill="both", expand=True)
+                    self._disable_combobox_wheel(shape_combo)
+                    on_cell = _cell(row_f, ON_PX)
+                    self._mk_check(on_cell, "", marker_on_var, side="left")
+                else:
+                    _cell(row_f, SHAPE_PX)
+                    _cell(row_f, ON_PX)
                 size_combo = ttk.Combobox(_cell(row_f, SIZE_PX), textvariable=size_var,
                                            values=MARKER_SIZE_LIST, state="readonly")
                 size_combo.pack(side="left", fill="both", expand=True)
@@ -8379,7 +8430,7 @@ class CathPlotGUI:
             for v, c, shape_var, size_var, style_var_row, title_var_row, maxno_var, marker_on_var in curve_check_vars:
                 _add_detail_row(f"[Curve] {c['label']}", style_var_row, shape_var, marker_on_var, size_var, maxno_var, _line_style_choices_curve)
             for v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var, marker_on_var in surface_check_vars:
-                _add_detail_row(f"[Surface] {s['label']}", style_var_row, shape_var, marker_on_var, size_var, maxno_var, _line_style_choices_surface)
+                _add_detail_row(f"[Surface] {s['label']}", style_var_row, shape_var, marker_on_var, size_var, maxno_var, _line_style_choices_surface, show_marker=False)
             # [추가 - 사용자 요청] "3D Curve 직접 추가" 섹션도 같은 이유로
             # Line Style/Shape/On/Size/MaxNo를 여기로 옮긴다(Dat/X/Y/Z/이름은
             # "이 줄이 어떤 데이터인지" 정하는 핵심이라 그 섹션에 인라인으로
@@ -8400,7 +8451,7 @@ class CathPlotGUI:
             for d in func_surface_rows:
                 _fs_title = d['title'].get().strip()
                 _fs_label = _fs_title if _fs_title else (d['expression'].get().strip() or "(수식 없음)")
-                _add_detail_row(f"[Function] {_fs_label}", d['style'], d['shape'], d['marker_on'], d['size'], d['_maxno_unused'], _line_style_choices_surface)
+                _add_detail_row(f"[Function] {_fs_label}", d['style'], d['shape'], d['marker_on'], d['size'], d['_maxno_unused'], _line_style_choices_surface, show_marker=False)
 
             if not curve_check_vars and not surface_check_vars and not manual_curve_rows and not func_surface_rows:
                 ttk.Label(list_frame, text="(curve/surface 없음)").pack(padx=5, pady=10)
@@ -8853,6 +8904,24 @@ class CathPlotGUI:
             # (체크/입력이 유효한) 항목 순서대로 매긴다(2D의 _marker_auto_rank
             # 와 동일한 개념 - _resolve_marker_shape 참고).
             _marker_auto_rank = 0
+            # [추가 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을
+            # 건너뛰고 순차적으로" - curve/surface/manual/Function Surface를
+            # 통틀어 실제로 포함되고(체크/입력 유효) marker_on=True이며 Shape를
+            # Auto가 아닌 특정 모양으로 직접 고른 것들의 라벨을 모아, 아래
+            # 4종류 루프의 Auto 배정에서 공통으로 제외한다.
+            _excluded_shapes_3d = set()
+            for v, c, shape_var, size_var, style_var_row, title_var_row, maxno_var, marker_on_var in curve_check_vars:
+                if v.get() and marker_on_var.get() and shape_var.get() != "Auto":
+                    _excluded_shapes_3d.add(shape_var.get())
+            for v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var, marker_on_var in surface_check_vars:
+                if v.get() and marker_on_var.get() and shape_var.get() != "Auto":
+                    _excluded_shapes_3d.add(shape_var.get())
+            for d in func_surface_rows:
+                if d['expression'].get().strip() and d['marker_on'].get() and d['shape'].get() != "Auto":
+                    _excluded_shapes_3d.add(d['shape'].get())
+            for d in manual_curve_rows:
+                if _mc_label_to_file.get(d['file_label'].get()) and d['marker_on'].get() and d['shape'].get() != "Auto":
+                    _excluded_shapes_3d.add(d['shape'].get())
 
             # [수정] "Marker Size를 세트별로, Style도 세트별로(curve마다 다르게
             # 줄 수 있으므로) 이동" - 예전엔 전체 공용 하나였는데, 이제 각 행의
@@ -8863,12 +8932,12 @@ class CathPlotGUI:
                     continue
                 c2 = dict(c)
                 _marker_shape, _used_auto = self._resolve_marker_shape(
-                    shape_var.get(), False, marker_on_var.get(), _marker_auto_rank)
+                    shape_var.get(), False, marker_on_var.get(), _marker_auto_rank, excluded_shapes=_excluded_shapes_3d)
                 if _used_auto:
                     _marker_auto_rank += 1
                 c2["marker_shape"] = _marker_shape
                 c2["marker_size"] = MARKER_SIZE_MAP.get(size_var.get(), 1.0)
-                c2["style"] = _resolve_3d_internal_style(style_var_row.get(), marker_on_var.get())
+                c2["style"], c2["line_dash"] = _resolve_3d_internal_style(style_var_row.get(), marker_on_var.get())
                 # [수정 - 사용자 요청] "3D 그림 이름이 file명 고정인데 legend에
                 # 구별되게 사용자가 수정하게 해줘요" - 새로 추가한 이름 입력칸
                 # (title_var_row)이 비어있지 않으면 그 값을, 비어있으면(기본)
@@ -8885,13 +8954,17 @@ class CathPlotGUI:
                 if not v.get():
                     continue
                 s2 = dict(s)
+                # [수정 - 사용자 요청] "Surface는 Shape/On 숨김" - UI에서 더
+                # 이상 못 바꾸게 됐어도, 예전 Template 등에 저장된 marker_on
+                # 값이 True로 남아있을 수 있어 여기서 항상 False로 강제한다
+                # (마커가 조용히 다시 나타나는 것을 막음).
                 _marker_shape, _used_auto = self._resolve_marker_shape(
-                    shape_var.get(), False, marker_on_var.get(), _marker_auto_rank)
+                    shape_var.get(), False, False, _marker_auto_rank, excluded_shapes=_excluded_shapes_3d)
                 if _used_auto:
                     _marker_auto_rank += 1
                 s2["marker_shape"] = _marker_shape
                 s2["marker_size"] = MARKER_SIZE_MAP.get(size_var.get(), 1.0)
-                s2["style"] = _resolve_3d_internal_style(style_var_row.get(), marker_on_var.get())
+                s2["style"], s2["line_dash"] = _resolve_3d_internal_style(style_var_row.get(), False)
                 # [추가 - 사용자 요청] curve와 동일하게 surface도 legend 이름을
                 # 사용자가 지정할 수 있게 함(비어있으면 기존처럼 label 유지).
                 s2["title"] = title_var_row.get().strip() or s["label"]
@@ -8909,15 +8982,20 @@ class CathPlotGUI:
                 expr = d['expression'].get().strip()
                 if not expr:
                     continue
-                _fs_marker_on = d['marker_on'].get()
+                # [수정 - 사용자 요청] "Function Surface도 Shape/On 숨김"(Surface와
+                # 동일 이유) - UI로 더 이상 못 바꿔도 예전 저장값이 남아있을 수
+                # 있어 항상 False로 강제.
+                _fs_marker_on = False
                 _fs_marker_shape, _fs_used_auto = self._resolve_marker_shape(
-                    d['shape'].get(), False, _fs_marker_on, _marker_auto_rank)
+                    d['shape'].get(), False, _fs_marker_on, _marker_auto_rank, excluded_shapes=_excluded_shapes_3d)
                 if _fs_used_auto:
                     _marker_auto_rank += 1
+                _fs_style, _fs_line_dash = _resolve_3d_internal_style(d['style'].get(), _fs_marker_on)
                 function_surfaces_final.append({
                     "expression": expr,
                     "title": d['title'].get().strip() or expr,
-                    "style": _resolve_3d_internal_style(d['style'].get(), _fs_marker_on),
+                    "style": _fs_style,
+                    "line_dash": _fs_line_dash,
                     "marker_shape": _fs_marker_shape,
                     "marker_size": MARKER_SIZE_MAP.get(d['size'].get(), 1.0),
                 })
@@ -8963,11 +9041,12 @@ class CathPlotGUI:
                 _x_shift = float(self.file_xshift_vars[_fn].get() or 0.0) if _fn in self.file_xshift_vars else 0.0
                 _mc_marker_on = d['marker_on'].get()
                 _mc_marker_shape, _mc_used_auto = self._resolve_marker_shape(
-                    d['shape'].get(), False, _mc_marker_on, _marker_auto_rank)
+                    d['shape'].get(), False, _mc_marker_on, _marker_auto_rank, excluded_shapes=_excluded_shapes_3d)
                 if _mc_used_auto:
                     _marker_auto_rank += 1
                 _default_label = f"{self._dedup_display_name(_fn)} (X{x_no},Y{y_no},Z{z_no})"
                 _mc_maxno_str = d['maxcount'].get().strip()
+                _mc_style, _mc_line_dash = _resolve_3d_internal_style(d['style'].get(), _mc_marker_on)
                 curves_final.append({
                     "dat_file": _target_dat_file,
                     "x_col": x_no + 1, "y_col": y_no + 1, "z_col": z_no + 1,
@@ -8976,7 +9055,8 @@ class CathPlotGUI:
                     "title": d['title'].get().strip() or _default_label,
                     "marker_shape": _mc_marker_shape,
                     "marker_size": MARKER_SIZE_MAP.get(d['size'].get(), 1.0),
-                    "style": _resolve_3d_internal_style(d['style'].get(), _mc_marker_on),
+                    "style": _mc_style,
+                    "line_dash": _mc_line_dash,
                     "marker_max_count": int(_mc_maxno_str) if _mc_maxno_str else None,
                 })
 
@@ -9258,7 +9338,12 @@ class CathPlotGUI:
 
             def _restore_line_style_and_on(label, style_var_row, marker_on_var):
                 if _line_styles is not None and label in _line_styles:
-                    style_var_row.set(_line_styles[label])
+                    # [수정 - 사용자 요청] "3D도 2D처럼 line style 필요" 변경
+                    # 이전(오늘)에 저장된 템플릿은 "Lines"를 그대로 들고 있을
+                    # 수 있는데, 이제 콤보박스 선택지에 "Lines"가 없으므로
+                    # (STYLE_LIST로 대체) 같은 의미인 "Auto"로 정규화한다.
+                    _saved_ls = _line_styles[label]
+                    style_var_row.set("Auto" if _saved_ls == "Lines" else _saved_ls)
                     if _marker_ons is not None and label in _marker_ons:
                         marker_on_var.set(bool(_marker_ons[label]))
                 elif label in _legacy_styles:
@@ -10767,6 +10852,17 @@ class CathPlotGUI:
             # _resolve_marker_shape 참고) - 이 그림에 실제로 포함되는
             # curve 순서(temp_curves_info, 아래 루프와 동일한 순서) 기준.
             _marker_auto_rank = 0
+            # [추가 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을
+            # 건너뛰고 순차적으로" - 이 그림에 실제로 포함되는 curve들
+            # (temp_curves_info) 중 marker_on=True이고 Shape를 Auto가 아닌
+            # 특정 모양으로 직접 고른 것들의 라벨을 모아, 아래 Auto 배정에서
+            # 제외한다.
+            _excluded_shapes = {
+                self.marker_shape_vars[k].get()
+                for _df, _no, _t, _ax, k in temp_curves_info
+                if self.marker_on_vars.get(k) and self.marker_on_vars[k].get()
+                and k in self.marker_shape_vars and self.marker_shape_vars[k].get() != "Auto"
+            }
             # 1. 각 파일별 선택된 X축을 확인하고 temp_sorted 폴더에 정렬 파일 생성
             for d_file, out_no, title, axis, key in temp_curves_info:
                 file_x_output_no = 0  # 기본값: 0 (선택되지 않았거나 첫 번째 컬럼 가정)
@@ -10803,7 +10899,7 @@ class CathPlotGUI:
                 except ValueError:
                     _orig_rel = d_file
 
-                _marker_shape, _marker_size, _marker_max_count, _used_auto = self._get_marker_fields(key, _marker_auto_rank)
+                _marker_shape, _marker_size, _marker_max_count, _used_auto = self._get_marker_fields(key, _marker_auto_rank, _excluded_shapes)
                 if _used_auto:
                     _marker_auto_rank += 1
                 curves.append(CurveDefinition(
@@ -12457,35 +12553,49 @@ class CathPlotGUI:
         """[하위호환] 3D Line Style/On 분리 이전에 저장된 3D Template/Batch
         데이터는 style이 "points"/"linespoints"(내부 표기, STYLE_3D_INTERNAL_MAP
         참고)로 저장돼 있어, 이를 새 (line_style 표시값, marker_on) 조합으로
-        변환한다: points -> (None, 켜짐), linespoints -> (Lines, 켜짐),
-        lines/그 외 -> (Lines, 꺼짐), pm3d(surface/Function 전용) -> (Color
-        Palette, 꺼짐 - 예전에도 pm3d는 marker 개념이 없었음). 3D Plot 팝업
-        (2D 위젯 빌더) 안과 Batch Set의 헤드리스 3D 렌더링 양쪽에서 공용으로
-        쓴다."""
+        변환한다: points -> (None, 켜짐), linespoints -> (Auto, 켜짐),
+        lines/그 외 -> (Auto, 꺼짐), pm3d(surface/Function 전용) -> (Color
+        Palette, 꺼짐 - 예전에도 pm3d는 marker 개념이 없었음). [수정 - 사용자
+        요청] "3D도 2D처럼 line style 필요" - 예전엔 "Lines" 한 가지뿐이라
+        그 값으로 매핑했지만, 이제 "Lines"는 선택지에 없고(STYLE_LIST로
+        대체) 2D의 Auto와 같은 의미인 "Auto"로 매핑한다(선 자체는 그대로
+        그려지고, dashtype만 curve 순번별 자동 배정 - _resolve_3d_internal_style
+        참고). 3D Plot 팝업(2D 위젯 빌더) 안과 Batch Set의 헤드리스 3D
+        렌더링 양쪽에서 공용으로 쓴다."""
         s = (internal_style or "lines").lower()
         if s == "points":
             return "None", True
         if s == "linespoints":
-            return "Lines", True
+            return "Auto", True
         if s == "pm3d":
             return "Color Palette", False
-        return "Lines", False
+        return "Auto", False
 
     @staticmethod
     def _resolve_3d_internal_style(line_style_label, marker_on):
         """[추가 - 사용자 요청] "3D도 2D처럼 Line Style/마커 분리" - Line
-        Style(Lines/None/Color Palette)과 On(marker_on) 조합을
-        gnu_generator가 원래 쓰던 4가지 내부 style("lines"/"points"/
-        "linespoints"/"pm3d")로 변환한다. None+Off(아무것도 안 보이는
-        조합)는 빈 curve가 되는 걸 막기 위해 안전하게 lines로 대체한다."""
+        Style(2D와 동일한 STYLE_LIST 중 하나/None/Color Palette)과
+        On(marker_on) 조합을 gnu_generator가 원래 쓰던 4가지 내부 style
+        ("lines"/"points"/"linespoints"/"pm3d")로 변환한다. None+Off(아무것도
+        안 보이는 조합)는 빈 curve가 되는 걸 막기 위해 안전하게 lines로
+        대체한다.
+        [수정 - 사용자 요청] "3D도 2D처럼 line style(점선 종류) 필요함(Color
+        Palette는 다른 문제로 선택사항)" - line_style_label이 이제 "Lines"
+        단일값이 아니라 2D STYLE_LIST 값(Auto/Solid/Dash/...) 중 하나일 수
+        있어서, 선을 그리는지(line_on) 여부와는 별개로 그 dash 종류(STYLE_MAP
+        키)도 같이 돌려줘야 한다 - 반환값을 (internal_style, dash_key)
+        튜플로 바꾼다(호출부는 모두 이 튜플을 c["style"]/c["line_dash"]에
+        각각 나눠 담도록 같이 수정함)."""
         if line_style_label == "Color Palette":
-            return "pm3d"
-        if line_style_label == "None":
-            return "points" if marker_on else "lines"
-        return "linespoints" if marker_on else "lines"
+            return "pm3d", ""
+        line_on = line_style_label != "None"
+        dash_key = STYLE_MAP.get(line_style_label, "") if line_on else ""
+        if not line_on:
+            return ("points", "") if marker_on else ("lines", "")
+        return ("linespoints" if marker_on else "lines"), dash_key
 
     @staticmethod
-    def _resolve_marker_shape(shape_label, fill_on, marker_on=True, auto_rank=0):
+    def _resolve_marker_shape(shape_label, fill_on, marker_on=True, auto_rank=0, excluded_shapes=frozenset()):
         """Shape 라벨(예: "Circle")과 fill 여부로부터 실제 gnuplot pointtype을
         고른다. [수정 - 사용자 요청] "Shape 우측에 체크박스 추가(기본
         unchecked), None 대신 Auto 추가" - marker_on=False면(체크박스가
@@ -12497,13 +12607,22 @@ class CathPlotGUI:
         순서대로, 다 돌면 다음 바퀴는 채운 버전으로) 자동으로 구체적인
         모양을 고른다 - 그래서 Auto를 선택해두면 매번 버튼을 눌러 값을
         "고정"하지 않아도 항상 최신 curve 구성을 따라간다.
+        [수정 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을 건너뛰고
+        순차적으로" - excluded_shapes(호출부가 미리 한 번 훑어서 모은,
+        "이 그림에서 marker_on=True이고 Shape를 Auto가 아닌 특정 모양으로
+        직접 고른 curve들의 그 모양" 집합)에 들어있는 모양은 Auto 순환
+        목록에서 제외한다(중복 배정 방지). 전부 제외되면(도형 10종보다
+        수동 지정이 많거나 같으면) 예외적으로 원래 전체 목록으로 되돌아가
+        빈 목록으로 나누기 에러가 나거나 마커가 사라지는 것을 막는다.
         반환: (marker_shape, used_auto) - used_auto가 True면 호출부는
         auto_rank 카운터를 1 증가시켜 다음 curve에 넘겨야 한다."""
         if not marker_on:
             return None, False
         used_auto = False
         if shape_label == "Auto":
-            shapes = [s for s in MARKER_SHAPE_LIST if s != "Auto"]
+            shapes = [s for s in MARKER_SHAPE_LIST if s != "Auto" and s not in excluded_shapes]
+            if not shapes:
+                shapes = [s for s in MARKER_SHAPE_LIST if s != "Auto"]
             if not shapes:
                 return None, False
             lap, idx = divmod(auto_rank, len(shapes))
@@ -12513,7 +12632,7 @@ class CathPlotGUI:
         hollow_pt, filled_pt = MARKER_SHAPE_MAP.get(shape_label, (None, None))
         return (filled_pt if fill_on else hollow_pt), used_auto
 
-    def _get_marker_fields(self, key, auto_rank=0):
+    def _get_marker_fields(self, key, auto_rank=0, excluded_shapes=frozenset()):
         """CurveDefinition 생성 시 공통으로 쓰는 marker 필드 3종(shape/size/max_count)을
         GUI 변수에서 읽어온다. 값이 없으면 기본(마커 없음/Auto).
         marker_on/Auto 해석은 _resolve_marker_shape에 위임한다(그쪽
@@ -12523,7 +12642,7 @@ class CathPlotGUI:
         shape_label = self.marker_shape_vars[key].get() if key in self.marker_shape_vars else "Auto"
         fill_on = self.marker_fill_vars[key].get() if key in self.marker_fill_vars else False
         marker_on = self.marker_on_vars[key].get() if key in self.marker_on_vars else False
-        marker_shape, used_auto = self._resolve_marker_shape(shape_label, fill_on, marker_on, auto_rank)
+        marker_shape, used_auto = self._resolve_marker_shape(shape_label, fill_on, marker_on, auto_rank, excluded_shapes)
         size_label = self.marker_size_vars[key].get() if key in self.marker_size_vars else "M"
         marker_size = MARKER_SIZE_MAP.get(size_label, 1.0)
         maxcount_str = (self.marker_maxcount_vars[key].get() if key in self.marker_maxcount_vars else "").strip()

@@ -1489,12 +1489,25 @@ class GnuplotGenerator:
             return data_min, data_max, span / 4.0
 
         # "보기 좋은" 눈금 간격(step) 계산
+        # [수정 - 사용자 보고 버그] "0~1000.07 데이터인데 axis가 0~1500까지
+        # 잡힘(1010~1100 정도가 적절)" - 원인: raw_step=span/4가 딱 후보
+        # 경계값(예: 2.5×10^n) 바로 위로 아주 살짝(0.01% 수준)만 넘어가도
+        # 다음 후보로 넘어가 버려서(2.5→5, 즉 step이 2배로 뜀 - 후보 단계
+        # 중 가장 큰 도약), data_max가 "거의 딱 떨어지는" 값(1000)에서
+        # 아주 조금만 벗어나도(1000.07) 축 범위가 확 넓어지는 문제가 있었음
+        # (실측: data_max=1000.07 -> normalized=2.5002로 2.5 경계를 겨우
+        # 넘겨 step 250 대신 500 선택, 그 결과 axis_max가 1250이 아니라
+        # 1500까지 벌어짐 - data_max=1000.00이면 문제없이 step=250이 나와
+        # 대조 확인됨). normalized가 후보값보다 "아주 조금"(0.5% 이내) 큰
+        # 경우는 부동소수점/실측 데이터의 사소한 오차로 보고 그 후보를
+        # 그대로 쓰도록 작은 허용오차를 둔다.
         raw_step = span / 4.0
         magnitude = 10 ** math.floor(math.log10(raw_step))
         normalized = raw_step / magnitude
         step = raw_step
+        _TOL = 1.005  # 후보값의 0.5% 이내 초과는 허용오차로 흡수
         for candidate in (1, 2, 2.5, 5, 10):
-            if normalized <= candidate:
+            if normalized <= candidate * _TOL:
                 step = candidate * magnitude
                 break
 
@@ -3460,7 +3473,18 @@ class GnuplotGenerator:
         # 제안대로 "대략 Legend 크기 정도"인 plotdef.legend_size(기본값도
         # 마침 "9"라 기존 기본 설정에서는 화면이 그대로 유지됨)를 기준으로
         # 바꿔 이제 Legend 크기를 바꾸면 tic도 같이 커지고 작아지게 한다.
-        tic_size = int(float(getattr(plotdef, "legend_size", None) or 9) * f_scale * _mp_font_fix)
+        # [수정 - 사용자 보고 버그] "Legend font가 tic num font보다 작아 보임"
+        # - Legend 텍스트 자신은 _render_legend_box 안에서
+        # _legend_font_extra(= 0.7 if is_print_mode else 1.0, "legend가
+        # title 대비 너무 커 보인다"는 예전 보고로 추가된 인쇄/저장 전용
+        # 축소 배율)까지 곱해서 그리는데, 이 tic_size는 그 배율 없이
+        # legend_size*f_scale만 썼다 - 그 결과 "tic 폰트도 Legend 폰트를
+        # 그대로 쓴다"는 의도와 달리 인쇄/저장(is_print_mode)에서만 legend가
+        # tic보다 30% 작게 나왔음(화면은 이 배율이 1.0이라 문제 없었음 -
+        # 사용자가 "screen과 이미지가 다른지" 직접 의심한 것과 일치).
+        # 같은 배율을 여기도 곱해 실제로 같은 크기가 되게 한다.
+        _tic_legend_font_extra = 0.7 if getattr(plotdef, "is_print_mode", False) else 1.0
+        tic_size = int(float(getattr(plotdef, "legend_size", None) or 9) * f_scale * _mp_font_fix * _tic_legend_font_extra)
         if getattr(plotdef, "is_print_mode", False):
             tic_major_scale, tic_minor_scale = PRINT_TIC_MAJOR_SCALE, PRINT_TIC_MINOR_SCALE
             # [수정 - 버그] "PNG의 major tic이 EMF 대비 약 2배로 길게 나옴,
@@ -3796,10 +3820,16 @@ class GnuplotGenerator:
             _target_gap_pt = min(1.0 * tic_size, 1.0 * ylabel_size)
             _y1_tick_chars = self._axis_tick_char_count(plotdef, "y1")
             _ylabel_offset -= (_target_gap_pt - 4.0) / _PT_PER_OFFSET_UNIT
-            # [수정 - 사용자 요청] "보통 tic 자릿수는 3~4개가 보통" - 기준
-            # 자릿수를 2 -> 3으로 올려, 흔한 3자리는 보정 없이(이미 위
-            # 0.75*tic_size 기본값이 커버) 4자리 이상만 추가로 보정한다.
-            _ylabel_offset -= max(0, _y1_tick_chars - 3) * (5.9 / _PT_PER_OFFSET_UNIT)
+            # [수정 - 사용자 보고 버그] "tic 자릿수가 2~3개인데 title과의
+            # 간격이 너무 넓음" - 기존엔 max(0, ...)로 "기준 자릿수(3)보다
+            # 많을 때"만 보정하고, 적을 때는 그대로 뒀다(그 시절엔 "3~4자리가
+            # 보통"이라 짧은 경우는 드물다고 가정). 그런데 tic 자릿수가
+            # 기준보다 적으면(우측 정렬이라 tic 라벨의 왼쪽 끝이 축 쪽으로
+            # 더 붙어서) title과의 간격이 반대로 "더 벌어진다" - 같은 선형
+            # 관계(자릿수당 5.9pt)가 반대 방향에서도 그대로 성립해야
+            # 자연스러우므로 max(0, ...) 바닥을 없애 양방향으로 보정되게
+            # 한다(자릿수가 적을수록 offset을 올려 간격을 좁힘).
+            _ylabel_offset -= (_y1_tick_chars - 3) * (5.9 / _PT_PER_OFFSET_UNIT)
             # [수정] "2줄 PNG는 tic 숫자<->y1 title 여백을 지금의 1.5배로"
             # - PNG는 PDF를 그대로 래스터화해서 만들기 때문에(create_script의
             # png/jpg 분기 참고, 실제로는 fmt="pdf"로 다시 호출됨) 이 "else"
@@ -3949,8 +3979,10 @@ class GnuplotGenerator:
                 _target_gap_pt = min(1.0 * tic_size, 1.0 * y2label_size)
                 _y2_tick_chars = self._axis_tick_char_count(plotdef, "y2")
                 _y2label_offset += (_target_gap_pt - 4.0) / _PT_PER_OFFSET_UNIT
-                # [수정 - 사용자 요청, Y1과 동일] 기준 자릿수 2 -> 3.
-                _y2label_offset += max(0, _y2_tick_chars - 3) * (5.9 / _PT_PER_OFFSET_UNIT)
+                # [수정 - 사용자 보고 버그, Y1과 동일 이유] 자릿수가 기준(3)
+                # 보다 적을 때도 반대 방향으로 보정되도록 max(0, ...) 바닥
+                # 제거 - 양방향 선형 보정.
+                _y2label_offset += (_y2_tick_chars - 3) * (5.9 / _PT_PER_OFFSET_UNIT)
                 # [수정 - 사용자 요청] "같은 자릿수면 Y1, Y2가 같은 간격이어야"
                 # - Y1(1.874-1.763*ratio)과 Y2(-1.871+1.939*ratio) base 식은
                 # 서로 다른 시점에 독립적으로 실측/보정된 것이라 완전한 거울
@@ -9848,7 +9880,7 @@ class GnuplotGenerator:
             Surface는 thresh_var와 무관하게 항상 전체를 정적으로 추가한다(docstring의
             function_surfaces 설명 참고)."""
             parts = []
-            for c in curves_3d:
+            for _c_idx, c in enumerate(curves_3d):
                 abs_path = c["dat_file"] if os.path.isabs(c["dat_file"]) else os.path.abspath(c["dat_file"])
                 try:
                     path = os.path.relpath(abs_path, start=plot_dir)
@@ -9878,6 +9910,12 @@ class GnuplotGenerator:
                         _pt_clause += f" pt {_fmt_pointtype(marker_pt)}"
                     if marker_size:
                         _pt_clause += f" ps {marker_size}"
+                _c_dash_clause = ""
+                if _c_style in ("lines", "linespoints"):
+                    _c_dash_key = c.get("line_dash") or DEFAULT_LINESTYLES[_c_idx % len(DEFAULT_LINESTYLES)]
+                    _c_dash_pat = _dash_pattern_for_fmt(_c_dash_key, "interactive")
+                    if _c_dash_pat:
+                        _c_dash_clause = f" dashtype ({_c_dash_pat})"
 
                 title_text = (c.get("title") or "").strip()
                 if title_text and _n_sets_anim > 1:
@@ -9886,7 +9924,7 @@ class GnuplotGenerator:
                 else:
                     _title_clause = "notitle"
 
-                parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette')
+                parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette{_c_dash_clause}')
 
             _SURFACE_DASH_CYCLE = ["", "6, 3", "1, 2", "8, 3, 1, 3", "3, 2"]
             for _s_idx, s in enumerate(surfaces or []):
@@ -9918,8 +9956,13 @@ class GnuplotGenerator:
                     parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with pm3d')
                 else:
                     _s_style = self._3D_STYLE_MAP.get(_s_style_raw, "lines")
-                    _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
-                    _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
+                    _s_dash_key = s.get("line_dash") or ""
+                    if _s_dash_key:
+                        _s_dash_pat = _dash_pattern_for_fmt(_s_dash_key, "interactive")
+                        _s_dash_clause = f" dashtype ({_s_dash_pat})" if _s_dash_pat else ""
+                    else:
+                        _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
+                        _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
                     _s_pt_clause = ""
                     if _s_style in ("points", "linespoints"):
                         _s_marker_pt = s.get("marker_shape")
@@ -9933,7 +9976,7 @@ class GnuplotGenerator:
                     )
 
             for fs in (function_surfaces or []):
-                _fs_part = self._build_function_surface_part(fs, _resolve_style, _n_sets_anim > 1)
+                _fs_part = self._build_function_surface_part(fs, _resolve_style, _n_sets_anim > 1, fmt="interactive")
                 if _fs_part:
                     parts.append(_fs_part)
             return parts
@@ -10172,7 +10215,7 @@ class GnuplotGenerator:
             parts.append(f"{raw_ref}<=({tmax})")
         return " && ".join(parts) if parts else None
 
-    def _build_function_surface_part(self, fs, resolve_style_fn, show_title):
+    def _build_function_surface_part(self, fs, resolve_style_fn, show_title, fmt=None):
         """[추가 - 요청] "2D+3D 한번에" - Function Surface: Z=f(X,Y) gnuplot 수식을
         데이터 파일 없이 그대로 splot 절 하나로 만든다. surfaces(파일 기반, using
         1:2:3)와 달리 수식 자체가 이미 X,Y 격자 전체에 대해 정의돼 있으므로 gnuplot의
@@ -10208,7 +10251,14 @@ class GnuplotGenerator:
                 _fs_pt_clause += f" pt {_fmt_pointtype(_fs_marker_pt)}"
             if _fs_marker_size:
                 _fs_pt_clause += f" ps {_fs_marker_size}"
-        return f'{expr} {_title_clause} with {fs_style}{_fs_pt_clause} palette'
+        # [추가 - 사용자 요청] "3D도 2D처럼 line style(점선 종류) 필요" - curve와
+        # 동일하게 line_dash(STYLE_MAP 키)가 있으면 그 dashtype을 적용한다.
+        _fs_dash_clause = ""
+        if fs_style in ("lines", "linespoints"):
+            _fs_dash_pat = _dash_pattern_for_fmt(fs.get("line_dash") or "", fmt or "interactive")
+            if _fs_dash_pat:
+                _fs_dash_clause = f" dashtype ({_fs_dash_pat})"
+        return f'{expr} {_title_clause} with {fs_style}{_fs_pt_clause} palette{_fs_dash_clause}'
 
     def create_3d_script(self, curves_3d, outfile, fmt="interactive",
                           xlabel="", ylabel="", zlabel="", title="",
@@ -10730,6 +10780,17 @@ class GnuplotGenerator:
                 if marker_size:
                     _pt_clause += f" ps {marker_size}"
 
+            # [추가 - 사용자 요청] "3D도 2D처럼 line style(점선 종류) 필요" -
+            # c["line_dash"](STYLE_MAP 키)를 2D와 동일한 dashtype으로 적용한다.
+            # 비어있으면(Auto) 2D의 DEFAULT_LINESTYLES 순환과 동일하게 curve
+            # 순번(_c_idx)별로 자동 배정해 겹쳐도 최소한 구분은 되게 한다.
+            _c_dash_clause = ""
+            if _c_style in ("lines", "linespoints"):
+                _c_dash_key = c.get("line_dash") or DEFAULT_LINESTYLES[_c_idx % len(DEFAULT_LINESTYLES)]
+                _c_dash_pat = _dash_pattern_for_fmt(_c_dash_key, fmt)
+                if _c_dash_pat:
+                    _c_dash_clause = f" dashtype ({_c_dash_pat})"
+
             # [수정] "3-D title의 _,^ 첨자 처리 문제" - 2D와 동일한
             # _render_text/noenhanced 규칙 재사용(위 xlabel/ylabel/zlabel/title과 동일).
             # [수정 - 버그] curve 개수만 보고 title을 넣을지 판단해서, curve 1개+
@@ -10769,13 +10830,13 @@ class GnuplotGenerator:
                     if _c_style == "points":
                         splot_parts.append(f'{dbname} using 1:2:3:3 {_title_clause} with points{_pt_clause} palette')
                     else:
-                        splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with lines palette')
+                        splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with lines palette{_c_dash_clause}')
                         splot_parts.append(f'{dbname} using 1:2:3:3 notitle with points{_pt_clause} palette')
                     continue
                 # marker_pts가 비면(파일 파싱 실패 등) 아래 공통 처리로 폴백해서
                 # 예전처럼 파일을 직접 참조하는 단일 splot 절로 그린다.
 
-            splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette')
+            splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette{_c_dash_clause}')
 
         # [추가] "splot에 x-set 4개 넣으니 구분 안됨" - 여러 surface를 겹쳐 그리면
         # 전부 palette(Z값)로만 색칠돼서, 서로 다른 surface(파일)라도 Z값이
@@ -10815,8 +10876,17 @@ class GnuplotGenerator:
                 # 전혀 안 보였음. curve와 동일하게 이 surface의 style/marker
                 # pt·ps를 그대로 적용한다(dashtype은 선이 있을 때만 의미 있음).
                 _s_style = self._3D_STYLE_MAP.get(_s_style_raw, "lines")
-                _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
-                _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
+                # [수정 - 사용자 요청] "3D도 2D처럼 line style 필요" - 사용자가
+                # Line Style에서 dash 종류를 직접 골랐으면(Auto가 아니면) 그것을
+                # 쓰고, Auto면 기존처럼 surface별 자동 순환(_SURFACE_DASH_CYCLE -
+                # 겹치는 surface 구분용)을 그대로 유지한다.
+                _s_dash_key = s.get("line_dash") or ""
+                if _s_dash_key:
+                    _s_dash_pat = _dash_pattern_for_fmt(_s_dash_key, fmt)
+                    _s_dash_clause = f" dashtype ({_s_dash_pat})" if _s_dash_pat else ""
+                else:
+                    _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
+                    _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
                 _s_pt_clause = ""
                 if _s_style in ("points", "linespoints"):
                     _s_marker_pt = s.get("marker_shape")
@@ -10856,7 +10926,7 @@ class GnuplotGenerator:
 
         # [추가 - 요청] "2D+3D 한번에" - Function Surface(수식만으로 그리는 Z=f(X,Y)).
         for fs in (function_surfaces or []):
-            _fs_part = self._build_function_surface_part(fs, _resolve_style, _n_sets > 1)
+            _fs_part = self._build_function_surface_part(fs, _resolve_style, _n_sets > 1, fmt=fmt)
             if _fs_part:
                 splot_parts.append(_fs_part)
 
