@@ -1537,15 +1537,23 @@ class GnuplotGenerator:
         # min이 "정수"면 패딩 없이 그대로 쓰던 동작은 "min이 step의
         # 배수"면 패딩 없이 그대로 쓰는 것으로 그대로 유지(0부터 시작하는
         # 흔한 경우는 예전과 동일하게 동작).
+        # [수정 - 사용자 지적] "정수(=이미 step 배수)인 경우엔 여유 0(그대로
+        # 사용)이 OK이면서, 아주 조금만 벗어나면 갑자기 step 하나를 통째로
+        # 더하는 건 일관성이 없다 - 5% 문턱 자체가 과도함" - 바로 위에서
+        # "여유가 좁으면 한 step 더" 식으로 문턱(_MARGIN_FRAC)을 뒀었는데,
+        # gap=0(정확히 배수)일 때는 여유 없이 그대로 쓰면서 gap이 살짝만
+        # 있어도(예: step의 2%) 문턱을 넘겨 한 step 전체를 더하는 불연속이
+        # 생겼다. 사실 "정수(배수)면 그대로 쓴다"는 규칙 자체가 이미
+        # floor(내림)/ceil(올림)의 특수한 경우(배수일 때는 floor(x)==x==
+        # round(x))이므로, 별도로 "정수인지" 먼저 따지고 문턱까지 두는 대신
+        # 그냥 항상 floor(min)/ceil(max)만 쓰면 gap 크기와 무관하게 모든
+        # 경우가 하나의 규칙으로 일관되게 처리된다(추가 padding 없음 -
+        # floor/ceil 자체가 이미 "데이터를 넘지 않는 가장 가까운 step
+        # 배수"라 축이 데이터보다 안쪽으로 파고들 일이 없다).
         _round_unit = step if step > 0 else 1.0
-        _min_over_unit = data_min / _round_unit
-        data_min_is_nice = abs(_min_over_unit - round(_min_over_unit)) < 1e-6
-        if data_min_is_nice:
-            axis_min = round(_min_over_unit) * _round_unit
-            axis_max = math.ceil((data_max + span * 0.05) / _round_unit) * _round_unit
-        else:
-            axis_min = math.floor((data_min - span * 0.05) / _round_unit) * _round_unit
-            axis_max = math.ceil((data_max + span * 0.05) / _round_unit) * _round_unit
+        axis_min = math.floor(data_min / _round_unit) * _round_unit
+        axis_max = math.ceil(data_max / _round_unit) * _round_unit
+
         if axis_min >= axis_max:
             axis_max = axis_min + _round_unit
         return axis_min, axis_max, step
@@ -1873,13 +1881,21 @@ class GnuplotGenerator:
         if not curves:
             return
 
-        # [수정 - 버그] "axis title/Plot Title은 비슷해 보이는데 legend만 너무
-        # 커 보임(10~11pt 정도가 적당해 보임)" - title/xlabel/legend 모두 같은
-        # f_scale(1.60)을 그대로 곱해서 서로간 비율은 원래와 같은데도, legend만
-        # 유독 큰 느낌이라는 피드백 - legend에서만 그 배율을 추가로 낮춘다
-        # (9pt 기준 * 1.60 * 0.7 ≈ 10.1pt로 요청하신 범위에 맞춤). 화면(screen)은
-        # 이 2배 확대 대상이 아니었으므로 손대지 않음.
-        _legend_font_extra = 0.7 if is_print_mode else 1.0
+        # [수정 - 버그, 과거] "axis title/Plot Title은 비슷해 보이는데 legend만
+        # 너무 커 보임(10~11pt 정도가 적당해 보임)" - title/xlabel/legend 모두
+        # 같은 f_scale(1.60)을 그대로 곱해서 서로간 비율은 원래와 같은데도,
+        # legend만 유독 큰 느낌이라는 피드백으로 legend에서만 그 배율을 추가로
+        # 낮췄었다(9pt 기준 * 1.60 * 0.7 ≈ 10.1pt).
+        # [수정 - 사용자 재검토] 그런데 Comment(주석) 폰트는 legend_size를
+        # 그대로 쓰면서 이 0.7 축소가 애초에 없었고(_ann_size 참고), tic도
+        # "Legend와 같은 크기" 설계인데 이 축소가 안 반영돼 있었음 - 즉
+        # legend만 혼자 tic/Comment보다 작게 나오고 있었던 것. "legend=tic=
+        # comment 크기가 항상 같아야 한다"는 규칙을 지키기 위해, legend만
+        # 따로 줄이던 이 배율을 없앤다(legend가 커 보이면 이제는 Legend
+        # Size 입력값 자체를 사용자가 낮추면 됨 - 코드가 몰래 축소하지
+        # 않음). 아래 tic_size의 대응 배율(_tic_legend_font_extra)도 같은
+        # 이유로 함께 제거함(더 이상 mirror할 축소가 없음).
+        _legend_font_extra = 1.0
         # [수정] "Legend Font: PNG 등은 약간 작아 보임, EMF/SVG는 오케이" - EMF는
         # f_scale 자체가 이미 0.75 축소돼 있고 SVG는 축소가 없는데도(즉 PDF/PNG와
         # font_pt 계산이 같은데도) SVG는 괜찮고 PDF/PNG(cairo 렌더러)만 작다는
@@ -3473,17 +3489,24 @@ class GnuplotGenerator:
         # 제안대로 "대략 Legend 크기 정도"인 plotdef.legend_size(기본값도
         # 마침 "9"라 기존 기본 설정에서는 화면이 그대로 유지됨)를 기준으로
         # 바꿔 이제 Legend 크기를 바꾸면 tic도 같이 커지고 작아지게 한다.
-        # [수정 - 사용자 보고 버그] "Legend font가 tic num font보다 작아 보임"
-        # - Legend 텍스트 자신은 _render_legend_box 안에서
+        # [수정 - 사용자 보고 버그, 과거] "Legend font가 tic num font보다 작아
+        # 보임" - Legend 텍스트 자신은 _render_legend_box 안에서
         # _legend_font_extra(= 0.7 if is_print_mode else 1.0, "legend가
         # title 대비 너무 커 보인다"는 예전 보고로 추가된 인쇄/저장 전용
         # 축소 배율)까지 곱해서 그리는데, 이 tic_size는 그 배율 없이
-        # legend_size*f_scale만 썼다 - 그 결과 "tic 폰트도 Legend 폰트를
-        # 그대로 쓴다"는 의도와 달리 인쇄/저장(is_print_mode)에서만 legend가
-        # tic보다 30% 작게 나왔음(화면은 이 배율이 1.0이라 문제 없었음 -
-        # 사용자가 "screen과 이미지가 다른지" 직접 의심한 것과 일치).
-        # 같은 배율을 여기도 곱해 실제로 같은 크기가 되게 한다.
-        _tic_legend_font_extra = 0.7 if getattr(plotdef, "is_print_mode", False) else 1.0
+        # legend_size*f_scale만 써서 인쇄/저장에서만 legend가 tic보다 30%
+        # 작게 나왔었다 - 그때는 tic을 legend에 맞춰 같이 줄이는 쪽으로
+        # 고쳤었음.
+        # [수정 - 사용자 재검토] 그런데 Comment(주석, _ann_size 참고)는
+        # 애초에 이런 축소 없이 legend_size*f_scale을 그대로 썼고, tic도
+        # 원래 그게 정상이었다 - 즉 작았던 건 legend 쪽(위 _legend_font_extra
+        # 참고 - 이제 1.0으로 되돌림)이라, tic을 legend에 맞춰 줄이는 대신
+        # legend를 tic/Comment 기준으로 되돌리는 쪽으로 바꿨다("legend=tic=
+        # comment 크기가 항상 같아야 한다"는 규칙 - legend가 커 보이면
+        # Legend Size 입력값을 사용자가 직접 낮추면 됨). 그래서 여기 배율도
+        # 다시 1.0으로 되돌린다(나중에 재조정이 필요할 수 있어 변수/이력은
+        # 그대로 남겨둠).
+        _tic_legend_font_extra = 1.0
         tic_size = int(float(getattr(plotdef, "legend_size", None) or 9) * f_scale * _mp_font_fix * _tic_legend_font_extra)
         if getattr(plotdef, "is_print_mode", False):
             tic_major_scale, tic_minor_scale = PRINT_TIC_MAJOR_SCALE, PRINT_TIC_MINOR_SCALE
