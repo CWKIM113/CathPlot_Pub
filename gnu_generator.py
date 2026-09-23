@@ -1330,6 +1330,33 @@ class GnuplotGenerator:
         except (TypeError, ValueError):
             return 0.0
 
+    def _axis_tick_char_count(self, plotdef, axis_name):
+        """[추가 - 사용자 요청] "Y/Y2 title<->tic 간격이 tic 숫자가 길어지면
+        (예: 두 자리 이상) 좁아지던 문제" 대응용 - 그 축의 실제 tic 값
+        범위에서 가장 긴 숫자 문자열의 글자 수를 반환한다(_compute_manual_
+        margins_in의 _tick_label_chars와 같은 계산이나, ylabel/y2label
+        offset 계산 시점(_build_plot_commands 초반)엔 그 로컬 함수가 아직
+        없어 별도 메서드로 뺌 - 공유해서 써도 되지만 위험 줄이려고 새로
+        만듦). 실패하면 2(기존 offset 공식이 암묵적으로 가정하던 기준
+        자릿수)를 반환해 기존 동작과 동일하게 유지한다."""
+        try:
+            nice = self._nice_axis_range(plotdef, axis_name)
+        except Exception:
+            nice = None
+        if not nice:
+            return 2
+        y_lo, y_hi, _ = nice
+        max_len = 1
+        for v in (y_lo, y_hi, (y_lo + y_hi) / 2.0):
+            if abs(v) < 1e-9:
+                s = "0"
+            elif float(v).is_integer() and abs(v) < 1e15:
+                s = f"{v:.0f}"
+            else:
+                s = f"{v:.3g}"
+            max_len = max(max_len, len(s))
+        return max_len
+
     def _nice_axis_range(self, plotdef, axis, is_log=False, extra_values=None):
         parser = CathenaDatParser()
         
@@ -3736,6 +3763,40 @@ class GnuplotGenerator:
             # 선형관계를 이용해 재계산, size=36→gap 4->13.4pt에 해당하는
             # offset로 재조정).
             _ylabel_offset = 1.874 - 1.763 * (ylabel_size / _term_font_pt_ref)
+            # [수정 - 사용자 요청] "title<->tic 간격이 title/tic 폰트에 비례해야
+            # 한다, 최소/최대치를 둬도 된다" - EMF 실측을 못 구해서(sandbox
+            # LibreOffice headless 변환 불가) 사용자 지시대로 "tic 폰트
+            # 비례를 최소선, title 폰트의 1.0배를 최대치"로 clamp(둘 다 폰트
+            # 크기 비례라 f_scale에 따라 같이 커짐. 기본 계수는 아래에서
+            # 0.75*tic_size로 확정 - "tic 3자리는 흔한데 기본이 좁다"는
+            # 추가 피드백으로 최초 제안한 0.5배에서 상향). title 폰트가
+            # 작아 그 값이 과도하게 커지는 경우에만 1.0*ylabel_size로 상한을
+            # 건다. 또한 실측(PyMuPDF, out111 실데이터)으로 "tic 숫자
+            # 자릿수가 늘수록(우측 정렬이라 왼쪽으로
+            # 더 밀림) 간격이 눈에 띄게 좁아짐"을 직접 확인(1자리 9.9pt ->
+            # 2자리 4.0pt, 자릿수당 약 5.9pt 감소) - 기존 offset 공식이
+            # 암묵적으로 가정한 기준 자릿수(2자리) 대비 초과분만큼 offset도
+            # 같이 늘려 실제 gap이 자릿수와 무관하게 목표치에 가깝게 유지되도록
+            # 보정한다(1 offset 단위 ≈ 4.05pt, SVG 2줄 보정 등 기존 여러
+            # 곳에서 이미 쓰인 실측 환산 상수 재사용).
+            # [주의 - 부호, 실측으로 재확인] "더 음수일수록 간격이 커진다"는
+            # 위 2줄-라벨 주석의 1줄 기준 설명이 맞음(PyMuPDF 실측 스윕,
+            # offset 0/-1/-2 → 2자리 tic gap 0/4.66/9.33pt로 확인, 기울기
+            # 약 -4.66pt/unit) - target_gap_pt를 키울수록(간격을 더 벌리고
+            # 싶을수록) offset은 오히려 "빼야"(더 음수) 한다.
+            _PT_PER_OFFSET_UNIT = 4.05
+            # [수정 - 사용자 요청] "tic num 3자리는 많은 게 아닌데... 기본을
+            # 좀 더 넓혀줘요" - 최소치(0.5*tic_size)를 그대로 기본값으로
+            # 쓰면 흔한 3자리 tic조차 좁아 보인다는 지적 - 기본 계수를
+            # 0.75*tic_size로 올려 여유를 둔다(최대치 1.0*title_size는
+            # 사용자가 "1.0 is good"으로 확정한 그대로 유지).
+            _target_gap_pt = min(0.75 * tic_size, 1.0 * ylabel_size)
+            _y1_tick_chars = self._axis_tick_char_count(plotdef, "y1")
+            _ylabel_offset -= (_target_gap_pt - 4.0) / _PT_PER_OFFSET_UNIT
+            # [수정 - 사용자 요청] "보통 tic 자릿수는 3~4개가 보통" - 기준
+            # 자릿수를 2 -> 3으로 올려, 흔한 3자리는 보정 없이(이미 위
+            # 0.75*tic_size 기본값이 커버) 4자리 이상만 추가로 보정한다.
+            _ylabel_offset -= max(0, _y1_tick_chars - 3) * (5.9 / _PT_PER_OFFSET_UNIT)
             # [수정] "2줄 PNG는 tic 숫자<->y1 title 여백을 지금의 1.5배로"
             # - PNG는 PDF를 그대로 래스터화해서 만들기 때문에(create_script의
             # png/jpg 분기 참고, 실제로는 fmt="pdf"로 다시 호출됨) 이 "else"
@@ -3868,6 +3929,25 @@ class GnuplotGenerator:
                 # 크기(ratio≈1.545)의 gap(4pt)은 유지하고 다른 크기에서는
                 # 비례해서 커지도록 절편/기울기 재계산.
                 _y2label_offset = -1.871 + 1.939 * (y2label_size / _term_font_pt_ref)
+                # [수정 - 사용자 요청, Y1과 동일 로직] "title<->tic 간격이
+                # title/tic 폰트에 비례, 최소=tic 폰트 1/2, 최대=title 폰트
+                # 1.0배로 clamp" - Y2는 오른쪽 축이라 offset 부호가 Y1과
+                # 반대(기울기 +1.939, 즉 offset이 커질수록/양수 쪽으로
+                # 갈수록 title이 축에서 더 멀어져 gap이 커짐)이지만, 그
+                # 방향으로 "양수 delta를 더하면 gap이 커진다"는 관계 자체는
+                # Y1과 동일하므로(둘 다 +offset → +gap) 부호를 바꾸지 않고
+                # 그대로 더한다. tic 자릿수 보정(자릿수당 5.9pt)은 Y2
+                # 전용 실측값이 없어 Y1 실측치를 그대로 재사용(같은
+                # PT_PER_OFFSET_UNIT 환산 상수를 쓰는 것과 같은 근거 -
+                # 두 축 모두 같은 gnuplot 폰트/터미널 메트릭을 공유).
+                _PT_PER_OFFSET_UNIT = 4.05
+                # [수정 - 사용자 요청, Y1과 동일] 기본 계수를 0.75*tic_size로
+                # 상향(최대치 1.0*title_size는 그대로).
+                _target_gap_pt = min(0.75 * tic_size, 1.0 * y2label_size)
+                _y2_tick_chars = self._axis_tick_char_count(plotdef, "y2")
+                _y2label_offset += (_target_gap_pt - 4.0) / _PT_PER_OFFSET_UNIT
+                # [수정 - 사용자 요청, Y1과 동일] 기준 자릿수 2 -> 3.
+                _y2label_offset += max(0, _y2_tick_chars - 3) * (5.9 / _PT_PER_OFFSET_UNIT)
             # [수정 - 근본 원인, 위 ylabel과 동일한 이유] M-P 안쪽(interior) 칸은
             # margin_right도 절반만(_interior_k=0.5) 예약되는데 이 offset은 그걸
             # 몰랐음 - 실제 예약 비율(y2label_margin_ratio)만큼 같이 줄인다.
