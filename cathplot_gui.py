@@ -5787,7 +5787,15 @@ class CathPlotGUI:
         # 목록 순서)를 따르게 되는데, 이는 Legend/curve_order 등 다른
         # 곳에서 이미 쓰는 "사용자가 클릭(선택)한 순서"(_ordered_selected_
         # keys)와 다르다 - 같은 기준으로 통일한다.
-        _ordered_keys, _y1_set, _y2_set = self._ordered_selected_keys()
+        # [수정 - 사용자 재보고 버그] "Curves에서 순서를 바꾸면 Marker도 같은
+        # 순서로" - 위 수정은 클릭(선택)한 원래 순서만 따랐을 뿐, Curves
+        # 팝업(Legend1)에서 ▲▼로 명시적으로 재배치한 순서(self._legend_order
+        # ["1"] - _legend_ordered_keys 참고)는 반영하지 않았음. Legend1은
+        # 기본으로 항상 전체 curve가 포함돼 있는 "주" legend이므로, 그 순서를
+        # 기준으로 삼는다(아직 한 번도 안 바꿨으면 기존과 동일하게 클릭 순서
+        # 그대로 - _legend_ordered_keys가 빈 리스트일 때 그렇게 처리함).
+        _base_ordered_keys, _y1_set, _y2_set = self._ordered_selected_keys()
+        _ordered_keys = self._legend_ordered_keys("1", _base_ordered_keys)
         any_added = False
         for key in _ordered_keys:
             any_added = True

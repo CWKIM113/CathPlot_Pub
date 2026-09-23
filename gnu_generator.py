@@ -438,6 +438,15 @@ MARKER_SYMBOL_MAP = {
     # 문자(◁◀▷▶)라 legend 기호로도 그대로 재사용한다.
     "◁": "◁", "◀": "◀",
     "▷": "▷", "▶": "▶",
+    # [수정 - 버그] "오각형이 그려지지 않음" - Pentagon(pt 14/15) 추가 때
+    # MARKER_Y_OFFSET/_SCREEN에는 14/15 항목을 넣었지만 정작 이 dict(어떤
+    # marker_shape가 "유효"한지 판단하는 기준)에는 빠뜨렸음 - legend 아이콘이
+    # 그 자리에서 아예 안 그려질 뿐 아니라(if marker_shape in
+    # MARKER_SYMBOL_MAP 검사), PIP 인셋의 자체 marker 오버레이도 같은
+    # 검사로 걸러져 안 그려짐(gnuplot 자체 pointtype 14/15는 정상적으로
+    # 오각형을 그림 - pdfcairo로 직접 렌더링해 확인). ⬠(U+2B20, 빈 오각형)/
+    # ⬟(U+2B1F, 채운 오각형) 유니코드로 추가.
+    14: "⬠", 15: "⬟",  # Pentagon (속빈/채운)
 }
 # Legend 샘플선 위 마커 기호의 수직 보정치(ROW_H 배수, +면 위로/-면 아래로).
 # 세모류(△▲▽▼)는 잉크 무게중심이 위/아래로 치우쳐 있어 "center" 정렬만으로는
@@ -657,8 +666,15 @@ SP_SVG_FONT_RENDER_FIX = 1.0 / 1.125
 # 문제의 반대 방향이라 안전).
 MP_EMF_FONT_RENDER_FIX = 1.0 / 1.5
 MP_SVG_FONT_RENDER_FIX = 1.0 / 1.125
-PRINT_TIC_MAJOR_SCALE = 1.0
-PRINT_TIC_MINOR_SCALE = 0.5
+# [수정 - 사용자 요청] "tic 마크 길이를 지금의 2배 정도로. 이건 axis frame
+# 크기에 비례하지 않는지? 2배 키운 걸 기준으로 비례하게 해줘요" - 실제로는
+# 이 상수(major/minor 곱셈 배율)가 frame(axis) 크기와 무관한 고정값이었음
+# (tic_size(숫자 폰트)는 f_scale로 이미 비례하지만, tic 길이 자체는 그동안
+# 비례가 안 걸려 있었음 - 아래 실제 적용부(set tics scale) 참고). 기준값을
+# 2배로 올리고, 적용부에서 f_scale(frame 크기 비례 배율, 기준 10x8cm=1.0)을
+# 곱해 tic 길이도 frame 크기에 비례하게 만든다.
+PRINT_TIC_MAJOR_SCALE = 2.0
+PRINT_TIC_MINOR_SCALE = 1.0
 
 #----------------------------------------------------------
 # [수정 - 죽은 코드 제거] PAGE_MARGIN_LEFT/RIGHT/TOP/BOTTOM_CM, SAVE_PAGE_
@@ -3439,9 +3455,14 @@ class GnuplotGenerator:
                 # 0.8배로 줄일 것" - 누적 0.8*0.8=0.64배.
                 tic_major_scale *= 0.8 * 0.8
                 tic_minor_scale *= 0.8 * 0.8
+            # [추가 - 사용자 요청] tic 길이도 tic_size(숫자 폰트)처럼 frame
+            # 크기에 비례하게(f_scale, 기준 10x8cm=1.0) - print/save(이미지)
+            # 경로에만 적용(화면은 문제 제기가 없어 SCREEN_TIC_*는 그대로 둠).
+            tic_major_scale *= f_scale
+            tic_minor_scale *= f_scale
         else:
             tic_major_scale, tic_minor_scale = SCREEN_TIC_MAJOR_SCALE, SCREEN_TIC_MINOR_SCALE
-        lines.append(f"set tics scale {tic_major_scale}, {tic_minor_scale}")
+        lines.append(f"set tics scale {tic_major_scale:.3f}, {tic_minor_scale:.3f}")
 
         # [수정 - 사용자 보고 버그] "main plot 상단 x축에 tic이 안 그려짐" -
         # PIP 인셋이 자기 축에 "nomirror"를 쓰는데(작은 박스에 위아래로 tic
