@@ -3951,6 +3951,14 @@ class GnuplotGenerator:
                 _y2label_offset += (_target_gap_pt - 4.0) / _PT_PER_OFFSET_UNIT
                 # [수정 - 사용자 요청, Y1과 동일] 기준 자릿수 2 -> 3.
                 _y2label_offset += max(0, _y2_tick_chars - 3) * (5.9 / _PT_PER_OFFSET_UNIT)
+                # [수정 - 사용자 요청] "같은 자릿수면 Y1, Y2가 같은 간격이어야"
+                # - Y1(1.874-1.763*ratio)과 Y2(-1.871+1.939*ratio) base 식은
+                # 서로 다른 시점에 독립적으로 실측/보정된 것이라 완전한 거울
+                # 대칭이 아님 - PyMuPDF로 같은 3자리 tic 조건에서 직접 비교
+                # (Y1 18.87pt vs Y2 17.30pt, 기준 크기 ratio=1.545) - 그
+                # 차이(1.57pt)만큼 Y2에 상수 보정을 더해 Y1과 맞춘다
+                # (Y2 실측 기울기 약 4.67pt/unit 사용, 1.57/4.67≈0.336).
+                _y2label_offset += 0.336
             # [수정 - 근본 원인, 위 ylabel과 동일한 이유] M-P 안쪽(interior) 칸은
             # margin_right도 절반만(_interior_k=0.5) 예약되는데 이 offset은 그걸
             # 몰랐음 - 실제 예약 비율(y2label_margin_ratio)만큼 같이 줄인다.
