@@ -8006,7 +8006,12 @@ class CathPlotGUI:
         # s-plot(surface)에만 의미가 있으니 curve 행에는 그 옵션 자체를 빼서
         # s-plot에서만 선택 가능하게 함" - curve/surface 체크박스, Style,
         # Marker Size, Marker 모양을 한 줄에서 같이 고른다.
-        set_frame = ttk.LabelFrame(dialog, text="포함할 Set (체크 해제로 제외, Style·Size·Marker 모양을 세트별로 지정)")
+        # [수정 - 사용자 요청] "3D에서도 커버특성을 묶어서 정리" - 2D Dat
+        # list -> Curve Settings 팝업 통합과 같은 이유로, Style/Size/Shape/
+        # MaxNo(저빈도 "세부 설정")를 이 줄에서 빼서 "Detail" 팝업
+        # (_open_3d_curve_detail_popup, set_frame 헤더 참고)으로 옮긴다.
+        # 이 줄엔 자주 쓰는 체크박스/이름/▲▼만 남는다.
+        set_frame = ttk.LabelFrame(dialog, text="포함할 Set (체크 해제로 제외)")
         set_frame.pack(fill="x", padx=10, pady=5)
         _shape_choices = [s for s in MARKER_SHAPE_LIST if s != "None"]
         _style_choices_curve = [v for k, v in STYLE_3D_DISPLAY_MAP.items() if k != "pm3d"]
@@ -8072,21 +8077,15 @@ class CathPlotGUI:
             # Set 목록에서 바로 보이게(0-based, Dat list 변수 번호와 동일 기준).
             _col_tag = f" (X{c.get('x_out', '?')},Y{c.get('y1_out', '?')},Z{c.get('y2_out', '?')})"
             self._mk_check(srow, f"[Curve] {c['label']}{_col_tag}", v, color="accent", side="left")
+            # [수정 - 사용자 요청] Style/Size/Shape/MaxNo는 더 이상 이 줄에
+            # inline으로 넣지 않고 Detail 팝업에서만 편집한다(아래 변수는
+            # 그대로 유지 - curve_check_vars가 다운스트림 3D 렌더링에서
+            # 그대로 참조함).
             shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
             size_var = tk.StringVar(value="M")
             style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
             title_var_row = tk.StringVar(value="")
             maxno_var = tk.StringVar(value="")
-            maxno_entry = ttk.Entry(srow, textvariable=maxno_var, width=5,
-                                     validate="key", validatecommand=_maxno_vcmd)
-            maxno_entry.pack(side="right", padx=_MAXNO_PADX)
-            ttk.Label(srow, text="MaxNo.").pack(side="right", padx=(_MAXNO_PADX, 0))
-            ttk.Combobox(srow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
-                         width=7, state="readonly").pack(side="right", padx=_MAXNO_PADX)
-            ttk.Combobox(srow, textvariable=size_var, values=MARKER_SIZE_LIST,
-                         width=3, state="readonly").pack(side="right", padx=_MAXNO_PADX)
-            ttk.Combobox(srow, textvariable=style_var_row, values=_style_choices_curve,
-                         width=9, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             self._mk_btn(srow, "▼", lambda fr=srow: _move_3d_row(curve_check_vars, curve_check_frames, fr, 1),
                          color="grey", btn_width=2, side="right", padx=1)
             self._mk_btn(srow, "▲", lambda fr=srow: _move_3d_row(curve_check_vars, curve_check_frames, fr, -1),
@@ -8104,21 +8103,13 @@ class CathPlotGUI:
             v = tk.BooleanVar(value=True)
             self._mk_check(srow, f"[Surface] {s['label']} (채널 {s['n_outputs']}개, Z={s['z_label']})", v,
                             color="amber", side="left")
+            # [수정 - 사용자 요청] Curve와 동일하게 Style/Size/Shape/MaxNo는
+            # Detail 팝업으로 이동.
             shape_var = tk.StringVar(value=_shape_choices[_set_idx % len(_shape_choices)])
             size_var = tk.StringVar(value="M")
             style_var_row = tk.StringVar(value=STYLE_3D_DISPLAY_MAP["lines"])
             title_var_row = tk.StringVar(value="")
             maxno_var = tk.StringVar(value="")
-            maxno_entry = ttk.Entry(srow, textvariable=maxno_var, width=5,
-                                     validate="key", validatecommand=_maxno_vcmd)
-            maxno_entry.pack(side="right", padx=_MAXNO_PADX)
-            ttk.Label(srow, text="MaxNo.").pack(side="right", padx=(_MAXNO_PADX, 0))
-            ttk.Combobox(srow, textvariable=shape_var, values=MARKER_SHAPE_LIST,
-                         width=7, state="readonly").pack(side="right", padx=_MAXNO_PADX)
-            ttk.Combobox(srow, textvariable=size_var, values=MARKER_SIZE_LIST,
-                         width=3, state="readonly").pack(side="right", padx=_MAXNO_PADX)
-            ttk.Combobox(srow, textvariable=style_var_row, values=_style_choices_surface,
-                         width=9, state="readonly").pack(side="right", padx=_MAXNO_PADX)
             self._mk_btn(srow, "▼", lambda fr=srow: _move_3d_row(surface_check_vars, surface_check_frames, fr, 1),
                          color="grey", btn_width=2, side="right", padx=1)
             self._mk_btn(srow, "▲", lambda fr=srow: _move_3d_row(surface_check_vars, surface_check_frames, fr, -1),
@@ -8130,6 +8121,82 @@ class CathPlotGUI:
             surface_check_vars.append((v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var))
             surface_check_frames.append(srow)
             _set_idx += 1
+
+        # [추가 - 사용자 요청] "3D에서도 커버특성을 묶어서 정리" - 위에서
+        # 각 줄(curve/surface)에서 뺀 Style/Size/Shape/MaxNo를 한 팝업에
+        # 전부 모아서 보여준다(2D Curve Settings 팝업과 같은 표 형태).
+        # curve_check_vars/surface_check_vars가 이미 다 채워진 뒤에
+        # 여닫히므로(버튼 클릭 시점에 평가) 이 함수 정의 위치는 상관없지만,
+        # 읽기 쉽게 두 루프 바로 뒤에 둔다.
+        def _open_3d_curve_detail_popup():
+            popup = tk.Toplevel(dialog)
+            popup.title("3D Set Detail (Style/Size/Shape/MaxNo)")
+            popup.transient(dialog)
+
+            NAME_PX, STYLE_PX, SIZE_PX, SHAPE_PX, MAXNO_PX = 200, 100, 55, 90, 65
+
+            def _cell(parent, px, height=22):
+                f = tk.Frame(parent, width=px, height=height)
+                f.pack_propagate(False)
+                f.pack(side="left")
+                return f
+
+            header_f = ttk.Frame(popup)
+            header_f.pack(fill="x", padx=10, pady=(10, 2))
+            ttk.Label(_cell(header_f, NAME_PX), text="Curve/Surface", font=("Consolas", 9, "bold")).pack(side="left")
+            ttk.Label(_cell(header_f, STYLE_PX), text="Style", font=("Consolas", 9, "bold")).pack(side="left")
+            ttk.Label(_cell(header_f, SIZE_PX), text="Size", font=("Consolas", 9, "bold")).pack(side="left")
+            ttk.Label(_cell(header_f, SHAPE_PX), text="Shape", font=("Consolas", 9, "bold")).pack(side="left")
+            ttk.Label(_cell(header_f, MAXNO_PX), text="MaxNo.", font=("Consolas", 9, "bold")).pack(side="left")
+
+            list_frame = ttk.Frame(popup)
+            list_frame.pack(fill="both", expand=True, padx=10)
+
+            def _add_detail_row(label_text, style_var_row, size_var, shape_var, maxno_var, style_choices):
+                row_f = ttk.Frame(list_frame)
+                row_f.pack(fill="x", pady=1)
+                ttk.Label(_cell(row_f, NAME_PX), text=label_text).pack(side="left")
+                style_combo = ttk.Combobox(_cell(row_f, STYLE_PX), textvariable=style_var_row,
+                                            values=style_choices, state="readonly")
+                style_combo.pack(side="left", fill="both", expand=True)
+                self._disable_combobox_wheel(style_combo)
+                size_combo = ttk.Combobox(_cell(row_f, SIZE_PX), textvariable=size_var,
+                                           values=MARKER_SIZE_LIST, state="readonly")
+                size_combo.pack(side="left", fill="both", expand=True)
+                self._disable_combobox_wheel(size_combo)
+                shape_combo = ttk.Combobox(_cell(row_f, SHAPE_PX), textvariable=shape_var,
+                                            values=MARKER_SHAPE_LIST, state="readonly")
+                shape_combo.pack(side="left", fill="both", expand=True)
+                self._disable_combobox_wheel(shape_combo)
+                maxno_cell = _cell(row_f, MAXNO_PX)
+                ttk.Entry(maxno_cell, textvariable=maxno_var, validate="key",
+                          validatecommand=_maxno_vcmd).pack(side="left", fill="both", expand=True)
+
+            for v, c, shape_var, size_var, style_var_row, title_var_row, maxno_var in curve_check_vars:
+                _add_detail_row(f"[Curve] {c['label']}", style_var_row, size_var, shape_var, maxno_var, _style_choices_curve)
+            for v, s, shape_var, size_var, style_var_row, title_var_row, maxno_var in surface_check_vars:
+                _add_detail_row(f"[Surface] {s['label']}", style_var_row, size_var, shape_var, maxno_var, _style_choices_surface)
+
+            if not curve_check_vars and not surface_check_vars:
+                ttk.Label(list_frame, text="(curve/surface 없음)").pack(padx=5, pady=10)
+
+            ttk.Label(
+                popup, text="Style=파선/색상 등 3D 선 표시 방식(Surface는 pm3d 포함). MaxNo를 비우면 자동(Marker 개수 제한).",
+                foreground="#555555"
+            ).pack(padx=10, pady=(4, 0), anchor="w")
+
+            ttk.Button(popup, text="완료", command=popup.destroy).pack(anchor="e", padx=10, pady=8)
+
+        set_detail_row = ttk.Frame(dialog)
+        set_detail_row.pack(fill="x", padx=10, pady=(0, 5))
+        set_detail_btn = tk.Button(
+            set_detail_row, text="Set Detail", width=11, font=("Malgun Gothic", 9, "bold"),
+            bg=self.PALETTE["secondary"], fg="white",
+            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
+            relief="raised", bd=1, pady=1,
+            command=_open_3d_curve_detail_popup,
+        )
+        set_detail_btn.pack(side="left")
 
         # [추가 - 요청] "2D+3D 한번에" - Function Surface: 데이터 파일 없이
         # Z=f(X,Y) gnuplot 수식(예: sin(x)*cos(y), x**2-y**2)을 그대로 splot에
