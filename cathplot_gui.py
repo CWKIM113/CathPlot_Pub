@@ -4994,31 +4994,28 @@ class CathPlotGUI:
 
             threading.Thread(target=worker, daemon=True).start()
 
-        # [수정 - 사용자 보고 버그] "Batch Set 입력화면에서 글자가 안 잘리게,
-        # 이름기준 box 등은 Format 바로 아래에 align해서 위치" - 기존엔 위
-        # btn_row(Add/Remove/이동 버튼들) 한 줄에 Format/이름 기준/접미사까지
-        # 전부 욱여넣어서, 다이얼로그 폭(640px)에 다 안 들어가고 글자가
-        # 잘려 보였음. [수정 - 재시도] 처음엔 "이름 기준" 라벨의 왼쪽 여백을
-        # Format 라벨의 실제 렌더링 x좌표로 맞추는 방식을 썼는데, 이 다이얼로그가
-        # 아직 화면에 맵(map)되기 전이라 winfo_x()가 0을 반환해 정렬이 실제로는
-        # 안 먹혔음(실측으로 확인) - 픽셀 좌표를 런타임에 재는 대신, Format도
-        # 아예 버튼들과 분리된 자신만의 줄(format_row)로 내려서 name_suffix_row와
-        # 똑같이 다이얼로그 왼쪽 여백(padx=10)에서 시작하게 한다 - 두 줄 다 같은
-        # 기준선에서 시작하므로 항상 자동으로 정렬되고, 폰트/DPI가 달라져도 깨지지 않는다.
-        format_row = ttk.Frame(dlg)
-        format_row.pack(fill="x", padx=10, pady=(0, 5))
-        ttk.Label(format_row, text="Format:").pack(side="left", padx=(0, 2))
+        ttk.Label(btn_row, text="  Format:").pack(side="left", padx=(20, 2))
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
         # png가 default여야 함" - 기본 포맷을 png로 변경, jpg 추가, 순서를
         # png/pdf/jpg/svg/emf/eps로 통일.
         fmt_var = tk.StringVar(value="png")
         ttk.Combobox(
-            format_row, textvariable=fmt_var, values=["png", "pdf", "jpg", "svg", "emf", "eps"],
+            btn_row, textvariable=fmt_var, values=["png", "pdf", "jpg", "svg", "emf", "eps"],
             width=6, state="readonly"
         ).pack(side="left")
 
-        name_suffix_row = ttk.Frame(dlg)
-        name_suffix_row.pack(fill="x", padx=10, pady=(0, 5))
+        # [수정 - 사용자 보고 버그] "Format box는 그 위치 그대로 두고 이름
+        # 기준 등을 Format에 맞춰 바로 아래에, 즉 Edit in Notepad의 우측에" -
+        # Format은 원래 있던 btn_row에 그대로 두고, 이름 기준/접미사는 새
+        # 줄을 따로 만드는 대신 그 바로 아래 줄인 btn_row2(List Save/List
+        # Load/Edit in Notepad)의 오른쪽에 이어 붙인다 - 두 버튼 줄의 폭이
+        # 비슷해서 자연스럽게 Format 아래쪽에 놓인다.
+        btn_row2 = ttk.Frame(dlg)
+        btn_row2.pack(fill="x", padx=10, pady=(0, 5))
+        self._mk_btn(btn_row2, "List Save...", save_list, color="grey", btn_pady=0, side="left", padx=5)
+        self._mk_btn(btn_row2, "List Load...", load_list, color="grey", btn_pady=0, side="left", padx=5)
+        edit_btn = self._mk_btn(btn_row2, "Edit in Notepad...", edit_list_notepad, color="grey", btn_pady=0, side="left", padx=5)
+        name_suffix_row = btn_row2
 
         # [추가 - 사용자 요청] "batch set에서 만들어지는 이미지파일명에 대한
         # 사용자 선택 옵션 - template와 같은 파일명+batch, Plot_File_Name+
@@ -5049,12 +5046,6 @@ class CathPlotGUI:
         ttk.Label(name_suffix_row, text="  접미사:").pack(side="left", padx=(10, 2))
         suffix_var = tk.StringVar(value="_bat")
         ttk.Entry(name_suffix_row, textvariable=suffix_var, width=7).pack(side="left")
-
-        btn_row2 = ttk.Frame(dlg)
-        btn_row2.pack(fill="x", padx=10, pady=(0, 5))
-        self._mk_btn(btn_row2, "List Save...", save_list, color="grey", btn_pady=0, side="left", padx=5)
-        self._mk_btn(btn_row2, "List Load...", load_list, color="grey", btn_pady=0, side="left", padx=5)
-        edit_btn = self._mk_btn(btn_row2, "Edit in Notepad...", edit_list_notepad, color="grey", btn_pady=0, side="left", padx=5)
 
         # [추가] "3D도 Batch에 연동" - 2D Template 각각에 3D curve/surface 적격
         # 조건(Y1 1개+Y2 1개, 또는 surface)이 있으면, 여기서 고른 3D Template(회전각/
