@@ -1083,21 +1083,31 @@ class GnuplotGenerator:
         selected = []
         used_idx = set()
         for t in targets:
+            # [수정 - 사용자 보고 버그] "Auto marker가 목표 개수(예: 25)보다
+            # 적게 찍히고, 끝부분에 두 개가 몰려 찍힘" - 예전엔 "전체 점 중
+            # target에 가장 가까운 점"을 먼저 찾고 나서야 그 점이 이미 다른
+            # target에 쓰였는지(used_idx) 확인했는데, 이미 쓰인 점이면 그냥
+            # 이 target을 통째로 건너뛰어 버렸다(대신 "그다음으로 가까운
+            # 안 쓰인 점"을 찾지 않음) - 데이터가 촘촘한 구간에서는 여러
+            # target이 같은 점에 가장 가깝기 쉬워서, target마다 하나씩
+            # 마커가 빠지며 총 개수가 목표보다 줄었다. 그리고 그렇게 빠진
+            # target이 마지막 부근이면, 아래 "끝점 강제 포함" 로직이 진짜
+            # 마지막 데이터 점을 별도로 추가하면서 그 직전에 이미 선택된
+            # 마커와 가까이 붙어(둘 다 남아서) "끝에 두 개가 몰린" 것처럼
+            # 보였다. 이제 처음부터 "아직 안 쓰인 점들 중" 가장 가까운
+            # 점을 찾도록 바꿔서, target 개수만큼 점이 남아있는 한(위에서
+            # len(pts) > len(targets) 확인됨) 매 target마다 항상 새 점을
+            # 배정받는다.
             best_i, best_d = None, None
             for i, (px, _) in enumerate(pts):
+                if i in used_idx:
+                    continue
                 d = abs(math.log10(px) - math.log10(t)) if (is_log_x and px > 0 and t > 0) else abs(px - t)
                 if best_d is None or d < best_d:
                     best_i, best_d = i, d
-            if best_i is not None and best_i not in used_idx:
-                # [추가 - 사용자 보고 버그] "노이즈가 심한 curve에서 marker가
-                # curve 선에서 떨어져 보임(spline은 확인했으니 문제 아님) -
-                # 1~2개 정도 앞뒤로 이동해 가급적 선에 붙게" - "target x에
-                # 가장 가까운 실제 데이터 점"만 보고 고르다 보니, 노이즈가
-                # 심한 구간에서는 그 점이 우연히 바로 앞뒤 이웃과 크게
-                # 동떨어진 국소 튐(spike)일 수 있음 - smooth csplines는
-                # 그 점을 수학적으로는 정확히 지나가지만, 그 주변 구간
-                # 전체가 그 튐 때문에 요동쳐서 "선에서 떨어져 보이는" 시각
-                # 효과가 남음. target x와 가장 가까운 점 대신, 그 앞뒤
+            if best_i is not None:
+                # [기존] "노이즈가 심한 curve에서 marker가 curve 선에서
+                # 떨어져 보임" - target x와 가장 가까운 점 대신, 그 앞뒤
                 # window(최대 2칸) 안에서 "바로 옆 이웃 두 점의 평균값과
                 # 가장 비슷한(덜 튀는)" 점으로 살짝 옮겨서 눈에 보이는 선
                 # 흐름에 더 잘 붙게 한다.
@@ -1246,12 +1256,19 @@ class GnuplotGenerator:
         selected = []
         used_idx = set()
         for t in all_targets:
+            # [수정 - 사용자 보고 버그, 2D와 동일] "Auto marker 개수가 목표보다
+            # 적게 찍히고 끝부분에 몰림" - _select_marker_points와 동일한
+            # 원인(이미 쓰인 점이면 target을 그냥 건너뛰어 개수가 줄고,
+            # 그 결과 끝쪽 강제 포함 로직과 겹쳐 마커가 몰려 보임) - 처음부터
+            # 아직 안 쓰인 점들 중에서만 가장 가까운 점을 찾도록 수정.
             best_i, best_d = None, None
             for i, (px, _, _) in enumerate(pts):
+                if i in used_idx:
+                    continue
                 d = abs(math.log10(px) - math.log10(t)) if (is_log_x and px > 0 and t > 0) else abs(px - t)
                 if best_d is None or d < best_d:
                     best_i, best_d = i, d
-            if best_i is not None and best_i not in used_idx:
+            if best_i is not None:
                 # [추가] 2D와 동일하게 국소 튐 보정 재사용 - _refine_marker_index는
                 # pts[j][1](Y값)만 보므로 3-tuple((x,y,z))에도 그대로 쓸 수 있다.
                 best_i = self._refine_marker_index(pts, best_i, used_idx)
