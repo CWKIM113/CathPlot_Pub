@@ -4671,7 +4671,12 @@ class CathPlotGUI:
         dlg.transient(self.root)
         # [수정 - 요청] 버튼 높이를 1.4배로 키우면서(btn_pady=10) 창에 필요한
         # 최소 높이가 480px보다 커져 listbox가 그만큼 눌리던 것을 보정.
-        dlg.geometry("640x500")
+        # [수정 - 사용자 보고 버그] "입력화면에서 글자가 안 잘리게" - 이름
+        # 기준/접미사 줄, 공통 Axis Frame 크기 줄+안내 문구 줄이 추가되면서
+        # 필요한 최소 높이가 늘어났는데 창 크기는 그대로라 아래쪽(listbox나
+        # 안내 문구)이 잘려 보였음 - 폭도 넓혀 한 줄에 든 요소들이 넉넉하게
+        # 보이도록, 높이도 늘어난 줄 수만큼 키운다.
+        dlg.geometry("700x620")
 
         ttk.Label(
             dlg,
@@ -4989,46 +4994,67 @@ class CathPlotGUI:
 
             threading.Thread(target=worker, daemon=True).start()
 
-        btn_row2 = ttk.Frame(dlg)
-        btn_row2.pack(fill="x", padx=10, pady=(0, 5))
-        self._mk_btn(btn_row2, "List Save...", save_list, color="grey", btn_pady=0, side="left", padx=5)
-        self._mk_btn(btn_row2, "List Load...", load_list, color="grey", btn_pady=0, side="left", padx=5)
-        edit_btn = self._mk_btn(btn_row2, "Edit in Notepad...", edit_list_notepad, color="grey", btn_pady=0, side="left", padx=5)
-
-        ttk.Label(btn_row, text="Format:").pack(side="left", padx=(20, 2))
+        # [수정 - 사용자 보고 버그] "Batch Set 입력화면에서 글자가 안 잘리게,
+        # 이름기준 box 등은 Format 바로 아래에 align해서 위치" - 기존엔 위
+        # btn_row(Add/Remove/이동 버튼들) 한 줄에 Format/이름 기준/접미사까지
+        # 전부 욱여넣어서, 다이얼로그 폭(640px)에 다 안 들어가고 글자가
+        # 잘려 보였음. [수정 - 재시도] 처음엔 "이름 기준" 라벨의 왼쪽 여백을
+        # Format 라벨의 실제 렌더링 x좌표로 맞추는 방식을 썼는데, 이 다이얼로그가
+        # 아직 화면에 맵(map)되기 전이라 winfo_x()가 0을 반환해 정렬이 실제로는
+        # 안 먹혔음(실측으로 확인) - 픽셀 좌표를 런타임에 재는 대신, Format도
+        # 아예 버튼들과 분리된 자신만의 줄(format_row)로 내려서 name_suffix_row와
+        # 똑같이 다이얼로그 왼쪽 여백(padx=10)에서 시작하게 한다 - 두 줄 다 같은
+        # 기준선에서 시작하므로 항상 자동으로 정렬되고, 폰트/DPI가 달라져도 깨지지 않는다.
+        format_row = ttk.Frame(dlg)
+        format_row.pack(fill="x", padx=10, pady=(0, 5))
+        ttk.Label(format_row, text="Format:").pack(side="left", padx=(0, 2))
         # [수정] "Word 등에 이미지로 넣으려면 pdf는 안 되고, 가볍고 품질 좋은
         # png가 default여야 함" - 기본 포맷을 png로 변경, jpg 추가, 순서를
         # png/pdf/jpg/svg/emf/eps로 통일.
         fmt_var = tk.StringVar(value="png")
         ttk.Combobox(
-            btn_row, textvariable=fmt_var, values=["png", "pdf", "jpg", "svg", "emf", "eps"],
+            format_row, textvariable=fmt_var, values=["png", "pdf", "jpg", "svg", "emf", "eps"],
             width=6, state="readonly"
         ).pack(side="left")
 
+        name_suffix_row = ttk.Frame(dlg)
+        name_suffix_row.pack(fill="x", padx=10, pady=(0, 5))
+
         # [추가 - 사용자 요청] "batch set에서 만들어지는 이미지파일명에 대한
-        # 사용자 선택 옵션 - template와 같은 파일명+batch, Plot_File_title+
+        # 사용자 선택 옵션 - template와 같은 파일명+batch, Plot_File_Name+
         # batch... 같은 파일이 존재하면 _#로 추가" - 출력 파일명을 무엇
         # 기준으로 만들지 고를 수 있게 한다. "Template 파일명"(기본, 서로
         # 다른 template은 항상 서로 다른 json 파일명이라 고유함이 보장됨)과
-        # "Plot Title"(원본 dat 파일명 기반이라 같은 dat로 만든 여러
-        # template이 흔히 겹침 - 그래서 겹치면 자동으로 "_2","_3"...을
-        # 붙여 절대 서로 덮어쓰지 않게 한다).
-        ttk.Label(btn_row, text="  이름 기준:").pack(side="left", padx=(10, 2))
-        NAME_MODE_DISPLAY = {"template": "Template 파일명", "title": "Plot Title"}
+        # "Plot File Name"(메인 화면의 Plot File Name 입력칸 값 - plot 창
+        # 이름과 저장 파일명 기본값으로 쓰이는 바로 그 필드. 원본 dat
+        # 파일명 기반이라 같은 dat로 만든 여러 template이 흔히 겹침 -
+        # 그래서 겹치면 자동으로 "_2","_3"...을 붙여 절대 서로 덮어쓰지
+        # 않게 한다). [수정 - 사용자 지적] 처음엔 이 옵션을 "Plot Title"로
+        # 잘못 표시했었는데, 실제로 쓰는 값은 title_var(그래프 위에 표시되는
+        # 제목)가 아니라 filename_var(Plot File Name - plot 창 이름과
+        # 동일한 값)라서 혼동을 막기 위해 이름을 바로잡음.
+        ttk.Label(name_suffix_row, text="이름 기준:").pack(side="left", padx=(0, 2))
+        NAME_MODE_DISPLAY = {"template": "Template 파일명", "title": "Plot File Name"}
         NAME_MODE_FROM_DISPLAY = {v: k for k, v in NAME_MODE_DISPLAY.items()}
         name_mode_display_var = tk.StringVar(value=NAME_MODE_DISPLAY["template"])
         ttk.Combobox(
-            btn_row, textvariable=name_mode_display_var,
-            values=list(NAME_MODE_DISPLAY.values()), width=13, state="readonly"
+            name_suffix_row, textvariable=name_mode_display_var,
+            values=list(NAME_MODE_DISPLAY.values()), width=14, state="readonly"
         ).pack(side="left")
 
         # [추가 - 사용자 요청] "굳이 batchset을 안 붙여도 될 듯한데... 아니면
         # 간단히 bat만 붙이든지" - 접미사 자체를 직접 입력할 수 있게 한다
         # (기본 "_bat"로 짧게, 완전히 비우면 접미사 없이 이름 그대로 저장 -
         # 그래도 같은 이름이 이미 있으면 자동으로 "_2","_3"...는 그대로 붙음).
-        ttk.Label(btn_row, text=" 접미사:").pack(side="left", padx=(6, 2))
+        ttk.Label(name_suffix_row, text="  접미사:").pack(side="left", padx=(10, 2))
         suffix_var = tk.StringVar(value="_bat")
-        ttk.Entry(btn_row, textvariable=suffix_var, width=8).pack(side="left")
+        ttk.Entry(name_suffix_row, textvariable=suffix_var, width=7).pack(side="left")
+
+        btn_row2 = ttk.Frame(dlg)
+        btn_row2.pack(fill="x", padx=10, pady=(0, 5))
+        self._mk_btn(btn_row2, "List Save...", save_list, color="grey", btn_pady=0, side="left", padx=5)
+        self._mk_btn(btn_row2, "List Load...", load_list, color="grey", btn_pady=0, side="left", padx=5)
+        edit_btn = self._mk_btn(btn_row2, "Edit in Notepad...", edit_list_notepad, color="grey", btn_pady=0, side="left", padx=5)
 
         # [추가] "3D도 Batch에 연동" - 2D Template 각각에 3D curve/surface 적격
         # 조건(Y1 1개+Y2 1개, 또는 surface)이 있으면, 여기서 고른 3D Template(회전각/
@@ -5056,11 +5082,17 @@ class CathPlotGUI:
                 td3_path_var.set(p)
                 td3_label.config(text=os.path.basename(p), foreground="black")
 
-        ttk.Button(td3_row, text="선택...", command=pick_3d_template).pack(side="left", padx=5)
+        # [수정 - 사용자 보고] "3D 관련 box 선택/미선택을 줄여줘요. 너무 큼
+        # (특히 세로 폭이, 가로도 줄이고)" - 순수 ttk.Button은 세로 padding이
+        # 기본값이라 옆의 다른 버튼들(_mk_btn 기반, btn_pady=0으로 이미
+        # 압축됨)보다 훨씬 두꺼워 보였음 - 이 다이얼로그의 다른 버튼들과
+        # 동일한 _mk_btn(compact)으로 통일하고 폭도 좁게 지정.
+        self._mk_btn(td3_row, "선택...", pick_3d_template, color="grey", btn_pady=0, btn_width=6, side="left", padx=5)
         # [수정 - 요청] "해제" 버튼이 마치 뭔가를 고정/잠금 해제하는 것처럼
         # 읽혀 헷갈린다는 피드백 - 실제 동작(고른 3D Template을 다시 없음
         # 상태로 되돌림)에 맞게 "미선택"으로 라벨만 변경.
-        ttk.Button(td3_row, text="미선택", command=lambda: (td3_path_var.set(""), td3_label.config(text="", foreground="#555555"))).pack(side="left")
+        self._mk_btn(td3_row, "미선택", lambda: (td3_path_var.set(""), td3_label.config(text="", foreground="#555555")),
+                     color="grey", btn_pady=0, btn_width=6, side="left")
 
         # [추가 - 사용자 요청] "batch set에서 axis frame 크기를 이미지 선택처럼
         # 입력으로 주는 건 어떨까요? (template에 없으니까...)" - CathPlot을 막
@@ -5070,17 +5102,23 @@ class CathPlotGUI:
         # 안에 별도 입력칸을 둔다. 체크 해제(기본값) 시엔 지금까지와 동일하게
         # 각 template 자신의 frame 설정(Auto면 10x8cm, Manual이면 그 값)을 그대로
         # 쓰고, 체크하면 여기 입력한 크기를 모든 template에 공통으로 덮어쓴다.
+        # [수정 - 사용자 보고 버그] "글자가 안 잘리게, axis frame 관련 설명은
+        # 다음 줄에 명시" - 체크박스+입력칸 줄과 안내 문구를 한 줄에 같이
+        # 욱여넣어서 다이얼로그 폭에 안 들어가고 잘려 보였음 - 안내 문구를
+        # 별도 줄(common_frame_note_row)로 분리하고, 체크박스도 다른 화면의
+        # 체크박스들과 같은 _mk_check(직접 그린 비트맵 기반, 네이티브보다
+        # 크고 또렷함)로 통일해서 크기를 키운다.
         common_frame_row = ttk.Frame(dlg)
-        common_frame_row.pack(fill="x", padx=10, pady=(0, 5))
+        common_frame_row.pack(fill="x", padx=10, pady=(0, 2))
         common_frame_var = tk.BooleanVar(value=False)
         common_frame_w_var = tk.StringVar(value="10.00")
         common_frame_h_var = tk.StringVar(value="8.00")
         common_frame_unit_var = tk.StringVar(value="cm")
 
-        common_frame_chk = ttk.Checkbutton(common_frame_row, text="공통 Axis Frame 크기 사용", variable=common_frame_var)
-        common_frame_chk.pack(side="left")
+        self._mk_check(common_frame_row, "공통 Axis Frame 크기 사용", common_frame_var,
+                        color="accent", size=19, bold=True, side="left")
         cf_w_entry = ttk.Entry(common_frame_row, textvariable=common_frame_w_var, width=6)
-        cf_w_entry.pack(side="left", padx=(8, 2))
+        cf_w_entry.pack(side="left", padx=(10, 2))
         ttk.Label(common_frame_row, text="x").pack(side="left")
         cf_h_entry = ttk.Entry(common_frame_row, textvariable=common_frame_h_var, width=6)
         cf_h_entry.pack(side="left", padx=(2, 4))
@@ -5095,10 +5133,12 @@ class CathPlotGUI:
         common_frame_var.trace_add("write", _update_common_frame_state)
         _update_common_frame_state()
 
+        common_frame_note_row = ttk.Frame(dlg)
+        common_frame_note_row.pack(fill="x", padx=10, pady=(0, 5))
         ttk.Label(
-            common_frame_row,
-            text="  (체크 해제 시 개별 template 설정 사용. 프레임 크기를 바꿔도 폰트 크기는\n"
-                 "  자동으로 비례하지 않으니 필요하면 각 template의 Font 크기도 같이 조정하세요)",
+            common_frame_note_row,
+            text="(체크 해제 시 개별 template 설정 사용. 프레임 크기를 바꿔도 폰트 크기는 자동으로\n"
+                 "비례하지 않으니, 필요하면 각 template의 Font 크기도 같이 조정하세요)",
             foreground="#555555", justify="left"
         ).pack(side="left")
 
@@ -5173,10 +5213,14 @@ class CathPlotGUI:
             self._run_batch_set_async(list(queue_list), fmt_var.get(), td3_path_var.get() or None,
                                        name_mode=_name_mode, out_suffix=suffix_var.get(), common_frame=_common_frame)
 
+        # [수정 - 사용자 요청] "Run Batch Set/취소 버튼은 좀 더 키우고" -
+        # 다른 보조 버튼들(3D 선택/미선택 등)은 이번에 compact(btn_pady=0)로
+        # 줄인 반면, 이 둘은 다이얼로그의 최종 실행/취소를 결정하는 주된
+        # 액션이라 오히려 더 눈에 띄게 크게(btn_pady=10, btn_width로 폭도 확보).
         run_row = ttk.Frame(dlg)
         run_row.pack(fill="x", padx=10, pady=10)
-        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", btn_pady=0, side="right", padx=5)
-        self._mk_btn(run_row, "Run Batch Set", run_batch_set, color="accent", btn_pady=0, side="right", padx=5)
+        self._mk_btn(run_row, "취소", dlg.destroy, color="danger", btn_pady=10, btn_width=10, side="right", padx=5)
+        self._mk_btn(run_row, "Run Batch Set", run_batch_set, color="accent", btn_pady=10, btn_width=16, side="right", padx=5)
 
     def _render_3d_from_template_data(self, data, td3_data, outfile, fmt):
         """[추가] "3D도 Batch에 연동" - 2D Template의 data(file_assignments/
@@ -5333,7 +5377,7 @@ class CathPlotGUI:
         # 저장되며 서로 덮어씀" - Plot_File_Name은 같은 dat 파일로 만든
         # 여러 template이 흔히 공유하는 값이라 고유 식별자가 못 된다.
         # 기본은 template 자신의 json 파일명(항상 서로 다름) 기준으로
-        # 만들되, 사용자가 "Plot Title" 기준을 직접 고르면 그 값을 쓴다
+        # 만들되, 사용자가 "Plot File Name" 기준을 직접 고르면 그 값을 쓴다
         # (요청). 접미사("_batchset")도 "굳이 안 붙여도 될 듯... 아니면
         # 간단히 bat만"이라는 요청에 따라 직접 입력(기본 "_bat", 비우면
         # 접미사 없음)할 수 있게 함. 이름이 겹치면(디스크에 이미 있던
@@ -5420,7 +5464,7 @@ class CathPlotGUI:
                 td3_path = None
                 td3_data = None
 
-        # [추가 - 사용자 요청] "이름 기준(Plot Title)을 고르면 같은 dat
+        # [추가 - 사용자 요청] "이름 기준(Plot File Name)을 고르면 같은 dat
         # 파일에서 만든 여러 template이 흔히 같은 이름으로 겹침 - 그 경우
         # 서로 덮어쓰지 않고 자동으로 _2, _3...을 붙여야 함" - 여러
         # template이 ThreadPoolExecutor로 동시에 처리되므로, "이번
