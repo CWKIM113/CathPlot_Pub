@@ -2911,7 +2911,15 @@ class CathPlotGUI:
                     # 확인창을 띄워 그 자리에서 재지정할 기회를 준다.
                     if getattr(self, "template_load_autoplot_var", None) and self.template_load_autoplot_var.get():
                         for _fa in _missing_fa:
-                            self._log_warning(f"Template Load: dat 파일을 찾을 수 없어 건너뜀 ({_fa.get('filename', '')})")
+                            # [수정 - 사용자 요청] "Note가 필요하지 않을지" -
+                            # 이 로그만 보고도 "나중에 그냥 파일만 다시 열면
+                            # 되는 게 아니라, X/Y1/Y2를 직접 다시 골라야
+                            # 한다"는 한계가 바로 드러나도록 문구를 구체화.
+                            self._log_warning(
+                                f"Template Load: dat 파일을 찾을 수 없어 건너뜀 ({_fa.get('filename', '')}) - "
+                                "이 파일의 X/Y1/Y2·스타일 지정은 적용되지 않았습니다. 나중에 파일만 다시 열어도 "
+                                "자동으로 이어지지 않으니, 재지정하려면 'Load 후 바로 그리기'를 끄고 Template Load를 다시 하세요."
+                            )
                     else:
                         _missing_names = "\n".join(f"- {fa.get('filename', '')}" for fa in _missing_fa)
                         _relocate = messagebox.askyesno(
