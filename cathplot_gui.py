@@ -2821,25 +2821,13 @@ class CathPlotGUI:
                 for _info in self.file_rows:
                     _info["x_var"].set("")
 
-                for _fa in _file_assignments:
-                    _rel_path = _fa.get("filename", "")
-                    if not _rel_path:
-                        continue
-                    # [수정 - 되돌림, 사용자 설명] "cwd 이후 구조는 같지만
-                    # dat 파일은 물리적으로 다른 경우가 대부분" - 같은 상대
-                    # 구조의 서로 다른 case 폴더에 CathPlot을 각각 실행해
-                    # 같은 Template을 적용하는 게 주된 사용 방식이라, 경로
-                    # 복원은 반드시 "지금(로드 시점)의" cwd 기준 상대경로여야
-                    # 함(저장 시점의 절대경로를 우선하면, case를 바꿔 다시
-                    # 열었을 때 새 case가 아니라 예전 case의 파일을 그대로
-                    # 참조하는 더 심각한 오류가 됨) - 한때 저장 시점 절대경로를
-                    # 우선하도록 바꿨던 시도를 원래의 cwd-상대경로 방식으로
-                    # 되돌린다(해시 불안정 문제는 resort_dat_file 쪽에서
-                    # 경로를 정규화하는 것으로 별도 해결 - 아래 참고).
-                    _abs_path = _rel_path if os.path.isabs(_rel_path) else os.path.join(self.cwd, _rel_path)
-                    if not os.path.exists(_abs_path):
-                        continue  # 템플릿 저장 이후 파일이 옮겨지거나 지워졌으면 조용히 건너뜀
-
+                # [추가 - 사용자 요청] "template의 나머지 입력은 읽어오고 dat
+                # file만 바꾸는 방식" - 이 _fa(X/Y1/Y2/shift 지정)를 이미 존재가
+                # 확인된 dat 파일(_abs_path)에 적용하는 부분을 별도 함수로
+                # 뽑아둔다 - 정상 경로(파일이 그대로 있는 경우)와, 못 찾은
+                # 파일을 아래에서 사용자가 직접 다시 찾아준 경우 양쪽에서
+                # 똑같이 재사용하기 위함(중복 없이 동일한 로직 보장).
+                def _apply_fa_to_file(_fa, _abs_path):
                     _target_info = next((i for i in self.file_rows if i.get("filename") == _abs_path), None)
                     if _target_info is None:
                         _target_info = next((i for i in self.file_rows if not i.get("filename")), None)
@@ -2849,7 +2837,7 @@ class CathPlotGUI:
                         try:
                             _meta = self.parser.parse(_abs_path)
                         except Exception:
-                            continue
+                            return
                         _target_info["var"].set(self._display_relpath(_abs_path))
                         _target_info["filename"] = _abs_path
                         _target_info["meta"] = _meta
@@ -2878,6 +2866,56 @@ class CathPlotGUI:
                         if _datfile not in self.file_xshift_vars:
                             self.file_xshift_vars[_datfile] = tk.StringVar(value="0")
                         self.file_xshift_vars[_datfile].set(str(_fa.get("x_shift") or "0"))
+
+                # [수정 - 사용자 보고 버그] "template dat 파일을 못 찾으면 조용히
+                # 사라짐 - 나머지는 읽어오고 dat 파일만 다시 지정하게 해달라" -
+                # 예전엔 파일을 못 찾으면 경고 없이 그냥 건너뛰어(_fa 자체를
+                # 버림) 그 파일의 X/Y1/Y2/스타일 지정이 완전히 사라졌었다.
+                # 이제 못 찾은 항목을 따로 모아뒀다가, 아래(파일/축/Legend 등
+                # 나머지 설정을 전부 복원한 뒤) 한꺼번에 경고하고, 사용자가
+                # 원하면 그 자리에서 각 항목마다 대체 dat 파일을 찾아보게 해서
+                # 같은 _apply_fa_to_file로 X/Y1/Y2/shift를 그대로 이어 적용한다
+                # (새로 고른 파일의 실제 경로가 template에 저장된 원래
+                # 상대경로와 달라도, 아래 curve_styles 매칭은 output_no 전용
+                # 폴백(style_by_no)이 있어 대부분 그대로 이어짐).
+                _missing_fa = []
+                for _fa in _file_assignments:
+                    _rel_path = _fa.get("filename", "")
+                    if not _rel_path:
+                        continue
+                    # [수정 - 되돌림, 사용자 설명] "cwd 이후 구조는 같지만
+                    # dat 파일은 물리적으로 다른 경우가 대부분" - 같은 상대
+                    # 구조의 서로 다른 case 폴더에 CathPlot을 각각 실행해
+                    # 같은 Template을 적용하는 게 주된 사용 방식이라, 경로
+                    # 복원은 반드시 "지금(로드 시점)의" cwd 기준 상대경로여야
+                    # 함(저장 시점의 절대경로를 우선하면, case를 바꿔 다시
+                    # 열었을 때 새 case가 아니라 예전 case의 파일을 그대로
+                    # 참조하는 더 심각한 오류가 됨) - 한때 저장 시점 절대경로를
+                    # 우선하도록 바꿨던 시도를 원래의 cwd-상대경로 방식으로
+                    # 되돌린다(해시 불안정 문제는 resort_dat_file 쪽에서
+                    # 경로를 정규화하는 것으로 별도 해결 - 아래 참고).
+                    _abs_path = _rel_path if os.path.isabs(_rel_path) else os.path.join(self.cwd, _rel_path)
+                    if not os.path.exists(_abs_path):
+                        _missing_fa.append(_fa)
+                        continue
+
+                    _apply_fa_to_file(_fa, _abs_path)
+
+                if _missing_fa:
+                    _missing_names = "\n".join(f"- {fa.get('filename', '')}" for fa in _missing_fa)
+                    _relocate = messagebox.askyesno(
+                        "Template Load",
+                        f"다음 dat 파일을 찾을 수 없습니다(나머지 설정은 그대로 불러왔습니다):\n\n"
+                        f"{_missing_names}\n\n지금 하나씩 다시 찾아 지정하시겠습니까?"
+                    )
+                    if _relocate:
+                        for _fa in _missing_fa:
+                            _picked = filedialog.askopenfilename(
+                                title=f"'{_fa.get('filename', '')}' 대체할 dat 파일 선택 (취소하면 건너뜀)",
+                                initialdir=self.cwd
+                            )
+                            if _picked:
+                                _apply_fa_to_file(_fa, _picked)
 
                 # [수정 - 사용자 보고 버그] "Plot Title은 Template 저장 시 기록
                 # 안 되나요? 불러오니 file명으로 바뀜" - 여기서 update_title_
@@ -3050,7 +3088,11 @@ class CathPlotGUI:
         """템플릿 JSON(파일/변수 지정 + 스타일 전부 포함)만으로, 화면 상태를 전혀
         건드리지 않고 완전한 PlotDefinition을 직접 만든다. self.xxx_var.get() 같은
         Tkinter 위젯 접근을 전혀 하지 않으므로 백그라운드 스레드에서 호출해도 안전함
-        (Batch Set에서 여러 템플릿을 순차 처리할 때 사용)."""
+        (Batch Set에서 여러 템플릿을 순차 처리할 때 사용).
+        반환: (PlotDefinition, missing_files) - missing_files는 못 찾아서 건너뛴
+        dat 파일들의 저장된 상대경로 목록(전부 정상이면 빈 리스트). 파일 하나가
+        없다고 전체를 실패시키지 않고, 찾은 파일들만으로 최대한 plot을 만든다
+        (완전히 그릴 게 없을 때만 ValueError - 아래 "if not curves" 참고)."""
         file_assignments = data.get("file_assignments", [])
         if not file_assignments:
             raise ValueError("이 템플릿에는 파일/변수 지정(file_assignments)이 없습니다 "
@@ -3090,12 +3132,23 @@ class CathPlotGUI:
                     _excluded_shapes_2d.add(_lbl)
 
         curves = []
+        # [수정 - 사용자 요청] "Batch set 등은 log file에 메시지 넣고" - 예전엔
+        # file_assignments 중 dat 파일 하나라도 없으면 이 함수 전체가
+        # FileNotFoundError로 죽어서 그 template의 plot이 통째로 안 만들어졌음
+        # (다른 파일들은 멀쩡해도 마찬가지). 화면의 Template Load가 "나머지는
+        # 읽어오고 dat 파일만 다시 지정" 방식으로 바뀐 것과 같은 원칙으로,
+        # Batch(화면 대화상자가 없어 그 자리에서 물어볼 수 없음)는 못 찾은
+        # 파일만 건너뛰고 나머지 파일/curve로 최대한 plot을 만든 뒤, 무엇을
+        # 못 찾았는지 missing_files로 모아 호출부가 로그에 남기게 한다(완전히
+        # 아무것도 못 그릴 때만 아래 "if not curves" 에서 그대로 실패 처리).
+        missing_files = []
         default_x_output_no = 0
         for fa in file_assignments:
             rel_path = fa["filename"]
             abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(self.cwd, rel_path)
             if not os.path.exists(abs_path):
-                raise FileNotFoundError(f"파일을 찾을 수 없습니다: {rel_path}")
+                missing_files.append(rel_path)
+                continue
 
             dat_info = self.parser.parse(abs_path)
             var_by_no = {v.output_no: v for v in dat_info.variables}
@@ -3161,6 +3214,8 @@ class CathPlotGUI:
                         continue  # X/Y 번호가 같은 경우 등은 건너뜀
 
         if not curves:
+            if missing_files:
+                raise ValueError("dat 파일을 찾을 수 없습니다: " + ", ".join(missing_files))
             raise ValueError("이 템플릿에는 그릴 변수(Y1/Y2)가 없습니다.")
 
         # [추가 - 요청] curve_order(저장된 클릭 순서)가 있으면 그 순서대로
@@ -3183,7 +3238,7 @@ class CathPlotGUI:
 
         head_label_map = {"nohead": "No head", "head": "Forward", "backhead": "Backhead", "heads": "Both heads"}
 
-        return PlotDefinition(
+        plotdef = PlotDefinition(
             title=data.get("title", ""),
             xlabel=data.get("xlabel", ""), ylabel=data.get("ylabel", ""), y2label=data.get("y2label", ""),
             output_format="Batch",
@@ -3259,6 +3314,7 @@ class CathPlotGUI:
             pip=self._resolve_pip_dict_for_batch(data.get("pip", {})),
             function_curves=self._function_curves_from_json(data.get("function_curves", [])),
         )
+        return plotdef, missing_files
 
     def _resolve_pip_dict_for_batch(self, pip_data):
         """[추가 - 요청] Batch Set처럼 화면(screen) tk 변수를 건드리지 않고
@@ -5451,10 +5507,17 @@ class CathPlotGUI:
             return res
 
         try:
-            plotdef = self._build_plotdef_from_template_data(data)
+            plotdef, _missing_files = self._build_plotdef_from_template_data(data)
         except Exception as e:
             res["errors"].append(f"{tname}: {e}")
             return res
+        # [추가 - 사용자 요청] "Batch set 등은 log file에 메시지 넣고" - 일부
+        # dat 파일만 없어서(나머지 파일/curve로는 plot이 만들어짐) 건너뛴
+        # 경우, 화면 팝업으로 물어볼 방법이 없는 Batch에서는 경고로만 남긴다
+        # (아래에서 res["warnings"]에 쌓인 전부가 res["errors"]와 함께 이
+        # 항목 전용 로그 파일에도 기록됨 - 아래 끝부분 참고).
+        for _mf in _missing_files:
+            res["warnings"].append(f"{tname}: dat 파일을 찾을 수 없어 건너뜀 ({_mf})")
 
         # [수정 - 사용자 보고 버그] "Batch Set으로 1plot을 그리면 title/tic/
         # legend 폰트가 그림 대비 너무 작음" - execute_plot_pipeline(화면의
@@ -5548,6 +5611,18 @@ class CathPlotGUI:
                     res["warnings"].append(f"{tname}: 3D 적격 조건(Y1 1개+Y2 1개, 또는 surface)에 맞는 파일이 없어 3D는 스킵")
             except Exception as e:
                 res["errors"].append(f"{tname}: 3D 저장 실패 ({e})")
+
+        # [추가 - 사용자 요청] "Batch set 등은 log file에 메시지 넣고 - log
+        # file명은 plot_file_name+batlog?" - 이 항목이 실제로 만든(또는
+        # 만들려다 실패한) 출력 파일 이름(safe_stem)을 그대로 재사용해서
+        # "<safe_stem>.batlog"에 이 항목만의 경고/오류를 남긴다. 배치
+        # 전체를 모아 하나로 남기는 기존 batch_warnings.log(_run_batch_set
+        # 끝부분, 항목명 접두어 포함)는 그대로 유지하고, 이건 그 결과
+        # 이미지 파일 바로 옆에서 "이 그림에 무슨 문제가 있었는지"를 따로
+        # 바로 확인할 수 있게 추가하는 보조 로그다.
+        if res["warnings"] or res["errors"]:
+            _item_log = [f"[ERROR] {e}" for e in res["errors"]] + [f"[WARN] {w}" for w in res["warnings"]]
+            self._log_batch_warnings(_item_log, log_name=f"{safe_stem}.batlog")
 
         return res
 
