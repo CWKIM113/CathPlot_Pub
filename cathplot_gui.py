@@ -5613,16 +5613,21 @@ class CathPlotGUI:
                 res["errors"].append(f"{tname}: 3D 저장 실패 ({e})")
 
         # [추가 - 사용자 요청] "Batch set 등은 log file에 메시지 넣고 - log
-        # file명은 plot_file_name+batlog?" - 이 항목이 실제로 만든(또는
-        # 만들려다 실패한) 출력 파일 이름(safe_stem)을 그대로 재사용해서
-        # "<safe_stem>.batlog"에 이 항목만의 경고/오류를 남긴다. 배치
-        # 전체를 모아 하나로 남기는 기존 batch_warnings.log(_run_batch_set
-        # 끝부분, 항목명 접두어 포함)는 그대로 유지하고, 이건 그 결과
-        # 이미지 파일 바로 옆에서 "이 그림에 무슨 문제가 있었는지"를 따로
-        # 바로 확인할 수 있게 추가하는 보조 로그다.
+        # file명은 <출력파일명>_bat.log로(이미 _bat 있으면 생략)" - 이
+        # 항목이 실제로 만든(또는 만들려다 실패한) 출력 파일 이름
+        # (safe_stem)을 그대로 재사용해서 이 항목만의 경고/오류를 남긴다.
+        # safe_stem은 out_suffix(기본 "_bat")가 이미 붙어있는 경우가
+        # 흔해서(위 _candidate_stem 참고), 그대로 또 "_bat"를 붙이면
+        # "..._bat_bat.log"처럼 중복되므로, 이미 "_bat"로 끝나면 생략하고
+        # ".log"만 붙인다. 배치 전체를 모아 하나로 남기는 기존
+        # batch_warnings.log(_run_batch_set 끝부분, 항목명 접두어 포함)는
+        # 그대로 유지하고, 이건 그 결과 이미지 파일 바로 옆에서 "이 그림에
+        # 무슨 문제가 있었는지"를 따로 바로 확인할 수 있게 추가하는 보조
+        # 로그다.
         if res["warnings"] or res["errors"]:
             _item_log = [f"[ERROR] {e}" for e in res["errors"]] + [f"[WARN] {w}" for w in res["warnings"]]
-            self._log_batch_warnings(_item_log, log_name=f"{safe_stem}.batlog")
+            _log_stem = safe_stem if safe_stem.endswith("_bat") else f"{safe_stem}_bat"
+            self._log_batch_warnings(_item_log, log_name=f"{_log_stem}.log")
 
         return res
 
