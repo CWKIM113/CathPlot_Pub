@@ -2902,20 +2902,41 @@ class CathPlotGUI:
                     _apply_fa_to_file(_fa, _abs_path)
 
                 if _missing_fa:
-                    _missing_names = "\n".join(f"- {fa.get('filename', '')}" for fa in _missing_fa)
-                    _relocate = messagebox.askyesno(
-                        "Template Load",
-                        f"다음 dat 파일을 찾을 수 없습니다(나머지 설정은 그대로 불러왔습니다):\n\n"
-                        f"{_missing_names}\n\n지금 하나씩 다시 찾아 지정하시겠습니까?"
-                    )
-                    if _relocate:
+                    # [수정 - 사용자 요청] "본래 template를 읽어오면 바로
+                    # plot하는데..." - "Load 후 바로 그리기"가 켜져 있으면
+                    # (기본값, 빠른 흐름을 원한다는 신호) 확인창으로 그 흐름을
+                    # 막지 않는다 - 조용히 건너뛰고 경고만 로그(cathplot_
+                    # warnings.log)에 남긴 뒤 그대로 plot으로 이어지게 한다.
+                    # 꺼져 있으면(사용자가 신중하게 살펴보는 모드) 지금까지처럼
+                    # 확인창을 띄워 그 자리에서 재지정할 기회를 준다.
+                    if getattr(self, "template_load_autoplot_var", None) and self.template_load_autoplot_var.get():
                         for _fa in _missing_fa:
-                            _picked = filedialog.askopenfilename(
-                                title=f"'{_fa.get('filename', '')}' 대체할 dat 파일 선택 (취소하면 건너뜀)",
-                                initialdir=self.cwd
-                            )
-                            if _picked:
-                                _apply_fa_to_file(_fa, _picked)
+                            self._log_warning(f"Template Load: dat 파일을 찾을 수 없어 건너뜀 ({_fa.get('filename', '')})")
+                    else:
+                        _missing_names = "\n".join(f"- {fa.get('filename', '')}" for fa in _missing_fa)
+                        _relocate = messagebox.askyesno(
+                            "Template Load",
+                            f"다음 dat 파일을 찾을 수 없습니다(나머지 설정은 그대로 불러왔습니다):\n\n"
+                            f"{_missing_names}\n\n지금 하나씩 다시 찾아 지정하시겠습니까?"
+                        )
+                        if _relocate:
+                            for _fa in _missing_fa:
+                                # [수정 - 사용자 지적] "기존 Browse를 쓰는지
+                                # 따로 띄우는지" - load_dat_file(파일 목록의
+                                # 표준 "찾아보기" 버튼)과 다른 별도
+                                # 대화상자였음(필터/마지막 폴더 기억이 빠짐) -
+                                # 같은 관례(*.dat 필터, last_opened_dir 기억)로
+                                # 맞춘다.
+                                _init_dir = self.last_opened_dir if getattr(self, "last_opened_dir", None) else self.cwd
+                                _picked = filedialog.askopenfilename(
+                                    initialdir=_init_dir,
+                                    title=f"'{_fa.get('filename', '')}' 대체할 dat 파일 선택 (취소하면 건너뜀)",
+                                    filetypes=[("DAT files", "*.dat"), ("All files", "*.*")]
+                                )
+                                if _picked:
+                                    _picked = os.path.abspath(_picked)
+                                    self.last_opened_dir = os.path.dirname(_picked)
+                                    _apply_fa_to_file(_fa, _picked)
 
                 # [수정 - 사용자 보고 버그] "Plot Title은 Template 저장 시 기록
                 # 안 되나요? 불러오니 file명으로 바뀜" - 여기서 update_title_
