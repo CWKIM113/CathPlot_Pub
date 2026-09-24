@@ -5631,7 +5631,7 @@ class CathPlotGUI:
 
         return res
 
-    def _run_batch_set(self, template_paths, fmt, progress_callback=None, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None):
+    def _run_batch_set(self, template_paths, fmt, progress_callback=None, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None, overwrite_log=False):
         """template_paths(각각 완전한 plot 사양이 담긴 *.json)를 병렬로 처리해서
         이미지로 저장한다. self.xxx_var.get() 같은 Tkinter 접근을 안 하므로
         백그라운드 스레드에서 호출해도 안전함.
@@ -5704,13 +5704,17 @@ class CathPlotGUI:
             msg += "\n\n오류:\n" + "\n".join(errors[:10])
             if len(errors) > 10:
                 msg += f"\n... 외 {len(errors) - 10}개"
-        log_path = self._log_batch_warnings(warnings)
+        log_path = self._log_batch_warnings(warnings, mode="w" if overwrite_log else "a")
         if log_path:
             msg += f"\n\n경고 {len(warnings)}건이 로그에 기록되었습니다: {log_path}"
         self.root.after(0, lambda m=msg: messagebox.showinfo("Batch Set", m))
 
     def _run_batch_set_async(self, template_paths, fmt, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None):
         """Batch Set을 백그라운드 스레드에서 실행하며 진행창을 보여준다."""
+        # [추가 - 사용자 요청] "매 Batch 실행 시작 시 새로 덮어쓰기 물어보고
+        # 처리" - 진행창을 띄우거나 worker 스레드를 시작하기 전, 메인
+        # 스레드에서 먼저 물어본다(messagebox는 메인 스레드에서만 안전).
+        overwrite_log = self._confirm_batch_log_overwrite()
         job_id = self._register_batch_job("Batch Set", len(template_paths))
 
         progress_win = tk.Toplevel(self.root)
@@ -5742,7 +5746,8 @@ class CathPlotGUI:
         def worker():
             try:
                 self._run_batch_set(template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path,
-                                     name_mode=name_mode, out_suffix=out_suffix, common_frame=common_frame)
+                                     name_mode=name_mode, out_suffix=out_suffix, common_frame=common_frame,
+                                     overwrite_log=overwrite_log)
             finally:
                 # [추가 - 요청] 작업이 끝났으니(성공/오류 무관) 실행 중 목록에서
                 # 뺀다. dict 조작은 메인 스레드에서만 하도록 after(0, ...)로 넘김.
@@ -6687,7 +6692,7 @@ class CathPlotGUI:
 
         return res
 
-    def _run_batch_queue(self, relative_paths, fmt, settings, progress_callback=None):
+    def _run_batch_queue(self, relative_paths, fmt, settings, progress_callback=None, overwrite_log=False):
         """[수정 - 효율] _run_batch_set과 동일한 이유로 ThreadPoolExecutor로
         병렬 처리 - 자세한 설명은 _run_batch_set 및 _process_one_batch_set_item
         참고."""
@@ -6730,7 +6735,7 @@ class CathPlotGUI:
             msg += "\n\n오류:\n" + "\n".join(errors[:10])
             if len(errors) > 10:
                 msg += f"\n... 외 {len(errors) - 10}개"
-        log_path = self._log_batch_warnings(warnings)
+        log_path = self._log_batch_warnings(warnings, mode="w" if overwrite_log else "a")
         if log_path:
             msg += f"\n\n경고 {len(warnings)}건이 로그에 기록되었습니다: {log_path}"
         self.root.after(0, lambda m=msg: messagebox.showinfo("Batch Queue", m))
@@ -6741,6 +6746,10 @@ class CathPlotGUI:
         누른 뒤 전체 작업이 끝날 때까지 창이 응답 없이 붙잡혀 있지 않는다.
         화면 설정은 스레드를 시작하기 전에(메인 스레드에서) 미리 캡처해둔다."""
         settings = self._capture_batch_queue_settings()
+        # [추가 - 사용자 요청, Batch Set과 동일] "매 Batch 실행 시작 시 새로
+        # 덮어쓰기 물어보고 처리" - Batch Set/Queue 둘 다 같은 batch_warnings.log
+        # 파일을 공유하므로 여기서도 동일하게 물어본다.
+        overwrite_log = self._confirm_batch_log_overwrite()
         job_id = self._register_batch_job("Batch Queue", len(relative_paths))
 
         progress_win = tk.Toplevel(self.root)
@@ -6767,7 +6776,8 @@ class CathPlotGUI:
 
         def worker():
             try:
-                self._run_batch_queue(relative_paths, fmt, settings, progress_callback=progress_callback)
+                self._run_batch_queue(relative_paths, fmt, settings, progress_callback=progress_callback,
+                                       overwrite_log=overwrite_log)
             finally:
                 # [추가 - 요청] Batch Set과 동일하게, 완료(성공/오류 무관) 시
                 # 실행 중 목록에서 제거 - 반드시 메인 스레드에서.
@@ -10255,20 +10265,44 @@ class CathPlotGUI:
             return plotdef, []
         return plotdef, warnings
 
-    def _log_batch_warnings(self, warnings, log_name="batch_warnings.log"):
+    def _log_batch_warnings(self, warnings, log_name="batch_warnings.log", mode="a"):
         """Batch(Queue/Set) 실행 중 모인 경고 메시지를(파일명 prefix 포함) 로그
-        파일에 남긴다. 반환값은 로그 파일 경로(기록 실패 시 None)."""
+        파일에 남긴다. 반환값은 로그 파일 경로(기록 실패 시 None).
+        [수정 - 사용자 요청] "매 Batch 실행 시작 시 새로 덮어쓰기 물어보고
+        처리" - 기본은 지금까지처럼 이어서 기록("a")이지만, 호출부가
+        mode="w"를 넘기면(_confirm_batch_log_overwrite에서 사용자가 "새로
+        덮어쓰기"를 선택한 경우) 그 실행의 첫 기록에서 기존 내용을 지우고
+        새로 시작한다."""
         if not warnings:
             return None
         log_path = os.path.join(self.plot_dir, log_name)
         try:
-            with open(log_path, "a", encoding="utf-8") as f:
+            with open(log_path, mode, encoding="utf-8") as f:
                 f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
                 for w in warnings:
                     f.write(w + "\n")
             return log_path
         except OSError:
             return None
+
+    def _confirm_batch_log_overwrite(self):
+        """[추가 - 사용자 요청] "매 Batch 실행 시작 시 새로 덮어쓰기 물어보고
+        처리하기" - Batch Set/Queue를 실제로 시작하기 전(메인 스레드,
+        진행창을 띄우기 전) 기존 batch_warnings.log가 있으면 이번 실행에서
+        새로 덮어쓸지(그 실행 내용만 남김) 이어서 기록할지 물어본다.
+        파일이 아직 없으면 물어볼 필요 없이 그냥 새로 만들면 되므로 조용히
+        False(=기존과 동일한 "a" 모드- 빈 파일에 이어서 쓰는 것과 같음)를
+        반환한다. 반환값(True=덮어쓰기)은 그대로 _run_batch_set/
+        _run_batch_queue의 overwrite_log로 전달돼 _log_batch_warnings의
+        mode를 결정한다."""
+        log_path = os.path.join(self.plot_dir, "batch_warnings.log")
+        if not os.path.exists(log_path):
+            return False
+        return messagebox.askyesno(
+            "Batch 로그",
+            f"기존 batch_warnings.log가 있습니다:\n{log_path}\n\n"
+            "새로 덮어쓸까요?\n예: 이번 실행 내용만 남김\n아니오: 기존 내용에 이어서 기록"
+        )
 
     def _find_window_rect(self, title, timeout_sec=2.0):
         """title로 창을 찾아 (hwnd, (left,top,right,bottom))을 반환. 못 찾으면
