@@ -786,8 +786,13 @@ class CathPlotGUI:
         # 기본값 꺼짐 -> 켜짐으로 변경.
         self.template_load_autoplot_var = tk.BooleanVar(value=True)
         def _load_template_then_maybe_plot():
-            self.load_template()
-            if self.template_load_autoplot_var.get():
+            # [수정 - 사용자 요청] "오류가 없으면 바로 그리기 ON을 실행하고
+            # 아니면 실행 안 하기" - load_template()의 반환값(True=문제 없이
+            # 끝남)까지 같이 확인해야 자동 plot한다 - 못 찾은 dat 파일이
+            # 있었으면(재지정을 다 마쳤더라도) 자동으로 넘어가지 않고
+            # 사용자가 결과를 보고 직접 PLOT을 누르게 한다.
+            _ok = self.load_template()
+            if self.template_load_autoplot_var.get() and _ok:
                 self.execute_plot_pipeline(mode="Interactive")
         self._mk_btn(btn_container, "Template Load", _load_template_then_maybe_plot,
                      color="grey", fg="white", side="left", padx=5)
@@ -2589,7 +2594,15 @@ class CathPlotGUI:
             title="Load Template"
         )
         if not filepath:
-            return
+            return False
+        # [추가 - 사용자 요청] "오류가 없으면 바로 그리기 ON을 실행하고 아니면
+        # 실행 안 하기" - 이 함수의 반환값으로 "자동 plot을 실행해도 안전한
+        # 상태였는지"를 알려준다(True=문제 없음, False=못 찾은 dat 파일이
+        # 있었거나 로드 자체가 실패함). 호출부(_load_template_then_maybe_plot)
+        # 는 "Load 후 바로 그리기" 체크와 이 반환값을 모두 만족할 때만 자동
+        # plot한다 - 재지정을 마쳤어도(확인창에서 다 고쳤어도) 한 번이라도
+        # 문제가 있었던 로드는 안전하게 사용자가 직접 PLOT을 눌러 확인하게 함.
+        _load_ok = True
         try:
             import json
             with open(filepath, "r", encoding="utf-8") as f:
@@ -2902,49 +2915,56 @@ class CathPlotGUI:
                     _apply_fa_to_file(_fa, _abs_path)
 
                 if _missing_fa:
-                    # [수정 - 사용자 요청] "본래 template를 읽어오면 바로
-                    # plot하는데..." - "Load 후 바로 그리기"가 켜져 있으면
-                    # (기본값, 빠른 흐름을 원한다는 신호) 확인창으로 그 흐름을
-                    # 막지 않는다 - 조용히 건너뛰고 경고만 로그(cathplot_
-                    # warnings.log)에 남긴 뒤 그대로 plot으로 이어지게 한다.
-                    # 꺼져 있으면(사용자가 신중하게 살펴보는 모드) 지금까지처럼
-                    # 확인창을 띄워 그 자리에서 재지정할 기회를 준다.
-                    if getattr(self, "template_load_autoplot_var", None) and self.template_load_autoplot_var.get():
+                    # [수정 - 사용자 재검토] "바로 그리기 ON이라도 파일을 못
+                    # 찾는 오류가 나면 OFF처럼 처리하는 게 맞지 않나 - 사실
+                    # ON은 이 경우 무의미하니까" - 한때 ON이면 확인창 없이
+                    # 조용히 건너뛰고 로그만 남겼었는데, 그러면 "즉시 그려진
+                    # 결과"가 사실은 curve가 빠진 채 조용히 틀린 그림이라
+                    # "빠르게 원하는 결과를 본다"는 ON의 취지 자체가 무의미해짐
+                    # - 정상 케이스(못 찾은 파일 없음)에서만 ON이 의미 있고,
+                    # 오류 상황에서는 ON/OFF 무관하게 항상 이 확인창을 띄운다.
+                    # [추가 - 사용자 요청] "오류가 없으면 바로 그리기 ON을
+                    # 실행하고 아니면 실행 안 하기" - 재지정을 다 마쳤더라도
+                    # (한 번이라도 문제가 있었던 로드이므로) 자동 plot은 하지
+                    # 않는다 - _load_ok=False로 표시해두면 호출부
+                    # (_load_template_then_maybe_plot)가 이 반환값을 보고
+                    # 자동 plot을 건너뛰고, 사용자가 결과를 직접 보고 PLOT을
+                    # 눌러 확인하게 한다.
+                    _load_ok = False
+                    _missing_names = "\n".join(f"- {fa.get('filename', '')}" for fa in _missing_fa)
+                    _relocate = messagebox.askyesno(
+                        "Template Load",
+                        f"다음 dat 파일을 찾을 수 없습니다(나머지 설정은 그대로 불러왔습니다):\n\n"
+                        f"{_missing_names}\n\n지금 하나씩 다시 찾아 지정하시겠습니까?"
+                    )
+                    _still_missing = list(_missing_fa)
+                    if _relocate:
                         for _fa in _missing_fa:
-                            # [수정 - 사용자 요청] "Note가 필요하지 않을지" -
-                            # 이 로그만 보고도 "나중에 그냥 파일만 다시 열면
-                            # 되는 게 아니라, X/Y1/Y2를 직접 다시 골라야
-                            # 한다"는 한계가 바로 드러나도록 문구를 구체화.
-                            self._log_warning(
-                                f"Template Load: dat 파일을 찾을 수 없어 건너뜀 ({_fa.get('filename', '')}) - "
-                                "이 파일의 X/Y1/Y2·스타일 지정은 적용되지 않았습니다. 나중에 파일만 다시 열어도 "
-                                "자동으로 이어지지 않으니, 재지정하려면 'Load 후 바로 그리기'를 끄고 Template Load를 다시 하세요."
+                            # [수정 - 사용자 지적] "기존 Browse를 쓰는지
+                            # 따로 띄우는지" - load_dat_file(파일 목록의
+                            # 표준 "찾아보기" 버튼)과 다른 별도
+                            # 대화상자였음(필터/마지막 폴더 기억이 빠짐) -
+                            # 같은 관례(*.dat 필터, last_opened_dir 기억)로
+                            # 맞춘다.
+                            _init_dir = self.last_opened_dir if getattr(self, "last_opened_dir", None) else self.cwd
+                            _picked = filedialog.askopenfilename(
+                                initialdir=_init_dir,
+                                title=f"'{_fa.get('filename', '')}' 대체할 dat 파일 선택 (취소하면 건너뜀)",
+                                filetypes=[("DAT files", "*.dat"), ("All files", "*.*")]
                             )
-                    else:
-                        _missing_names = "\n".join(f"- {fa.get('filename', '')}" for fa in _missing_fa)
-                        _relocate = messagebox.askyesno(
-                            "Template Load",
-                            f"다음 dat 파일을 찾을 수 없습니다(나머지 설정은 그대로 불러왔습니다):\n\n"
-                            f"{_missing_names}\n\n지금 하나씩 다시 찾아 지정하시겠습니까?"
+                            if _picked:
+                                _picked = os.path.abspath(_picked)
+                                self.last_opened_dir = os.path.dirname(_picked)
+                                _apply_fa_to_file(_fa, _picked)
+                                _still_missing.remove(_fa)
+                    # [추가 - 사용자 요청] "메시지로 알려주면 더 좋고" -
+                    # 재지정 안 했거나(확인창 "아니오") 일부만 취소한 경우,
+                    # 끝까지 못 찾은 채로 남은 파일들을 기록으로 남긴다.
+                    for _fa in _still_missing:
+                        self._log_warning(
+                            f"Template Load: dat 파일을 찾을 수 없어 건너뜀 ({_fa.get('filename', '')}) - "
+                            "이 파일의 X/Y1/Y2·스타일 지정은 적용되지 않았습니다."
                         )
-                        if _relocate:
-                            for _fa in _missing_fa:
-                                # [수정 - 사용자 지적] "기존 Browse를 쓰는지
-                                # 따로 띄우는지" - load_dat_file(파일 목록의
-                                # 표준 "찾아보기" 버튼)과 다른 별도
-                                # 대화상자였음(필터/마지막 폴더 기억이 빠짐) -
-                                # 같은 관례(*.dat 필터, last_opened_dir 기억)로
-                                # 맞춘다.
-                                _init_dir = self.last_opened_dir if getattr(self, "last_opened_dir", None) else self.cwd
-                                _picked = filedialog.askopenfilename(
-                                    initialdir=_init_dir,
-                                    title=f"'{_fa.get('filename', '')}' 대체할 dat 파일 선택 (취소하면 건너뜀)",
-                                    filetypes=[("DAT files", "*.dat"), ("All files", "*.*")]
-                                )
-                                if _picked:
-                                    _picked = os.path.abspath(_picked)
-                                    self.last_opened_dir = os.path.dirname(_picked)
-                                    _apply_fa_to_file(_fa, _picked)
 
                 # [수정 - 사용자 보고 버그] "Plot Title은 Template 저장 시 기록
                 # 안 되나요? 불러오니 file명으로 바뀜" - 여기서 update_title_
@@ -3110,8 +3130,10 @@ class CathPlotGUI:
                 self._restore_legend_order_from_data("2", data.get("legend2_curve_order"))
 
             messagebox.showinfo("Template", "템플릿을 불러왔습니다.")
+            return _load_ok
         except Exception as e:
             messagebox.showerror("Template", f"템플릿 불러오기 실패: {e}")
+            return False
 
     def _build_plotdef_from_template_data(self, data):
         """템플릿 JSON(파일/변수 지정 + 스타일 전부 포함)만으로, 화면 상태를 전혀
