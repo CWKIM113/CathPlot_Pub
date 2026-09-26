@@ -3395,7 +3395,7 @@ class CathPlotGUI:
                             linestyle=STYLE_MAP.get(_migrate_style_label(style.get("linestyle", "")), None),
                             linewidth=float(style.get("linewidth") or 1.5),
                             x_output_no=x_output_no,
-                            legend_group=int(style.get("legend_group", 1) or 1),
+                            legend_group=int(style.get("legend_group", 2) or 2),
                             in_legend1=style.get("in_legend1", True),
                             marker_shape=_marker_shape,
                             marker_size=MARKER_SIZE_MAP.get(style.get("marker_size_label", "M"), 1.0),
@@ -6116,7 +6116,7 @@ class CathPlotGUI:
                 "color": self.color_vars[key].get() if key in self.color_vars else "",
                 "linestyle": self.linestyle_vars[key].get() if key in self.linestyle_vars else "",
                 "linewidth": self.linewidth_vars[key].get() if key in self.linewidth_vars else "1.5",
-                "legend_group": int(self.legend_group_vars[key].get()) if key in self.legend_group_vars else 1,
+                "legend_group": int(self.legend_group_vars[key].get()) if key in self.legend_group_vars else 2,
                 "in_legend1": self.in_legend1_vars[key].get() if key in self.in_legend1_vars else True,
                 "marker_shape_label": self.marker_shape_vars[key].get() if key in self.marker_shape_vars else "Auto",
                 "marker_on": self.marker_on_vars[key].get() if key in self.marker_on_vars else False,
@@ -6330,7 +6330,7 @@ class CathPlotGUI:
             if key not in self.in_legend1_vars:
                 self.in_legend1_vars[key] = tk.BooleanVar(value=True)
             if key not in self.legend_group_vars:
-                self.legend_group_vars[key] = tk.StringVar(value="1")
+                self.legend_group_vars[key] = tk.StringVar(value="2")
 
             label = self.legend_vars[key].get() if key in self.legend_vars else key
             row_f = ttk.Frame(list_frame)
@@ -6857,7 +6857,7 @@ class CathPlotGUI:
                     linestyle=STYLE_MAP.get(_migrate_style_label(item["linestyle"]), None),
                     linewidth=float(item["linewidth"] or 1.5),
                     x_output_no=x_output_no,
-                    legend_group=int(item.get("legend_group", 1) or 1),
+                    legend_group=int(item.get("legend_group", 2) or 2),
                     in_legend1=item.get("in_legend1", True),
                     marker_shape=_marker_shape,
                     marker_size=MARKER_SIZE_MAP.get(item.get("marker_size_label", "M"), 1.0),
@@ -7753,15 +7753,14 @@ class CathPlotGUI:
                 if key_str not in self.linewidth_vars:
                     self.linewidth_vars[key_str] = tk.DoubleVar(value=1.5)
                 if key_str not in self.legend_group_vars:
-                    # [수정 - 버그, 사용자 보고] "Legend1의 Auto Shape가 Open
-                    # 이어야 하는데 fill로 나타남" - 기본값이 여기만 "2"
-                    # (Legend2)로 잘못 초기화돼 있어서, 화면에 변수 표가
-                    # 그려지는 순간 사실상 모든 curve가(Legend2 Curves
-                    # 팝업을 한 번도 안 열었어도) Legend2 취급을 받아 Shape
-                    # Auto의 fill이 강제로 켜졌었음. CurveDefinition 등
-                    # 다른 모든 곳은 "안 정해졌으면 1(Legend1)"을 기본으로
-                    # 삼으므로(legend_group=1 or 1) 그것과 맞춘다.
-                    self.legend_group_vars[key_str] = tk.StringVar(value="1")
+                    # [수정 - 사용자 요청] "Legend2는 Legend1과 독립적으로 하나
+                    # 더 표기하는 box - Legend1과 같은 logic" - Legend1(in_legend1
+                    # 기본 True)과 똑같이 Legend2도 기본은 전체 포함("2")이고,
+                    # Curve Features의 L1/L2로 각각 독립적으로 뺀다. (한때
+                    # "1"로 바꿨던 건 Auto Shape의 fill이 Legend2 소속을 따라가던
+                    # 시절의 버그 대응이었는데, 이제 fill은 axis(Y1/Y2) 기준이라
+                    # Legend2 기본 포함이 Auto Shape에 영향을 주지 않음.)
+                    self.legend_group_vars[key_str] = tk.StringVar(value="2")
                 if key_str not in self.smooth_csplines_vars:
                     self.smooth_csplines_vars[key_str] = tk.BooleanVar(value=False)
 
@@ -11118,7 +11117,7 @@ class CathPlotGUI:
                     linestyle=STYLE_MAP.get(self.linestyle_vars[key].get(), None),
                     linewidth=float(self.linewidth_vars[key].get() if key in self.linewidth_vars else 1.5),
                     x_output_no=file_x_output_no,   # ← 추가: 파일별로 선택된 X변수 컬럼을 곡선에도 전달
-                    legend_group=int(self.legend_group_vars[key].get()) if key in self.legend_group_vars else 1,
+                    legend_group=int(self.legend_group_vars[key].get()) if key in self.legend_group_vars else 2,
                     in_legend1=self.in_legend1_vars[key].get() if key in self.in_legend1_vars else True,
                     legend1_order=_legend1_index.get(key, 0), legend2_order=_legend2_index.get(key, 0),
                     marker_shape=_marker_shape, marker_size=_marker_size, marker_max_count=_marker_max_count,
