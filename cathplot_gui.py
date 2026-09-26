@@ -2118,6 +2118,14 @@ class CathPlotGUI:
 
             selected_names = [available_names[i] for i in ordered_indices]
             selected_defs = [available_plots[i] for i in ordered_indices]
+            # [추가 - 코드 리뷰] 이 창을 연 뒤에 PLOT 직후 확인(최대 2초)에서
+            # gnuplot이 바로 종료된 것으로 판정돼 목록에서 빠진 plot이 섞여 있으면
+            # 알리고 멈춘다(이 창의 목록은 열 때의 스냅샷이라 자동 갱신 안 됨).
+            _gone = [n for n in selected_names if n not in self.active_plots_cache]
+            if _gone:
+                messagebox.showwarning(
+                    "경고", f"{', '.join(_gone)}: " + "그 사이 gnuplot 오류로 창이 바로 종료되어 목록에서 제외됐습니다" + ".\n선택을 다시 해주세요.", parent=dialog)
+                return
 
             layout = self.layout_var.get()
             rows, cols = self.LAYOUT_GRID.get(layout, (1, 1))
@@ -2611,6 +2619,11 @@ class CathPlotGUI:
             return False, None
         if choice == "현재 화면":
             return None, None
+        # [수정 - 코드 리뷰] 창을 연 사이에 목록에서 빠진(바로 종료된) plot이면
+        # None이 돼 호출부가 "현재 화면" 저장으로 착각하므로 취소로 처리한다.
+        if choice not in self.active_plot_templates:
+            messagebox.showwarning("Template Save", f"{choice}: " + "그 사이 gnuplot 오류로 창이 바로 종료되어 목록에서 제외됐습니다" + ".")
+            return False, None
         return self.active_plot_templates.get(choice), choice
 
     def save_template(self):
@@ -5929,11 +5942,14 @@ class CathPlotGUI:
         self._get_installed_font_names()
 
         def worker():
+            # [수정 - 버그, 코드 리뷰] 진행창 닫기가 finally 밖에 있어서 run_fn이
+            # 예외를 던지면(오류 내용은 전역 핸들러가 팝업으로 보여줌) 작업 등록만
+            # 해제되고 진행창은 화면에 그대로 남았음 - 둘 다 finally에서 처리.
             try:
                 run_fn(progress_callback)
             finally:
                 self.root.after(0, lambda: self._unregister_batch_job(job_id))
-            self.root.after(0, lambda: progress_win.destroy() if progress_win.winfo_exists() else None)
+                self.root.after(0, lambda: progress_win.destroy() if progress_win.winfo_exists() else None)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -9765,23 +9781,20 @@ class CathPlotGUI:
         # 의존하므로 그대로 재사용됨).
         # [수정 - 요청 "실행속도"] 2D(execute_plot_pipeline)와 같은 이유로 UI를
         # 막는 time.sleep 대기 대신 _watch_plot_process_start로 비동기 확인한다.
+        # [수정 - 코드 리뷰] 예전엔 Animate를 켠 경우에만 확인했고, 기본(정적)
+        # 3D Plot은 스크립트 오류로 gnuplot이 바로 죽어도 아무 안내가 없었음 -
+        # 2D PLOT과 같이 정적 3D도 확인한다(애니메이션 컨트롤 패널은 해당 없음).
+        if not animate3d and generator.last_process is not None:
+            def _after_static_launch(_crashed):
+                if _crashed:
+                    messagebox.showwarning("3D Plot", self._gnuplot_crash_message(
+                        generator.last_process, "3D 그래프를", "축 설정이나 데이터 범위를 확인해주세요."))
+            self._watch_plot_process_start(generator.last_process, _after_static_launch)
+
         if animate3d and generator.last_process is not None:
             def _after_launch(_crashed):
                 if _crashed:
-                    _err_detail = ""
-                    try:
-                        if generator.last_process.stderr:
-                            _err_detail = generator.last_process.stderr.read().decode("utf-8", errors="ignore").strip()
-                    except Exception:
-                        _err_detail = ""
-                    # [수정 - 사용자 보고, 2D PLOT 메시지와 동일하게 개선] 실제
-                    # 오류 내용을 잡았으면 그 사실 그대로만 보여주고(축 설정/
-                    # 데이터 범위와 무관한 원인일 때 오해를 줄 수 있음), 못
-                    # 잡았을 때만 기존 추정 문구를 대신 보여준다.
-                    if _err_detail:
-                        _msg = f"gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
-                    else:
-                        _msg = "gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n축 설정이나 데이터 범위를 확인해주세요."
+                    _msg = self._gnuplot_crash_message(generator.last_process, "3D 애니메이션을", "축 설정이나 데이터 범위를 확인해주세요.")
                     messagebox.showwarning("3D Plot", _msg)
                 elif getattr(generator, "last_anim_ctrl_path", None):
                     self._open_animation_control_panel(
@@ -11505,23 +11518,7 @@ class CathPlotGUI:
             # 등록)은 아래 _after_launch에서 기존과 같은 순서로 처리한다.
             def _after_launch(_crashed):
                 if _crashed:
-                    _err_detail = ""
-                    try:
-                        if generator.last_process.stderr:
-                            _err_detail = generator.last_process.stderr.read().decode("utf-8", errors="ignore").strip()
-                    except Exception:
-                        _err_detail = ""
-                    # [수정 - 사용자 보고] "메시지 중 축설정(log scale, data
-                    # 범위) 등은 유효하지 않는 메시지로 보임" - PIP+Animation
-                    # EOD 크래시처럼 실제 원인이 축 설정/데이터 범위와 전혀
-                    # 무관한 경우에도 이 문구가 항상 붙어서 오해를 줬음 -
-                    # gnuplot의 실제 오류 내용(_err_detail)을 잡았으면 그
-                    # 사실 그대로만 보여주고, 못 잡았을 때만(추측할 단서가
-                    # 그것뿐이므로) 기존의 일반적인 추정 문구를 대신 보여준다.
-                    if _err_detail:
-                        _msg = f"gnuplot이 그래프를 그리지 못하고 바로 종료됐습니다.\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
-                    else:
-                        _msg = "gnuplot이 그래프를 그리지 못하고 바로 종료됐습니다.\n축 설정(특히 Log Scale)이나 데이터 범위를 확인해주세요."
+                    _msg = self._gnuplot_crash_message(generator.last_process, "그래프를", "축 설정(특히 Log Scale)이나 데이터 범위를 확인해주세요.")
                     messagebox.showwarning("PLOT", _msg)
                 elif getattr(generator, "last_anim_ctrl_path", None):
                     # [추가 - space bar 재설계] 애니메이션이 정상적으로 떠 있으면
@@ -11646,10 +11643,21 @@ class CathPlotGUI:
     def _watch_plot_process_start(self, proc, on_done, interval_ms=200, max_checks=10):
         """새로 띄운 화면(Interactive) gnuplot 프로세스가 스크립트 오류로 곧바로
         죽는지 interval_ms 간격으로 최대 max_checks번 확인한 뒤 on_done(crashed)
-        를 부른다 - UI 스레드를 막지 않도록 root.after로 진행한다."""
+        를 부른다 - UI 스레드를 막지 않도록 root.after로 진행한다.
+        [수정 - 코드 리뷰] 확인 도중 CathPlot 메인 창이 닫히면(on_closing이
+        이미 등록된 plot 프로세스 정리를 마친 상태) 더 이상 죽은 창을 대상으로
+        콜백을 실행하지 않고 조용히 멈춘다."""
         state = {"n": 0}
 
+        def _alive():
+            try:
+                return bool(self.root.winfo_exists())
+            except tk.TclError:
+                return False
+
         def _poll():
+            if not _alive():
+                return
             state["n"] += 1
             if proc.poll() is not None:
                 on_done(True)
@@ -11659,6 +11667,23 @@ class CathPlotGUI:
                 self.root.after(interval_ms, _poll)
 
         self.root.after(interval_ms, _poll)
+
+    @staticmethod
+    def _gnuplot_crash_message(proc, what, fallback_hint):
+        """[추가 - 요청 "중복성"] 화면 gnuplot이 바로 종료됐을 때의 안내 문구 -
+        2D PLOT/3D Plot/3D Animation 공용. gnuplot의 실제 오류 내용(stderr)을
+        잡았으면 그 사실 그대로만 보여주고(축 설정 등과 무관한 원인일 때 오해를
+        주지 않게), 못 잡았을 때만 fallback_hint(추정 문구)를 대신 붙인다."""
+        _err_detail = ""
+        try:
+            if proc.stderr:
+                _err_detail = proc.stderr.read().decode("utf-8", errors="ignore").strip()
+        except Exception:
+            _err_detail = ""
+        _head = f"gnuplot이 {what} 그리지 못하고 바로 종료됐습니다."
+        if _err_detail:
+            return f"{_head}\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
+        return f"{_head}\n{fallback_hint}"
 
     def execute_multi_plot_pipeline(self, selected_plot_defs, mode, custom_filepath=None, custom_format=None):
         if not selected_plot_defs:
@@ -11944,6 +11969,12 @@ class CathPlotGUI:
 
         def do_ok():
             picked = choice_var.get()
+            # [수정 - 코드 리뷰] 창을 연 사이에 목록에서 빠진(바로 종료된) plot을
+            # 고르면 .get()이 None을 돌려줘 조용히 "현재 화면 설정"으로 처리되던
+            # 문제 - 알리고 다시 고르게 한다.
+            if picked != CURRENT_SCREEN_LABEL and picked not in self.active_plots_cache:
+                messagebox.showwarning("경고", f"{picked}: " + "그 사이 gnuplot 오류로 창이 바로 종료되어 목록에서 제외됐습니다" + ".", parent=dlg)
+                return
             result["choice"] = None if picked == CURRENT_SCREEN_LABEL else self.active_plots_cache.get(picked)
             result["orientation"] = orient_var.get()
             dlg.destroy()
