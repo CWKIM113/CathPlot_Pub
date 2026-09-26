@@ -25,6 +25,7 @@ import re
 import uuid
 import hashlib
 import copy
+import contextlib
 
 from tkinter import ttk
 from tkinter import filedialog
@@ -43,7 +44,7 @@ from pathlib import Path
 # 기능을 한 번도 안 쓰면 이 비용 자체가 안 든다(기능은 완전히 동일 -
 # win32gui는 실제로는 주석 처리된 죽은 코드에서만 참조돼 아예 삭제).
 
-from data_parser import CathenaDatParser, save_json, is_comment_or_blank, strip_inline_comment
+from data_parser import CathenaDatParser, save_json, is_comment_or_blank, strip_inline_comment, load_dat_table, split_fields, parse_number
 from gnu_generator import (PlotDefinition, CurveDefinition, FunctionCurveDefinition, GnuplotGenerator,
                             PIP_OVERLAY_CHROMA_KEY, DASH_PATTERNS)
 
@@ -144,6 +145,17 @@ STYLE_3D_DISPLAY_MAP = {
     "pm3d": "Color Palette",
 }
 STYLE_3D_INTERNAL_MAP = {v: k for k, v in STYLE_3D_DISPLAY_MAP.items()}
+
+# [추가 - 요청 "중복성"] SAVE 대화상자(단일/Multi/3D)의 파일 형식 목록 - Word 등에
+# 넣기 좋은 png를 기본/최우선으로, "png, pdf, jpg, svg, emf, eps" 순.
+SAVE_IMAGE_FILE_TYPES = (
+    ("PNG Image (*.png)", "*.png"),
+    ("Portable Document Format (*.pdf)", "*.pdf"),
+    ("JPEG Image (*.jpg)", "*.jpg"),
+    ("SVG Vector Graphic (*.svg)", "*.svg"),
+    ("Enhanced Metafile (*.emf)", "*.emf"),
+    ("Encapsulated PostScript (*.eps)", "*.eps"),
+)
 
 class CathPlotGUI:
 
@@ -1922,24 +1934,6 @@ class CathPlotGUI:
             self.minor_grid_var.set(False)
             self.minor_grid_check.config(state="disabled")
 
-    def _next_interactive_plot_id(self, raw_title, safe_title):
-        """Choose an unused plot/window number, including plots from past runs."""
-        known_ids = [self.title_counters.get(raw_title, 0)]
-        #pattern = re.compile(rf"^{re.escape(safe_title)}_Temp_(\d+)\.plt$", re.IGNORECASE)
-        pattern = re.compile(rf"^{re.escape(safe_title)}_(\d+)\.plt$", re.IGNORECASE)
-        for path in glob.glob(os.path.join(self.plot_dir, f"{safe_title}_Temp_*.plt")):
-            match = pattern.match(os.path.basename(path))
-            if match:
-                known_ids.append(int(match.group(1)))
-
-        window_pattern = re.compile(rf"^{re.escape(safe_title)}_(\d+)$")
-        for window_name in self.active_plots_cache:
-            match = window_pattern.match(window_name)
-            if match:
-                known_ids.append(int(match.group(1)))
-
-        return max(known_ids) + 1
-
     LAYOUT_GRID = {
         "1/p": (1, 1),
         "2/p": (2, 1),
@@ -2127,7 +2121,6 @@ class CathPlotGUI:
 
             layout = self.layout_var.get()
             rows, cols = self.LAYOUT_GRID.get(layout, (1, 1))
-            orientation = self.orientation_var.get()
 
             if layout != "Auto" and len(selected_defs) > rows * cols:
                 messagebox.showwarning(
@@ -2139,7 +2132,6 @@ class CathPlotGUI:
                 )
                 return
 
-            import re
             base_title = re.sub(r"_\d+$", "", selected_names[0])
 
             self.multi_counters[base_title] = self.multi_counters.get(base_title, 0) + 1
@@ -2148,14 +2140,7 @@ class CathPlotGUI:
             if mode == "Save":
                 # [수정] "이미지 sample 순서는 png, pdf, jpg, svg, emf, eps 순으로" -
                 # Word 등에 넣기 좋은 png를 기본/최우선으로.
-                file_types = [
-                    ("PNG Image (*.png)", "*.png"),
-                    ("Portable Document Format (*.pdf)", "*.pdf"),
-                    ("JPEG Image (*.jpg)", "*.jpg"),
-                    ("SVG Vector Graphic (*.svg)", "*.svg"),
-                    ("Enhanced Metafile (*.emf)", "*.emf"),
-                    ("Encapsulated PostScript (*.eps)", "*.eps"),
-                ]
+                file_types = list(SAVE_IMAGE_FILE_TYPES)
                 filepath = filedialog.asksaveasfilename(
                     parent=dialog,
                     initialdir=self.plot_dir,
@@ -5913,22 +5898,25 @@ class CathPlotGUI:
             msg += f"\n\n경고 {len(warnings)}건이 로그에 기록되었습니다: {log_path}"
         self.root.after(0, lambda m=msg: messagebox.showinfo("Batch Set", m))
 
-    def _run_batch_set_async(self, template_paths, fmt, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None):
-        """Batch Set을 백그라운드 스레드에서 실행하며 진행창을 보여준다."""
-        # [추가 - 사용자 요청] "매 Batch 실행 시작 시 새로 덮어쓰기 물어보고
-        # 처리" - 진행창을 띄우거나 worker 스레드를 시작하기 전, 메인
-        # 스레드에서 먼저 물어본다(messagebox는 메인 스레드에서만 안전).
-        overwrite_log = self._confirm_batch_log_overwrite()
-        job_id = self._register_batch_job("Batch Set", len(template_paths))
+    def _run_batch_in_background(self, job_name, total, run_fn, label_width=55, bar_length=340):
+        """[추가 - 요청 "중복성"] Batch Set/Queue 공용 - 진행창을 띄우고
+        run_fn(progress_callback)을 백그라운드 스레드에서 실행한다(예전엔 두
+        _async 함수에 같은 30줄이 복사돼 있었음).
+        - 실행 중 작업 목록 등록/해제(_register/_unregister_batch_job)와 진행창
+          조작은 반드시 메인 스레드에서 하도록 root.after(0, ...)로 넘긴다.
+        - run_fn 안에서 부르는 _check_and_fix_fonts -> _get_installed_font_names가
+          캐시가 비어 있으면(앱 켜자마자 Batch부터 누른 경우) tkfont.families로
+          실제 Tcl 호출을 해서 메인 스레드가 아닌 곳에서 Tk와 통신하게 됨 -
+          스레드 시작 "전" 메인 스레드에서 미리 한 번 불러 캐시를 채워둔다."""
+        job_id = self._register_batch_job(job_name, total)
 
         progress_win = tk.Toplevel(self.root)
-        progress_win.title("Batch Set 처리 중")
+        progress_win.title(f"{job_name} 처리 중")
         progress_win.transient(self.root)
 
-        total = len(template_paths)
         label_var = tk.StringVar(value=f"준비 중... (0/{total})")
-        ttk.Label(progress_win, textvariable=label_var, padding=15, width=55).pack()
-        progress_bar = ttk.Progressbar(progress_win, length=340, maximum=max(total, 1))
+        ttk.Label(progress_win, textvariable=label_var, padding=15, width=label_width).pack()
+        progress_bar = ttk.Progressbar(progress_win, length=bar_length, maximum=max(total, 1))
         progress_bar.pack(padx=15, pady=(0, 15))
 
         def progress_callback(done, total_n, current_name):
@@ -5938,27 +5926,31 @@ class CathPlotGUI:
                     progress_bar["value"] = done
             self.root.after(0, _update)
 
-        # [수정 - 버그] "_run_batch_set는 self.xxx_var.get()을 안 써서 백그라운드
-        # 스레드에서 안전하다"는 docstring이 있었지만, 그 안에서 부르는
-        # _check_and_fix_fonts -> _get_installed_font_names가 캐시가 비어있으면
-        # (앱 켜자마자 바로 Batch Set부터 누른 경우) tkfont.families(self.root)로
-        # 실제 Tcl 호출을 해서 메인 스레드가 아닌 곳에서 Tk와 통신하는 위반이
-        # 있었음 - 스레드 시작 "전" 메인 스레드에서 미리 한 번 불러 캐시를
-        # 채워두면 백그라운드 쪽은 항상 캐시 히트만 타서 안전해진다.
         self._get_installed_font_names()
 
         def worker():
             try:
-                self._run_batch_set(template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path,
-                                     name_mode=name_mode, out_suffix=out_suffix, common_frame=common_frame,
-                                     overwrite_log=overwrite_log)
+                run_fn(progress_callback)
             finally:
-                # [추가 - 요청] 작업이 끝났으니(성공/오류 무관) 실행 중 목록에서
-                # 뺀다. dict 조작은 메인 스레드에서만 하도록 after(0, ...)로 넘김.
                 self.root.after(0, lambda: self._unregister_batch_job(job_id))
             self.root.after(0, lambda: progress_win.destroy() if progress_win.winfo_exists() else None)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _run_batch_set_async(self, template_paths, fmt, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None):
+        """Batch Set을 백그라운드 스레드에서 실행하며 진행창을 보여준다."""
+        # [추가 - 사용자 요청] "매 Batch 실행 시작 시 새로 덮어쓰기 물어보고
+        # 처리" - 진행창을 띄우거나 worker 스레드를 시작하기 전, 메인
+        # 스레드에서 먼저 물어본다(messagebox는 메인 스레드에서만 안전).
+        overwrite_log = self._confirm_batch_log_overwrite()
+        self._run_batch_in_background(
+            "Batch Set", len(template_paths),
+            lambda progress_callback: self._run_batch_set(
+                template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path,
+                name_mode=name_mode, out_suffix=out_suffix, common_frame=common_frame,
+                overwrite_log=overwrite_log),
+            label_width=55, bar_length=340,
+        )
 
     # ------------------------------------------------------------------
     # [추가 - 요청] "DAT file 중 선택한 순서대로 curve를 그려주기(Legend box
@@ -6975,41 +6967,13 @@ class CathPlotGUI:
         # 덮어쓰기 물어보고 처리" - Batch Set/Queue 둘 다 같은 batch_warnings.log
         # 파일을 공유하므로 여기서도 동일하게 물어본다.
         overwrite_log = self._confirm_batch_log_overwrite()
-        job_id = self._register_batch_job("Batch Queue", len(relative_paths))
-
-        progress_win = tk.Toplevel(self.root)
-        progress_win.title("Batch Queue 처리 중")
-        progress_win.transient(self.root)
-
-        total = len(relative_paths)
-        label_var = tk.StringVar(value=f"준비 중... (0/{total})")
-        ttk.Label(progress_win, textvariable=label_var, padding=15, width=50).pack()
-        progress_bar = ttk.Progressbar(progress_win, length=320, maximum=max(total, 1))
-        progress_bar.pack(padx=15, pady=(0, 15))
-
-        def progress_callback(done, total_n, current_name):
-            def _update():
-                if progress_win.winfo_exists():
-                    label_var.set(f"처리 중: {current_name}  ({done}/{total_n})")
-                    progress_bar["value"] = done
-            self.root.after(0, _update)
-
-        # [수정 - 버그] _run_batch_set_async와 같은 이유 - _run_batch_queue도
-        # _check_and_fix_fonts를 거치므로, 스레드 시작 전에 폰트 캐시를 미리
-        # 채워 백그라운드에서 Tcl 호출(tkfont.families)이 일어나지 않게 한다.
-        self._get_installed_font_names()
-
-        def worker():
-            try:
-                self._run_batch_queue(relative_paths, fmt, settings, progress_callback=progress_callback,
-                                       overwrite_log=overwrite_log)
-            finally:
-                # [추가 - 요청] Batch Set과 동일하게, 완료(성공/오류 무관) 시
-                # 실행 중 목록에서 제거 - 반드시 메인 스레드에서.
-                self.root.after(0, lambda: self._unregister_batch_job(job_id))
-            self.root.after(0, lambda: progress_win.destroy() if progress_win.winfo_exists() else None)
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_batch_in_background(
+            "Batch Queue", len(relative_paths),
+            lambda progress_callback: self._run_batch_queue(
+                relative_paths, fmt, settings, progress_callback=progress_callback,
+                overwrite_log=overwrite_log),
+            label_width=50, bar_length=320,
+        )
 
     def close_all_plot_windows(self):
         dlg = tk.Toplevel(self.root)
@@ -7573,52 +7537,7 @@ class CathPlotGUI:
         if hasattr(self, "plot_canvas"):
             self.plot_canvas.configure(scrollregion=self.plot_canvas.bbox("all"))
 
-    #def remove_row(self, target_list, frame):
-    #    container = frame.master  # c_list_frame 또는 a_list_frame
-    #    frame.destroy()
-    #    for item in target_list:
-    #        if item['frame'] == frame:
-    #            target_list.remove(item)
-    #            break
-    #
-    #    if target_list:
-    #        # 남은 행이 있으면, 순서대로 강제로 다시 pack해서 재정렬한다.
-    #        for item in target_list:
-    #            item['frame'].pack_forget()
-    #            item['frame'].pack(fill="x", pady=2)
-    #    else:
-    #        # 마지막 남은 한 줄까지 지워서 목록이 완전히 비면, 다시 pack할
-    #        # 대상이 없어서 위 방법이 안 통한다 - 이 경우엔 컨테이너 자체를
-    #        # 뗐다 다시 붙여서 크기를 0으로 강제로 재계산시킨다.
-    #        # before=로 원래 순서(Comment 목록 -> Arrow 목록 -> 버튼 줄)를 유지한다.
-    #        if container is self.c_list_frame:
-    #            container.pack_forget()
-    #            container.pack(fill="x", padx=5, before=self.a_list_frame)
-    #        elif container is self.a_list_frame:
-    #            container.pack_forget()
-    #            container.pack(fill="x", padx=5, before=self.anno_btn_f)
-    #        else:
-    #            container.pack_forget()
-    #            container.pack(fill="x", padx=5)
-    #
-    #    self.plot_frame.update_idletasks()
-    #    self.plot_canvas.configure(scrollregion=self.plot_canvas.bbox("all"))
-
     def clear_file_selections(self, target_df):
-        # all var color/style to "Auto"
-        #for k in list(self.selected_y1_vars.keys()):
-        #    if k.startswith(target_df):
-        #        self.selected_y1_vars[k].set(False)
-        #        self.selected_y2_vars[k].set(False)
-        #        if k in self.color_vars:
-        #            self.color_vars[k].set("Auto")
-        #        if k in self.linestyle_vars:
-        #            self.linestyle_vars[k].set("Auto")
-        #if self.selected_x_key.get().startswith(target_df):
-        #    self.selected_x_key.set("")
-        #    self.prev_x_key = ""
-        #self.sync_axis_labels()
-
         # color/style to "Auto": selected var only
         for k in list(self.selected_y1_vars.keys()):
             if k.startswith(target_df):
@@ -7955,53 +7874,6 @@ class CathPlotGUI:
             self._updating_y2 = True
             self.y2label_var.set(y2_selected[0] if y2_selected else "")
             self._updating_y2 = False
-
-    def clean_past_plots(self):
-        """임시 파일 및 캐시 정리"""
-        # 1. 처음 한 번만 삭제 확인 박스를 띄웁니다.
-        if not messagebox.askyesno("확인", "이전 임시 plot 파일과 캐시를 모두 정리하시겠습니까?"):
-            return
-
-        deleted_count = 0
-
-        # 2. temp_sorted 임시 폴더 통째로 삭제
-        try:
-            temp_dir = os.path.join(self.plot_dir, "temp_sorted")
-            if os.path.exists(temp_dir):
-                import shutil
-                shutil.rmtree(temp_dir)
-                deleted_count += 1
-        except Exception:
-            pass
-
-        # 3. 디렉토리 내의 임시 플롯 파일 패턴들 (*.plt, *.gnu) 수집 및 삭제
-        try:
-            import glob
-            patterns = [
-                os.path.join(self.plot_dir, "*.plt"),
-                os.path.join(self.plot_dir, "*.gnu"),
-            ]
-
-            for pattern in patterns:
-                for filepath in glob.glob(pattern):
-                    if os.path.exists(filepath):
-                        try:
-                            os.remove(filepath)
-                            deleted_count += 1
-                        except:
-                            pass
-
-            # 리스트 뷰 및 파일 리스트 새로고침
-            self.update_plot_file_list()
-            messagebox.showinfo("완료", "이전 임시 파일과 캐시를 정리했습니다.")
-        except Exception as e:
-            messagebox.showerror("오류", f"이전 plot 정리 실패: {e}")
-
-    # [삭제 - 죽은 코드] clear_all_plots/reset_history - grep 결과 이 파일 안에
-    # 호출부(버튼/메뉴)가 전혀 없어(0 call sites) 화면 어디서도 실행될 수
-    # 없었음. 실제로 쓰이는 "전체 초기화"는 clean_past_plots 하나뿐이라,
-    # 이 둘은 clean_past_plots와 거의 같은 내용을 중복 구현한 채 방치돼
-    # 있었을 뿐(git 히스토리에 남아있으니 필요하면 복원 가능).
 
     def _collect_annotations(self):
         # [수정 - 요청] "Enable Comments 체크박스가 꼭 필요한지 - 3D처럼 입력
@@ -9891,38 +9763,35 @@ class CathPlotGUI:
         # 같은 크래시 확인 + Animation Control 패널 오픈 패턴(_open_animation_
         # control_panel은 2D/3D 구분 없이 ctrl_path/status_path 프로토콜에만
         # 의존하므로 그대로 재사용됨).
+        # [수정 - 요청 "실행속도"] 2D(execute_plot_pipeline)와 같은 이유로 UI를
+        # 막는 time.sleep 대기 대신 _watch_plot_process_start로 비동기 확인한다.
         if animate3d and generator.last_process is not None:
-            import time as _time
-            _crashed = False
-            for _ in range(10):  # 0.2초 간격으로 최대 2초
-                _time.sleep(0.2)
-                if generator.last_process.poll() is not None:
-                    _crashed = True
-                    break
-            if _crashed:
-                _err_detail = ""
-                try:
-                    if generator.last_process.stderr:
-                        _err_detail = generator.last_process.stderr.read().decode("utf-8", errors="ignore").strip()
-                except Exception:
+            def _after_launch(_crashed):
+                if _crashed:
                     _err_detail = ""
-                # [수정 - 사용자 보고, 2D PLOT 메시지와 동일하게 개선] 실제
-                # 오류 내용을 잡았으면 그 사실 그대로만 보여주고(축 설정/
-                # 데이터 범위와 무관한 원인일 때 오해를 줄 수 있음), 못
-                # 잡았을 때만 기존 추정 문구를 대신 보여준다.
-                if _err_detail:
-                    _msg = f"gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
-                else:
-                    _msg = "gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n축 설정이나 데이터 범위를 확인해주세요."
-                messagebox.showwarning("3D Plot", _msg)
-                generator.last_process = None
-            elif getattr(generator, "last_anim_ctrl_path", None):
-                self._open_animation_control_panel(
-                    generator.last_anim_ctrl_path, generator.last_anim_frame_pause,
-                    status_path=getattr(generator, "last_anim_status_path", None),
-                    proc=generator.last_process,
-                    plot_window_title=os.path.splitext(os.path.basename(outfile))[0],
-                )
+                    try:
+                        if generator.last_process.stderr:
+                            _err_detail = generator.last_process.stderr.read().decode("utf-8", errors="ignore").strip()
+                    except Exception:
+                        _err_detail = ""
+                    # [수정 - 사용자 보고, 2D PLOT 메시지와 동일하게 개선] 실제
+                    # 오류 내용을 잡았으면 그 사실 그대로만 보여주고(축 설정/
+                    # 데이터 범위와 무관한 원인일 때 오해를 줄 수 있음), 못
+                    # 잡았을 때만 기존 추정 문구를 대신 보여준다.
+                    if _err_detail:
+                        _msg = f"gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
+                    else:
+                        _msg = "gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n축 설정이나 데이터 범위를 확인해주세요."
+                    messagebox.showwarning("3D Plot", _msg)
+                elif getattr(generator, "last_anim_ctrl_path", None):
+                    self._open_animation_control_panel(
+                        generator.last_anim_ctrl_path, generator.last_anim_frame_pause,
+                        status_path=getattr(generator, "last_anim_status_path", None),
+                        proc=generator.last_process,
+                        plot_window_title=os.path.splitext(os.path.basename(outfile))[0],
+                    )
+
+            self._watch_plot_process_start(generator.last_process, _after_launch)
 
     def _generate_3d_file(self, outfile, fmt, curves, rot_x, rot_z, style, palette, colorbox,
                            annotations_3d, arrows_3d, equal_xyz, surfaces, xlabel3d="", ylabel3d="", zlabel3d="",
@@ -9986,12 +9855,7 @@ class CathPlotGUI:
         next_id = self.title_counters.get(safe_title, 0) + 1
         default_name = f"{safe_title}_3D_{next_id}"
         file_types = [
-            ("PNG Image (*.png)", "*.png"),
-            ("Portable Document Format (*.pdf)", "*.pdf"),
-            ("JPEG Image (*.jpg)", "*.jpg"),
-            ("SVG Vector Graphic (*.svg)", "*.svg"),
-            ("Enhanced Metafile (*.emf)", "*.emf"),
-            ("Encapsulated PostScript (*.eps)", "*.eps"),
+            *SAVE_IMAGE_FILE_TYPES,
             # [추가 - 요청] "저장도 animation으로 되게" - GIF 확장자를 고르면
             # (Animate 체크박스와 무관하게) _generate_3d_file이 애니메이션
             # GIF로 만든다(2D의 별도 "Save GIF" 버튼과 달리, 3D는 이 Save
@@ -10059,11 +9923,6 @@ class CathPlotGUI:
         threading.Thread(
             target=self._print_emf_and_cleanup, args=(temp_emf, raw_title, printer_name, "landscape"), daemon=True
         ).start()
-
-    def get_temp_dir(self):
-        temp_dir = os.path.join(self.cwd, "temp_sorted")
-        os.makedirs(temp_dir, exist_ok=True)
-        return temp_dir
 
     def _get_resort_lock(self, sorted_filepath):
         """resort_dat_file의 "확인 후 없으면 생성" 구간을 파일 경로별로 잠근다
@@ -10200,24 +10059,18 @@ class CathPlotGUI:
                     return sorted_filepath
 
                 # 파서로 Cathena/Generic 여부와 무관하게 데이터 시작 줄과 변수명을 동일한 방식으로 판단
-                # (호출부가 이미 파싱해둔 결과를 넘겼으면 재사용 - 위 dat_info 파라미터 참고)
+                # (호출부가 이미 파싱해둔 결과를 넘겼으면 재사용 - 위 dat_info 파라미터 참고).
+                # [수정 - 요청 "실행속도/중복성"] 헤더 파싱·주석/빈 줄 제거(#, !, **,
+                # =로 시작하는 줄과 inline "!" 주석)는 data_parser.load_dat_table이
+                # gnu_generator와 같은 규칙으로 한 번만 해두고 캐시한다.
+                _table_info, table = load_dat_table(dat_file)
                 if dat_info is None:
-                    dat_info = self.parser.parse(dat_file)
+                    dat_info = _table_info
 
-                with open(dat_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    lines = f.readlines()
-
-                # [수정 - 요청] "#, !, **, =로 시작하면 comment, 중간의 !도
-                # comment" - data_parser의 공용 규칙을 그대로 적용(inline
-                # "!" 먼저 잘라낸 뒤 줄 전체 주석/빈 줄 여부 판정).
                 data_rows = []
-                for line in lines[dat_info.data_start_line:]:
-                    stripped = strip_inline_comment(line).strip()
-                    if is_comment_or_blank(stripped):
-                        continue
-                    parts = re.split(r'[,\s]+', stripped)
+                for stripped in table.texts:
                     try:
-                        vals = [float(p.replace("D", "E").replace("d", "e").replace(",", "")) for p in parts]
+                        vals = [parse_number(p) for p in split_fields(stripped)]
                         if len(vals) >= 2:
                             data_rows.append(vals)
                     except ValueError:
@@ -10253,71 +10106,16 @@ class CathPlotGUI:
             self._log_warning(f"[resort_dat_file 실패] {dat_file} (x_col={x_col}): {e}\n{traceback.format_exc()}")
             return dat_file
 
-    def _read_column_values(self, dat_file, col_idx):
-        """
-        dat_file에서 지정된 컬럼(col_idx, 0-based)의 실수 값 목록을 읽어온다.
-        헤더/데이터 경계는 각자 라인을 다시 훑으며 추측하지 않고, 이미 통합되어
-        있는 CathenaDatParser의 data_start_line을 그대로 재사용한다
-        (resort_dat_file, gnu_generator._nice_axis_range와 동일한 방식).
-        """
-        values = []
-        try:
-            dat_info = self.parser.parse(dat_file)
-        except Exception:
-            return values
-
-        try:
-            with open(dat_file, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
-        except OSError:
-            return values
-
-        for line in lines[dat_info.data_start_line:]:
-            text = strip_inline_comment(line).strip()
-            if is_comment_or_blank(text):
-                continue
-            parts = re.split(r'[,\s]+', text)
-            if len(parts) <= col_idx:
-                continue
-            try:
-                values.append(float(parts[col_idx].replace("D", "E").replace("d", "e").replace(",", "")))
-            except ValueError:
-                continue
-
-        return values
-
     def _read_column_with_x(self, dat_file, col_idx, x_idx):
         """dat_file에서 (x_idx, col_idx) 두 컬럼을 같은 행끼리 짝지어 (x값, y값)
         쌍의 목록으로 읽어온다. min/max가 실제로 어느 X값에서 발생했는지
         알아내기 위한 용도 (변수 툴팁에서 사용)."""
-        pairs = []
         try:
-            dat_info = self.parser.parse(dat_file)
+            _, table = load_dat_table(dat_file)
         except Exception:
-            return pairs
-
-        try:
-            with open(dat_file, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
-        except OSError:
-            return pairs
-
-        max_col = max(col_idx, x_idx)
-        for line in lines[dat_info.data_start_line:]:
-            text = strip_inline_comment(line).strip()
-            if is_comment_or_blank(text):
-                continue
-            parts = re.split(r'[,\s]+', text)
-            if len(parts) <= max_col:
-                continue
-            try:
-                y_val = float(parts[col_idx].replace("D", "E").replace("d", "e").replace(",", ""))
-                x_val = float(parts[x_idx].replace("D", "E").replace("d", "e").replace(",", ""))
-            except ValueError:
-                continue
-            pairs.append((x_val, y_val))
-
-        return pairs
+            return []
+        y_vals, x_vals = table.columns(col_idx, x_idx)
+        return [(x, y) for x, y in zip(x_vals, y_vals) if x is not None and y is not None]
 
     def _bind_var_tooltip(self, widgets, file_info, output_no):
         """widgets(하나 또는 여러 개 - 보통 No.라벨과 변수명 입력칸) 위에 마우스를
@@ -11163,7 +10961,6 @@ class CathPlotGUI:
 
     def execute_plot_pipeline(self, mode="Interactive", custom_filepath=None, custom_format=None):
         # 연타(더블클릭)로 인해 gnuplot 창이 동시에 여러 개 뜨는 것을 방지하기 위한 디바운스 가드
-        import time
         now = time.monotonic()
         last = getattr(self, "_last_plot_time", 0)
         if now - last < 0.7:
@@ -11699,14 +11496,14 @@ class CathPlotGUI:
             # 시간이 더 걸리는 경우(0.4초 시점엔 아직 안 죽어서) 놓치는 문제가
             # 있었음 - 최대 2초까지 짧은 간격으로 반복 확인하도록 개선. 또한
             # gnuplot의 실제 stderr 에러 메시지를 잡아서 같이 보여준다
-            if mode == "Interactive" and generator.last_process is not None:
-                import time as _time
-                _crashed = False
-                for _ in range(10):  # 0.2초 간격으로 최대 2초
-                    _time.sleep(0.2)
-                    if generator.last_process.poll() is not None:
-                        _crashed = True
-                        break
+            # [수정 - 요청 "실행속도"] 예전엔 여기서 time.sleep(0.2)을 최대 10번
+            # 반복하며 메인(UI) 스레드를 막고 gnuplot이 바로 죽는지 확인해서,
+            # 정상적으로 뜬 경우에도 PLOT을 누를 때마다 CathPlot 창 전체가 항상
+            # 2초씩 멈췄다(실측 2.01s). 같은 확인(0.2초 간격, 최대 2초)을
+            # root.after로 비동기 진행하고, 결과에 따라 해야 할 일(오류 안내/
+            # 애니메이션 컨트롤·PIP 오버레이 창/경고/Multi Print·Save 목록
+            # 등록)은 아래 _after_launch에서 기존과 같은 순서로 처리한다.
+            def _after_launch(_crashed):
                 if _crashed:
                     _err_detail = ""
                     try:
@@ -11726,7 +11523,6 @@ class CathPlotGUI:
                     else:
                         _msg = "gnuplot이 그래프를 그리지 못하고 바로 종료됐습니다.\n축 설정(특히 Log Scale)이나 데이터 범위를 확인해주세요."
                     messagebox.showwarning("PLOT", _msg)
-                    generator.last_process = None
                 elif getattr(generator, "last_anim_ctrl_path", None):
                     # [추가 - space bar 재설계] 애니메이션이 정상적으로 떠 있으면
                     # (크래시 아님) Pause/Speed/Exit 컨트롤 패널을 띄운다.
@@ -11768,34 +11564,53 @@ class CathPlotGUI:
                         os.path.splitext(os.path.basename(outfile))[0],
                     )
 
-            # [수정 - 버그] "PIP+Animation(spline 등 경고 포함) 중 멈춘 것처럼
-            # 보임" - 이 경고창(messagebox.showwarning, 모달)이 예전엔 위
-            # create_animation_script 직후 곧바로 떴는데, 그러면 그 뒤에 오는
-            # Animation Control 패널/PIP 오버레이 창 띄우기가 사용자가 이
-            # 경고를 닫을 때까지 전부 미뤄져서(같은 메인 스레드) 애니메이션
-            # 컨트롤이 안 뜨고 멈춘 것처럼 보였음 - 경고 자체는 정보성이라
-            # 어디서 띄우든 상관없으므로, 크래시 확인/컨트롤 패널·오버레이
-            # 띄우기가 전부 끝난 뒤로 옮겨서 실제 애니메이션 UI가 먼저 보이게 한다.
-            if _all_warn:
-                # [수정 - 요청, 재수정] "CathPlot 메인 화면이 맨 위에 고정됨 -
-                # 지금 Anim 중인 plot창이 맨 위에 나와야 함" - root 전체를
-                # topmost로 올렸다 내리던 이전 수정이 바로 그 원인이었다
-                # (Animation처럼 경고가 반복되는 상황에서 CathPlot 메인
-                # 창이 활성 plot/Animation 창 위로 계속 튀어 올라옴).
-                # messagebox 자체가 모달이라 원래도 포커스는 알아서 받으므로
-                # root를 통째로 topmost로 만들 필요가 없었다 - 제거.
-                messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
+                # [수정 - 버그] "PIP+Animation(spline 등 경고 포함) 중 멈춘 것처럼
+                # 보임" - 이 경고창(messagebox.showwarning, 모달)이 예전엔 위
+                # create_animation_script 직후 곧바로 떴는데, 그러면 그 뒤에 오는
+                # Animation Control 패널/PIP 오버레이 창 띄우기가 사용자가 이
+                # 경고를 닫을 때까지 전부 미뤄져서(같은 메인 스레드) 애니메이션
+                # 컨트롤이 안 뜨고 멈춘 것처럼 보였음 - 경고 자체는 정보성이라
+                # 어디서 띄우든 상관없으므로, 크래시 확인/컨트롤 패널·오버레이
+                # 띄우기가 전부 끝난 뒤로 옮겨서 실제 애니메이션 UI가 먼저 보이게 한다.
+                if _all_warn:
+                    # [수정 - 요청, 재수정] "CathPlot 메인 화면이 맨 위에 고정됨 -
+                    # 지금 Anim 중인 plot창이 맨 위에 나와야 함" - root 전체를
+                    # topmost로 올렸다 내리던 이전 수정이 바로 그 원인이었다
+                    # (Animation처럼 경고가 반복되는 상황에서 CathPlot 메인
+                    # 창이 활성 plot/Animation 창 위로 계속 튀어 올라옴).
+                    # messagebox 자체가 모달이라 원래도 포커스는 알아서 받으므로
+                    # root를 통째로 topmost로 만들 필요가 없었다 - 제거.
+                    messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
 
-            # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로
-            # 고정되던 버그. 같은 Plot Title로 Interactive PLOT을 여러 번 누르면
-            # active_plots_cache가 매번 같은 키("...+_default")로 덮어써져서,
-            # 이전 창들이 실제로는 열려있는데도 Multi Print/Save 목록에서 사라지는
-            # 문제가 있었음. 위에서 이미 파일명용으로 계산해둔 next_id(1,2,3...)를
-            # 그대로 재사용해서 매번 고유한 키가 되도록 함.
-            # [주의] next_id는 custom_filepath가 없을 때(Interactive)만 위에서 계산되므로,
-            # Batch/Save/Print(=custom_filepath 지정)에서는 여기서 참조하면 안 됨 -
-            # Interactive 분기 안에서만 curr_id를 계산하도록 함.
+                # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로
+                # 고정되던 버그. 같은 Plot Title로 Interactive PLOT을 여러 번 누르면
+                # active_plots_cache가 매번 같은 키("...+_default")로 덮어써져서,
+                # 이전 창들이 실제로는 열려있는데도 Multi Print/Save 목록에서 사라지는
+                # 문제가 있었음. 위에서 이미 파일명용으로 계산해둔 next_id(1,2,3...)를
+                # 그대로 재사용해서 매번 고유한 키가 되도록 함.
+                # [주의] next_id는 custom_filepath가 없을 때(Interactive)만 위에서 계산되므로,
+                # Batch/Save/Print(=custom_filepath 지정)에서는 여기서 참조하면 안 됨 -
+                # Interactive 분기 안에서만 curr_id를 계산하도록 함.
+
+                if _crashed:
+                    # 띄우자마자 목록에 먼저 올려둔 항목을 되돌린다(아래 참고) -
+                    # 바로 죽은 창이 Multi Print/Save 목록에 "유령 항목"으로
+                    # 남지 않게 하는 원래 목적은 그대로.
+                    _cache_key = f"{safe_title}_{next_id}"
+                    if self.active_plots_cache.get(_cache_key) is plotdef:
+                        self.active_plots_cache.pop(_cache_key, None)
+                        self.active_plot_templates.pop(_cache_key, None)
+                    if generator.last_process in self.plot_processes:
+                        self.plot_processes.remove(generator.last_process)
+                    if self.plot_process_by_title.get(base_name) is generator.last_process:
+                        self.plot_process_by_title.pop(base_name, None)
+
             if mode == "Interactive" and generator.last_process is not None:
+                # [수정 - 사용자 요청 "사용자가 못 느끼게"] Multi Print/Save 목록
+                # 등록은 확인(최대 2초)을 기다리지 않고 창을 띄우자마자 바로
+                # 한다 - 예전처럼 PLOT 직후 곧바로 목록에서 보이고, 화면 상태
+                # 스냅샷(_template_dict)도 PLOT을 누른 바로 그 순간 값으로 뜬다.
+                # 곧바로 죽은 경우에만 _after_launch가 다시 뺀다.
                 curr_id = next_id
                 # [수정] Plot Title은 비어있을 수 있어서(Batch Queue 등에서는 의도적으로
                 # 비워둠) 그걸로 표시 이름을 만들면 "_31"처럼 제목 없이 번호만 남는
@@ -11814,6 +11629,9 @@ class CathPlotGUI:
                 except Exception:
                     pass
                 self.plot_process_by_title[base_name] = generator.last_process
+                self._watch_plot_process_start(generator.last_process, _after_launch)
+            elif _all_warn:
+                messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
 
             if plotdef not in self.history_plots:
                 self.history_plots.append(plotdef)
@@ -11825,94 +11643,22 @@ class CathPlotGUI:
             messagebox.showerror("오류", f"plot 생성 중 오류가 발생했습니다: {e}")
 
 
-    def show_multiplot_dialog(self, mode="Batch", default_format="png"):
-        dialog = tk.Toplevel(self.root)  # self -> self.root 교정
-        dialog.title("Multi-Plot Layout Settings")
-        dialog.geometry("450x400")
-        dialog.grab_set()
+    def _watch_plot_process_start(self, proc, on_done, interval_ms=200, max_checks=10):
+        """새로 띄운 화면(Interactive) gnuplot 프로세스가 스크립트 오류로 곧바로
+        죽는지 interval_ms 간격으로 최대 max_checks번 확인한 뒤 on_done(crashed)
+        를 부른다 - UI 스레드를 막지 않도록 root.after로 진행한다."""
+        state = {"n": 0}
 
-        ttk.Label(dialog, text="Select plots to merge and choose layout:", font=("Malgun Gothic", 10, "bold")).pack(anchor="w", padx=15, pady=10)
-
-        list_frame = ttk.Frame(dialog)
-        list_frame.pack(fill="both", expand=True, padx=15, pady=5)
-
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
-        plot_listbox = tk.Listbox(list_frame, selectmode=tk.MULTIPLE, yscrollcommand=scrollbar.set, font=("Malgun Gothic", 9))
-        scrollbar.config(command=plot_listbox.yview)
-        scrollbar.pack(side="right", fill="y")
-        plot_listbox.pack(side="left", fill="both", expand=True)
-
-        available_plots = getattr(self, "history_plots", [])
-        for i, p_def in enumerate(available_plots):
-            plot_listbox.insert(tk.END, f"[{i+1}] {p_def.title or 'Unnamed Plot'}")
-
-        layout_frame = ttk.Frame(dialog)
-        layout_frame.pack(fill="x", padx=15, pady=10)
-        ttk.Label(layout_frame, text="Pages per Sheet (Layout):").pack(side="left", padx=5)
-
-        layout_cmb_var = tk.StringVar(value="Auto")
-        cmb_layout = ttk.Combobox(layout_frame, textvariable=layout_cmb_var, values=["Auto", "1/p", "2/p (V)", "4/p (H)", "6/p (V)"], width=12, state="readonly")
-        cmb_layout.pack(side="left", padx=5)
-
-        # [참고] 이 함수(show_multiplot_dialog)는 코드베이스 어디서도 호출되지
-        # 않는 죽은 코드로 확인됨(실제 "Multi Print/Save" 버튼은
-        # open_multi_plot_dialog에 연결돼 있음) - Axis Frame Auto/Manual 컨트롤
-        # 추가는 그쪽에 반영했다(해당 함수 참고).
-
-        def on_execute():
-            selected_indices = plot_listbox.curselection()
-            if not selected_indices:
-                messagebox.showwarning("경고", "목록에서 plot을 하나 이상 선택해주세요.", parent=dialog)
-                return
-
-            selected_defs = [available_plots[idx] for idx in selected_indices]
-            fmt = default_format
-
-            if mode == "Save":
-                file_types = [("PNG image", "*.png"), ("PDF cairo", "*.pdf"), ("SVG vector", "*.svg")]
-                filepath = filedialog.asksaveasfilename(parent=dialog, defaultextension=f".{default_format}", filetypes=file_types, title="Save Multiplot File")
-                if not filepath: return
-                fmt = os.path.splitext(filepath)[1].replace(".", "").lower()
+        def _poll():
+            state["n"] += 1
+            if proc.poll() is not None:
+                on_done(True)
+            elif state["n"] >= max_checks:
+                on_done(False)
             else:
-                # 인쇄 시 임시 파일명 규칙 동기화 및 고정
-                #filepath = os.path.join(self.plot_dir, "MultiPlot_Print_Temp_1.emf")
-                filepath = os.path.join(self.plot_dir, "MultiPlot_Print_1.emf")
-                fmt = "emf"
+                self.root.after(interval_ms, _poll)
 
-            self.layout_var.set(layout_cmb_var.get())
-
-            # 1. 먼저 멀티플롯 이미지/PDF 파일을 생성합니다.
-            _result_path = self.execute_multi_plot_pipeline(selected_defs, mode, filepath, fmt)
-
-            # 2. 인쇄(Print) 모드일 때만 프린터를 고른 뒤 인쇄합니다
-            # (EMF로 만들었으니 PDF 뷰어를 거치는 ShellExecute 대신 EMF 전용 헬퍼 사용)
-            if mode != "Save":
-                if os.path.exists(filepath):
-                    printer_name = self._pick_printer_dialog()
-                    if printer_name:
-                        threading.Thread(
-                            target=self._print_emf_and_cleanup,
-                            args=(filepath, "CathPlot Multi Plot", printer_name, self.orientation_var.get()),
-                            daemon=True
-                        ).start()
-                    else:
-                        try:
-                            os.remove(filepath)
-                        except OSError:
-                            pass
-
-            dialog.destroy()
-
-            # Save일 때만 성공 메시지를 띄웁니다 (인쇄 시에는 윈도우 시스템 창이 뜨므로 생략)
-            # [수정] 경고 미리보기에서 취소하면 _result_path가 None(파일도 이미
-            # 삭제됨) - 이때는 "성공" 메시지를 띄우지 않는다.
-            if mode == "Save" and _result_path:
-                messagebox.showinfo("완료", f"멀티플롯을 생성했습니다: {os.path.basename(filepath)}")
-
-        btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(fill="x", pady=15)
-        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side="right", padx=15)
-        ttk.Button(btn_frame, text="Run Plot", command=on_execute).pack(side="right", padx=5)
+        self.root.after(interval_ms, _poll)
 
     def execute_multi_plot_pipeline(self, selected_plot_defs, mode, custom_filepath=None, custom_format=None):
         if not selected_plot_defs:
@@ -11926,8 +11672,7 @@ class CathPlotGUI:
         if custom_filepath:
             outfile = custom_filepath
         else:
-            #outfile = os.path.join(self.plot_dir, f"MultiPlot_Temp.gnu" if target == "screen" else f"MultiPlot_Output.{fmt}")
-            outfile = os.path.join(self.plot_dir, f"MultiPlot.gnu" if target == "screen" else f"MultiPlot_Output.{fmt}")
+            outfile = os.path.join(self.plot_dir, "MultiPlot.gnu" if target == "screen" else f"MultiPlot_Output.{fmt}")
 
         layout_opt = self.layout_var.get()
         is_auto = self.frame_auto_var.get()
@@ -11939,11 +11684,6 @@ class CathPlotGUI:
 
         if target == "file" and not is_auto and w_str and h_str:
             try:
-                #float(w_str)
-                #float(h_str)
-                #final_frame_width = w_str
-                #final_frame_height = h_str
-                #final_frame_unit = unit
                 w_val = float(w_str)
                 h_val = float(h_str)
                 if fmt in ("png", "jpg"):
@@ -12034,21 +11774,6 @@ class CathPlotGUI:
             self.file_listbox.delete(0, 'end')
             for f in files: self.file_listbox.insert('end', os.path.basename(f))
 
-    #def execute_print_dialog(self):
-    #    idx = 1
-    #    while True:
-    #        temp_pdf = os.path.join(self.plot_dir, f"Print_Job_Temp_{idx}.pdf")
-    #        if not os.path.exists(temp_pdf):
-    #            break
-    #        idx += 1
-    #
-    #    success_path = self.execute_plot_pipeline("Batch", custom_filepath=temp_pdf, custom_format="PDF")
-    #
-    #    if success_path and os.path.exists(success_path):
-    #        threading.Thread(
-    #            target=self._print_and_cleanup, args=(success_path,), daemon=True
-    #        ).start()
-
     def execute_print_dialog(self):
         """PDF를 만들어 외부 PDF 뷰어 앱을 거쳐 인쇄하던 방식 대신, EMF를 만들어
         직접 프린터로 인쇄한다.
@@ -12097,23 +11822,10 @@ class CathPlotGUI:
                 시점의 현재 GUI Frame 설정을 따른다"로 통일한다(Multi-Print/
                 Save, '현재 화면 설정'과 동일 원칙). 고른 plot은 내용(curve 등)만
                 제공하고, 크기는 pd가 아니라 현재 GUI 상태에서 가져온다."""
-                if self.frame_auto_var.get():
-                    w_str, h_str = self._compute_auto_frame_size_cm(for_print=True, orientation=orientation)
-                    w, h = float(w_str), float(h_str)
-                    unit = "cm"
-                else:
-                    try:
-                        w = float((self.frame_width_var.get() or "10").strip() or 10.0)
-                        h = float((self.frame_height_var.get() or "8").strip() or 8.0)
-                    except ValueError:
-                        w, h = 10.0, 8.0
-                    unit = self.frame_unit_var.get()
-                    # [수정 - 재검토] "가로/세로는 그대로 두고 위치만 가로세로로
-                    # 두면 어떨까"라는 지적으로 여기 있던 orientation 기반 w/h
-                    # 스왑을 없앰 - Manual로 지정한 축 크기의 x:y는 orientation
-                    # 선택과 무관하게 항상 그대로 유지된다(_compute_auto_frame_size_cm
-                    # 주석 참고 - 실제 인쇄 단계가 EMF 비율은 유지한 채 페이지만
-                    # 돌리므로 스왑이 애초에 불필요했음).
+                # orientation 기반 w/h 스왑은 하지 않는다 - Manual로 지정한 축 크기의
+                # x:y는 orientation과 무관하게 유지(실제 인쇄 단계가 EMF 비율은 유지한
+                # 채 페이지만 돌리므로 스왑이 애초에 불필요했음).
+                w, h, unit = self._resolve_output_frame_size(for_print=True, orientation=orientation)
                 return dataclasses.replace(pd, frame_auto=False, frame_width=str(w), frame_height=str(h), frame_unit=unit)
 
             if chosen_plotdef is not None:
@@ -12135,39 +11847,12 @@ class CathPlotGUI:
             else:
                 # 현재 화면 설정 그대로 인쇄하는 경우 - GUI 변수를 임시로 방향에 맞게
                 # 바꿔서 생성한 뒤 원래 값으로 되돌린다
-                _orig_auto = self.frame_auto_var.get()
-                _orig_w = self.frame_width_var.get()
-                _orig_h = self.frame_height_var.get()
-                _orig_unit = self.frame_unit_var.get()
-                # [수정] Auto가 켜져 있으면 여기서 5x4in라는 임의의 작은 고정값으로
-                # 대체해버려서, 실제 용지를 거의 다 채워야 할 Auto 인쇄가 그보다
-                # 훨씬 작게(약 1/3 크기) 나오는 문제가 있었음 - Multi-Print의 1/p
-                # Auto/Save의 Auto와 동일하게 _compute_auto_frame_size_cm으로
-                # 용지 크기 기준 값을 계산해서 써야 함
-                if _orig_auto:
-                    w_str, h_str = self._compute_auto_frame_size_cm(for_print=True, orientation=orientation)
-                    w, h = float(w_str), float(h_str)
-                    unit = "cm"
-                else:
-                    try:
-                        w = float((_orig_w or "10").strip() or 10.0)
-                        h = float((_orig_h or "8").strip() or 8.0)
-                    except ValueError:
-                        w, h = 10.0, 8.0
-                    unit = _orig_unit
-                # [수정 - 재검토] orientation 기반 w/h 스왑 제거 (위
-                # _apply_orientation_to_plotdef 주석과 동일한 이유).
-                self.frame_auto_var.set(False)
-                self.frame_width_var.set(str(w))
-                self.frame_height_var.set(str(h))
-                self.frame_unit_var.set(unit)
-                try:
+                # [수정] Auto가 켜져 있으면 임의의 작은 고정값(5x4in) 대신 Multi-Print의
+                # 1/p Auto/Save의 Auto와 동일하게 용지 기준 크기를 쓴다(_resolve_
+                # output_frame_size). orientation 기반 w/h 스왑은 하지 않는다(위와 동일).
+                w, h, unit = self._resolve_output_frame_size(for_print=True, orientation=orientation)
+                with self._frame_vars_overridden(w, h, unit):
                     success_path = self.execute_plot_pipeline("Batch", custom_filepath=temp_emf, custom_format="EMF")
-                finally:
-                    self.frame_auto_var.set(_orig_auto)
-                    self.frame_width_var.set(_orig_w)
-                    self.frame_height_var.set(_orig_h)
-                    self.frame_unit_var.set(_orig_unit)
         except Exception as e:
             messagebox.showerror("인쇄 오류", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
             return
@@ -12189,10 +11874,48 @@ class CathPlotGUI:
             target=self._print_emf_and_cleanup, args=(success_path, raw_title, printer_name, orientation), daemon=True
         ).start()
 
-    def _pick_plot_to_print_dialog(self):
-        """PRINT 버튼을 눌렀을 때 무엇을 인쇄할지, 어떤 용지 방향으로 인쇄할지 고르는 창.
-        (Multi Print/Save는 이미 자체 orientation 선택이 있어서 중복이라, 단일
-        PRINT 전용으로 여기서 방향까지 같이 물어봄)
+    def _resolve_output_frame_size(self, for_print, orientation):
+        """[추가 - 요청 "중복성"] 단일 PRINT/SAVE가 실제로 쓸 axis frame 크기
+        (w, h, unit)를 현재 GUI의 Frame 설정에서 정한다 - Auto면 용지 기준
+        기본 크기(_compute_auto_frame_size_cm, cm), Manual이면 입력칸 값(숫자가
+        아니면 10x8). 예전엔 같은 계산이 PRINT/SAVE의 "현재 화면"/"이전 plot"
+        분기 네 곳에 복사돼 있었음."""
+        if self.frame_auto_var.get():
+            w_str, h_str = self._compute_auto_frame_size_cm(for_print=for_print, orientation=orientation)
+            return float(w_str), float(h_str), "cm"
+        try:
+            w = float((self.frame_width_var.get() or "10").strip() or 10.0)
+            h = float((self.frame_height_var.get() or "8").strip() or 8.0)
+        except ValueError:
+            w, h = 10.0, 8.0
+        return w, h, self.frame_unit_var.get()
+
+    @contextlib.contextmanager
+    def _frame_vars_overridden(self, w, h, unit):
+        """GUI의 Frame 입력값을 잠깐 (Manual, w, h, unit)으로 바꿔 두고 끝나면
+        (예외가 나도) 원래 값으로 되돌린다 - "현재 화면 설정" 기준 PRINT/SAVE가
+        execute_plot_pipeline을 그대로 재사용하기 위한 장치."""
+        orig = (self.frame_auto_var.get(), self.frame_width_var.get(),
+                self.frame_height_var.get(), self.frame_unit_var.get())
+        self.frame_auto_var.set(False)
+        self.frame_width_var.set(str(w))
+        self.frame_height_var.set(str(h))
+        self.frame_unit_var.set(unit)
+        try:
+            yield
+        finally:
+            self.frame_auto_var.set(orig[0])
+            self.frame_width_var.set(orig[1])
+            self.frame_height_var.set(orig[2])
+            self.frame_unit_var.set(orig[3])
+
+    def _pick_plot_target_dialog(self, action):
+        """PRINT/SAVE 버튼을 눌렀을 때 무엇을(현재 화면 설정 또는 이전에 그린
+        plot), 어떤 용지 방향으로 {action}할지 고르는 창. (Multi Print/Save는
+        이미 자체 orientation 선택이 있어서, 단일 PRINT/SAVE 전용으로 여기서
+        방향까지 같이 물어봄)
+        [수정 - 요청 "중복성"] 예전엔 문구만 다른 똑같은 창이 PRINT/SAVE용으로
+        두 벌 있었음 - action("인쇄"/"저장")만 받아 하나로 합침.
         반환값: (choice, orientation) 튜플.
           choice: None = '현재 화면 설정'을 고름(기존 방식), False = 취소,
                   그 외 = 선택된 PlotDefinition 객체
@@ -12203,11 +11926,11 @@ class CathPlotGUI:
 
         result = {"choice": False, "orientation": self.orientation_var.get()}
         dlg = tk.Toplevel(self.root)
-        dlg.title("인쇄할 Plot 선택")
+        dlg.title(f"{action}할 Plot 선택")
         dlg.transient(self.root)
         dlg.grab_set()
 
-        ttk.Label(dlg, text="인쇄할 대상을 선택하세요:").pack(padx=15, pady=(15, 5))
+        ttk.Label(dlg, text=f"{action}할 대상을 선택하세요:").pack(padx=15, pady=(15, 5))
         choice_var = tk.StringVar(value=CURRENT_SCREEN_LABEL)
         ttk.Combobox(
             dlg, textvariable=choice_var, values=names, width=35, state="readonly"
@@ -12232,6 +11955,12 @@ class CathPlotGUI:
 
         self.root.wait_window(dlg)
         return result["choice"], result["orientation"]
+
+    def _pick_plot_to_print_dialog(self):
+        return self._pick_plot_target_dialog("인쇄")
+
+    def _pick_plot_to_save_dialog(self):
+        return self._pick_plot_target_dialog("저장")
 
     def _ask_file_conflict(self, filename):
         """같은 이름의 출력 파일이 이미 있을 때 어떻게 할지 물어본다.
@@ -12635,84 +12364,6 @@ class CathPlotGUI:
             except OSError:
                 pass
 
-#    def _print_emf_and_cleanup_OLD(self, filepath, document_name):
-#        """Show the native print dialog and spool an EMF without a PDF viewer."""
-#        try:
-#            dialog = win32ui.CreatePrintDialog(0)
-#            if dialog.DoModal() != win32con.IDOK:
-#                return False
-#
-#            dc = dialog.GetPrinterDC()
-#            emf = None
-#            try:
-#                emf = win32gui.GetEnhMetaFile(os.path.abspath(filepath))
-#                width = dc.GetDeviceCaps(win32con.HORZRES)
-#                height = dc.GetDeviceCaps(win32con.VERTRES)
-#                dc.StartDoc(document_name)
-#                dc.StartPage()
-#                win32gui.PlayEnhMetaFile(dc.GetSafeHdc(), emf, (0, 0, width, height))
-#                dc.EndPage()
-#                dc.EndDoc()
-#            finally:
-#                if emf:
-#                    win32gui.DeleteEnhMetaFile(emf)
-#                if dc:
-#                    dc.DeleteDC()
-#            return True
-#        finally:
-#            # No viewer has the EMF open, so cleanup is immediate and reliable.
-#            try:
-#                if os.path.exists(filepath):
-#                    os.remove(filepath)
-#            except OSError:
-#                pass
-
-    def _print_and_cleanup(self, filepath):
-        # ShellExecute는 내부적으로 COM을 쓰기 때문에, 새로 만든 스레드에서
-        # 바로 호출하면 COM이 초기화되어 있지 않아 멈추거나(hang) 심하면
-        # 프로세스 자체가 죽는 네이티브 크래시가 날 수 있다. 이 스레드
-        # 전용으로 COM을 초기화/정리해준다.
-        import pythoncom, win32api  # [수정 - 지연 import] 파일 위 설명 참고
-        pythoncom.CoInitialize()
-        try:
-            result = win32api.ShellExecute(0, "print", os.path.abspath(filepath), None, ".", 0)
-            if result > 32:
-                self.root.after(0, lambda: messagebox.showinfo(
-                    "Print", "인쇄 작업을 프린터로 전송했습니다."
-                ))
-            if result <= 32:
-                # "print" verb가 이 PDF 뷰어에서 지원 안 되는 경우 - 그냥 열어서
-                # 사용자가 직접 Ctrl+P로 인쇄하도록 안내
-                win32api.ShellExecute(0, "open", os.path.abspath(filepath), None, ".", 0)
-                self.root.after(0, lambda: messagebox.showinfo(
-                    "Print",
-                    "이 PDF 뷰어는 자동 인쇄를 지원하지 않아 파일을 열기만 했습니다.\n"
-                    "열린 창에서 Ctrl+P로 직접 인쇄해주세요."
-                ))
-        except Exception as e:
-            err_msg = str(e)
-            self.root.after(0, lambda msg=err_msg: messagebox.showerror("인쇄 오류", msg))
-        finally:
-            pythoncom.CoUninitialize()
-
-        # 인쇄 스풀/뷰어가 파일을 읽어갈 시간을 준 뒤 삭제 (메인 스레드 안 막음)
-        # [수정] ShellExecute(..., "print", ...)는 프린터 전송이 끝난 게 아니라 연결된
-        # PDF 뷰어 앱을 비동기로 띄우는 것뿐이라, 그 앱이 뜨는 데 시간이 걸리면(특히
-        # 해당 세션에서 처음 실행되는 경우) 예전의 10초 대기로는 부족해서 앱이 파일을
-        # 열기도 전에 지워버리는 경우가 있었음. 첫 대기를 60초로 늘리고, 그래도 파일이
-        # 잠겨있으면(뷰어가 계속 열어둔 상태) 무리하게 지우지 않고 몇 번 더 시도 후 포기함
-        # (남은 임시파일은 "Clean Past Plots"로 나중에 정리 가능)
-        def _delayed_delete():
-            for _ in range(6):
-                try:
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
-                    break
-                except Exception:
-                    time.sleep(10.0)
-
-        threading.Timer(60.0, _delayed_delete).start()
-
     def execute_save_dialog(self):
         """SAVE도 PRINT처럼, 저장된(Interactive로 그렸던) plot이 있으면 무조건
         현재 화면 설정으로만 저장하지 않고 어떤 것을 + 어떤 용지 방향으로
@@ -12754,14 +12405,7 @@ class CathPlotGUI:
             fmt = "GIF"
         else:
             # [수정] "이미지 sample 순서는 png, pdf, jpg, svg, emf, eps 순으로"
-            file_types = [
-                ("PNG Image (*.png)", "*.png"),
-                ("Portable Document Format (*.pdf)", "*.pdf"),
-                ("JPEG Image (*.jpg)", "*.jpg"),
-                ("SVG Vector Graphic (*.svg)", "*.svg"),
-                ("Enhanced Metafile (*.emf)", "*.emf"),
-                ("Encapsulated PostScript (*.eps)", "*.eps"),
-            ]
+            file_types = list(SAVE_IMAGE_FILE_TYPES)
             selected_path = filedialog.asksaveasfilename(initialdir=self.plot_dir, initialfile=default_name, title="Save Plot As...", filetypes=file_types, defaultextension=".png")
             if not selected_path: return
 
@@ -12772,37 +12416,12 @@ class CathPlotGUI:
         if chosen_plotdef is None:
             # 현재 화면 설정 - PRINT와 동일하게, 선택한 방향에 맞춰 GUI의 frame
             # 값을 잠깐 덮어써서 생성한 뒤 원래 값으로 되돌린다
-            import dataclasses
-            _orig_auto = self.frame_auto_var.get()
-            _orig_w = self.frame_width_var.get()
-            _orig_h = self.frame_height_var.get()
-            _orig_unit = self.frame_unit_var.get()
-            if _orig_auto:
-                w_cm, h_cm = self._compute_auto_frame_size_cm(for_print=False, orientation=orientation)
-                w, h = float(w_cm), float(h_cm)
-                unit = "cm"
-            else:
-                try:
-                    w = float((_orig_w or "10").strip() or 10.0)
-                    h = float((_orig_h or "8").strip() or 8.0)
-                except ValueError:
-                    w, h = 10.0, 8.0
-                # [수정 - 재검토] orientation 기반 w/h 스왑 제거 - Save는
-                # "페이지" 개념이 없어(캔버스=frame 그 자신) 스왑하면 Manual로
-                # 지정한 x:y가 orientation 선택만으로 뒤집혀버림(왜곡). 사용자
-                # 확인 후 Print와 동일하게 스왑 없이 그대로 유지하기로 함.
-                unit = _orig_unit
-            self.frame_auto_var.set(False)
-            self.frame_width_var.set(str(w))
-            self.frame_height_var.set(str(h))
-            self.frame_unit_var.set(unit)
-            try:
+            # orientation 기반 w/h 스왑은 하지 않는다 - Save는 "페이지" 개념이
+            # 없어(캔버스=frame 그 자신) 스왑하면 Manual로 지정한 x:y가
+            # orientation 선택만으로 뒤집혀버림(왜곡). Print와 동일.
+            w, h, unit = self._resolve_output_frame_size(for_print=False, orientation=orientation)
+            with self._frame_vars_overridden(w, h, unit):
                 self.execute_plot_pipeline("Batch", custom_filepath=os.path.abspath(selected_path), custom_format=fmt)
-            finally:
-                self.frame_auto_var.set(_orig_auto)
-                self.frame_width_var.set(_orig_w)
-                self.frame_height_var.set(_orig_h)
-                self.frame_unit_var.set(_orig_unit)
             return
 
         # 캐시된(Interactive) plot을 골랐을 때 - 화면 전용이던 plotdef를 파일
@@ -12813,19 +12432,9 @@ class CathPlotGUI:
         # plot이 들고 있는 값은 의도적으로 고른 값이 아닐 수 있기 때문("크기는
         # 항상 저장 시점의 현재 GUI 설정을 따른다"로 PRINT와 통일).
         import dataclasses
-        if self.frame_auto_var.get():
-            w_cm, h_cm = self._compute_auto_frame_size_cm(for_print=False, orientation=orientation)
-            w, h = float(w_cm), float(h_cm)
-            unit_out = "cm"
-        else:
-            try:
-                w = float((self.frame_width_var.get() or "10").strip() or 10.0)
-                h = float((self.frame_height_var.get() or "8").strip() or 8.0)
-            except ValueError:
-                w, h = 10.0, 8.0
-            unit_out = self.frame_unit_var.get()
-            # [수정 - 재검토] orientation 기반 w/h 스왑 제거 (위 두 곳과 동일한
-            # 이유 - Save도 Manual 지정 x:y를 orientation과 무관하게 유지).
+        # orientation 기반 w/h 스왑 없음(Save도 Manual 지정 x:y를 orientation과
+        # 무관하게 유지).
+        w, h, unit_out = self._resolve_output_frame_size(for_print=False, orientation=orientation)
         save_plotdef = dataclasses.replace(
             chosen_plotdef, is_print_mode=True, frame_auto=False,
             frame_width=str(w), frame_height=str(h), frame_unit=unit_out,
@@ -12845,60 +12454,8 @@ class CathPlotGUI:
         self.update_plot_file_list()
         messagebox.showinfo("완료", f"저장했습니다: {os.path.basename(selected_path)}")
 
-    def _pick_plot_to_save_dialog(self):
-        """SAVE 버튼을 눌렀을 때 무엇을 + 어떤 용지 방향으로 저장할지 고르는 창
-        (PRINT의 _pick_plot_to_print_dialog와 동일한 패턴).
-        반환값: (choice, orientation) 튜플.
-          choice: None = '현재 화면 설정'을 고름(기존 방식), False = 취소,
-                  그 외 = 선택된 PlotDefinition 객체
-          orientation: "portrait" 또는 "landscape" (취소 시 의미 없음)"""
-        CURRENT_SCREEN_LABEL = "현재 화면 설정"
-        self._cleanup_stale_plot_cache()
-        names = [CURRENT_SCREEN_LABEL] + sorted(self.active_plots_cache.keys())
-
-        result = {"choice": False, "orientation": self.orientation_var.get()}
-        dlg = tk.Toplevel(self.root)
-        dlg.title("저장할 Plot 선택")
-        dlg.transient(self.root)
-        dlg.grab_set()
-
-        ttk.Label(dlg, text="저장할 대상을 선택하세요:").pack(padx=15, pady=(15, 5))
-        choice_var = tk.StringVar(value=CURRENT_SCREEN_LABEL)
-        ttk.Combobox(
-            dlg, textvariable=choice_var, values=names, width=35, state="readonly"
-        ).pack(padx=15, pady=5)
-
-        ttk.Label(dlg, text="용지 방향:").pack(padx=15, pady=(5, 2))
-        orient_var = tk.StringVar(value=self.orientation_var.get())
-        ttk.Combobox(
-            dlg, textvariable=orient_var, values=["portrait", "landscape"], width=15, state="readonly"
-        ).pack(padx=15, pady=5)
-
-        def do_ok():
-            picked = choice_var.get()
-            result["choice"] = None if picked == CURRENT_SCREEN_LABEL else self.active_plots_cache.get(picked)
-            result["orientation"] = orient_var.get()
-            dlg.destroy()
-
-        btn_row = ttk.Frame(dlg)
-        btn_row.pack(pady=10)
-        ttk.Button(btn_row, text="취소", command=dlg.destroy).pack(side="right", padx=5)
-        ttk.Button(btn_row, text="확인", command=do_ok).pack(side="right", padx=5)
-
-        self.root.wait_window(dlg)
-        return result["choice"], result["orientation"]
-
     def set_active_entry(self, entry):
         self.active_entry = entry
-
-    #def cleanup_sorted_cache(self):
-    #    for cached_path in self.sorted_dat_cache.values():
-    #        if os.path.exists(cached_path):
-    #            try:
-    #                os.remove(cached_path)
-    #            except Exception:
-    #                pass
-    #    self.sorted_dat_cache.clear()
 
     def _compute_auto_frame_size_cm(self, for_print=True, orientation="portrait"):
         """Axis Frame Auto가 켜진 채로 1장짜리 PRINT/SAVE를 할 때 쓸 크기.

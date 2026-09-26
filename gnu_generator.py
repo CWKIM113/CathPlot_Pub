@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
-from data_parser import CathenaDatParser, is_comment_or_blank, strip_inline_comment  # 파서 모듈 임포트
+from data_parser import load_dat_table  # 파서 모듈 임포트
+from bisect import bisect_left
 from dataclasses import dataclass, field
 import math
 import os
@@ -253,6 +254,55 @@ def _fix_implicit_multiplication(expr):
         if ch == ")" and i < n and (expr[i].isalpha() or expr[i] in "(_" or expr[i].isdigit()):
             out.append("*")
     return "".join(out)
+
+def _run_gnuplot_stdin(gnuplot_exe, script_text, cwd, fail_msg, debug_tag=""):
+    """[추가 - 요청 "중복성"] 파일 산출물(Batch/Save/Print/GIF)용 gnuplot 실행 -
+    스크립트를 디스크에 쓰지 않고 stdin으로 바로 넘긴다. 실패했을 때만
+    디버깅할 수 있도록 스크립트를 ".cathplot_failed{debug_tag}_*.plt"로
+    남기고 stderr와 함께 RuntimeError를 낸다(예전엔 같은 20줄이 create_script/
+    multiplot/3D/animation 다섯 곳에 복사돼 있었음)."""
+    result = subprocess.run(
+        [gnuplot_exe],
+        input=script_text, text=True, encoding="utf-8", errors="replace",
+        capture_output=True, cwd=cwd, **_no_console_kwargs()
+    )
+    if result.returncode != 0:
+        debug_path = os.path.join(cwd, f".cathplot_failed{debug_tag}_{uuid.uuid4().hex}.plt")
+        try:
+            with open(debug_path, "w", encoding="utf-8") as f:
+                f.write(script_text)
+        except OSError:
+            debug_path = None
+        stderr_text = (result.stderr or "").strip()
+        msg = f"{fail_msg} (반환 코드 {result.returncode})"
+        if stderr_text:
+            msg += f":\n{stderr_text}"
+        if debug_path:
+            msg += f"\n\n(스크립트 보존됨: {debug_path})"
+        raise RuntimeError(msg)
+    return result
+
+
+def _gnuplot_rel_path(abs_path, base_dir):
+    """gnuplot은 cwd를 plot 폴더로 고정해 실행하므로 데이터 파일을 그 기준
+    상대경로(슬래시 구분)로 넘긴다 - 다른 드라이브라 상대경로 계산이 안
+    되면(ValueError) 절대경로를 그대로 쓴다."""
+    try:
+        path = os.path.relpath(abs_path, start=base_dir) if base_dir else abs_path
+    except ValueError:
+        path = abs_path
+    return path.replace("\\", "/")
+
+
+def _launch_gnuplot_persist(gnuplot_exe, script_path, cwd):
+    """화면(Interactive) 창용 gnuplot 실행 - 창을 계속 띄워두므로 기다리지 않고
+    프로세스를 돌려준다. 스크립트 에러로 죽을 때 실제 에러 메시지를 사용자에게
+    보여줄 수 있도록 stderr를 파이프로 캡처한다."""
+    return subprocess.Popen(
+        [gnuplot_exe, "-persist", script_path], cwd=cwd, **_no_console_kwargs(),
+        stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
+    )
+
 _gnuplot_exe_cache = None
 
 def _resolve_gnuplot_exe():
@@ -929,6 +979,119 @@ class PlotDefinition:
     #     clip_rx를 그대로 써서 원이 됨. 50%면 박스에 꽉 차게 내접.
     pip: dict = field(default_factory=dict)
 
+
+
+# 3D에서 여러 surface를 겹쳐 그리면 전부 palette(Z값)로만 색칠돼 Z값이 비슷한
+# 구간은 구분이 안 됨 - 색은 그대로 두고 surface별로 dashtype(선 패턴)을
+# 다르게 줘서 선 자체는 겹쳐도 구분되게 한다(첫 surface는 실선).
+_SURFACE_DASH_CYCLE = ["", "6, 3", "1, 2", "8, 3, 1, 3", "3, 2"]
+
+
+# [추가 - 요청 "중복성"] 3D 정적/애니메이션 스크립트(create_3d_script/
+# create_3d_animation_script/_build_function_surface_part)에 똑같이 복사돼
+# 있던 작은 조각들을 공용 함수로 모음(출력 문자열은 기존과 동일).
+def _3d_range_clause(vmin, vmax):
+    """비어있지 않은 쪽만 채운 gnuplot 범위 "[min:max]"(둘 다 비면 None)."""
+    has_min = vmin is not None and vmin != ""
+    has_max = vmax is not None and vmax != ""
+    if not has_min and not has_max:
+        return None
+    return f"[{vmin if has_min else '*'}:{vmax if has_max else '*'}]"
+
+
+def _3d_marker_clause(style, item):
+    """style이 points/linespoints일 때만 item의 marker_shape/marker_size로
+    " pt N ps S" 절을 만든다(lines면 점 모양이 안 보이므로 빈 문자열)."""
+    clause = ""
+    if style in ("points", "linespoints"):
+        marker_pt = item.get("marker_shape")
+        marker_size = item.get("marker_size")
+        if marker_pt is not None:
+            clause += f" pt {_fmt_pointtype(marker_pt)}"
+        if marker_size:
+            clause += f" ps {marker_size}"
+    return clause
+
+
+def _3d_surface_dash_clause(surface, s_idx, fmt):
+    """surface의 Line Style(line_dash)이 지정돼 있으면 그 dashtype, Auto면
+    겹치는 surface 구분용 자동 순환(_SURFACE_DASH_CYCLE)을 쓴다."""
+    dash_key = surface.get("line_dash") or ""
+    if dash_key:
+        dash_pat = _dash_pattern_for_fmt(dash_key, fmt)
+        return f" dashtype ({dash_pat})" if dash_pat else ""
+    dash = _SURFACE_DASH_CYCLE[s_idx % len(_SURFACE_DASH_CYCLE)]
+    return f" dashtype ({dash})" if dash else ""
+
+class _NearestUnusedFinder:
+    """[추가 - 요청 "실행속도"] marker 선택(_select_marker_points/_3d)에서
+    "아직 안 쓰인 점들 중 목표 x에 가장 가까운 점"을 찾는 부분이 목표점마다
+    전체 데이터를 처음부터 훑고 log10까지 매번 다시 계산해서(목표 25개 x 데이터
+    10만 줄이면 수백만 번) 큰 파일에서 수 초씩 걸렸음. 결과가 완전히 같은
+    (같은 거리 계산식, 동률이면 원래처럼 가장 앞 index) 정렬+이분탐색으로
+    바꾼다. log축인데 0 이하 값이 섞이면 점마다 거리 공식(log/선형)이 달라져
+    정렬 순서와 거리가 단조 관계가 아니므로, 그때만 기존 방식 그대로 전체를
+    훑는다."""
+
+    def __init__(self, xs, is_log_x):
+        self.xs = xs
+        self.is_log_x = is_log_x
+        self._fast = (not is_log_x) or all(x > 0 for x in xs)
+        if self._fast:
+            keys = [math.log10(x) for x in xs] if is_log_x else list(xs)
+            self._order = sorted(range(len(keys)), key=keys.__getitem__)
+            self._skeys = [keys[i] for i in self._order]
+
+    def _scan(self, t, used_idx):
+        best_i, best_d = None, None
+        is_log_x = self.is_log_x
+        for i, px in enumerate(self.xs):
+            if i in used_idx:
+                continue
+            d = abs(math.log10(px) - math.log10(t)) if (is_log_x and px > 0 and t > 0) else abs(px - t)
+            if best_d is None or d < best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    def find(self, t, used_idx):
+        if not self._fast or (self.is_log_x and t <= 0):
+            return self._scan(t, used_idx)
+        tk = math.log10(t) if self.is_log_x else t
+        order, skeys = self._order, self._skeys
+        n = len(order)
+        pos = bisect_left(skeys, tk)
+        l = pos - 1
+        while l >= 0 and order[l] in used_idx:
+            l -= 1
+        r = pos
+        while r < n and order[r] in used_idx:
+            r += 1
+        dl = abs(skeys[l] - tk) if l >= 0 else None
+        dr = abs(skeys[r] - tk) if r < n else None
+        if dl is None and dr is None:
+            return None
+        best_d = dl if dr is None else dr if dl is None else min(dl, dr)
+        # 같은 거리(동률)인 안 쓰인 점이 여럿이면 원래 선형 탐색과 같게
+        # 가장 앞 index를 고른다(거리는 바깥으로 갈수록 단조 증가).
+        best_i = None
+        j = l
+        while j >= 0:
+            if order[j] not in used_idx:
+                if abs(skeys[j] - tk) != best_d:
+                    break
+                if best_i is None or order[j] < best_i:
+                    best_i = order[j]
+            j -= 1
+        j = r
+        while j < n:
+            if order[j] not in used_idx:
+                if abs(skeys[j] - tk) != best_d:
+                    break
+                if best_i is None or order[j] < best_i:
+                    best_i = order[j]
+            j += 1
+        return best_i
+
 class GnuplotGenerator:
 
     def __init__(self, plot_dir=None):
@@ -1017,29 +1180,18 @@ class GnuplotGenerator:
           안 보이는 점을 경계 마커로 잘못 고를 수 있어서 대비함).
         x_shift는 여기서 이미 반영해서 반환한다(실제 plot에 그려지는 좌표 기준)."""
         try:
-            parser = CathenaDatParser()
-            dat_info = parser.parse(curve.dat_file)
-            with open(curve.dat_file, "r", encoding="utf-8", errors="ignore") as f:
-                file_lines = f.readlines()
+            _, table = load_dat_table(curve.dat_file)
         except Exception:
             return []
 
         pts = []
-        max_col = max(x_col_idx, y_col_idx)
-        for row in file_lines[dat_info.data_start_line:]:
-            text = strip_inline_comment(row).strip()
-            if is_comment_or_blank(text):
+        x_shift = curve.x_shift
+        for xv, yv in zip(*table.columns(x_col_idx, y_col_idx)):
+            if xv is None or yv is None:
                 continue
-            fields = re.split(r'[,\s]+', text)
-            if len(fields) <= max_col:
-                continue
-            try:
-                x_val = float(fields[x_col_idx].replace("D", "E").replace("d", "e").replace(",", "")) + curve.x_shift
-                y_val = float(fields[y_col_idx].replace("D", "E").replace("d", "e").replace(",", ""))
-            except ValueError:
-                continue
-            if math.isfinite(x_val) and math.isfinite(y_val):
-                pts.append((x_val, y_val))
+            x_val = xv + x_shift
+            if math.isfinite(x_val) and math.isfinite(yv):
+                pts.append((x_val, yv))
 
         if not pts:
             return []
@@ -1082,6 +1234,7 @@ class GnuplotGenerator:
 
         selected = []
         used_idx = set()
+        _finder = _NearestUnusedFinder([p[0] for p in pts], is_log_x)
         for t in targets:
             # [수정 - 사용자 보고 버그] "Auto marker가 목표 개수(예: 25)보다
             # 적게 찍히고, 끝부분에 두 개가 몰려 찍힘" - 예전엔 "전체 점 중
@@ -1098,13 +1251,7 @@ class GnuplotGenerator:
             # 점을 찾도록 바꿔서, target 개수만큼 점이 남아있는 한(위에서
             # len(pts) > len(targets) 확인됨) 매 target마다 항상 새 점을
             # 배정받는다.
-            best_i, best_d = None, None
-            for i, (px, _) in enumerate(pts):
-                if i in used_idx:
-                    continue
-                d = abs(math.log10(px) - math.log10(t)) if (is_log_x and px > 0 and t > 0) else abs(px - t)
-                if best_d is None or d < best_d:
-                    best_i, best_d = i, d
+            best_i = _finder.find(t, used_idx)
             if best_i is not None:
                 # [기존] "노이즈가 심한 curve에서 marker가 curve 선에서
                 # 떨어져 보임" - target x와 가장 가까운 점 대신, 그 앞뒤
@@ -1208,30 +1355,17 @@ class GnuplotGenerator:
         아직 없어 이 curve 자신의 X 범위만 기준으로 삼는다."""
         x_idx0, y_idx0, z_idx0 = x_col_idx - 1, y_col_idx - 1, z_col_idx - 1
         try:
-            parser = CathenaDatParser()
-            dat_info = parser.parse(dat_file)
-            with open(dat_file, "r", encoding="utf-8", errors="ignore") as f:
-                file_lines = f.readlines()
+            _, table = load_dat_table(dat_file)
         except Exception:
             return []
 
         pts = []
-        max_col = max(x_idx0, y_idx0, z_idx0)
-        for row in file_lines[dat_info.data_start_line:]:
-            text = strip_inline_comment(row).strip()
-            if is_comment_or_blank(text):
+        for xv, yv, zv in zip(*table.columns(x_idx0, y_idx0, z_idx0)):
+            if xv is None or yv is None or zv is None:
                 continue
-            fields = re.split(r'[,\s]+', text)
-            if len(fields) <= max_col:
-                continue
-            try:
-                x_val = float(fields[x_idx0].replace("D", "E").replace("d", "e").replace(",", "")) + x_shift
-                y_val = float(fields[y_idx0].replace("D", "E").replace("d", "e").replace(",", ""))
-                z_val = float(fields[z_idx0].replace("D", "E").replace("d", "e").replace(",", ""))
-            except ValueError:
-                continue
-            if math.isfinite(x_val) and math.isfinite(y_val) and math.isfinite(z_val):
-                pts.append((x_val, y_val, z_val))
+            x_val = xv + x_shift
+            if math.isfinite(x_val) and math.isfinite(yv) and math.isfinite(zv):
+                pts.append((x_val, yv, zv))
 
         if not pts or len(pts) <= target_count:
             return pts
@@ -1255,19 +1389,14 @@ class GnuplotGenerator:
 
         selected = []
         used_idx = set()
+        _finder = _NearestUnusedFinder([p[0] for p in pts], is_log_x)
         for t in all_targets:
             # [수정 - 사용자 보고 버그, 2D와 동일] "Auto marker 개수가 목표보다
             # 적게 찍히고 끝부분에 몰림" - _select_marker_points와 동일한
             # 원인(이미 쓰인 점이면 target을 그냥 건너뛰어 개수가 줄고,
             # 그 결과 끝쪽 강제 포함 로직과 겹쳐 마커가 몰려 보임) - 처음부터
             # 아직 안 쓰인 점들 중에서만 가장 가까운 점을 찾도록 수정.
-            best_i, best_d = None, None
-            for i, (px, _, _) in enumerate(pts):
-                if i in used_idx:
-                    continue
-                d = abs(math.log10(px) - math.log10(t)) if (is_log_x and px > 0 and t > 0) else abs(px - t)
-                if best_d is None or d < best_d:
-                    best_i, best_d = i, d
+            best_i = _finder.find(t, used_idx)
             if best_i is not None:
                 # [추가] 2D와 동일하게 국소 튐 보정 재사용 - _refine_marker_index는
                 # pts[j][1](Y값)만 보므로 3-tuple((x,y,z))에도 그대로 쓸 수 있다.
@@ -1401,8 +1530,39 @@ class GnuplotGenerator:
         dim_in = w_in if axis == "x" else h_in
         return max(4, round(dim_in))
 
+    @staticmethod
+    def _curve_minmax(table, x_col_idx, column, x_shift, x_min, x_max, shift_value):
+        """_nice_axis_range용 - 한 curve의 (min, max)(유한값만, 없으면 None)."""
+        x_vals, col_vals = table.columns(x_col_idx, column)
+        _x_filter = x_min is not None or x_max is not None
+        lo = hi = None
+        for x_val_check, value in zip(x_vals, col_vals):
+            # 컬럼이 모자라거나 숫자가 아닌 행은 건너뜀
+            if x_val_check is None or value is None:
+                continue
+            # x_min, x_max 필터링은 오직 axis == "x" 이고 제한이 유효할 때만 작동
+            if _x_filter:
+                x_val = x_val_check + x_shift
+                if x_min is not None and x_val < x_min:
+                    continue
+                if x_max is not None and x_val > x_max:
+                    continue
+            # [수정 - 사용자 보고 버그] "Auto X-range가 shift 적용 전 원본 데이터
+            # 범위로 잡힘" - X축 계산일 때는 실제 플롯에 그려지는 좌표(shift
+            # 반영)와 맞추려고 여기서도 shift를 더한다.
+            if shift_value:
+                value += x_shift
+            if math.isfinite(value):
+                if lo is None:
+                    lo = hi = value
+                else:
+                    if value < lo:
+                        lo = value
+                    if value > hi:
+                        hi = value
+        return None if lo is None else (lo, hi)
+
     def _nice_axis_range(self, plotdef, axis, is_log=False, extra_values=None):
-        parser = CathenaDatParser()
 
         # [수정 - 사용자 요청] "X는 major 간격 4개 대신 5개로(0~1000.07에서
         # step이 250이 아니라 200 정도 되게), Y는 axis frame 비율에 따라
@@ -1452,72 +1612,25 @@ class GnuplotGenerator:
                     continue
                 column = curve.output_no
 
+            # 헤더/데이터 경계는 이미 파서가 판단해둔 data_start_line을 그대로 사용
+            # ("---","===","OUTPUT" 등을 다시 문자열로 추측하는 중복 로직을 두지 않음).
+            # [수정 - 요청 "실행속도"] 파일 읽기/컬럼 숫자 변환은 load_dat_table
+            # 캐시를 재사용한다(이 함수는 plot 한 번에 축마다 여러 번 불림).
             try:
-                dat_info = parser.parse(curve.dat_file)
+                _, table = load_dat_table(curve.dat_file)
             except Exception:
                 continue
-
-            try:
-                with open(curve.dat_file, "r", encoding="utf-8", errors="ignore") as data:
-                    file_lines = data.readlines()
-            except OSError:
-                continue
-
-            # 헤더/데이터 경계는 이미 파서가 판단해둔 data_start_line을 그대로 사용
-            # ("---","===","OUTPUT" 등을 다시 문자열로 추측하는 중복 로직을 두지 않음)
-            for row in file_lines[dat_info.data_start_line:]:
-                text = strip_inline_comment(row).strip()
-                if is_comment_or_blank(text):
-                    continue
-
-                fields = re.split(r'[,\s]+', text)
-                if not fields:
-                    continue
-
-                max_col = max(column, x_col_idx)
-                if len(fields) <= max_col:
-                    continue
-
-                # X축 값 검증
-                try:
-                    x_val_check = float(fields[x_col_idx].replace("D", "E").replace("d", "e").replace(",", ""))
-                except ValueError:
-                    continue
-
-                # x_min, x_max 필터링은 오직 axis == "x" 이고 제한이 유효할 때만 작동
-                if x_min is not None or x_max is not None:
-                    try:
-                        x_val = x_val_check + curve.x_shift
-                    except (ValueError, IndexError):
-                        x_val = None
-                    if x_val is not None:
-                        if x_min is not None and x_val < x_min:
-                            continue
-                        if x_max is not None and x_val > x_max:
-                            continue
-
-                try:
-                    val_str = fields[column].replace("D", "E").replace("d", "e").replace(",", "")
-                    value = float(val_str)
-                    # [수정 - 사용자 보고 버그] "Auto X-range가 shift 적용 전
-                    # 원본 데이터 범위로 잡힘" - axis=="x"일 때 column은
-                    # x_col_idx와 같아서 여기서 다시 읽는 값이 바로 위
-                    # x_val_check(아직 shift 반영 전)와 동일한데, 정작 이
-                    # 값(value)이 그대로 Auto 범위 계산용 values 목록에
-                    # 들어가고 있었다 - x_shift는 위 필터(x_min/x_max가
-                    # 있을 때만 쓰는 x_val)에만 반영되고 있어서, 수동 X
-                    # 제한이 없는 보통의 Auto 경우엔 shift가 통째로
-                    # 무시된 채로 범위가 잡혔다(실제 플롯에 그려지는
-                    # 좌표는 이미 shift가 반영된 값인데, 축 범위만
-                    # shift 이전 값 기준으로 계산되던 불일치). X축
-                    # 계산일 때만 여기서도 shift를 더해준다.
-                    if axis == "x":
-                        value += curve.x_shift
-                except (ValueError, IndexError):
-                    continue
-
-                if math.isfinite(value):
-                    values.append(value)
+            # [수정 - 요청 "실행속도"] 이 함수는 plot 한 번에 축마다 여러 번
+            # (tic 글자수/margin/marker 범위 계산 등) 같은 인자로 다시 불린다 -
+            # 결과에 필요한 건 이 curve 값들의 min/max뿐이라, 그 쌍을 table에
+            # 기억해두고 재사용한다(min/max를 curve별로 먼저 구해 합쳐도 전체
+            # 값 목록에서 바로 구한 것과 같은 값).
+            _memo_key = ("nice_minmax", x_col_idx, column, curve.x_shift, x_min, x_max, axis == "x")
+            if _memo_key not in table.memo:
+                table.memo[_memo_key] = self._curve_minmax(table, x_col_idx, column, curve.x_shift, x_min, x_max, axis == "x")
+            _mm = table.memo[_memo_key]
+            if _mm is not None:
+                values.extend(_mm)
 
         # [추가 - 사용자 보고 버그] "sin 값이 음수에서 잘림 - y1축 범위를
         # 늘려야 하는데" - 이 함수는 원래 plotdef.curves(실제 .dat 파일)만
@@ -1628,7 +1741,6 @@ class GnuplotGenerator:
         Y범위를 그대로 물려받음)로는 세로로 전혀 안 좁혀져서 이 목적에 안
         맞기 때문에 별도로 둔다. 파싱 방식(CathenaDatParser, 컬럼 분리 등)은
         _nice_axis_range와 동일하게 맞춰 일관성을 유지한다."""
-        parser = CathenaDatParser()
         values = []
         default_x_col = getattr(plotdef, "x_output_no", 0)
         for curve in plotdef.curves:
@@ -1638,33 +1750,15 @@ class GnuplotGenerator:
             x_col_idx = curve.x_output_no if getattr(curve, "x_output_no", None) is not None else default_x_col
             column = curve.output_no
             try:
-                dat_info = parser.parse(curve.dat_file)
+                _, table = load_dat_table(curve.dat_file)
             except Exception:
                 continue
-            try:
-                with open(curve.dat_file, "r", encoding="utf-8", errors="ignore") as data:
-                    file_lines = data.readlines()
-            except OSError:
-                continue
-            for row in file_lines[dat_info.data_start_line:]:
-                text = strip_inline_comment(row).strip()
-                if is_comment_or_blank(text):
+            x_shift = curve.x_shift
+            for xv, value in zip(*table.columns(x_col_idx, column)):
+                if xv is None or value is None:
                     continue
-                fields = re.split(r'[,\s]+', text)
-                if not fields:
-                    continue
-                max_col = max(column, x_col_idx)
-                if len(fields) <= max_col:
-                    continue
-                try:
-                    x_val = float(fields[x_col_idx].replace("D", "E").replace("d", "e").replace(",", "")) + curve.x_shift
-                except (ValueError, IndexError):
-                    continue
+                x_val = xv + x_shift
                 if x_val < x_lo or x_val > x_hi:
-                    continue
-                try:
-                    value = float(fields[column].replace("D", "E").replace("d", "e").replace(",", ""))
-                except (ValueError, IndexError):
                     continue
                 if math.isfinite(value):
                     values.append(value)
@@ -4343,11 +4437,7 @@ class GnuplotGenerator:
             abs_path = curve.dat_file if os.path.isabs(curve.dat_file) else os.path.abspath(curve.dat_file)
             # gnuplot을 실행할 때 cwd를 self.plot_dir로 고정해두므로, 그 기준 상대경로를 씀
             # (다른 드라이브라 상대경로 계산이 안 되면 절대경로로 대체)
-            try:
-                path = os.path.relpath(abs_path, start=self.plot_dir) if self.plot_dir else abs_path
-            except ValueError:
-                path = abs_path
-            path = path.replace("\\", "/")
+            path = _gnuplot_rel_path(abs_path, self.plot_dir)
 
             is_y2 = getattr(curve, "axis", "y1") == "y2"
             axis = "x1y2" if is_y2 else "x1y1"
@@ -4506,11 +4596,7 @@ class GnuplotGenerator:
             color = curve.color or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
             linestyle = curve.linestyle or DEFAULT_LINESTYLES[i % len(DEFAULT_LINESTYLES)]
             abs_path = curve.dat_file if os.path.isabs(curve.dat_file) else os.path.abspath(curve.dat_file)
-            try:
-                path = os.path.relpath(abs_path, start=self.plot_dir) if self.plot_dir else abs_path
-            except ValueError:
-                path = abs_path
-            path = path.replace("\\", "/")
+            path = _gnuplot_rel_path(abs_path, self.plot_dir)
 
             is_y2 = getattr(curve, "axis", "y1") == "y2"
             axis = "x1y2" if is_y2 else "x1y1"
@@ -4958,8 +5044,12 @@ class GnuplotGenerator:
             # [추가 - 사용자 요청] "PIP 인셋 grid도 on/off 옵션" - 간단히
             # 표시(minimal)와 별개로, grid만 따로 끌 수 있게 한다(축
             # 프레임/tic 숫자는 이 옵션과 무관하게 그대로 유지).
+            # [수정 - 버그, 코드 검토로 발견] _grid_fracs를 grid_on 안에서만
+            # 정의해서, grid를 끄면 아래 tic 숫자 계산이 UnboundLocalError로
+            # 죽어 화면(Interactive) PIP가 아예 안 그려졌음 - tic 위치는 grid와
+            # 무관하게 항상 필요하므로 밖으로 뺀다.
+            _grid_fracs = (0.25, 0.5, 0.75)
             if grid_on:
-                _grid_fracs = (0.25, 0.5, 0.75)
                 _grid_segs = []
                 for _f in _grid_fracs:
                     _gx = ix_lo + _f * (ix_hi - ix_lo)
@@ -5131,11 +5221,7 @@ class GnuplotGenerator:
             src_ymin, src_ymax = (py2min, py2max) if is_y2 else (py1min, py1max)
             axis_spec = "x1y2" if is_y2 else "x1y1"
             abs_path = curve.dat_file if os.path.isabs(curve.dat_file) else os.path.abspath(curve.dat_file)
-            try:
-                rel_path = os.path.relpath(abs_path, start=plot_dir_) if plot_dir_ else abs_path
-            except ValueError:
-                rel_path = abs_path
-            rel_path = rel_path.replace("\\", "/")
+            rel_path = _gnuplot_rel_path(abs_path, plot_dir_)
             x_col_idx = curve.x_output_no if getattr(curve, "x_output_no", None) is not None else getattr(plotdef, "x_output_no", 0)
             x_expr = f"(${x_col_idx + 1}+{curve.x_shift})"
             y_expr = f"(${curve.output_no + 1})"
@@ -6672,6 +6758,60 @@ class GnuplotGenerator:
         # 두께(_border_lw0)에 font_scale을 곱한 값 하나로 rect/ellipse
         # 모두 통일한다(다른 요소들과 같은 관례).
         _deco_lw = _border_lw0 * font_scale
+
+        def _setup_fold_overlay(clip_shape, clip_rx, clip_ry, opaque_bg):
+            """[추가 - 요청 "중복성"] rect/타원 x 불투명/투명 네 분기에 거의 같은
+            30줄이 복사돼 있던 fold overlay 준비(self._pip_replay_mask_box/
+            _pip_fold_ranges/_pip_fold_active)를 한 곳으로 모음 - 분기마다 다른
+            건 클리핑 모양과 배경 채움(opaque_bg) 여부뿐이다.
+            - _box_bounds_outer에는 PIP 자신의 확대 구간(xrange_cmd 등)이 아니라
+              main의 실제 전체 range(_main_*range_line)를 써야 한다(박스가 축
+              프레임에서 차지하는 위치는 main range 기준 - 섞어 쓰면 박스가
+              엉뚱한 data 구간으로 계산돼 화면 밖으로 튀어나갔던 버그).
+            - self._pip_replay_mask_box는 투명이어도 반드시 채워야 한다 -
+              _build_pip_folded_overlay가 배경/테두리/커브를 어디에 그릴지 아는
+              유일한 통로라, 비어 있으면 투명 PIP가 통째로 안 보인다.
+            - marker_scale은 legend 마커 기호와 같은 공식(font_scale*0.75*
+              크기비율, 30% 하한), axis_w/h_in은 원/타원 반지름 물리보정에 쓰는
+              것과 같은 고정 캔버스(5.95x4.17in) 기준 - fold overlay는 화면
+              (interactive) 전용이라 이 근사로 충분하다."""
+            _rxr = _parse_range(xrange_cmd)
+            _ryr = _parse_range(yrange_cmd)
+            _ry2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
+            _main_xr = _parse_range(_main_xrange_line) if _main_xrange_line else None
+            _main_yr = _parse_range(_main_yrange_line) if _main_yrange_line else None
+            _main_y2r = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
+            if not (_rxr is not None and _ryr is not None and _rxr[1] != _rxr[0] and _ryr[1] != _ryr[0]
+                    and _ry2r is not None and _ry2r[1] != _ry2r[0]
+                    and _main_xr is not None and _main_xr[1] != _main_xr[0]
+                    and _main_yr is not None and _main_yr[1] != _main_yr[0]
+                    and (not _uses_y2 or (_main_y2r is not None and _main_y2r[1] != _main_y2r[0]))):
+                return
+            _mbx = _box_bounds_outer(_main_xr[0], _main_xr[1], True)
+            _mby1 = _box_bounds_outer(_main_yr[0], _main_yr[1], False)
+            _mby2 = _box_bounds_outer(_main_y2r[0], _main_y2r[1], False) if _uses_y2 else None
+            if _mbx is None or _mby1 is None:
+                return
+            self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
+            self._pip_fold_ranges = {
+                "x": _rxr, "y1": _ryr, "y2": _ry2r if _uses_y2 else None,
+                "clip_shape": clip_shape, "clip_rx": clip_rx, "clip_ry": clip_ry,
+                "minimal": bool(pip.get("minimal")),
+                "grid_on": bool(pip.get("grid_on", True)),
+                "size_factor": min(1.0, max(size_w, size_h)),
+                "font_scale": font_scale,
+                "marker_on": bool(pip.get("marker_on")),
+                "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
+                "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
+                "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
+                "opaque_bg": opaque_bg,
+                "margins": {
+                    "top": _inset_top_frac, "bottom": _inset_bottom_frac,
+                    "left": _inset_left_frac, "right": _inset_right_frac,
+                },
+            }
+            self._pip_fold_active = True
+
         if _rect_fully_opaque:
             # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - id 7100은
             # annotation(1번대)/Legend1(8000대)/Legend2(9000대)와 안 겹치도록
@@ -6716,65 +6856,7 @@ class GnuplotGenerator:
             # 범위를 계산할 수 없으므로(원/타원의 _ellipse_native_ok 조건과
             # 동일한 이유), 그 경우는 블랭킹만 적용하고 이 마스킹은 생략한다
             # (재생 시 다시 겹칠 위험은 남지만, 기존보다 나빠지진 않음).
-            _rxr = _parse_range(xrange_cmd)
-            _ryr = _parse_range(yrange_cmd)
-            _ry2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
-            # [수정 - 실사용 데이터로 재현된 버그] "PIP 박스가 화면 밖으로
-            # 튀어나감" - _box_bounds에 넘긴 dmin/dmax가 잘못됐었음: xrange_cmd/
-            # yrange_cmd/y2range_cmd는 "PIP 자신의" 확대 구간(예: [0:300])인데,
-            # 박스가 축 프레임에서 차지하는 위치(frac_lo/frac_hi)는 "메인의"
-            # 전체 range(예: [0:1051]) 기준으로 환산해야 함 - 서로 다른 두
-            # range를 섞어 써서 박스가 훨씬 좁은(또는 엉뚱한) data 구간으로
-            # 계산됐던 것. main의 실제 range는 위에서 이미 찾아둔
-            # _main_xrange_line/_main_yrange_line/_main_y2range_line에서 가져온다.
-            _main_xr = _parse_range(_main_xrange_line) if _main_xrange_line else None
-            _main_yr = _parse_range(_main_yrange_line) if _main_yrange_line else None
-            _main_y2r = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
-            if (_rxr is not None and _ryr is not None and _rxr[1] != _rxr[0] and _ryr[1] != _ryr[0]
-                    and _ry2r is not None and _ry2r[1] != _ry2r[0]
-                    and _main_xr is not None and _main_xr[1] != _main_xr[0]
-                    and _main_yr is not None and _main_yr[1] != _main_yr[0]
-                    and (not _uses_y2 or (_main_y2r is not None and _main_y2r[1] != _main_y2r[0]))):
-                _mbx = _box_bounds_outer(_main_xr[0], _main_xr[1], True)
-                _mby1 = _box_bounds_outer(_main_yr[0], _main_yr[1], False)
-                _mby2 = (
-                    _box_bounds_outer(_main_y2r[0], _main_y2r[1], False)
-                    if _uses_y2 else None
-                )
-                if _mbx is not None and _mby1 is not None:
-                    self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
-                    self._pip_fold_ranges = {
-                        "x": _rxr, "y1": _ryr, "y2": _ry2r if _uses_y2 else None,
-                        "clip_shape": "rect", "clip_rx": 50.0, "clip_ry": 50.0,
-                        "minimal": bool(pip.get("minimal")),
-                        "grid_on": bool(pip.get("grid_on", True)),
-                        "size_factor": min(1.0, max(size_w, size_h)),
-                        "font_scale": font_scale,
-                        # [추가 - 요청] "PIP 입력에 마커 on/off" - 켜져 있으면
-                        # curve에 marker_shape가 있는 것만 인셋 안에도 마커를
-                        # 같이 찍는다. marker_scale은 legend 마커 기호가 이미
-                        # 쓰는 것과 같은 공식(font_scale*0.75*크기비율, 30%
-                        # 하한 - "예전엔 인셋 마커 크기 하한치가 있었다"는
-                        # 사용자 지적 반영)을 그대로 재사용한다.
-                        "marker_on": bool(pip.get("marker_on")),
-                        "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
-                        # [추가 - 사용자 지적] "main legend에서 이미 다
-                        # 설계했던 건데 왜 여기선 안 되나" - legend box/마커
-                        # 폭을 문자수 근사가 아니라 main legend와 같은 실측
-                        # (_measure_text_width_in, PIL로 실제 렌더 폭을 inch
-                        # 단위로 잼)으로 구하려면 인셋의 실제 물리 폭(inch)이
-                        # 필요하다 - fold overlay는 fmt=="interactive"에서만
-                        # 쓰이므로 원/타원 반지름 물리보정에 이미 쓰는 것과
-                        # 같은 고정 캔버스 폭(5.95in)을 그대로 쓴다.
-                        "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
-                        "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
-                        "opaque_bg": True,
-                        "margins": {
-                            "top": _inset_top_frac, "bottom": _inset_bottom_frac,
-                            "left": _inset_left_frac, "right": _inset_right_frac,
-                        },
-                    }
-                    self._pip_fold_active = True
+            _setup_fold_overlay("rect", 50.0, 50.0, opaque_bg=True)
         elif _rect_no_bg:
             # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
             # 통일 필요(가는 외곽선은 다 있는 게 낫다)" - 배경(채우기)은
@@ -6797,40 +6879,7 @@ class GnuplotGenerator:
             # None이라 _build_pip_folded_overlay가 곧바로 빈 결과를 반환해
             # 투명 PIP가 통째로 안 보이는 회귀로 이어짐 - 실측 전에 코드
             # 리뷰로 미리 발견해 고침).
-            _rxr2 = _parse_range(xrange_cmd)
-            _ryr2 = _parse_range(yrange_cmd)
-            _ry2r2 = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
-            _main_xr2 = _parse_range(_main_xrange_line) if _main_xrange_line else None
-            _main_yr2 = _parse_range(_main_yrange_line) if _main_yrange_line else None
-            _main_y2r2 = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
-            if (_rxr2 is not None and _ryr2 is not None and _rxr2[1] != _rxr2[0] and _ryr2[1] != _ryr2[0]
-                    and _ry2r2 is not None and _ry2r2[1] != _ry2r2[0]
-                    and _main_xr2 is not None and _main_xr2[1] != _main_xr2[0]
-                    and _main_yr2 is not None and _main_yr2[1] != _main_yr2[0]
-                    and (not _uses_y2 or (_main_y2r2 is not None and _main_y2r2[1] != _main_y2r2[0]))):
-                _mbx2 = _box_bounds_outer(_main_xr2[0], _main_xr2[1], True)
-                _mby12 = _box_bounds_outer(_main_yr2[0], _main_yr2[1], False)
-                _mby22 = _box_bounds_outer(_main_y2r2[0], _main_y2r2[1], False) if _uses_y2 else None
-                if _mbx2 is not None and _mby12 is not None:
-                    self._pip_replay_mask_box = {"x": _mbx2, "y1": _mby12, "y2": _mby22}
-                    self._pip_fold_ranges = {
-                        "x": _rxr2, "y1": _ryr2, "y2": _ry2r2 if _uses_y2 else None,
-                        "clip_shape": "rect", "clip_rx": 50.0, "clip_ry": 50.0,
-                        "minimal": bool(pip.get("minimal")),
-                        "grid_on": bool(pip.get("grid_on", True)),
-                        "size_factor": min(1.0, max(size_w, size_h)),
-                        "font_scale": font_scale,
-                        "marker_on": bool(pip.get("marker_on")),
-                        "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
-                        "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
-                        "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
-                        "opaque_bg": False,
-                        "margins": {
-                            "top": _inset_top_frac, "bottom": _inset_bottom_frac,
-                            "left": _inset_left_frac, "right": _inset_right_frac,
-                        },
-                    }
-                    self._pip_fold_active = True
+            _setup_fold_overlay("rect", 50.0, 50.0, opaque_bg=False)
         elif _ellipse_fully_opaque or _ellipse_no_bg:
             _ecx = origin_x + size_w / 2.0
             _ecy = origin_y + size_h / 2.0
@@ -6883,84 +6932,12 @@ class GnuplotGenerator:
                 # range 기준 고정 data 범위를 계산해 재생 제외에는 이것만
                 # 쓴다(타원을 감싸는 사각형이라 모서리 쪽만 약간 더 넓게
                 # 제외 - 안전 우선으로 감수).
-                _erxr = _parse_range(xrange_cmd)
-                _eryr = _parse_range(yrange_cmd)
-                _ery2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
-                # [수정 - 근본원인, rect 쪽과 동일] _box_bounds에는 PIP 자신의
-                # 확대 구간(_erxr 등)이 아니라 main의 실제 전체 range를 써야
-                # 함 - 위 rect 분기의 같은 수정 배경 주석 참고.
-                _main_xr = _parse_range(_main_xrange_line) if _main_xrange_line else None
-                _main_yr = _parse_range(_main_yrange_line) if _main_yrange_line else None
-                _main_y2r = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
-                if (_erxr is not None and _eryr is not None and _erxr[1] != _erxr[0] and _eryr[1] != _eryr[0]
-                        and _ery2r is not None and _ery2r[1] != _ery2r[0]
-                        and _main_xr is not None and _main_xr[1] != _main_xr[0]
-                        and _main_yr is not None and _main_yr[1] != _main_yr[0]
-                        and (not _uses_y2 or (_main_y2r is not None and _main_y2r[1] != _main_y2r[0]))):
-                    _mbx = _box_bounds_outer(_main_xr[0], _main_xr[1], True)
-                    _mby1 = _box_bounds_outer(_main_yr[0], _main_yr[1], False)
-                    _mby2 = (
-                        _box_bounds_outer(_main_y2r[0], _main_y2r[1], False)
-                        if _uses_y2 else None
-                    )
-                    if _mbx is not None and _mby1 is not None:
-                        self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
-                        self._pip_fold_ranges = {
-                            "x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None,
-                            "clip_shape": _clip_shape, "clip_rx": _clip_rx, "clip_ry": _clip_ry,
-                            "minimal": bool(pip.get("minimal")),
-                            "grid_on": bool(pip.get("grid_on", True)),
-                            "size_factor": min(1.0, max(size_w, size_h)),
-                            "font_scale": font_scale,
-                            "marker_on": bool(pip.get("marker_on")),
-                            "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
-                            "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
-                            "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
-                            "opaque_bg": True,
-                            "margins": {
-                                "top": _inset_top_frac, "bottom": _inset_bottom_frac,
-                                "left": _inset_left_frac, "right": _inset_right_frac,
-                            },
-                        }
-                        self._pip_fold_active = True
+                _setup_fold_overlay(_clip_shape, _clip_rx, _clip_ry, opaque_bg=True)
             elif _ellipse_no_bg:
                 # [추가 - 사용자 요청] "투명 적용 먼저 하고" - rect_no_bg와
                 # 같은 이유(box 인자는 투명이어도 필수)로 self._pip_replay_
                 # mask_box도 같이 계산해 둔다 - 위 rect_no_bg 분기의 설명 참고.
-                _erxr = _parse_range(xrange_cmd)
-                _eryr = _parse_range(yrange_cmd)
-                _ery2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
-                _main_xr3 = _parse_range(_main_xrange_line) if _main_xrange_line else None
-                _main_yr3 = _parse_range(_main_yrange_line) if _main_yrange_line else None
-                _main_y2r3 = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
-                if (_erxr is not None and _eryr is not None and _erxr[1] != _erxr[0] and _eryr[1] != _eryr[0]
-                        and _ery2r is not None and _ery2r[1] != _ery2r[0]
-                        and _main_xr3 is not None and _main_xr3[1] != _main_xr3[0]
-                        and _main_yr3 is not None and _main_yr3[1] != _main_yr3[0]
-                        and (not _uses_y2 or (_main_y2r3 is not None and _main_y2r3[1] != _main_y2r3[0]))):
-                    _mbx3 = _box_bounds_outer(_main_xr3[0], _main_xr3[1], True)
-                    _mby13 = _box_bounds_outer(_main_yr3[0], _main_yr3[1], False)
-                    _mby23 = _box_bounds_outer(_main_y2r3[0], _main_y2r3[1], False) if _uses_y2 else None
-                    if _mbx3 is not None and _mby13 is not None:
-                        self._pip_replay_mask_box = {"x": _mbx3, "y1": _mby13, "y2": _mby23}
-                        self._pip_fold_ranges = {
-                            "x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None,
-                            "clip_shape": _clip_shape, "clip_rx": _clip_rx, "clip_ry": _clip_ry,
-                            "minimal": bool(pip.get("minimal")),
-                            "grid_on": bool(pip.get("grid_on", True)),
-                            "size_factor": min(1.0, max(size_w, size_h)),
-                            "font_scale": font_scale,
-                            "marker_on": bool(pip.get("marker_on")),
-                            "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
-                            "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
-                            "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
-                            "opaque_bg": False,
-                            "margins": {
-                                "top": _inset_top_frac, "bottom": _inset_bottom_frac,
-                                "left": _inset_left_frac, "right": _inset_right_frac,
-                            },
-                        }
-                        self._pip_fold_active = True
+                _setup_fold_overlay(_clip_shape, _clip_rx, _clip_ry, opaque_bg=False)
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
             # 있도록 항상 흰 배경만(테두리 없이) 깐다 - 최종 배경 불투명도/
@@ -7194,11 +7171,7 @@ class GnuplotGenerator:
                 if not getattr(_curve, "smooth_csplines", False):
                     continue
                 _abs_path = _curve.dat_file if os.path.isabs(_curve.dat_file) else os.path.abspath(_curve.dat_file)
-                try:
-                    _rel_path = os.path.relpath(_abs_path, start=self.plot_dir) if self.plot_dir else _abs_path
-                except ValueError:
-                    _rel_path = _abs_path
-                _rel_path = _rel_path.replace("\\", "/")
+                _rel_path = _gnuplot_rel_path(_abs_path, self.plot_dir)
                 _x_col_idx = _curve.x_output_no if getattr(_curve, "x_output_no", None) is not None else _default_x_col
                 _using_expr_for_match = f"(${_x_col_idx + 1}+{_curve.x_shift}):{_curve.output_no + 1}"
                 for _li, _ln in enumerate(_inset_cmd_list):
@@ -8270,12 +8243,8 @@ class GnuplotGenerator:
         if not want:
             return
         try:
-            if fmt_l == "emf":
-                with open(outfile, "rb") as f:
-                    found_text = self._extract_emf_texts(f.read())
-            else:  # svg
-                with open(outfile, "r", encoding="utf-8", errors="replace") as f:
-                    found_text = f.read()
+            with open(outfile, "rb") as f:
+                found_text = self._extract_emf_texts(f.read())
         except OSError:
             return
 
@@ -8965,35 +8934,13 @@ class GnuplotGenerator:
                     f.write("\n".join(self._pip_reset_fragment_lines))
             # [추가] gnuplot이 스크립트 에러로 죽을 때 실제 에러 메시지를 잡아서
             # 사용자에게 보여줄 수 있도록 stderr를 파이프로 캡처
-            self.last_process = subprocess.Popen(
-                [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
-                stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
-            )
+            self.last_process = _launch_gnuplot_persist(gnuplot_exe, script_path, plot_dir)
         else:
             # [수정] Batch/Save/Print는 결과 파일(pdf/png/emf 등)만 필요하고 스크립트
             # 자체는 안 남겨도 되는 임시 산출물이므로, 디스크에 .plt 파일을 쓰지 않고
             # gnuplot의 표준입력(stdin)으로 스크립트를 바로 넘겨서 디스크 I/O와
             # 매번 임시파일을 만들고 지우는 오버헤드를 줄인다.
-            result = subprocess.run(
-                [gnuplot_exe],
-                input=script_text, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
-            )
-            if result.returncode != 0:
-                # 실패했을 때만 디버깅할 수 있도록 스크립트를 임시 파일로 남겨둔다
-                debug_path = os.path.join(plot_dir, f".cathplot_failed_{uuid.uuid4().hex}.plt")
-                try:
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        f.write(script_text)
-                except OSError:
-                    debug_path = None
-                stderr_text = (result.stderr or "").strip()
-                msg = f"gnuplot 실행 실패 (반환 코드 {result.returncode})"
-                if stderr_text:
-                    msg += f":\n{stderr_text}"
-                if debug_path:
-                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
-                raise RuntimeError(msg)
+            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "gnuplot 실행 실패", debug_tag="")
 
             if fmt.lower() == "png":
                 _upscale_png_dpi(outfile)
@@ -9114,11 +9061,7 @@ class GnuplotGenerator:
                 if not getattr(_curve, "smooth_csplines", False):
                     continue
                 _abs_path = _curve.dat_file if os.path.isabs(_curve.dat_file) else os.path.abspath(_curve.dat_file)
-                try:
-                    _rel_path = os.path.relpath(_abs_path, start=self.plot_dir) if self.plot_dir else _abs_path
-                except ValueError:
-                    _rel_path = _abs_path
-                _rel_path = _rel_path.replace("\\", "/")
+                _rel_path = _gnuplot_rel_path(_abs_path, self.plot_dir)
                 _x_col_idx = _curve.x_output_no if getattr(_curve, "x_output_no", None) is not None else default_x_col
                 _using_expr_for_match = f"(${_x_col_idx + 1}+{_curve.x_shift}):{_curve.output_no + 1}"
                 _matched = False
@@ -9671,24 +9614,7 @@ class GnuplotGenerator:
         if is_gif:
             # 파일 산출물이라 Batch/Save와 동일하게 stdin으로 넘겨서 끝내고,
             # 실패 시에만 디버깅용으로 스크립트를 남긴다(create_script 패턴과 동일).
-            result = subprocess.run(
-                [gnuplot_exe], input=script_text, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
-            )
-            if result.returncode != 0:
-                debug_path = os.path.join(plot_dir, f".cathplot_failed_anim_{uuid.uuid4().hex}.plt")
-                try:
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        f.write(script_text)
-                except OSError:
-                    debug_path = None
-                stderr_text = (result.stderr or "").strip()
-                msg = f"애니메이션 GIF 생성 실패 (반환 코드 {result.returncode})"
-                if stderr_text:
-                    msg += f":\n{stderr_text}"
-                if debug_path:
-                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
-                raise RuntimeError(msg)
+            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "애니메이션 GIF 생성 실패", debug_tag="_anim")
             return gif_path
 
         script_path = outfile.rsplit(".", 1)[0] + ".plt"
@@ -9714,10 +9640,7 @@ class GnuplotGenerator:
         self.last_anim_ctrl_path = ctrl_path
         self.last_anim_status_path = status_path
         self.last_anim_frame_pause = frame_pause
-        self.last_process = subprocess.Popen(
-            [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
-            stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
-        )
+        self.last_process = _launch_gnuplot_persist(gnuplot_exe, script_path, plot_dir)
         # [수정 - 근본 원인 재설계, 위 참고] "space bar가 안 먹힘" - bind " "는
         # 이미 올바른 문법인데도 실측(키 입력 감지 카운터가 0에서 안 움직임)
         # 결과 gnuplot 창이 실제로 키보드 포커스를 못 받는 것으로 확인됨.
@@ -9966,11 +9889,7 @@ class GnuplotGenerator:
             parts = []
             for _c_idx, c in enumerate(curves_3d):
                 abs_path = c["dat_file"] if os.path.isabs(c["dat_file"]) else os.path.abspath(c["dat_file"])
-                try:
-                    path = os.path.relpath(abs_path, start=plot_dir)
-                except ValueError:
-                    path = abs_path
-                path = path.replace("\\", "/")
+                path = _gnuplot_rel_path(abs_path, plot_dir)
                 x_shift = c.get("x_shift", 0.0)
                 _raw_ref = f"${c['x_col']}"
                 _conds = []
@@ -9986,14 +9905,7 @@ class GnuplotGenerator:
                 using_expr = f"{x_expr}:{c['y_col']}:{c['z_col']}:{c['z_col']}"
 
                 _c_style = self._3D_STYLE_MAP.get(_resolve_style(c), "lines")
-                _pt_clause = ""
-                if _c_style in ("points", "linespoints"):
-                    marker_pt = c.get("marker_shape")
-                    marker_size = c.get("marker_size")
-                    if marker_pt is not None:
-                        _pt_clause += f" pt {_fmt_pointtype(marker_pt)}"
-                    if marker_size:
-                        _pt_clause += f" ps {marker_size}"
+                _pt_clause = _3d_marker_clause(_c_style, c)
                 _c_dash_clause = ""
                 if _c_style in ("lines", "linespoints"):
                     _c_dash_key = c.get("line_dash") or DEFAULT_LINESTYLES[_c_idx % len(DEFAULT_LINESTYLES)]
@@ -10010,14 +9922,9 @@ class GnuplotGenerator:
 
                 parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette{_c_dash_clause}')
 
-            _SURFACE_DASH_CYCLE = ["", "6, 3", "1, 2", "8, 3, 1, 3", "3, 2"]
             for _s_idx, s in enumerate(surfaces or []):
                 abs_path = s["dat_file"] if os.path.isabs(s["dat_file"]) else os.path.abspath(s["dat_file"])
-                try:
-                    path = os.path.relpath(abs_path, start=plot_dir)
-                except ValueError:
-                    path = abs_path
-                path = path.replace("\\", "/")
+                path = _gnuplot_rel_path(abs_path, plot_dir)
                 # [수정 - 사용자 요청] "3D 그림 이름을 legend에서 구별되게
                 # 수정 입력하게 해줘요" - curve(c.get("title"))와 동일하게
                 # surface도 "title"(사용자가 지정한 legend 이름)이 있으면
@@ -10040,21 +9947,8 @@ class GnuplotGenerator:
                     parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with pm3d')
                 else:
                     _s_style = self._3D_STYLE_MAP.get(_s_style_raw, "lines")
-                    _s_dash_key = s.get("line_dash") or ""
-                    if _s_dash_key:
-                        _s_dash_pat = _dash_pattern_for_fmt(_s_dash_key, "interactive")
-                        _s_dash_clause = f" dashtype ({_s_dash_pat})" if _s_dash_pat else ""
-                    else:
-                        _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
-                        _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
-                    _s_pt_clause = ""
-                    if _s_style in ("points", "linespoints"):
-                        _s_marker_pt = s.get("marker_shape")
-                        _s_marker_size = s.get("marker_size")
-                        if _s_marker_pt is not None:
-                            _s_pt_clause += f" pt {_fmt_pointtype(_s_marker_pt)}"
-                        if _s_marker_size:
-                            _s_pt_clause += f" ps {_s_marker_size}"
+                    _s_dash_clause = _3d_surface_dash_clause(s, _s_idx, "interactive")
+                    _s_pt_clause = _3d_marker_clause(_s_style, s)
                     parts.append(
                         f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}'
                     )
@@ -10076,15 +9970,9 @@ class GnuplotGenerator:
         if equal_xyz:
             lines.append("set view equal xyz")
 
-        def _range_clause(vmin, vmax):
-            has_min = vmin is not None and vmin != ""
-            has_max = vmax is not None and vmax != ""
-            if not has_min and not has_max:
-                return None
-            return f"[{vmin if has_min else '*'}:{vmax if has_max else '*'}]"
-        _yr = _range_clause(y_min, y_max)
+        _yr = _3d_range_clause(y_min, y_max)
         if _yr: lines.append(f"set yrange {_yr}")
-        _zr = _range_clause(z_min, z_max)
+        _zr = _3d_range_clause(z_min, z_max)
         if _zr: lines.append(f"set zrange {_zr}")
         lines.append("set ticslevel 0")
         if xlog: lines.append("set logscale x")
@@ -10241,24 +10129,7 @@ class GnuplotGenerator:
         gnuplot_exe = _resolve_gnuplot_exe()
 
         if is_gif:
-            result = subprocess.run(
-                [gnuplot_exe], input=script_text, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
-            )
-            if result.returncode != 0:
-                debug_path = os.path.join(plot_dir, f".cathplot_failed_3d_anim_{uuid.uuid4().hex}.plt")
-                try:
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        f.write(script_text)
-                except OSError:
-                    debug_path = None
-                stderr_text = (result.stderr or "").strip()
-                msg = f"3D 애니메이션 GIF 생성 실패 (반환 코드 {result.returncode})"
-                if stderr_text:
-                    msg += f":\n{stderr_text}"
-                if debug_path:
-                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
-                raise RuntimeError(msg)
+            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "3D 애니메이션 GIF 생성 실패", debug_tag="_3d_anim")
             return gif_path
 
         script_path = outfile.rsplit(".", 1)[0] + ".plt"
@@ -10273,10 +10144,7 @@ class GnuplotGenerator:
         self.last_anim_ctrl_path = ctrl_path
         self.last_anim_status_path = status_path
         self.last_anim_frame_pause = frame_pause
-        self.last_process = subprocess.Popen(
-            [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
-            stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
-        )
+        self.last_process = _launch_gnuplot_persist(gnuplot_exe, script_path, plot_dir)
         _force_focus_window_by_title(title_disp)
         return outfile
 
@@ -10327,14 +10195,7 @@ class GnuplotGenerator:
         # gnuplot이 함수를 직접 샘플링하는 "with points/linespoints pt N"에
         # 그대로 pt/ps를 붙인다(격자 전체 샘플 지점에 마커가 찍힘 - Max#
         # 제한 개념 자체가 없음, _collect_3d_state 주석 참고).
-        _fs_pt_clause = ""
-        if fs_style in ("points", "linespoints"):
-            _fs_marker_pt = fs.get("marker_shape")
-            _fs_marker_size = fs.get("marker_size")
-            if _fs_marker_pt is not None:
-                _fs_pt_clause += f" pt {_fmt_pointtype(_fs_marker_pt)}"
-            if _fs_marker_size:
-                _fs_pt_clause += f" ps {_fs_marker_size}"
+        _fs_pt_clause = _3d_marker_clause(fs_style, fs)
         # [추가 - 사용자 요청] "3D도 2D처럼 line style(점선 종류) 필요" - curve와
         # 동일하게 line_dash(STYLE_MAP 키)가 있으면 그 dashtype을 적용한다.
         _fs_dash_clause = ""
@@ -10419,15 +10280,9 @@ class GnuplotGenerator:
         # [추가] "마우스 스크롤에 따라 Y/Z 범위가 예측 못하게 바뀜 - 명시적
         # 입력칸으로" - 비우면 gnuplot 자동 범위 그대로, 값을 채우면 그 범위로
         # 고정. 2D의 Auto Range/Min/Max와 같은 개념.
-        def _range_clause(vmin, vmax):
-            has_min = vmin is not None and vmin != ""
-            has_max = vmax is not None and vmax != ""
-            if not has_min and not has_max:
-                return None
-            return f"[{vmin if has_min else '*'}:{vmax if has_max else '*'}]"
-        _yr = _range_clause(y_min, y_max)
+        _yr = _3d_range_clause(y_min, y_max)
         if _yr: lines.append(f"set yrange {_yr}")
-        _zr = _range_clause(z_min, z_max)
+        _zr = _3d_range_clause(z_min, z_max)
         if _zr: lines.append(f"set zrange {_zr}")
         # [추가] "z축이 x,y 평면보다 너무 위로 뜸" - gnuplot 기본 ticslevel(0.5)은
         # x,y 바닥면을 z축 최소값보다 z_range*0.5만큼 아래에 그려서 z축이
@@ -10829,11 +10684,7 @@ class GnuplotGenerator:
         marker_datablocks_3d = []
         for _c_idx, c in enumerate(curves_3d):
             abs_path = c["dat_file"] if os.path.isabs(c["dat_file"]) else os.path.abspath(c["dat_file"])
-            try:
-                path = os.path.relpath(abs_path, start=plot_dir)
-            except ValueError:
-                path = abs_path
-            path = path.replace("\\", "/")
+            path = _gnuplot_rel_path(abs_path, plot_dir)
             x_shift = c.get("x_shift", 0.0)
             # [수정 - 버그] x_shift가 0이면 괄호 없이 "$1"만 썼는데, gnuplot의
             # using 절에서 "$N"은 반드시 괄호로 감싼 수식 안에서만 유효함(단독
@@ -10855,14 +10706,7 @@ class GnuplotGenerator:
             _c_style = self._3D_STYLE_MAP.get(_resolve_style(c), "lines")
             # [추가] 세트별 Marker(pt)/크기(ps) - style이 points/linespoints일 때만
             # 의미 있음(lines면 점 모양이 안 보이므로 무시).
-            _pt_clause = ""
-            if _c_style in ("points", "linespoints"):
-                marker_pt = c.get("marker_shape")
-                marker_size = c.get("marker_size")
-                if marker_pt is not None:
-                    _pt_clause += f" pt {_fmt_pointtype(marker_pt)}"
-                if marker_size:
-                    _pt_clause += f" ps {marker_size}"
+            _pt_clause = _3d_marker_clause(_c_style, c)
 
             # [추가 - 사용자 요청] "3D도 2D처럼 line style(점선 종류) 필요" -
             # c["line_dash"](STYLE_MAP 키)를 2D와 동일한 dashtype으로 적용한다.
@@ -10922,19 +10766,9 @@ class GnuplotGenerator:
 
             splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette{_c_dash_clause}')
 
-        # [추가] "splot에 x-set 4개 넣으니 구분 안됨" - 여러 surface를 겹쳐 그리면
-        # 전부 palette(Z값)로만 색칠돼서, 서로 다른 surface(파일)라도 Z값이
-        # 비슷한 구간은 색이 같아 보여 구분이 안 됨. 색은 그대로 Z값 팔레트로
-        # 유지하되(어느 쪽이 요청/필요할 수도 있어 색 자체는 안 건드림), surface별로
-        # dashtype(선 패턴)을 다르게 줘서 최소한 선 자체는 겹쳐도 구분되게 한다.
-        _SURFACE_DASH_CYCLE = ["", "6, 3", "1, 2", "8, 3, 1, 3", "3, 2"]  # 첫 surface는 실선
         for _s_idx, s in enumerate(surfaces or []):
             abs_path = s["dat_file"] if os.path.isabs(s["dat_file"]) else os.path.abspath(s["dat_file"])
-            try:
-                path = os.path.relpath(abs_path, start=plot_dir)
-            except ValueError:
-                path = abs_path
-            path = path.replace("\\", "/")
+            path = _gnuplot_rel_path(abs_path, plot_dir)
             # [수정 - 사용자 요청] curve와 동일하게 surface도 사용자 지정
             # "title"이 있으면 우선 쓰고, 없으면 기존처럼 label을 그대로 씀.
             _s_title = (s.get("title") or s.get("label") or "").strip()
@@ -10964,21 +10798,8 @@ class GnuplotGenerator:
                 # Line Style에서 dash 종류를 직접 골랐으면(Auto가 아니면) 그것을
                 # 쓰고, Auto면 기존처럼 surface별 자동 순환(_SURFACE_DASH_CYCLE -
                 # 겹치는 surface 구분용)을 그대로 유지한다.
-                _s_dash_key = s.get("line_dash") or ""
-                if _s_dash_key:
-                    _s_dash_pat = _dash_pattern_for_fmt(_s_dash_key, fmt)
-                    _s_dash_clause = f" dashtype ({_s_dash_pat})" if _s_dash_pat else ""
-                else:
-                    _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
-                    _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
-                _s_pt_clause = ""
-                if _s_style in ("points", "linespoints"):
-                    _s_marker_pt = s.get("marker_shape")
-                    _s_marker_size = s.get("marker_size")
-                    if _s_marker_pt is not None:
-                        _s_pt_clause += f" pt {_fmt_pointtype(_s_marker_pt)}"
-                    if _s_marker_size:
-                        _s_pt_clause += f" ps {_s_marker_size}"
+                _s_dash_clause = _3d_surface_dash_clause(s, _s_idx, fmt)
+                _s_pt_clause = _3d_marker_clause(_s_style, s)
 
                 # [추가 - 사용자 요청] "3D Marker 개수도 2D처럼 최대개수를 정해요" -
                 # curve와 동일하게(단, pm3d는 격자 전체가 있어야 면이 끊기지 않아
@@ -11056,30 +10877,9 @@ class GnuplotGenerator:
             script_path = outfile.rsplit(".", 1)[0] + ".plt"
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(script_text)
-            self.last_process = subprocess.Popen(
-                [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
-                stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
-            )
+            self.last_process = _launch_gnuplot_persist(gnuplot_exe, script_path, plot_dir)
         else:
-            result = subprocess.run(
-                [gnuplot_exe],
-                input=script_text, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
-            )
-            if result.returncode != 0:
-                debug_path = os.path.join(plot_dir, f".cathplot_failed_3d_{uuid.uuid4().hex}.plt")
-                try:
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        f.write(script_text)
-                except OSError:
-                    debug_path = None
-                stderr_text = (result.stderr or "").strip()
-                msg = f"gnuplot 실행 실패 (반환 코드 {result.returncode})"
-                if stderr_text:
-                    msg += f":\n{stderr_text}"
-                if debug_path:
-                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
-                raise RuntimeError(msg)
+            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "gnuplot 실행 실패", debug_tag="_3d")
 
         return outfile
 
@@ -12658,25 +12458,7 @@ class GnuplotGenerator:
                 raise RuntimeError(f"gnuplot 실행 실패 (스크립트 보존됨: {script_path})\n{result.stderr.strip()}")
         else:
             # Batch/Print(임시 산출물): 디스크에 스크립트 파일을 쓰지 않고 stdin으로 바로 전달
-            result = subprocess.run(
-                [gnuplot_exe],
-                input=script_text, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
-            )
-            if result.returncode != 0:
-                debug_path = os.path.join(plot_dir, f".cathplot_failed_{uuid.uuid4().hex}.plt")
-                try:
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        f.write(script_text)
-                except OSError:
-                    debug_path = None
-                msg = f"gnuplot 실행 실패 (반환 코드 {result.returncode})"
-                stderr_text = (result.stderr or "").strip()
-                if stderr_text:
-                    msg += f":\n{stderr_text}"
-                if debug_path:
-                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
-                raise RuntimeError(msg)
+            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "gnuplot 실행 실패", debug_tag="")
 
         if fmt.lower() == "png":
             _upscale_png_dpi(outfile)
