@@ -5041,8 +5041,12 @@ class GnuplotGenerator:
             # [추가 - 사용자 요청] "PIP 인셋 grid도 on/off 옵션" - 간단히
             # 표시(minimal)와 별개로, grid만 따로 끌 수 있게 한다(축
             # 프레임/tic 숫자는 이 옵션과 무관하게 그대로 유지).
+            # [수정 - 버그, 코드 검토로 발견] _grid_fracs를 grid_on 안에서만
+            # 정의해서, grid를 끄면 아래 tic 숫자 계산이 UnboundLocalError로
+            # 죽어 화면(Interactive) PIP가 아예 안 그려졌음 - tic 위치는 grid와
+            # 무관하게 항상 필요하므로 밖으로 뺀다.
+            _grid_fracs = (0.25, 0.5, 0.75)
             if grid_on:
-                _grid_fracs = (0.25, 0.5, 0.75)
                 _grid_segs = []
                 for _f in _grid_fracs:
                     _gx = ix_lo + _f * (ix_hi - ix_lo)
@@ -6755,6 +6759,60 @@ class GnuplotGenerator:
         # 두께(_border_lw0)에 font_scale을 곱한 값 하나로 rect/ellipse
         # 모두 통일한다(다른 요소들과 같은 관례).
         _deco_lw = _border_lw0 * font_scale
+
+        def _setup_fold_overlay(clip_shape, clip_rx, clip_ry, opaque_bg):
+            """[추가 - 요청 "중복성"] rect/타원 x 불투명/투명 네 분기에 거의 같은
+            30줄이 복사돼 있던 fold overlay 준비(self._pip_replay_mask_box/
+            _pip_fold_ranges/_pip_fold_active)를 한 곳으로 모음 - 분기마다 다른
+            건 클리핑 모양과 배경 채움(opaque_bg) 여부뿐이다.
+            - _box_bounds_outer에는 PIP 자신의 확대 구간(xrange_cmd 등)이 아니라
+              main의 실제 전체 range(_main_*range_line)를 써야 한다(박스가 축
+              프레임에서 차지하는 위치는 main range 기준 - 섞어 쓰면 박스가
+              엉뚱한 data 구간으로 계산돼 화면 밖으로 튀어나갔던 버그).
+            - self._pip_replay_mask_box는 투명이어도 반드시 채워야 한다 -
+              _build_pip_folded_overlay가 배경/테두리/커브를 어디에 그릴지 아는
+              유일한 통로라, 비어 있으면 투명 PIP가 통째로 안 보인다.
+            - marker_scale은 legend 마커 기호와 같은 공식(font_scale*0.75*
+              크기비율, 30% 하한), axis_w/h_in은 원/타원 반지름 물리보정에 쓰는
+              것과 같은 고정 캔버스(5.95x4.17in) 기준 - fold overlay는 화면
+              (interactive) 전용이라 이 근사로 충분하다."""
+            _rxr = _parse_range(xrange_cmd)
+            _ryr = _parse_range(yrange_cmd)
+            _ry2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
+            _main_xr = _parse_range(_main_xrange_line) if _main_xrange_line else None
+            _main_yr = _parse_range(_main_yrange_line) if _main_yrange_line else None
+            _main_y2r = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
+            if not (_rxr is not None and _ryr is not None and _rxr[1] != _rxr[0] and _ryr[1] != _ryr[0]
+                    and _ry2r is not None and _ry2r[1] != _ry2r[0]
+                    and _main_xr is not None and _main_xr[1] != _main_xr[0]
+                    and _main_yr is not None and _main_yr[1] != _main_yr[0]
+                    and (not _uses_y2 or (_main_y2r is not None and _main_y2r[1] != _main_y2r[0]))):
+                return
+            _mbx = _box_bounds_outer(_main_xr[0], _main_xr[1], True)
+            _mby1 = _box_bounds_outer(_main_yr[0], _main_yr[1], False)
+            _mby2 = _box_bounds_outer(_main_y2r[0], _main_y2r[1], False) if _uses_y2 else None
+            if _mbx is None or _mby1 is None:
+                return
+            self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
+            self._pip_fold_ranges = {
+                "x": _rxr, "y1": _ryr, "y2": _ry2r if _uses_y2 else None,
+                "clip_shape": clip_shape, "clip_rx": clip_rx, "clip_ry": clip_ry,
+                "minimal": bool(pip.get("minimal")),
+                "grid_on": bool(pip.get("grid_on", True)),
+                "size_factor": min(1.0, max(size_w, size_h)),
+                "font_scale": font_scale,
+                "marker_on": bool(pip.get("marker_on")),
+                "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
+                "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
+                "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
+                "opaque_bg": opaque_bg,
+                "margins": {
+                    "top": _inset_top_frac, "bottom": _inset_bottom_frac,
+                    "left": _inset_left_frac, "right": _inset_right_frac,
+                },
+            }
+            self._pip_fold_active = True
+
         if _rect_fully_opaque:
             # inset 영역 전체를 흰 배경으로 깔아 메인 plot을 가림 - id 7100은
             # annotation(1번대)/Legend1(8000대)/Legend2(9000대)와 안 겹치도록
@@ -6799,65 +6857,7 @@ class GnuplotGenerator:
             # 범위를 계산할 수 없으므로(원/타원의 _ellipse_native_ok 조건과
             # 동일한 이유), 그 경우는 블랭킹만 적용하고 이 마스킹은 생략한다
             # (재생 시 다시 겹칠 위험은 남지만, 기존보다 나빠지진 않음).
-            _rxr = _parse_range(xrange_cmd)
-            _ryr = _parse_range(yrange_cmd)
-            _ry2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
-            # [수정 - 실사용 데이터로 재현된 버그] "PIP 박스가 화면 밖으로
-            # 튀어나감" - _box_bounds에 넘긴 dmin/dmax가 잘못됐었음: xrange_cmd/
-            # yrange_cmd/y2range_cmd는 "PIP 자신의" 확대 구간(예: [0:300])인데,
-            # 박스가 축 프레임에서 차지하는 위치(frac_lo/frac_hi)는 "메인의"
-            # 전체 range(예: [0:1051]) 기준으로 환산해야 함 - 서로 다른 두
-            # range를 섞어 써서 박스가 훨씬 좁은(또는 엉뚱한) data 구간으로
-            # 계산됐던 것. main의 실제 range는 위에서 이미 찾아둔
-            # _main_xrange_line/_main_yrange_line/_main_y2range_line에서 가져온다.
-            _main_xr = _parse_range(_main_xrange_line) if _main_xrange_line else None
-            _main_yr = _parse_range(_main_yrange_line) if _main_yrange_line else None
-            _main_y2r = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
-            if (_rxr is not None and _ryr is not None and _rxr[1] != _rxr[0] and _ryr[1] != _ryr[0]
-                    and _ry2r is not None and _ry2r[1] != _ry2r[0]
-                    and _main_xr is not None and _main_xr[1] != _main_xr[0]
-                    and _main_yr is not None and _main_yr[1] != _main_yr[0]
-                    and (not _uses_y2 or (_main_y2r is not None and _main_y2r[1] != _main_y2r[0]))):
-                _mbx = _box_bounds_outer(_main_xr[0], _main_xr[1], True)
-                _mby1 = _box_bounds_outer(_main_yr[0], _main_yr[1], False)
-                _mby2 = (
-                    _box_bounds_outer(_main_y2r[0], _main_y2r[1], False)
-                    if _uses_y2 else None
-                )
-                if _mbx is not None and _mby1 is not None:
-                    self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
-                    self._pip_fold_ranges = {
-                        "x": _rxr, "y1": _ryr, "y2": _ry2r if _uses_y2 else None,
-                        "clip_shape": "rect", "clip_rx": 50.0, "clip_ry": 50.0,
-                        "minimal": bool(pip.get("minimal")),
-                        "grid_on": bool(pip.get("grid_on", True)),
-                        "size_factor": min(1.0, max(size_w, size_h)),
-                        "font_scale": font_scale,
-                        # [추가 - 요청] "PIP 입력에 마커 on/off" - 켜져 있으면
-                        # curve에 marker_shape가 있는 것만 인셋 안에도 마커를
-                        # 같이 찍는다. marker_scale은 legend 마커 기호가 이미
-                        # 쓰는 것과 같은 공식(font_scale*0.75*크기비율, 30%
-                        # 하한 - "예전엔 인셋 마커 크기 하한치가 있었다"는
-                        # 사용자 지적 반영)을 그대로 재사용한다.
-                        "marker_on": bool(pip.get("marker_on")),
-                        "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
-                        # [추가 - 사용자 지적] "main legend에서 이미 다
-                        # 설계했던 건데 왜 여기선 안 되나" - legend box/마커
-                        # 폭을 문자수 근사가 아니라 main legend와 같은 실측
-                        # (_measure_text_width_in, PIL로 실제 렌더 폭을 inch
-                        # 단위로 잼)으로 구하려면 인셋의 실제 물리 폭(inch)이
-                        # 필요하다 - fold overlay는 fmt=="interactive"에서만
-                        # 쓰이므로 원/타원 반지름 물리보정에 이미 쓰는 것과
-                        # 같은 고정 캔버스 폭(5.95in)을 그대로 쓴다.
-                        "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
-                        "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
-                        "opaque_bg": True,
-                        "margins": {
-                            "top": _inset_top_frac, "bottom": _inset_bottom_frac,
-                            "left": _inset_left_frac, "right": _inset_right_frac,
-                        },
-                    }
-                    self._pip_fold_active = True
+            _setup_fold_overlay("rect", 50.0, 50.0, opaque_bg=True)
         elif _rect_no_bg:
             # [수정 - 요청] "투명일 때 rect는 외곽선이 없는데 원/타원은 있음 -
             # 통일 필요(가는 외곽선은 다 있는 게 낫다)" - 배경(채우기)은
@@ -6880,40 +6880,7 @@ class GnuplotGenerator:
             # None이라 _build_pip_folded_overlay가 곧바로 빈 결과를 반환해
             # 투명 PIP가 통째로 안 보이는 회귀로 이어짐 - 실측 전에 코드
             # 리뷰로 미리 발견해 고침).
-            _rxr2 = _parse_range(xrange_cmd)
-            _ryr2 = _parse_range(yrange_cmd)
-            _ry2r2 = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
-            _main_xr2 = _parse_range(_main_xrange_line) if _main_xrange_line else None
-            _main_yr2 = _parse_range(_main_yrange_line) if _main_yrange_line else None
-            _main_y2r2 = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
-            if (_rxr2 is not None and _ryr2 is not None and _rxr2[1] != _rxr2[0] and _ryr2[1] != _ryr2[0]
-                    and _ry2r2 is not None and _ry2r2[1] != _ry2r2[0]
-                    and _main_xr2 is not None and _main_xr2[1] != _main_xr2[0]
-                    and _main_yr2 is not None and _main_yr2[1] != _main_yr2[0]
-                    and (not _uses_y2 or (_main_y2r2 is not None and _main_y2r2[1] != _main_y2r2[0]))):
-                _mbx2 = _box_bounds_outer(_main_xr2[0], _main_xr2[1], True)
-                _mby12 = _box_bounds_outer(_main_yr2[0], _main_yr2[1], False)
-                _mby22 = _box_bounds_outer(_main_y2r2[0], _main_y2r2[1], False) if _uses_y2 else None
-                if _mbx2 is not None and _mby12 is not None:
-                    self._pip_replay_mask_box = {"x": _mbx2, "y1": _mby12, "y2": _mby22}
-                    self._pip_fold_ranges = {
-                        "x": _rxr2, "y1": _ryr2, "y2": _ry2r2 if _uses_y2 else None,
-                        "clip_shape": "rect", "clip_rx": 50.0, "clip_ry": 50.0,
-                        "minimal": bool(pip.get("minimal")),
-                        "grid_on": bool(pip.get("grid_on", True)),
-                        "size_factor": min(1.0, max(size_w, size_h)),
-                        "font_scale": font_scale,
-                        "marker_on": bool(pip.get("marker_on")),
-                        "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
-                        "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
-                        "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
-                        "opaque_bg": False,
-                        "margins": {
-                            "top": _inset_top_frac, "bottom": _inset_bottom_frac,
-                            "left": _inset_left_frac, "right": _inset_right_frac,
-                        },
-                    }
-                    self._pip_fold_active = True
+            _setup_fold_overlay("rect", 50.0, 50.0, opaque_bg=False)
         elif _ellipse_fully_opaque or _ellipse_no_bg:
             _ecx = origin_x + size_w / 2.0
             _ecy = origin_y + size_h / 2.0
@@ -6966,84 +6933,12 @@ class GnuplotGenerator:
                 # range 기준 고정 data 범위를 계산해 재생 제외에는 이것만
                 # 쓴다(타원을 감싸는 사각형이라 모서리 쪽만 약간 더 넓게
                 # 제외 - 안전 우선으로 감수).
-                _erxr = _parse_range(xrange_cmd)
-                _eryr = _parse_range(yrange_cmd)
-                _ery2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
-                # [수정 - 근본원인, rect 쪽과 동일] _box_bounds에는 PIP 자신의
-                # 확대 구간(_erxr 등)이 아니라 main의 실제 전체 range를 써야
-                # 함 - 위 rect 분기의 같은 수정 배경 주석 참고.
-                _main_xr = _parse_range(_main_xrange_line) if _main_xrange_line else None
-                _main_yr = _parse_range(_main_yrange_line) if _main_yrange_line else None
-                _main_y2r = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
-                if (_erxr is not None and _eryr is not None and _erxr[1] != _erxr[0] and _eryr[1] != _eryr[0]
-                        and _ery2r is not None and _ery2r[1] != _ery2r[0]
-                        and _main_xr is not None and _main_xr[1] != _main_xr[0]
-                        and _main_yr is not None and _main_yr[1] != _main_yr[0]
-                        and (not _uses_y2 or (_main_y2r is not None and _main_y2r[1] != _main_y2r[0]))):
-                    _mbx = _box_bounds_outer(_main_xr[0], _main_xr[1], True)
-                    _mby1 = _box_bounds_outer(_main_yr[0], _main_yr[1], False)
-                    _mby2 = (
-                        _box_bounds_outer(_main_y2r[0], _main_y2r[1], False)
-                        if _uses_y2 else None
-                    )
-                    if _mbx is not None and _mby1 is not None:
-                        self._pip_replay_mask_box = {"x": _mbx, "y1": _mby1, "y2": _mby2}
-                        self._pip_fold_ranges = {
-                            "x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None,
-                            "clip_shape": _clip_shape, "clip_rx": _clip_rx, "clip_ry": _clip_ry,
-                            "minimal": bool(pip.get("minimal")),
-                            "grid_on": bool(pip.get("grid_on", True)),
-                            "size_factor": min(1.0, max(size_w, size_h)),
-                            "font_scale": font_scale,
-                            "marker_on": bool(pip.get("marker_on")),
-                            "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
-                            "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
-                            "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
-                            "opaque_bg": True,
-                            "margins": {
-                                "top": _inset_top_frac, "bottom": _inset_bottom_frac,
-                                "left": _inset_left_frac, "right": _inset_right_frac,
-                            },
-                        }
-                        self._pip_fold_active = True
+                _setup_fold_overlay(_clip_shape, _clip_rx, _clip_ry, opaque_bg=True)
             elif _ellipse_no_bg:
                 # [추가 - 사용자 요청] "투명 적용 먼저 하고" - rect_no_bg와
                 # 같은 이유(box 인자는 투명이어도 필수)로 self._pip_replay_
                 # mask_box도 같이 계산해 둔다 - 위 rect_no_bg 분기의 설명 참고.
-                _erxr = _parse_range(xrange_cmd)
-                _eryr = _parse_range(yrange_cmd)
-                _ery2r = _parse_range(y2range_cmd) if _uses_y2 else (0, 1)
-                _main_xr3 = _parse_range(_main_xrange_line) if _main_xrange_line else None
-                _main_yr3 = _parse_range(_main_yrange_line) if _main_yrange_line else None
-                _main_y2r3 = _parse_range(_main_y2range_line) if (_uses_y2 and _main_y2range_line) else None
-                if (_erxr is not None and _eryr is not None and _erxr[1] != _erxr[0] and _eryr[1] != _eryr[0]
-                        and _ery2r is not None and _ery2r[1] != _ery2r[0]
-                        and _main_xr3 is not None and _main_xr3[1] != _main_xr3[0]
-                        and _main_yr3 is not None and _main_yr3[1] != _main_yr3[0]
-                        and (not _uses_y2 or (_main_y2r3 is not None and _main_y2r3[1] != _main_y2r3[0]))):
-                    _mbx3 = _box_bounds_outer(_main_xr3[0], _main_xr3[1], True)
-                    _mby13 = _box_bounds_outer(_main_yr3[0], _main_yr3[1], False)
-                    _mby23 = _box_bounds_outer(_main_y2r3[0], _main_y2r3[1], False) if _uses_y2 else None
-                    if _mbx3 is not None and _mby13 is not None:
-                        self._pip_replay_mask_box = {"x": _mbx3, "y1": _mby13, "y2": _mby23}
-                        self._pip_fold_ranges = {
-                            "x": _erxr, "y1": _eryr, "y2": _ery2r if _uses_y2 else None,
-                            "clip_shape": _clip_shape, "clip_rx": _clip_rx, "clip_ry": _clip_ry,
-                            "minimal": bool(pip.get("minimal")),
-                            "grid_on": bool(pip.get("grid_on", True)),
-                            "size_factor": min(1.0, max(size_w, size_h)),
-                            "font_scale": font_scale,
-                            "marker_on": bool(pip.get("marker_on")),
-                            "marker_scale": max(font_scale * 0.75 * min(1.0, max(size_w, size_h)), 0.3),
-                            "axis_w_in": (_inset_rmargin - _inset_lmargin) * 5.95,
-                            "axis_h_in": (_inset_tmargin - _inset_bmargin) * 4.17,
-                            "opaque_bg": False,
-                            "margins": {
-                                "top": _inset_top_frac, "bottom": _inset_bottom_frac,
-                                "left": _inset_left_frac, "right": _inset_right_frac,
-                            },
-                        }
-                        self._pip_fold_active = True
+                _setup_fold_overlay(_clip_shape, _clip_rx, _clip_ry, opaque_bg=False)
         else:
             # 후처리(_apply_pip_clip)가 잉크를 흰 배경과 구분해 추출할 수
             # 있도록 항상 흰 배경만(테두리 없이) 깐다 - 최종 배경 불투명도/
