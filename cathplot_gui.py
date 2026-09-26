@@ -2645,18 +2645,43 @@ class CathPlotGUI:
             # [수정 - 사용자 보고 버그] "Template 저장 기본 이름이 화면에 방금
             # 그린 plot 번호랑 안 맞음" - title_counters는 PLOT/SAVE/PRINT를
             # 실제로 실행할 때마다 증가해서 그 결과 파일이 "{이름}_{그 시점
-            # 번호}"로 저장되는데(예: 방금 그린 plot이 CathPlot_3), 여기서는
+            # 번호}"로 저장되는데(예: 방금 그린 plot이 CathPlot_3), 예전엔
             # 그 값에 무조건 +1을 해서 기본 이름을 "CathPlot_4"처럼 한 번호
-            # 앞서 제안하고 있었음 - 방금 그린 그 plot과 짝을 맞추려는 사용자
-            # 입장에서는 어긋나 보였음. 이미 한 번이라도 그려진 적이 있으면
-            # (counter>0) 그 "현재" 번호를 그대로 써서 방금 그려진 plot과
-            # 이름이 맞게 하고, 아직 한 번도 안 그려졌으면(counter=0) 다음에
-            # 그려질 번호를 그대로 예상해서 보여준다(기존 동작 유지).
+            # 앞서 제안했었음 - 방금 그린 그 plot과 짝을 맞추려는 사용자
+            # 입장에서는 어긋나 보여서, "이미 그려진 적이 있으면 그 현재
+            # 번호를 그대로 쓴다"로 한 번 고쳤었다.
+            # [재수정 - 사용자 지적] "plot창이 있고 그 뒤에 화면을 수정했거나
+            # template을 load한 경우, 현재 화면으로 저장하면 (이미 내용이
+            # 달라졌는데도) 마지막 plot창과 같은 이름으로 나옴 - 하나 더
+            # 해져야" - 맞는 지적. "번호가 같다"고 "내용도 같다"는 보장이
+            # 없었음(PLOT 이후 화면을 바꾸면 번호는 그대로인데 내용은
+            # 달라짐). 그 번호로 실제로 그려졌던 스냅샷(active_plot_templates)
+            # 과 지금 화면의 _template_dict()가 완전히 같을 때만("그 plot
+            # 그대로") 번호를 그대로 쓰고, 조금이라도 다르면(수정했거나
+            # 아직 한 번도 안 그려졌으면) 다음 번호를 쓴다.
             raw_title = self.filename_var.get().strip() or "CathPlot"
             safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
             _current_id = self.title_counters.get(safe_title, 0)
-            default_name = f"{safe_title}_{_current_id}" if _current_id > 0 else f"{safe_title}_1"
-            template_data = None  # 아래에서 저장 직전에 self._template_dict()로 채움
+            template_data = self._template_dict()
+            _last_plotted_key = f"{safe_title}_{_current_id}" if _current_id > 0 else None
+            _matches_last_plot = (
+                _last_plotted_key is not None
+                and self.active_plot_templates.get(_last_plotted_key) == template_data
+            )
+            default_name = _last_plotted_key if _matches_last_plot else f"{safe_title}_{_current_id + 1}"
+
+        # [수정 - 사용자 보고 버그] "먼저 그렸던 plot 이름으로 template을
+        # 저장한 뒤, 다시 Template Save를 열어 같은 걸 또 고르면 기본
+        # 이름이 또 똑같이 나와서 방금 저장한 파일을 덮어쓸 위험이 있음" -
+        # "현재 화면"이든 이전 plot 선택이든 상관없이, 그 이름으로 이미
+        # 저장된 template 파일이 있으면 "_2", "_3"...을 붙여 겹치지 않는
+        # 이름이 나올 때까지 올린다(실제 plot 출력 파일명이 겹칠 때 쓰는
+        # 방식과 동일한 원리). 겹치는 이름이 없으면 기존처럼 그대로 둔다.
+        if os.path.exists(os.path.join(template_dir, f"{default_name}.json")):
+            _n = 2
+            while os.path.exists(os.path.join(template_dir, f"{default_name}_{_n}.json")):
+                _n += 1
+            default_name = f"{default_name}_{_n}"
 
         filepath = filedialog.asksaveasfilename(
             defaultextension=".json",
