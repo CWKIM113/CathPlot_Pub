@@ -3420,12 +3420,24 @@ class CathPlotGUI:
         # [추가 - 사용자 요청] Shape=Auto인 curve들을 이제서야 확정된 최종
         # 순서대로 다시 순번을 매겨 재계산한다(위 구성 루프의 _needs_auto
         # 표시 참고 - 그 시점엔 이 정렬이 아직 안 끝나 순서를 몰랐음).
-        _auto_rank = 0
-        for _key, _curve, _needs_auto in curves:
-            if _needs_auto:
-                _curve.marker_shape, _ = self._resolve_marker_shape(
-                    "Auto", False, True, _auto_rank, excluded_shapes=_excluded_shapes_2d)
-                _auto_rank += 1
+        # [수정 - 사용자 보고 버그 + 사용자 요청, 화면(Interactive) 렌더링과
+        # 동일한 이유] "Legend1은 open, Legend2는 fill로 각각 circle부터
+        # (Y1/Y2 구분에도 유용, 선정된 curve들만)" - 실제 그리기 순서
+        # (z-order)/legend 기본 순서는 그대로 curve_order(클릭 순서)를
+        # 유지하되, Auto 배정은 curve.legend_group 기준으로 Legend1
+        # 그룹(!=2)과 Legend2 그룹(==2)으로 나눠 각 그룹 안에서
+        # curve_order 상대 순서를 유지한 채 auto_rank를 0부터 따로
+        # 매기고 fill_on도 그룹별로 강제한다 - execute_plot_pipeline
+        # (화면)과 동일한 원칙.
+        _group1 = [(_k, _c, _n) for _k, _c, _n in curves if getattr(_c, "legend_group", 1) != 2]
+        _group2 = [(_k, _c, _n) for _k, _c, _n in curves if getattr(_c, "legend_group", 1) == 2]
+        for _grp, _force_fill in ((_group1, False), (_group2, True)):
+            _rank = 0
+            for _key, _curve, _needs_auto in _grp:
+                if _needs_auto:
+                    _curve.marker_shape, _ = self._resolve_marker_shape(
+                        "Auto", _force_fill, True, _rank, excluded_shapes=_excluded_shapes_2d)
+                    _rank += 1
         curves = [c for _key, c, _needs_auto in curves]
 
         head_label_map = {"nohead": "No head", "head": "Forward", "backhead": "Backhead", "heads": "Both heads"}
@@ -6247,7 +6259,14 @@ class CathPlotGUI:
             if key not in self.marker_maxcount_vars:
                 self.marker_maxcount_vars[key] = tk.StringVar(value="")
             if key not in self.marker_fill_vars:
-                self.marker_fill_vars[key] = tk.BooleanVar(value=False)
+                # [수정 - 사용자 요청] "Legend2 Curve Feature에서 Fill은 기본
+                # 체크로" - Auto Shape가 이제 Legend2 소속 curve는 항상 fill로
+                # 그리므로(_resolve_marker_shape 참고), 이 팝업에 처음 뜰 때도
+                # Legend2 소속이면 Fill 체크박스 기본값을 True로 맞춰 실제
+                # 렌더링과 화면 표시가 어긋나 보이지 않게 한다(Legend1 소속은
+                # 기존과 동일하게 기본 False/open).
+                _default_fill = bool(self.legend_group_vars.get(key) and self.legend_group_vars[key].get() == "2")
+                self.marker_fill_vars[key] = tk.BooleanVar(value=_default_fill)
             # [추가 - 사용자 요청] Dat list에서 옮겨온 Color/Style - 보통
             # show_variables()가 먼저 이 key를 lazy-init해두지만, 방어적으로
             # 여기서도 동일하게 없으면 만든다(Marker 쪽 변수들과 같은 패턴).
@@ -6770,10 +6789,6 @@ class CathPlotGUI:
             _orig_rel = abs_path
 
         curves = []
-        # [추가 - 사용자 요청] Shape=Auto용 순번 카운터 - recipe 순서가 곧
-        # 이 그림의 최종 curve 순서라 별도 재정렬이 없으므로(Template Load와
-        # 달리) 이 루프 안에서 바로 매겨도 된다.
-        _marker_auto_rank = 0
         # [추가 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을 건너뛰고
         # 순차적으로" - recipe 전체에서 marker_on=True이고 직접 특정 모양을
         # 고른 항목들의 라벨을 모아 Auto 배정에서 제외.
@@ -6781,16 +6796,34 @@ class CathPlotGUI:
             item.get("marker_shape_label", "Auto") for item in recipe
             if self._infer_marker_on(item) and item.get("marker_shape_label", "Auto") != "Auto"
         }
-        for item in recipe:
+        # [수정 - 사용자 보고 버그 + 사용자 요청, 화면(Interactive) 렌더링과
+        # 동일한 이유] "Legend1은 open, Legend2는 fill로 각각 circle부터
+        # (Y1/Y2 구분에도 유용, 선정된 curve들만)" - 실제 curve 목록/그리기
+        # 순서는 recipe 순서를 그대로 유지하되, Auto 배정은 legend_group
+        # 기준으로 Legend1 그룹(!=2)과 Legend2 그룹(==2)으로 나눠 각 그룹
+        # 안에서는 recipe 상대 순서를 유지한 채 auto_rank를 0부터 따로
+        # 매기고 fill_on도 그룹별로 강제한다(recipe 안 위치=index로 매칭).
+        _group1_indices = [i for i, item in enumerate(recipe) if item.get("legend_group", 1) != 2]
+        _group2_indices = [i for i, item in enumerate(recipe) if item.get("legend_group", 1) == 2]
+        _marker_shape_by_index = {}
+        for _indices, _force_fill in ((_group1_indices, False), (_group2_indices, True)):
+            _rank = 0
+            for _i in _indices:
+                _item = recipe[_i]
+                _shape_label = _item.get("marker_shape_label", "Auto")
+                _fill_in = _force_fill if _shape_label == "Auto" else _item.get("marker_fill", False)
+                _mshape, _mused_auto = self._resolve_marker_shape(
+                    _shape_label, _fill_in,
+                    self._infer_marker_on(_item), _rank, excluded_shapes=_excluded_shapes,
+                )
+                if _mused_auto:
+                    _rank += 1
+                _marker_shape_by_index[_i] = _mshape
+        for _idx, item in enumerate(recipe):
             var_obj = var_by_no.get(item["output_no"])
             legend_text = var_obj.display_name if var_obj else f"var_{item['output_no']}"
             try:
-                _marker_shape, _used_auto = self._resolve_marker_shape(
-                    item.get("marker_shape_label", "Auto"), item.get("marker_fill", False),
-                    self._infer_marker_on(item), _marker_auto_rank, excluded_shapes=_excluded_shapes,
-                )
-                if _used_auto:
-                    _marker_auto_rank += 1
+                _marker_shape = _marker_shape_by_index[_idx]
                 curves.append(CurveDefinition(
                     dat_file=target_dat_file,
                     output_no=item["output_no"],
@@ -11160,9 +11193,7 @@ class CathPlotGUI:
             # [추가 - 사용자 요청] "Shape 우측에 체크박스, None 대신 Auto" -
             # marker_on=True + Shape=Auto인 curve들에게 순서대로 서로 다른
             # 모양을 자동 배정하기 위한 순번 카운터(_get_marker_fields/
-            # _resolve_marker_shape 참고) - 이 그림에 실제로 포함되는
-            # curve 순서(temp_curves_info, 아래 루프와 동일한 순서) 기준.
-            _marker_auto_rank = 0
+            # _resolve_marker_shape 참고).
             # [추가 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을
             # 건너뛰고 순차적으로" - 이 그림에 실제로 포함되는 curve들
             # (temp_curves_info) 중 marker_on=True이고 Shape를 Auto가 아닌
@@ -11174,6 +11205,30 @@ class CathPlotGUI:
                 if self.marker_on_vars.get(k) and self.marker_on_vars[k].get()
                 and k in self.marker_shape_vars and self.marker_shape_vars[k].get() != "Auto"
             }
+            # [수정 - 사용자 보고 버그 + 사용자 요청] "Shape On Auto로 그려보면
+            # Y1/Y2가 클릭(선택)한 순서대로 뒤섞여 배정됨" -> "Legend1은
+            # open, Legend2는 fill로 각각 circle부터 (Y1/Y2 구분에도 유용,
+            # 선정된 curve들만)" - 실제 그리기 순서(temp_curves_info,
+            # z-order)는 여전히 클릭 순서를 그대로 쓰되, Auto Shape는
+            # Legend1 그룹(legend_group!=2)과 Legend2 그룹(legend_group==2)
+            # 으로 나눠 각각 Curve Features 팝업과 동일한 순서
+            # (_legend_ordered_keys)로 auto_rank를 0부터 따로 매기고,
+            # fill_on도 그룹별로 강제한다(Legend1=open, Legend2=fill) -
+            # 그래야 Legend1/2가 시각적으로도 구분되고, 팝업에서 보이는
+            # 순서와 실제 배정되는 모양 순서가 그룹 내에서 일치한다.
+            def _is_legend2(_k):
+                return bool(self.legend_group_vars.get(_k) and self.legend_group_vars[_k].get() == "2")
+            _group1_keys = [k for k in self._legend_ordered_keys("1", ordered_keys) if not _is_legend2(k)]
+            _group2_keys = [k for k in self._legend_ordered_keys("2", ordered_keys) if _is_legend2(k)]
+            _marker_fields_by_key = {}
+            for _grp_keys, _force_fill in ((_group1_keys, False), (_group2_keys, True)):
+                _rank = 0
+                for _mk in _grp_keys:
+                    _mshape, _msize, _mmax, _mused_auto = self._get_marker_fields(
+                        _mk, _rank, _excluded_shapes, auto_fill_override=_force_fill)
+                    if _mused_auto:
+                        _rank += 1
+                    _marker_fields_by_key[_mk] = (_mshape, _msize, _mmax)
             # 1. 각 파일별 선택된 X축을 확인하고 temp_sorted 폴더에 정렬 파일 생성
             for d_file, out_no, title, axis, key in temp_curves_info:
                 file_x_output_no = 0  # 기본값: 0 (선택되지 않았거나 첫 번째 컬럼 가정)
@@ -11210,9 +11265,7 @@ class CathPlotGUI:
                 except ValueError:
                     _orig_rel = d_file
 
-                _marker_shape, _marker_size, _marker_max_count, _used_auto = self._get_marker_fields(key, _marker_auto_rank, _excluded_shapes)
-                if _used_auto:
-                    _marker_auto_rank += 1
+                _marker_shape, _marker_size, _marker_max_count = _marker_fields_by_key[key]
                 curves.append(CurveDefinition(
                     dat_file=target_dat_file,
                     output_no=out_no,
@@ -12926,9 +12979,16 @@ class CathPlotGUI:
         marker_on=True고 Shape=Auto인 curve들" 사이의 순번 - 호출부가
         같은 그림 안에서 순서대로 매겨서 넘겨줌)를 이용해 기존
         "Auto(순서대로 배정)" 버튼과 완전히 동일한 규칙(도형 목록을
-        순서대로, 다 돌면 다음 바퀴는 채운 버전으로) 자동으로 구체적인
-        모양을 고른다 - 그래서 Auto를 선택해두면 매번 버튼을 눌러 값을
-        "고정"하지 않아도 항상 최신 curve 구성을 따라간다.
+        순서대로)으로 자동으로 구체적인 모양을 고른다 - 그래서 Auto를
+        선택해두면 매번 버튼을 눌러 값을 "고정"하지 않아도 항상 최신
+        curve 구성을 따라간다.
+        [수정 - 사용자 요청] "Legend1은 open, Legend2는 fill로 circle부터
+        (Y1/Y2 구분에도 유용)" - fill_on은 호출부가 그룹별 기준값(Legend1
+        그룹=False/open, Legend2 그룹=True/fill)을 고정으로 넘기고,
+        auto_rank도 그룹별로 0부터 따로 매긴다(도형 순서는 두 그룹 모두
+        정의된 순서 그대로: Circle→Square→...→Star, 다 돌면 fill은
+        그대로 유지한 채 처음부터 반복 - "fill은 그룹별로 이미 고정돼
+        있으니 도형만 순환하면 된다"는 사용자 확인에 따름).
         [수정 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을 건너뛰고
         순차적으로" - excluded_shapes(호출부가 미리 한 번 훑어서 모은,
         "이 그림에서 marker_on=True이고 Shape를 Auto가 아닌 특정 모양으로
@@ -12947,22 +13007,27 @@ class CathPlotGUI:
                 shapes = [s for s in MARKER_SHAPE_LIST if s != "Auto"]
             if not shapes:
                 return None, False
-            lap, idx = divmod(auto_rank, len(shapes))
+            idx = auto_rank % len(shapes)
             shape_label = shapes[idx]
-            fill_on = bool(lap % 2 == 1)
             used_auto = True
         hollow_pt, filled_pt = MARKER_SHAPE_MAP.get(shape_label, (None, None))
         return (filled_pt if fill_on else hollow_pt), used_auto
 
-    def _get_marker_fields(self, key, auto_rank=0, excluded_shapes=frozenset()):
+    def _get_marker_fields(self, key, auto_rank=0, excluded_shapes=frozenset(), auto_fill_override=None):
         """CurveDefinition 생성 시 공통으로 쓰는 marker 필드 3종(shape/size/max_count)을
         GUI 변수에서 읽어온다. 값이 없으면 기본(마커 없음/Auto).
         marker_on/Auto 해석은 _resolve_marker_shape에 위임한다(그쪽
         docstring 참고). 반환: (marker_shape, marker_size, marker_max_count,
         used_auto) - used_auto는 호출부가 auto_rank 카운터를 증가시켜야
-        하는지 알려주는 플래그."""
+        하는지 알려주는 플래그.
+        [수정 - 사용자 요청] auto_fill_override - Shape=Auto인 curve의 fill
+        여부를 Legend1/2 그룹(호출부가 결정)으로 강제할 때 씀 - None이면
+        기존처럼 사용자가 체크한 Fill 값을 그대로 쓴다(non-Auto는 항상
+        이 경로)."""
         shape_label = self.marker_shape_vars[key].get() if key in self.marker_shape_vars else "Auto"
         fill_on = self.marker_fill_vars[key].get() if key in self.marker_fill_vars else False
+        if shape_label == "Auto" and auto_fill_override is not None:
+            fill_on = auto_fill_override
         marker_on = self.marker_on_vars[key].get() if key in self.marker_on_vars else False
         marker_shape, used_auto = self._resolve_marker_shape(shape_label, fill_on, marker_on, auto_rank, excluded_shapes)
         size_label = self.marker_size_vars[key].get() if key in self.marker_size_vars else "M"
