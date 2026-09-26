@@ -303,6 +303,14 @@ class CathPlotGUI:
         self.title_counters = {}
         self.multi_counters = {}
         self.active_plots_cache = {}
+        # [추가 - 사용자 요청] "먼저 그린 창을 Template Save에서 선택할 수
+        # 없는지" - Interactive PLOT을 실행할 때마다, 그 시점의 화면 설정을
+        # 그대로 _template_dict() 스냅샷으로도 같이 남겨둔다(아래 execute_
+        # plot_pipeline에서 active_plots_cache와 항상 같은 키로 같이 채움).
+        # Template Load 등으로 화면이 나중에 다른 내용으로 바뀌어도, 이
+        # 스냅샷은 "그 plot을 그렸던 순간의 설정 그대로"라 save_template이
+        # 그 키를 고르면 화면을 건드리지 않고 그 내용 그대로 저장할 수 있다.
+        self.active_plot_templates = {}
         self.plot_processes = []
         # [추가 - 사용자 보고 버그] "덮어쓰기 plot 이후 replot 하면 plt
         # 파일은 update 되지만 화면의 창은 같은 이름으로 추가만 됨(이전
@@ -2557,24 +2565,98 @@ class CathPlotGUI:
             })
         return surfaces
 
+    def _choose_template_save_source(self):
+        """[추가 - 사용자 요청] "먼저 그린 plot(창)을 Template Save에서 선택할
+        수 없는지" - Template Load 등으로 화면이 나중에 바뀌어도, 그 전에
+        Interactive PLOT을 실행할 때마다 execute_plot_pipeline이 그 순간의
+        화면 스냅샷(_template_dict() 결과)을 self.active_plot_templates에
+        같이 남겨두므로, 여기서 그중 하나를 골라 화면을 전혀 건드리지 않고
+        그 내용 그대로 저장할 수 있게 한다.
+        반환: (dict_or_None, display_name).
+        - active_plot_templates가 비어있으면(이전에 그려진 plot이 없음)
+          선택창 없이 곧장 (None, None) - 기존 동작과 완전히 동일하게 유지.
+        - "현재 화면"을 고르면 (None, None) - 호출부가 직접 _template_dict()를 부름.
+        - 이전 plot 하나를 고르면 (그 스냅샷 dict, 그 plot 이름).
+        - 취소하면 (False, None) - 호출부가 저장 자체를 중단해야 함."""
+        # [추가 - 사용자 질문] "plot 창을 닫아도 선택 가능한지" - 창이
+        # 닫혀도 이 목록엔 영향 없지만(창 프로세스와 무관), .plt 파일을
+        # 수동으로 지운 경우까지는 걸러야 하므로 기존 정리 함수를 먼저
+        # 불러 유령 항목을 없앤다(Multi Print/Save 목록과 동일한 기준).
+        self._cleanup_stale_plot_cache()
+        if not self.active_plot_templates:
+            return None, None
+
+        names = list(self.active_plot_templates.keys())
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Template Save - 저장할 대상 선택")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        ttk.Label(
+            dlg,
+            text="저장할 대상을 선택하세요 (\"현재 화면\" 외에는\n이전에 Interactive PLOT으로 그렸던 창의 설정 그대로 저장됩니다):",
+            padding=(10, 10, 10, 4), justify="left"
+        ).pack(anchor="w")
+        choice_var = tk.StringVar(value="현재 화면")
+        combo = ttk.Combobox(dlg, textvariable=choice_var, state="readonly",
+                              values=["현재 화면"] + names, width=42)
+        combo.pack(padx=10, pady=(0, 10), fill="x")
+        self._disable_combobox_wheel(combo)
+
+        result = {"choice": None}
+
+        def _ok():
+            result["choice"] = choice_var.get()
+            dlg.destroy()
+
+        def _cancel():
+            result["choice"] = None
+            dlg.destroy()
+
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(pady=(0, 10))
+        self._mk_btn(btn_row, "OK", _ok, color="accent", btn_pady=2, btn_width=8, side="left", padx=5)
+        self._mk_btn(btn_row, "취소", _cancel, color="danger", btn_pady=2, btn_width=8, side="left", padx=5)
+        dlg.protocol("WM_DELETE_WINDOW", _cancel)
+
+        dlg.wait_window()
+
+        choice = result["choice"]
+        if choice is None:
+            return False, None
+        if choice == "현재 화면":
+            return None, None
+        return self.active_plot_templates.get(choice), choice
+
     def save_template(self):
         template_dir = os.path.join(self.cwd, "template")
         os.makedirs(template_dir, exist_ok=True)
 
-        # [수정 - 사용자 보고 버그] "Template 저장 기본 이름이 화면에 방금 그린
-        # plot 번호랑 안 맞음" - title_counters는 PLOT/SAVE/PRINT를 실제로
-        # 실행할 때마다 증가해서 그 결과 파일이 "{이름}_{그 시점 번호}"로
-        # 저장되는데(예: 방금 그린 plot이 CathPlot_3), 여기서는 그 값에
-        # 무조건 +1을 해서 기본 이름을 "CathPlot_4"처럼 한 번호 앞서
-        # 제안하고 있었음 - 방금 그린 그 plot과 짝을 맞추려는 사용자
-        # 입장에서는 어긋나 보였음. 이미 한 번이라도 그려진 적이 있으면
-        # (counter>0) 그 "현재" 번호를 그대로 써서 방금 그려진 plot과 이름이
-        # 맞게 하고, 아직 한 번도 안 그려졌으면(counter=0) 다음에 그려질
-        # 번호를 그대로 예상해서 보여준다(기존 동작 유지).
-        raw_title = self.filename_var.get().strip() or "CathPlot"
-        safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
-        _current_id = self.title_counters.get(safe_title, 0)
-        default_name = f"{safe_title}_{_current_id}" if _current_id > 0 else f"{safe_title}_1"
+        _snapshot_dict, _snapshot_name = self._choose_template_save_source()
+        if _snapshot_dict is False:
+            return  # 선택창에서 취소함
+
+        if _snapshot_dict is not None:
+            # 이전에 그려진 plot의 스냅샷을 그대로 사용 - 화면(현재 선택된
+            # 값들)은 전혀 건드리지 않는다.
+            template_data = _snapshot_dict
+            default_name = _snapshot_name
+        else:
+            # [수정 - 사용자 보고 버그] "Template 저장 기본 이름이 화면에 방금
+            # 그린 plot 번호랑 안 맞음" - title_counters는 PLOT/SAVE/PRINT를
+            # 실제로 실행할 때마다 증가해서 그 결과 파일이 "{이름}_{그 시점
+            # 번호}"로 저장되는데(예: 방금 그린 plot이 CathPlot_3), 여기서는
+            # 그 값에 무조건 +1을 해서 기본 이름을 "CathPlot_4"처럼 한 번호
+            # 앞서 제안하고 있었음 - 방금 그린 그 plot과 짝을 맞추려는 사용자
+            # 입장에서는 어긋나 보였음. 이미 한 번이라도 그려진 적이 있으면
+            # (counter>0) 그 "현재" 번호를 그대로 써서 방금 그려진 plot과
+            # 이름이 맞게 하고, 아직 한 번도 안 그려졌으면(counter=0) 다음에
+            # 그려질 번호를 그대로 예상해서 보여준다(기존 동작 유지).
+            raw_title = self.filename_var.get().strip() or "CathPlot"
+            safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
+            _current_id = self.title_counters.get(safe_title, 0)
+            default_name = f"{safe_title}_{_current_id}" if _current_id > 0 else f"{safe_title}_1"
+            template_data = None  # 아래에서 저장 직전에 self._template_dict()로 채움
 
         filepath = filedialog.asksaveasfilename(
             defaultextension=".json",
@@ -2588,7 +2670,7 @@ class CathPlotGUI:
         try:
             import json
             with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(self._template_dict(), f, indent=2, ensure_ascii=False)
+                json.dump(template_data if template_data is not None else self._template_dict(), f, indent=2, ensure_ascii=False)
             messagebox.showinfo("Template", f"템플릿을 저장했습니다:\n{filepath}")
         except Exception as e:
             messagebox.showerror("Template", f"템플릿 저장 실패: {e}")
@@ -2850,7 +2932,32 @@ class CathPlotGUI:
                 # 파일을 아래에서 사용자가 직접 다시 찾아준 경우 양쪽에서
                 # 똑같이 재사용하기 위함(중복 없이 동일한 로직 보장).
                 def _apply_fa_to_file(_fa, _abs_path):
-                    _target_info = next((i for i in self.file_rows if i.get("filename") == _abs_path), None)
+                    # [수정 - 사용자 보고 버그] "서로 다른 폴더에서 template을
+                    # 불러올 때, 이미 열려있는 것과 같은 물리 dat 파일인데
+                    # DAT list에는 2개(out111-1.dat, out111-2.dat)로 따로
+                    # 뜸 - temp_sorted 캐시는 정확히 1개뿐인데" - 원인:
+                    # resort_dat_file은 캐시 파일명을 정할 때 realpath+
+                    # normcase로 정규화한 경로를 해시해서 같은 실제 파일이면
+                    # 문자열 표기가 달라도(대소문자, 상대/절대, 심볼릭
+                    # 링크 등) 항상 같은 캐시 하나로 합쳐지는데, 바로 아래
+                    # "이미 열려있는 파일인지" 판단은 문자열 그대로
+                    # (i.get("filename") == _abs_path) 비교해서, 같은 파일을
+                    # 가리키는 표기가 조금만 달라도(예: 첫 로드는 상대경로,
+                    # 재지정은 절대경로) 다른 파일로 오인해 새 행을 또
+                    # 만들었다. resort_dat_file과 동일한 정규화 기준으로
+                    # 비교해서 실제로 같은 파일이면 항상 같은 행을 재사용한다
+                    # ("어떤 파일을 쓸지" 자체는 그대로 _abs_path를 쓰므로
+                    # 안 바뀜 - 비교 기준만 안정화).
+                    def _canon(p):
+                        try:
+                            return os.path.normcase(os.path.realpath(p))
+                        except OSError:
+                            return os.path.normcase(os.path.abspath(p))
+                    _canon_abs = _canon(_abs_path)
+                    _target_info = next(
+                        (i for i in self.file_rows if i.get("filename") and _canon(i["filename"]) == _canon_abs),
+                        None
+                    )
                     if _target_info is None:
                         _target_info = next((i for i in self.file_rows if not i.get("filename")), None)
                         if _target_info is None:
@@ -11607,6 +11714,17 @@ class CathPlotGUI:
                 # 문제가 있었음 - 실제 저장되는 plt 파일명(safe_title)을 그대로 사용
                 self.plot_processes.append(generator.last_process)
                 self.active_plots_cache[f"{safe_title}_{curr_id}"] = plotdef
+                # [추가 - 사용자 요청] "먼저 그린 창을 Template Save에서 선택"
+                # - 지금 이 화면 상태(_template_dict가 읽는 것과 같은 위젯
+                # 값들)가 방금 이 plotdef를 만든 바로 그 상태이므로, 여기서
+                # 같이 스냅샷 떠두면 이후 화면이 Template Load 등으로 바뀌어도
+                # save_template이 이 키를 고르면 손실 없이 그대로 복원해
+                # 저장할 수 있다(plotdef -> dict 역변환 없이, 위젯을 그대로
+                # 한 번 더 읽어서 저장하는 방식이라 완전히 정확함).
+                try:
+                    self.active_plot_templates[f"{safe_title}_{curr_id}"] = self._template_dict()
+                except Exception:
+                    pass
                 self.plot_process_by_title[base_name] = generator.last_process
 
             if plotdef not in self.history_plots:
@@ -12841,6 +12959,10 @@ class CathPlotGUI:
             if not os.path.exists(os.path.join(self.plot_dir, f"{name}.plt"))
         ]:
             del self.active_plots_cache[stale_name]
+            # [추가 - 사용자 요청] active_plot_templates(Template Save용
+            # 화면 스냅샷)도 같은 키로 같이 정리해서 닫힌/사라진 plot이
+            # 계속 선택 목록에 남지 않게 한다.
+            self.active_plot_templates.pop(stale_name, None)
 
     def _log_warning(self, message):
         """팝업을 띄우기엔 너무 사소하거나 자주 발생할 수 있는 경고를, 화면 방해
