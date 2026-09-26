@@ -9591,6 +9591,16 @@ class CathPlotGUI:
             _current_id = self.title_counters.get(safe_title, 0)
             next_id = _current_id if _current_id > 0 else 1
             default_name = f"{safe_title}_3D_{next_id}"
+            # [수정 - 사용자 지적] "template 저장시 이름 부분중복 문제" - 2D
+            # save_template()의 파일명 중복 회피(80836ce)가 3D에는 빠져있어,
+            # 제안된 이름으로 이미 저장된 3D template 파일이 있으면 조용히
+            # 덮어쓸 위험이 있었다 - 2D와 동일하게 "_2", "_3"...로 자동으로
+            # 번호를 올려 회피한다.
+            if os.path.exists(os.path.join(template_dir, f"{default_name}.json")):
+                _n = 2
+                while os.path.exists(os.path.join(template_dir, f"{default_name}_{_n}.json")):
+                    _n += 1
+                default_name = f"{default_name}_{_n}"
             filepath = filedialog.asksaveasfilename(
                 defaultextension=".json",
                 filetypes=[("CathPlot 3D Template", "*.json")],
