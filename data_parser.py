@@ -36,10 +36,13 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import copy
+import hashlib
+import io
 import json
 import os
 import re
 import threading
+import time
 
 
 # ==========================================================
@@ -105,45 +108,102 @@ def parse_number(tok):
         return float(tok.replace("D", "E").replace("d", "e").replace(",", ""))
 
 
-def _file_cache_key(path):
-    """파일 내용이 바뀌면 달라지는 캐시 키(정규화 절대경로, 수정시각, 크기)."""
-    st = os.stat(path)
-    return (os.path.normcase(os.path.abspath(path)), st.st_mtime_ns, st.st_size)
+class _FileCache:
+    """dat 파일 내용에서 만든 결과(파싱 메타데이터/데이터 표)를 파일별로 캐시한다.
 
+    - 유효성: 경로가 같고 크기·수정시각이 그대로면 재사용하되, 마지막 확인 후
+      VERIFY_INTERVAL초가 지났으면 파일 내용 해시(blake2b)를 다시 계산해
+      비교한다 - 네트워크 드라이브/USB처럼 수정시각 해상도가 낮은 곳에서 같은
+      크기로 빠르게 덮어쓴 경우(고정 형식 CATHENA 출력은 재실행해도 크기가
+      같기 쉬움)에도 예전 데이터를 보여주지 않는다. 한 번 plot하는 동안 같은
+      파일을 여러 번 부르는 경우(몇 초 이내)는 해시 없이 그대로 재사용.
+    - 동시성: 파일별 lock으로 캐시 미스 때 같은 파일을 여러 스레드(Batch
+      병렬)가 동시에 중복 파싱하지 않게 한다.
+    - 크기: 항목 수(max_items)와 원본 파일 바이트 합(max_bytes) 둘 다로
+      제한하는 LRU."""
 
-class _LRUCache:
-    """스레드 안전한 작은 LRU 캐시(Batch가 여러 스레드에서 동시에 plot을 만듦)."""
+    VERIFY_INTERVAL = 2.0
 
-    def __init__(self, maxsize):
-        self.maxsize = maxsize
-        self._data = OrderedDict()
+    def __init__(self, max_items, max_bytes):
+        self.max_items = max_items
+        self.max_bytes = max_bytes
+        self._entries = OrderedDict()   # key -> [size, mtime_ns, digest, verified_at, value]
         self._lock = threading.Lock()
+        self._file_locks = {}
 
-    def get(self, key):
+    def _file_lock(self, key):
         with self._lock:
-            val = self._data.get(key)
-            if val is not None:
-                self._data.move_to_end(key)
-            return val
+            lock = self._file_locks.get(key)
+            if lock is None:
+                lock = self._file_locks[key] = threading.Lock()
+            return lock
 
-    def put(self, key, val):
+    def get(self, path, build):
+        """build(data_bytes, path) -> value. 파일 읽기 실패 시 예외를 그대로 낸다."""
+        key = os.path.normcase(os.path.abspath(path))
+        with self._file_lock(key):
+            st = os.stat(path)
+            with self._lock:
+                entry = self._entries.get(key)
+            now = time.monotonic()
+            if entry is not None and entry[0] == st.st_size and entry[1] == st.st_mtime_ns:
+                if now - entry[3] <= self.VERIFY_INTERVAL:
+                    self._touch(key)
+                    return entry[4]
+                with open(path, "rb") as f:
+                    data = f.read()
+                if _digest(data) == entry[2]:
+                    entry[3] = now
+                    self._touch(key)
+                    return entry[4]
+            else:
+                with open(path, "rb") as f:
+                    data = f.read()
+            value = build(data, path)
+            with self._lock:
+                self._entries[key] = [st.st_size, st.st_mtime_ns, _digest(data), time.monotonic(), value]
+                self._entries.move_to_end(key)
+                self._evict()
+            return value
+
+    def _touch(self, key):
         with self._lock:
-            self._data[key] = val
-            self._data.move_to_end(key)
-            while len(self._data) > self.maxsize:
-                self._data.popitem(last=False)
+            if key in self._entries:
+                self._entries.move_to_end(key)
+
+    def _evict(self):
+        total = sum(e[0] for e in self._entries.values())
+        while len(self._entries) > 1 and (len(self._entries) > self.max_items or total > self.max_bytes):
+            _, old = self._entries.popitem(last=False)
+            total -= old[0]
+
+    def clear(self):
+        with self._lock:
+            self._entries.clear()
+
+
+def _digest(data):
+    return hashlib.blake2b(data, digest_size=16).digest()
+
+
+def _text_lines(data):
+    """open(path, "r", encoding="utf-8", errors="ignore")로 읽은 것과 똑같은
+    줄 목록(universal newline 변환 포함, 줄 끝 "\n" 유지)."""
+    return list(io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="ignore"))
 
 
 class DatTable:
     """dat 파일의 실제 데이터 행(data_start_line 이후, 줄 전체 주석/빈 줄을
     뺀 뒤 inline "!" 주석을 잘라내고 strip한 텍스트)과, 요청된 컬럼의 숫자
-    값을 한 번만 계산해 보관한다. column()이 돌려주는 리스트는 texts와 같은
+    값을 한 번만 계산해 보관한다. column()이 돌려주는 튜플은 texts와 같은
     길이이며, 그 행에 해당 컬럼이 없거나 숫자로 못 읽으면 None이다 - 기존
     루프들의 "len(fields) <= max_col이면 건너뜀 / ValueError면 건너뜀"
-    조건이 곧 "필요한 컬럼 중 하나라도 None이면 건너뜀"과 같다."""
+    조건이 곧 "필요한 컬럼 중 하나라도 None이면 건너뜀"과 같다.
+    여러 호출부(Batch 병렬 스레드 포함)가 같은 객체를 공유하므로 읽기
+    전용으로만 쓴다(texts/컬럼은 튜플이라 실수로 고칠 수도 없음)."""
 
     def __init__(self, texts):
-        self.texts = texts
+        self.texts = tuple(texts)
         self._cols = {}
         self._lock = threading.Lock()
         # 호출부가 이 파일 내용에서 파생된 계산 결과(예: 컬럼 min/max)를
@@ -175,32 +235,38 @@ class DatTable:
                         out.append(None)
                 else:
                     out.append(None)
-        self._cols.update(outs)
+        self._cols.update({i: tuple(v) for i, v in outs.items()})
 
 
-_PARSE_CACHE = _LRUCache(64)
-_TABLE_CACHE = _LRUCache(6)
+_PARSE_CACHE = _FileCache(max_items=64, max_bytes=2 * 1024 ** 3)
+_TABLE_CACHE = _FileCache(max_items=32, max_bytes=256 * 1024 ** 2)
 
 
-def load_dat_table(filename):
-    """(DatFile 메타데이터, DatTable)을 돌려준다 - 파일 내용이 바뀌지 않는 한
-    캐시를 재사용한다(한 번 plot할 때 같은 파일을 curve/축/마커 계산마다
-    여러 번 다시 읽고 파싱하던 중복을 없앰). 읽기 실패 시 예외를 그대로 낸다."""
-    key = _file_cache_key(filename)
-    cached = _TABLE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    dat_info = CathenaDatParser().parse(filename)
-    with open(filename, "r", encoding="utf-8", errors="ignore") as f:
-        lines = f.readlines()
+def clear_dat_cache():
+    """캐시를 모두 비운다(파일을 강제로 다시 읽게 하고 싶을 때)."""
+    _PARSE_CACHE.clear()
+    _TABLE_CACHE.clear()
+
+
+def _build_table(data, path):
+    lines = _text_lines(data)
+    dat_info = CathenaDatParser()._parse_lines(lines, Path(path))
     texts = []
     for row in lines[dat_info.data_start_line:]:
         text = strip_inline_comment(row).strip()
         if not is_comment_or_blank(text):
             texts.append(text)
-    result = (dat_info, DatTable(texts))
-    _TABLE_CACHE.put(key, result)
-    return result
+    return dat_info, DatTable(texts)
+
+
+def load_dat_table(filename):
+    """(DatFile 메타데이터, DatTable)을 돌려준다 - 파일 내용이 바뀌지 않는 한
+    캐시를 재사용한다(한 번 plot할 때 같은 파일을 curve/축/마커 계산마다
+    여러 번 다시 읽고 파싱하던 중복을 없앰). 메타데이터는 호출부가 고쳐도
+    캐시가 오염되지 않게 복사본을, DatTable은 읽기 전용 공유 객체를 준다.
+    읽기 실패 시 예외를 그대로 낸다."""
+    dat_info, table = _TABLE_CACHE.get(filename, _build_table)
+    return copy.deepcopy(dat_info), table
 
 
 # ==========================================================
@@ -290,16 +356,11 @@ class CathenaDatParser:
         # 파일 내용(수정시각/크기)이 그대로면 이전 결과를 재사용한다. 호출부가
         # 결과 객체를 고쳐도 캐시가 오염되지 않게 항상 복사본을 돌려준다.
         path = Path(filename)
-        key = _file_cache_key(path)
-        cached = _PARSE_CACHE.get(key)
-        if cached is None:
-            cached = self._parse_uncached(path)
-            _PARSE_CACHE.put(key, cached)
+        cached = _PARSE_CACHE.get(path, lambda data, p: self._parse_lines(_text_lines(data), p))
         return copy.deepcopy(cached)
 
-    def _parse_uncached(self, path):
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            lines = [x.rstrip("\n") for x in f]
+    def _parse_lines(self, raw_lines, path):
+        lines = [x.rstrip("\n") for x in raw_lines]
 
         # [추가] gnuplot splot용 CATHENA surface 출력 감지 - 일반 CATHENA와
         # 헤더 내용은 같지만 모든 줄(날짜/타이틀/OUTPUT#/변수명 포함)에 '#'가
