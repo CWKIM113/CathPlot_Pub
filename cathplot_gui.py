@@ -149,7 +149,7 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/24/2026.")
+        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/26/2026.")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움
         # [수정 - 사용자 요청] "가로 길이도 flexible하게(노트북에선 가로를
@@ -2561,11 +2561,20 @@ class CathPlotGUI:
         template_dir = os.path.join(self.cwd, "template")
         os.makedirs(template_dir, exist_ok=True)
 
-        # 기본 파일명: plot 파일명(Plot File Name 입력창) 규칙과 동일하게 "이름_다음번호"
+        # [수정 - 사용자 보고 버그] "Template 저장 기본 이름이 화면에 방금 그린
+        # plot 번호랑 안 맞음" - title_counters는 PLOT/SAVE/PRINT를 실제로
+        # 실행할 때마다 증가해서 그 결과 파일이 "{이름}_{그 시점 번호}"로
+        # 저장되는데(예: 방금 그린 plot이 CathPlot_3), 여기서는 그 값에
+        # 무조건 +1을 해서 기본 이름을 "CathPlot_4"처럼 한 번호 앞서
+        # 제안하고 있었음 - 방금 그린 그 plot과 짝을 맞추려는 사용자
+        # 입장에서는 어긋나 보였음. 이미 한 번이라도 그려진 적이 있으면
+        # (counter>0) 그 "현재" 번호를 그대로 써서 방금 그려진 plot과 이름이
+        # 맞게 하고, 아직 한 번도 안 그려졌으면(counter=0) 다음에 그려질
+        # 번호를 그대로 예상해서 보여준다(기존 동작 유지).
         raw_title = self.filename_var.get().strip() or "CathPlot"
         safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
-        next_id = self.title_counters.get(safe_title, 0) + 1
-        default_name = f"{safe_title}_{next_id}"
+        _current_id = self.title_counters.get(safe_title, 0)
+        default_name = f"{safe_title}_{_current_id}" if _current_id > 0 else f"{safe_title}_1"
 
         filepath = filedialog.asksaveasfilename(
             defaultextension=".json",
@@ -9406,11 +9415,16 @@ class CathPlotGUI:
         def do_save_3d_template():
             # [수정] "저장할 때 default로 plottitle_3d_...가 좋겠다" - 3D Plot
             # 이미지 저장(_execute_3d_plot의 base_name)과 동일한 규칙(이름_3D_번호).
+            # [수정 - 사용자 보고 버그, 2D save_template과 동일] 기본 이름이
+            # 방금 그린 3D plot 번호보다 항상 +1 앞서 제안되던 문제 - 이미
+            # 한 번이라도 그려진 적이 있으면(counter>0) 그 "현재" 번호를
+            # 그대로 써서 방금 그린 결과와 이름을 맞춘다.
             template_dir = os.path.join(self.cwd, "template")
             os.makedirs(template_dir, exist_ok=True)
             raw_title = plot_title_var.get().strip() or "CathPlot"
             safe_title = "".join(c for c in raw_title if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
-            next_id = self.title_counters.get(safe_title, 0) + 1
+            _current_id = self.title_counters.get(safe_title, 0)
+            next_id = _current_id if _current_id > 0 else 1
             default_name = f"{safe_title}_3D_{next_id}"
             filepath = filedialog.asksaveasfilename(
                 defaultextension=".json",

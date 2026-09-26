@@ -1374,9 +1374,53 @@ class GnuplotGenerator:
             max_len = max(max_len, len(s))
         return max_len
 
+    @staticmethod
+    def _axis_major_interval_count(plotdef, axis):
+        """[추가 - 사용자 요청] X/Y1/Y2 auto 범위의 "보기 좋은" 눈금 계산에 쓸
+        목표 major 구간 개수를 axis frame의 물리적 크기(inch)에서 뽑아낸다.
+        X는 가로(axis_w_in), Y(y1/y2 공용)는 세로(axis_h_in) 길이를 그대로
+        반올림 - 기본 프레임(5.0 x 4.0in)에서 X=5, Y=4가 되고, 정사각형(예:
+        5x5in)이면 Y도 5가 되는 식으로 사용자가 준 두 기준점과 일치한다.
+        Auto Frame이면(아직 실제 해상 전이라 여기서는) 화면 기본값
+        5.0/4.0in을 그대로 기준으로 쓴다(실제 Auto 해상 로직까지 갈
+        필요 없이 이 근사로 충분 - margin 등 미세 조정은 tic 개수 결정에
+        영향을 줄 정도로 크지 않음). 어떤 경우든 최소 4개는 보장한다."""
+        try:
+            if getattr(plotdef, "frame_auto", True):
+                w_in, h_in = 5.0, 4.0
+            else:
+                unit = (getattr(plotdef, "frame_unit", "in") or "in").strip().lower()
+                w_raw = float((getattr(plotdef, "frame_width", "") or "5").strip() or 5.0)
+                h_raw = float((getattr(plotdef, "frame_height", "") or "4").strip() or 4.0)
+                if unit == "cm":
+                    w_in, h_in = w_raw / 2.54, h_raw / 2.54
+                else:
+                    w_in, h_in = w_raw, h_raw
+        except (TypeError, ValueError, AttributeError):
+            w_in, h_in = 5.0, 4.0
+        dim_in = w_in if axis == "x" else h_in
+        return max(4, round(dim_in))
+
     def _nice_axis_range(self, plotdef, axis, is_log=False, extra_values=None):
         parser = CathenaDatParser()
-        
+
+        # [수정 - 사용자 요청] "X는 major 간격 4개 대신 5개로(0~1000.07에서
+        # step이 250이 아니라 200 정도 되게), Y는 axis frame 비율에 따라
+        # (기본 5:4면 4개, 1:1이면 5개, 그 사이는 세로 길이(inch)를 반올림 -
+        # 예: 세로 3.5~4.5in은 4개, 5in 이상은 5개), 둘 다 최소 4개" - 예전엔
+        # "span/4"로 X/Y 구분 없이 항상 4개 구간(5개 눈금)만 썼는데, 가로가
+        # 세로보다 넓은 기본 비율(5:4)에서도 X만 유독 4개라 데이터가 조금만
+        # 벗어나도(예: 1000.07) 축이 다음 "보기 좋은" 후보로 훌쩍 뛰어(1500)
+        # 데이터에 비해 너무 넓어 보였음. X는 가로(axis_w_in), Y(y1/y2 공용)는
+        # 세로(axis_h_in) 길이(inch)를 그대로 반올림해 구간 개수로 쓰면(기본
+        # 5.0in -> 5개, 4.0in -> 4개) 사용자가 준 두 기준점과 정확히 맞고,
+        # 프레임 크기를 바꿔도 그 물리적 크기에 비례해 자연스럽게 조정된다
+        # (Auto Frame이면 화면 기본값 5.0/4.0in을 그대로 기준으로 삼음 -
+        # 실제 Auto 해상 로직(margin 계산 등)까지 갈 필요 없이 이 정도
+        # 근사로 충분). 최소 4개는 항상 보장(너무 작은 프레임에서 구간이
+        # 2~3개로 줄어 tic이 성기게 나오는 것을 방지).
+        _n_major = self._axis_major_interval_count(plotdef, axis)
+
         # 변수 초기화
         x_min = None
         x_max = None
@@ -1499,11 +1543,11 @@ class GnuplotGenerator:
                 axis_max = 10 ** math.ceil(math.log10(lo_val * 10))
                 if axis_min >= axis_max:
                     axis_max = axis_min * 10
-                return axis_min, axis_max, (axis_max - axis_min) / 4.0
+                return axis_min, axis_max, (axis_max - axis_min) / _n_major
             span = max(abs(data_min) * 0.1, 1.0)
             data_min -= span / 2
             data_max += span / 2
-            return data_min, data_max, span / 4.0
+            return data_min, data_max, span / _n_major
 
         # "보기 좋은" 눈금 간격(step) 계산
         # [수정 - 사용자 보고 버그] "0~1000.07 데이터인데 axis가 0~1500까지
@@ -1518,7 +1562,7 @@ class GnuplotGenerator:
         # 대조 확인됨). normalized가 후보값보다 "아주 조금"(0.5% 이내) 큰
         # 경우는 부동소수점/실측 데이터의 사소한 오차로 보고 그 후보를
         # 그대로 쓰도록 작은 허용오차를 둔다.
-        raw_step = span / 4.0
+        raw_step = span / _n_major
         magnitude = 10 ** math.floor(math.log10(raw_step))
         normalized = raw_step / magnitude
         step = raw_step
