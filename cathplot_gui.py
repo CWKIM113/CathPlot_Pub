@@ -6448,10 +6448,31 @@ class CathPlotGUI:
                         self.marker_on_vars[key] = tk.BooleanVar(value=False)
                     self.marker_on_vars[key].set(True)
 
+        # [추가 - 사용자 지적] "L1/L2 한번에 모두 선택해제 버튼은 있나요" -
+        # 옛 Legend1/2 Curves 팝업에 있던 "전체 선택"/"전체 해제"가 Curve
+        # Features로 통합하면서 빠졌던 걸 다시 넣는다(L1/L2 각각 독립).
+        def _set_all_l1(val):
+            for k in _ordered_keys:
+                if k not in self.in_legend1_vars:
+                    self.in_legend1_vars[k] = tk.BooleanVar(value=True)
+                self.in_legend1_vars[k].set(val)
+            _reopen_curve_settings()
+
+        def _set_all_l2(val):
+            for k in _ordered_keys:
+                if k not in self.legend_group_vars:
+                    self.legend_group_vars[k] = tk.StringVar(value="2")
+                self.legend_group_vars[k].set("2" if val else "1")
+            _reopen_curve_settings()
+
         btn_row = ttk.Frame(popup)
         btn_row.pack(fill="x", padx=10, pady=8)
         ttk.Button(btn_row, text="완료", command=popup.destroy).pack(side="right")
         ttk.Button(btn_row, text="Auto(순서대로 배정)", command=_auto_assign_markers).pack(side="right", padx=(0, 6))
+        ttk.Button(btn_row, text="L1 전체선택", command=lambda: _set_all_l1(True)).pack(side="left")
+        ttk.Button(btn_row, text="L1 전체해제", command=lambda: _set_all_l1(False)).pack(side="left", padx=(4, 12))
+        ttk.Button(btn_row, text="L2 전체선택", command=lambda: _set_all_l2(True)).pack(side="left")
+        ttk.Button(btn_row, text="L2 전체해제", command=lambda: _set_all_l2(False)).pack(side="left", padx=(4, 0))
 
     # ------------------------------------------------------------------
     # Function Curve(2D) - 데이터 파일 없이 gnuplot 수식(삼각함수/다항식/
