@@ -5894,22 +5894,25 @@ class CathPlotGUI:
             msg += f"\n\n경고 {len(warnings)}건이 로그에 기록되었습니다: {log_path}"
         self.root.after(0, lambda m=msg: messagebox.showinfo("Batch Set", m))
 
-    def _run_batch_set_async(self, template_paths, fmt, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None):
-        """Batch Set을 백그라운드 스레드에서 실행하며 진행창을 보여준다."""
-        # [추가 - 사용자 요청] "매 Batch 실행 시작 시 새로 덮어쓰기 물어보고
-        # 처리" - 진행창을 띄우거나 worker 스레드를 시작하기 전, 메인
-        # 스레드에서 먼저 물어본다(messagebox는 메인 스레드에서만 안전).
-        overwrite_log = self._confirm_batch_log_overwrite()
-        job_id = self._register_batch_job("Batch Set", len(template_paths))
+    def _run_batch_in_background(self, job_name, total, run_fn, label_width=55, bar_length=340):
+        """[추가 - 요청 "중복성"] Batch Set/Queue 공용 - 진행창을 띄우고
+        run_fn(progress_callback)을 백그라운드 스레드에서 실행한다(예전엔 두
+        _async 함수에 같은 30줄이 복사돼 있었음).
+        - 실행 중 작업 목록 등록/해제(_register/_unregister_batch_job)와 진행창
+          조작은 반드시 메인 스레드에서 하도록 root.after(0, ...)로 넘긴다.
+        - run_fn 안에서 부르는 _check_and_fix_fonts -> _get_installed_font_names가
+          캐시가 비어 있으면(앱 켜자마자 Batch부터 누른 경우) tkfont.families로
+          실제 Tcl 호출을 해서 메인 스레드가 아닌 곳에서 Tk와 통신하게 됨 -
+          스레드 시작 "전" 메인 스레드에서 미리 한 번 불러 캐시를 채워둔다."""
+        job_id = self._register_batch_job(job_name, total)
 
         progress_win = tk.Toplevel(self.root)
-        progress_win.title("Batch Set 처리 중")
+        progress_win.title(f"{job_name} 처리 중")
         progress_win.transient(self.root)
 
-        total = len(template_paths)
         label_var = tk.StringVar(value=f"준비 중... (0/{total})")
-        ttk.Label(progress_win, textvariable=label_var, padding=15, width=55).pack()
-        progress_bar = ttk.Progressbar(progress_win, length=340, maximum=max(total, 1))
+        ttk.Label(progress_win, textvariable=label_var, padding=15, width=label_width).pack()
+        progress_bar = ttk.Progressbar(progress_win, length=bar_length, maximum=max(total, 1))
         progress_bar.pack(padx=15, pady=(0, 15))
 
         def progress_callback(done, total_n, current_name):
@@ -5919,27 +5922,31 @@ class CathPlotGUI:
                     progress_bar["value"] = done
             self.root.after(0, _update)
 
-        # [수정 - 버그] "_run_batch_set는 self.xxx_var.get()을 안 써서 백그라운드
-        # 스레드에서 안전하다"는 docstring이 있었지만, 그 안에서 부르는
-        # _check_and_fix_fonts -> _get_installed_font_names가 캐시가 비어있으면
-        # (앱 켜자마자 바로 Batch Set부터 누른 경우) tkfont.families(self.root)로
-        # 실제 Tcl 호출을 해서 메인 스레드가 아닌 곳에서 Tk와 통신하는 위반이
-        # 있었음 - 스레드 시작 "전" 메인 스레드에서 미리 한 번 불러 캐시를
-        # 채워두면 백그라운드 쪽은 항상 캐시 히트만 타서 안전해진다.
         self._get_installed_font_names()
 
         def worker():
             try:
-                self._run_batch_set(template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path,
-                                     name_mode=name_mode, out_suffix=out_suffix, common_frame=common_frame,
-                                     overwrite_log=overwrite_log)
+                run_fn(progress_callback)
             finally:
-                # [추가 - 요청] 작업이 끝났으니(성공/오류 무관) 실행 중 목록에서
-                # 뺀다. dict 조작은 메인 스레드에서만 하도록 after(0, ...)로 넘김.
                 self.root.after(0, lambda: self._unregister_batch_job(job_id))
             self.root.after(0, lambda: progress_win.destroy() if progress_win.winfo_exists() else None)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _run_batch_set_async(self, template_paths, fmt, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None):
+        """Batch Set을 백그라운드 스레드에서 실행하며 진행창을 보여준다."""
+        # [추가 - 사용자 요청] "매 Batch 실행 시작 시 새로 덮어쓰기 물어보고
+        # 처리" - 진행창을 띄우거나 worker 스레드를 시작하기 전, 메인
+        # 스레드에서 먼저 물어본다(messagebox는 메인 스레드에서만 안전).
+        overwrite_log = self._confirm_batch_log_overwrite()
+        self._run_batch_in_background(
+            "Batch Set", len(template_paths),
+            lambda progress_callback: self._run_batch_set(
+                template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path,
+                name_mode=name_mode, out_suffix=out_suffix, common_frame=common_frame,
+                overwrite_log=overwrite_log),
+            label_width=55, bar_length=340,
+        )
 
     # ------------------------------------------------------------------
     # [추가 - 요청] "DAT file 중 선택한 순서대로 curve를 그려주기(Legend box
@@ -6956,41 +6963,13 @@ class CathPlotGUI:
         # 덮어쓰기 물어보고 처리" - Batch Set/Queue 둘 다 같은 batch_warnings.log
         # 파일을 공유하므로 여기서도 동일하게 물어본다.
         overwrite_log = self._confirm_batch_log_overwrite()
-        job_id = self._register_batch_job("Batch Queue", len(relative_paths))
-
-        progress_win = tk.Toplevel(self.root)
-        progress_win.title("Batch Queue 처리 중")
-        progress_win.transient(self.root)
-
-        total = len(relative_paths)
-        label_var = tk.StringVar(value=f"준비 중... (0/{total})")
-        ttk.Label(progress_win, textvariable=label_var, padding=15, width=50).pack()
-        progress_bar = ttk.Progressbar(progress_win, length=320, maximum=max(total, 1))
-        progress_bar.pack(padx=15, pady=(0, 15))
-
-        def progress_callback(done, total_n, current_name):
-            def _update():
-                if progress_win.winfo_exists():
-                    label_var.set(f"처리 중: {current_name}  ({done}/{total_n})")
-                    progress_bar["value"] = done
-            self.root.after(0, _update)
-
-        # [수정 - 버그] _run_batch_set_async와 같은 이유 - _run_batch_queue도
-        # _check_and_fix_fonts를 거치므로, 스레드 시작 전에 폰트 캐시를 미리
-        # 채워 백그라운드에서 Tcl 호출(tkfont.families)이 일어나지 않게 한다.
-        self._get_installed_font_names()
-
-        def worker():
-            try:
-                self._run_batch_queue(relative_paths, fmt, settings, progress_callback=progress_callback,
-                                       overwrite_log=overwrite_log)
-            finally:
-                # [추가 - 요청] Batch Set과 동일하게, 완료(성공/오류 무관) 시
-                # 실행 중 목록에서 제거 - 반드시 메인 스레드에서.
-                self.root.after(0, lambda: self._unregister_batch_job(job_id))
-            self.root.after(0, lambda: progress_win.destroy() if progress_win.winfo_exists() else None)
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_batch_in_background(
+            "Batch Queue", len(relative_paths),
+            lambda progress_callback: self._run_batch_queue(
+                relative_paths, fmt, settings, progress_callback=progress_callback,
+                overwrite_log=overwrite_log),
+            label_width=50, bar_length=320,
+        )
 
     def close_all_plot_windows(self):
         dlg = tk.Toplevel(self.root)
