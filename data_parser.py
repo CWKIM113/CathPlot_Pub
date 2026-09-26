@@ -146,6 +146,9 @@ class DatTable:
         self.texts = texts
         self._cols = {}
         self._lock = threading.Lock()
+        # 호출부가 이 파일 내용에서 파생된 계산 결과(예: 컬럼 min/max)를
+        # 기억해둘 수 있는 자리 - 파일이 바뀌면 table 자체가 새로 만들어진다.
+        self.memo = {}
 
     def column(self, idx):
         return self.columns(idx)[0]

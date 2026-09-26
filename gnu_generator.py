@@ -1438,6 +1438,38 @@ class GnuplotGenerator:
         dim_in = w_in if axis == "x" else h_in
         return max(4, round(dim_in))
 
+    @staticmethod
+    def _curve_minmax(table, x_col_idx, column, x_shift, x_min, x_max, shift_value):
+        """_nice_axis_range용 - 한 curve의 (min, max)(유한값만, 없으면 None)."""
+        x_vals, col_vals = table.columns(x_col_idx, column)
+        _x_filter = x_min is not None or x_max is not None
+        lo = hi = None
+        for x_val_check, value in zip(x_vals, col_vals):
+            # 컬럼이 모자라거나 숫자가 아닌 행은 건너뜀
+            if x_val_check is None or value is None:
+                continue
+            # x_min, x_max 필터링은 오직 axis == "x" 이고 제한이 유효할 때만 작동
+            if _x_filter:
+                x_val = x_val_check + x_shift
+                if x_min is not None and x_val < x_min:
+                    continue
+                if x_max is not None and x_val > x_max:
+                    continue
+            # [수정 - 사용자 보고 버그] "Auto X-range가 shift 적용 전 원본 데이터
+            # 범위로 잡힘" - X축 계산일 때는 실제 플롯에 그려지는 좌표(shift
+            # 반영)와 맞추려고 여기서도 shift를 더한다.
+            if shift_value:
+                value += x_shift
+            if math.isfinite(value):
+                if lo is None:
+                    lo = hi = value
+                else:
+                    if value < lo:
+                        lo = value
+                    if value > hi:
+                        hi = value
+        return None if lo is None else (lo, hi)
+
     def _nice_axis_range(self, plotdef, axis, is_log=False, extra_values=None):
 
         # [수정 - 사용자 요청] "X는 major 간격 4개 대신 5개로(0~1000.07에서
@@ -1496,33 +1528,17 @@ class GnuplotGenerator:
                 _, table = load_dat_table(curve.dat_file)
             except Exception:
                 continue
-            x_vals, col_vals = table.columns(x_col_idx, column)
-            x_shift = curve.x_shift
-            _x_filter = x_min is not None or x_max is not None
-
-            for x_val_check, value in zip(x_vals, col_vals):
-                # 컬럼이 모자라거나 숫자가 아닌 행은 건너뜀
-                if x_val_check is None or value is None:
-                    continue
-
-                # x_min, x_max 필터링은 오직 axis == "x" 이고 제한이 유효할 때만 작동
-                if _x_filter:
-                    x_val = x_val_check + x_shift
-                    if x_min is not None and x_val < x_min:
-                        continue
-                    if x_max is not None and x_val > x_max:
-                        continue
-
-                # [수정 - 사용자 보고 버그] "Auto X-range가 shift 적용 전
-                # 원본 데이터 범위로 잡힘" - axis=="x"일 때 column은
-                # x_col_idx와 같아서 이 값이 shift 이전 값이다 - 실제 플롯에
-                # 그려지는 좌표(shift 반영)와 맞추려고 X축 계산일 때만 여기서도
-                # shift를 더해준다.
-                if axis == "x":
-                    value += x_shift
-
-                if math.isfinite(value):
-                    values.append(value)
+            # [수정 - 요청 "실행속도"] 이 함수는 plot 한 번에 축마다 여러 번
+            # (tic 글자수/margin/marker 범위 계산 등) 같은 인자로 다시 불린다 -
+            # 결과에 필요한 건 이 curve 값들의 min/max뿐이라, 그 쌍을 table에
+            # 기억해두고 재사용한다(min/max를 curve별로 먼저 구해 합쳐도 전체
+            # 값 목록에서 바로 구한 것과 같은 값).
+            _memo_key = ("nice_minmax", x_col_idx, column, curve.x_shift, x_min, x_max, axis == "x")
+            if _memo_key not in table.memo:
+                table.memo[_memo_key] = self._curve_minmax(table, x_col_idx, column, curve.x_shift, x_min, x_max, axis == "x")
+            _mm = table.memo[_memo_key]
+            if _mm is not None:
+                values.extend(_mm)
 
         # [추가 - 사용자 보고 버그] "sin 값이 음수에서 잘림 - y1축 범위를
         # 늘려야 하는데" - 이 함수는 원래 plotdef.curves(실제 .dat 파일)만
