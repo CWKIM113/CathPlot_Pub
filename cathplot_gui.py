@@ -1203,20 +1203,6 @@ class CathPlotGUI:
         legend1_row.grid(row=0, column=3, columnspan=3, padx=3, pady=0, sticky="we")
         self._mk_check(legend1_row, "Legend1 On", self.legend_on_var, side="left", padx=3)
         self._mk_check(legend1_row, "Box", self.legend_box_var, side="left", padx=3)
-        # [수정 - 사용자 요청] "Curves가 다 보이도록 가로크기를 조금만 더
-        # 키울까요? Curves/Function/Marker 버튼들을 좌측으로 이동해서
-        # 정렬하면 조금만 키워도 될 듯" - 이 버튼들이 전부 줄 맨 끝(오른쪽
-        # 맞춤)에 있어서, 창 폭이 조금만 좁아도(작은 화면 등) 아예 화면
-        # 밖으로 밀려나 안 보이고 이 구역엔 가로 스크롤바도 없어 접근 자체가
-        # 안 됐음(DAT Files/Available Variables 표와 달리) - Box 체크박스
-        # 바로 뒤(줄 앞쪽)로 옮겨서, 창이 조금 좁아도 항상 보이게 한다.
-        legend1_curves_btn = tk.Button(
-            legend1_row, text="Curves", width=7, font=("Malgun Gothic", 9, "bold"),
-            bg=self.PALETTE["secondary"], fg="white",
-            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=1, pady=1,
-        )
-        legend1_curves_btn.pack(side="left", padx=(3, 8))
         ttk.Label(legend1_row, text="Pos1:").pack(side="left", padx=(21, 2))
         legend_pos_combo = ttk.Combobox(legend1_row, textvariable=self.legend_pos_var, values=pos_list, width=10)
         legend_pos_combo.pack(side="left", padx=2)
@@ -1234,13 +1220,6 @@ class CathPlotGUI:
         # 이 줄이 병목이 되므로, row=2(옛 row2_f 자리, 이제 비어 있음)에
         # 따로 둔다 - 아래 참고.
 
-        # [수정 - 사용자 요청] "Curve Feature에 L1/L2 선택 box + 순서(▲▼)를
-        # 추가해 Legend1/2 Curves 팝업과 통합" - 이 버튼이 열던 전용
-        # "Legend1 Curves" 팝업(포함 여부+순서, _open_curve_select_popup)을
-        # 없애고 Curve Features로 합쳤다(L1/L2 체크 + Ord 칸이 그 역할을
-        # 대신함) - 버튼은 그대로 두되 Curve Features를 열도록 재연결.
-        legend1_curves_btn.configure(command=self._open_curve_settings_popup)
-
         # [수정] "입력 줄들이 너무 길다" - Box Thick/Font/Marker를 아래
         # frame_row2(원래 Axis Frame Auto 있던 자리)로 옮겨서 이 줄을 줄임.
 
@@ -1252,15 +1231,6 @@ class CathPlotGUI:
         legend2_row.grid(row=1, column=3, columnspan=3, padx=3, pady=0, sticky="we")
         self._mk_check(legend2_row, "Legend2 On", self.legend2_on_var, side="left", padx=3)
         self._mk_check(legend2_row, "Box", self.legend2_box_var, side="left", padx=3)
-        # [수정 - 사용자 요청] "Curves를 좌측으로 이동" - legend1_row와 동일한
-        # 이유로 Box 체크박스 바로 뒤로 옮김.
-        legend2_curves_btn = tk.Button(
-            legend2_row, text="Curves", width=7, font=("Malgun Gothic", 9, "bold"),
-            bg=self.PALETTE["secondary"], fg="white",
-            activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
-            relief="raised", bd=1, pady=1,
-        )
-        legend2_curves_btn.pack(side="left", padx=(3, 8))
         ttk.Label(legend2_row, text="Pos2:").pack(side="left", padx=(21, 2))
         legend2_pos_combo = ttk.Combobox(legend2_row, textvariable=self.legend2_pos_var, values=pos_list, width=10)
         legend2_pos_combo.pack(side="left", padx=2)
@@ -1270,9 +1240,6 @@ class CathPlotGUI:
                      width=5, state="readonly").pack(side="left", padx=1)
         # [수정 - 사용자 요청] Legend1과 동일하게 Box W/H는 Detail 팝업으로
         # 이동(이 줄 폭을 줄이기 위해).
-        # [수정 - 사용자 요청] Legend1의 "Curves" 버튼과 동일한 이유로
-        # "Legend2 Curves" 전용 팝업을 없애고 Curve Features로 통합.
-        legend2_curves_btn.configure(command=self._open_curve_settings_popup)
 
         # [수정] "입력 줄들이 너무 길다" - Font(legend_font_var/legend_size_var)를
         # 아래 frame_row2(원래 Axis Frame Auto 있던 자리)로 옮겨서 이 줄을 줄임.
@@ -2629,6 +2596,7 @@ class CathPlotGUI:
         return self.active_plot_templates.get(choice), choice
 
     def save_template(self):
+        import json
         template_dir = os.path.join(self.cwd, "template")
         os.makedirs(template_dir, exist_ok=True)
 
@@ -2676,12 +2644,38 @@ class CathPlotGUI:
         # "현재 화면"이든 이전 plot 선택이든 상관없이, 그 이름으로 이미
         # 저장된 template 파일이 있으면 "_2", "_3"...을 붙여 겹치지 않는
         # 이름이 나올 때까지 올린다(실제 plot 출력 파일명이 겹칠 때 쓰는
-        # 방식과 동일한 원리). 겹치는 이름이 없으면 기존처럼 그대로 둔다.
-        if os.path.exists(os.path.join(template_dir, f"{default_name}.json")):
+        # 방식과 동일한 원리).
+        # [재수정 - 사용자 보고 버그] "out111_1 창 띄우고 바로 Template
+        # Save 현재화면 누르면 out111_1_2.json으로 잡힘" - 예전엔 이름이
+        # 겹치기만 하면(내용이 같든 다르든) 무조건 번호를 올렸는데, 같은
+        # 테스트를 반복하면(같은 데이터로 같은 plot을 여러 번 Save) 매번
+        # 내용은 완전히 똑같은데도 번호만 계속 늘어나(_2, _3, ...) 거의
+        # 같은 template 파일이 쌓이는 문제가 있었음. 이제 이름이 겹치는
+        # 파일의 실제 내용까지 비교해서, 내용도 완전히 같으면("정말 같은
+        # 걸 또 저장") 번호를 올리지 않고 그 이름을 그대로 재사용하고,
+        # 내용이 다를 때만("진짜 다른 template인데 이름만 겹침") 안전하게
+        # 다음 번호로 넘어간다.
+        def _existing_template_matches(name):
+            fp = os.path.join(template_dir, f"{name}.json")
+            if not os.path.exists(fp):
+                return None  # 그 이름 자체가 비어있음 - 그대로 써도 됨
+            try:
+                with open(fp, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except Exception:
+                return False  # 못 읽으면 안전하게 "다르다"로 취급
+            return existing == template_data
+
+        _match = _existing_template_matches(default_name)
+        if _match is False:
             _n = 2
-            while os.path.exists(os.path.join(template_dir, f"{default_name}_{_n}.json")):
+            while True:
+                _candidate = f"{default_name}_{_n}"
+                _m = _existing_template_matches(_candidate)
+                if _m is not False:
+                    default_name = _candidate
+                    break
                 _n += 1
-            default_name = f"{default_name}_{_n}"
 
         filepath = filedialog.asksaveasfilename(
             defaultextension=".json",
@@ -2693,7 +2687,6 @@ class CathPlotGUI:
         if not filepath:
             return
         try:
-            import json
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(template_data if template_data is not None else self._template_dict(), f, indent=2, ensure_ascii=False)
             messagebox.showinfo("Template", f"템플릿을 저장했습니다:\n{filepath}")
@@ -6227,8 +6220,14 @@ class CathPlotGUI:
         # 순서는 self._legend_order["1"] 하나만 쓰고(_legend_ordered_keys
         # 참고), Legend2는 그 순서를 그대로 따르되 L2 체크된 것만 걸러
         # 보여준다.
+        # [수정 - 버그, 사용자 보고] "Order 칸에 ▼가 안 보임" - _mk_btn은
+        # 기본 내부 padx=8(좌우 각각)이 붙어서 "▲"/"▼" 버튼 두 개를 나란히
+        # 놓으면 실제 필요한 폭이 ORD_PX(46)보다 커져, 고정폭 _cell의
+        # pack_propagate(False) 때문에 두 번째 버튼(▼)이 프레임 밖으로
+        # 잘려 안 보였다 - 버튼 내부 padx를 줄이고(btn_padx=3) 칸도 넉넉히
+        # 넓힌다.
         CURVE_PX, ORD_PX, L1_PX, L2_PX, COLOR_PX, STYLE_PX, SHAPE_PX, ON_PX, SIZE_PX, FILL_PX, MAX_PX = \
-            160, 46, 32, 32, 65, 100, 100, 40, 55, 50, 35
+            160, 64, 32, 32, 65, 100, 100, 40, 55, 50, 35
 
         def _cell(parent, px, height=20):
             f = tk.Frame(parent, width=px, height=height)
@@ -6340,8 +6339,8 @@ class CathPlotGUI:
             ttk.Label(curve_cell, text=label).pack(side="left")
 
             ord_cell = _cell(row_f, ORD_PX)
-            self._mk_btn(ord_cell, "▲", lambda k=key: _move_curve(k, -1), color="grey", btn_width=2, side="left")
-            self._mk_btn(ord_cell, "▼", lambda k=key: _move_curve(k, 1), color="grey", btn_width=2, side="left", padx=(1, 0))
+            self._mk_btn(ord_cell, "▲", lambda k=key: _move_curve(k, -1), color="grey", btn_width=2, btn_padx=3, side="left")
+            self._mk_btn(ord_cell, "▼", lambda k=key: _move_curve(k, 1), color="grey", btn_width=2, btn_padx=3, side="left", padx=(2, 0))
 
             l1_cell = _cell(row_f, L1_PX)
             self._mk_check(l1_cell, "", self.in_legend1_vars[key], side="left")
@@ -9522,16 +9521,39 @@ class CathPlotGUI:
             _current_id = self.title_counters.get(safe_title, 0)
             next_id = _current_id if _current_id > 0 else 1
             default_name = f"{safe_title}_3D_{next_id}"
+            import json
+            _3d_data = _3d_template_dict()
             # [수정 - 사용자 지적] "template 저장시 이름 부분중복 문제" - 2D
             # save_template()의 파일명 중복 회피(80836ce)가 3D에는 빠져있어,
             # 제안된 이름으로 이미 저장된 3D template 파일이 있으면 조용히
             # 덮어쓸 위험이 있었다 - 2D와 동일하게 "_2", "_3"...로 자동으로
             # 번호를 올려 회피한다.
-            if os.path.exists(os.path.join(template_dir, f"{default_name}.json")):
+            # [재수정 - 2D save_template과 동일 이유] 이름만 겹치면 내용이
+            # 같든 다르든 무조건 번호를 올려서, 같은 3D plot을 반복 테스트로
+            # 여러 번 저장하면 내용은 똑같은데 번호만 계속 늘던 문제 -
+            # 내용까지 비교해서 완전히 같으면 번호를 올리지 않고 그 이름을
+            # 그대로 재사용한다.
+            def _existing_3d_template_matches(name):
+                fp = os.path.join(template_dir, f"{name}.json")
+                if not os.path.exists(fp):
+                    return None
+                try:
+                    with open(fp, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                except Exception:
+                    return False
+                return existing == _3d_data
+
+            _match = _existing_3d_template_matches(default_name)
+            if _match is False:
                 _n = 2
-                while os.path.exists(os.path.join(template_dir, f"{default_name}_{_n}.json")):
+                while True:
+                    _candidate = f"{default_name}_{_n}"
+                    _m = _existing_3d_template_matches(_candidate)
+                    if _m is not False:
+                        default_name = _candidate
+                        break
                     _n += 1
-                default_name = f"{default_name}_{_n}"
             filepath = filedialog.asksaveasfilename(
                 defaultextension=".json",
                 filetypes=[("CathPlot 3D Template", "*.json")],
@@ -9542,9 +9564,8 @@ class CathPlotGUI:
                 return
             self.title_counters[safe_title] = next_id
             try:
-                import json
                 with open(filepath, "w", encoding="utf-8") as f:
-                    json.dump(_3d_template_dict(), f, indent=2, ensure_ascii=False)
+                    json.dump(_3d_data, f, indent=2, ensure_ascii=False)
                 messagebox.showinfo("3D Template", f"3D 템플릿을 저장했습니다:\n{filepath}")
             except Exception as e:
                 messagebox.showerror("3D Template", f"3D 템플릿 저장 실패: {e}")
