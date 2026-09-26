@@ -1234,24 +1234,12 @@ class CathPlotGUI:
         # 이 줄이 병목이 되므로, row=2(옛 row2_f 자리, 이제 비어 있음)에
         # 따로 둔다 - 아래 참고.
 
-        def _legend1_get(key):
-            if key not in self.in_legend1_vars:
-                self.in_legend1_vars[key] = tk.BooleanVar(value=True)
-            return self.in_legend1_vars[key].get()
-
-        def _legend1_set(key, val):
-            if key not in self.in_legend1_vars:
-                self.in_legend1_vars[key] = tk.BooleanVar(value=True)
-            self.in_legend1_vars[key].set(val)
-
-        # [수정 - 사용자 요청] "Curves를 좌측으로 이동" - 버튼 자체는 위(Box
-        # 체크박스 바로 뒤)로 옮겼으니 여기서는 명령만 연결한다(_legend1_get/
-        # _legend1_set이 여기서만 정의돼 있어 configure는 이 위치에서 함).
-        legend1_curves_btn.configure(
-            command=lambda: self._open_curve_select_popup(
-                legend1_curves_btn, "Legend1 Curves", _legend1_get, _legend1_set, "1"
-            )
-        )
+        # [수정 - 사용자 요청] "Curve Feature에 L1/L2 선택 box + 순서(▲▼)를
+        # 추가해 Legend1/2 Curves 팝업과 통합" - 이 버튼이 열던 전용
+        # "Legend1 Curves" 팝업(포함 여부+순서, _open_curve_select_popup)을
+        # 없애고 Curve Features로 합쳤다(L1/L2 체크 + Ord 칸이 그 역할을
+        # 대신함) - 버튼은 그대로 두되 Curve Features를 열도록 재연결.
+        legend1_curves_btn.configure(command=self._open_curve_settings_popup)
 
         # [수정] "입력 줄들이 너무 길다" - Box Thick/Font/Marker를 아래
         # frame_row2(원래 Axis Frame Auto 있던 자리)로 옮겨서 이 줄을 줄임.
@@ -1282,21 +1270,9 @@ class CathPlotGUI:
                      width=5, state="readonly").pack(side="left", padx=1)
         # [수정 - 사용자 요청] Legend1과 동일하게 Box W/H는 Detail 팝업으로
         # 이동(이 줄 폭을 줄이기 위해).
-        def _legend2_get(key):
-            if key not in self.legend_group_vars:
-                self.legend_group_vars[key] = tk.StringVar(value="2")
-            return self.legend_group_vars[key].get() == "2"
-
-        def _legend2_set(key, val):
-            if key not in self.legend_group_vars:
-                self.legend_group_vars[key] = tk.StringVar(value="2")
-            self.legend_group_vars[key].set("2" if val else "1")
-
-        legend2_curves_btn.configure(
-            command=lambda: self._open_curve_select_popup(
-                legend2_curves_btn, "Legend2 Curves", _legend2_get, _legend2_set, "2"
-            )
-        )
+        # [수정 - 사용자 요청] Legend1의 "Curves" 버튼과 동일한 이유로
+        # "Legend2 Curves" 전용 팝업을 없애고 Curve Features로 통합.
+        legend2_curves_btn.configure(command=self._open_curve_settings_popup)
 
         # [수정] "입력 줄들이 너무 길다" - Font(legend_font_var/legend_size_var)를
         # 아래 frame_row2(원래 Axis Frame Auto 있던 자리)로 옮겨서 이 줄을 줄임.
@@ -6245,13 +6221,18 @@ class CathPlotGUI:
         # Max#는 정수 2자리면 되니 줄여줘요" - Style은 아래에서 라벨을
         # 축약 없이 풀어 쓰도록(Dash-Dot/Short-Dash/Dash-DotDot) 바꾸는
         # 김에 폭을 Shape와 같은 100으로 넓히고, Max#는 65->35로 줄인다.
-        # [추가 - 사용자 요청] "Curve Feature에 Legend1/2 구분이 없다" -
-        # L1/L2 체크박스 두 칸을 추가(각각 in_legend1_vars/legend_group_vars
-        # 를 다른 팝업(Legend1/2 Curves)과 동일한 Variable로 그대로 공유) -
-        # 포함 여부는 여기서 바로 보고 바꿀 수 있고, 순서 변경(▲▼)만
-        # 기존 Legend1/2 Curves 팝업에 남겨둔다.
-        CURVE_PX, L1_PX, L2_PX, COLOR_PX, STYLE_PX, SHAPE_PX, ON_PX, SIZE_PX, FILL_PX, MAX_PX = \
-            160, 32, 32, 65, 100, 100, 40, 55, 50, 35
+        # [추가 - 사용자 요청] "Curve Feature에 Legend1/2 구분이 없다 ->
+        # L1/L2 선택 box + 위아래 화살표로 Legend1/2 Curves 팝업과 통합" -
+        # L1/L2 체크박스(각각 in_legend1_vars/legend_group_vars를 그대로
+        # 공유)에 Ord(▲▼) 칸을 더해 옛 "Legend1 Curves"/"Legend2 Curves"
+        # 팝업(포함 여부 + 순서 변경)의 역할을 이 팝업 하나로 합친다 -
+        # 사용자 확인: "Legend1/2가 항상 같은 상대 순서를 공유"하는
+        # 단순화(서로 다른 순서로 독립 재배치는 더 이상 불가)를 받아들임.
+        # 순서는 self._legend_order["1"] 하나만 쓰고(_legend_ordered_keys
+        # 참고), Legend2는 그 순서를 그대로 따르되 L2 체크된 것만 걸러
+        # 보여준다.
+        CURVE_PX, ORD_PX, L1_PX, L2_PX, COLOR_PX, STYLE_PX, SHAPE_PX, ON_PX, SIZE_PX, FILL_PX, MAX_PX = \
+            160, 46, 32, 32, 65, 100, 100, 40, 55, 50, 35
 
         def _cell(parent, px, height=20):
             f = tk.Frame(parent, width=px, height=height)
@@ -6262,6 +6243,7 @@ class CathPlotGUI:
         header_f = ttk.Frame(popup)
         header_f.pack(fill="x", padx=10, pady=(10, 2))
         ttk.Label(_cell(header_f, CURVE_PX), text="Curve", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, ORD_PX), text="Ord", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, L1_PX), text="L1", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, L2_PX), text="L2", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, COLOR_PX), text="Color", font=("Consolas", 9, "bold")).pack(side="left")
@@ -6293,6 +6275,27 @@ class CathPlotGUI:
         # 그대로 - _legend_ordered_keys가 빈 리스트일 때 그렇게 처리함).
         _base_ordered_keys, _y1_set, _y2_set = self._ordered_selected_keys()
         _ordered_keys = self._legend_ordered_keys("1", _base_ordered_keys)
+
+        # [추가 - 사용자 요청] Ord(▲▼) - 옛 "Legend1/2 Curves" 팝업의 순서
+        # 변경 기능을 여기로 통합. self._legend_order["1"] 하나만 갱신하면
+        # _legend_ordered_keys가 "2"에도 그대로 반영하므로(위 주석 참고)
+        # Legend1/2 둘 다 이 순서를 같이 따라간다. 옮긴 뒤에는 팝업을
+        # 통째로 다시 그려 새 순서를 반영한다(옛 팝업과 동일한 패턴).
+        def _reopen_curve_settings():
+            popup.destroy()
+            self._open_curve_settings_popup()
+
+        def _move_curve(key, delta):
+            lst = self._legend_order.get("1") or []
+            if key not in lst:
+                lst = list(_ordered_keys)
+            self._legend_order["1"] = lst
+            i = lst.index(key)
+            j = i + delta
+            if 0 <= j < len(lst):
+                lst[i], lst[j] = lst[j], lst[i]
+            _reopen_curve_settings()
+
         any_added = False
         for key in _ordered_keys:
             any_added = True
@@ -6335,6 +6338,10 @@ class CathPlotGUI:
 
             curve_cell = _cell(row_f, CURVE_PX)
             ttk.Label(curve_cell, text=label).pack(side="left")
+
+            ord_cell = _cell(row_f, ORD_PX)
+            self._mk_btn(ord_cell, "▲", lambda k=key: _move_curve(k, -1), color="grey", btn_width=2, side="left")
+            self._mk_btn(ord_cell, "▼", lambda k=key: _move_curve(k, 1), color="grey", btn_width=2, side="left", padx=(1, 0))
 
             l1_cell = _cell(row_f, L1_PX)
             self._mk_check(l1_cell, "", self.in_legend1_vars[key], side="left")
@@ -6606,14 +6613,21 @@ class CathPlotGUI:
         return result
 
     def _legend_ordered_keys(self, legend_key, base_keys):
-        """[추가 - 사용자 보고 버그] "Legend1/Legend2 순서 독립적으로" -
-        base_keys(보통 _ordered_selected_keys()가 반환하는 전체 클릭 순서)를
-        legend_key("1"/"2")별 독립 순서(self._legend_order[legend_key])로
-        다시 정렬한다. 그 Legend에서 아직 한 번도 순서를 안 바꿨으면(리스트가
-        비어있으면) base_keys 순서를 그대로 기본값으로 써서(기존 동작과
-        동일한 첫인상), 리스트에 아직 없는 키(새로 선택된 curve 등)는 원래
-        자리 그대로 뒤에 이어붙인다."""
-        order = self._legend_order.get(legend_key) or []
+        """base_keys(보통 _ordered_selected_keys()가 반환하는 전체 클릭 순서)를
+        저장된 순서(self._legend_order["1"])로 다시 정렬한다. 아직 한 번도
+        순서를 안 바꿨으면(리스트가 비어있으면) base_keys 순서를 그대로
+        기본값으로 써서(기존 동작과 동일한 첫인상), 리스트에 아직 없는
+        키(새로 선택된 curve 등)는 원래 자리 그대로 뒤에 이어붙인다.
+        [수정 - 사용자 요청] "Legend1/2 Curves 팝업을 Curve Features로
+        통합, 순서는 하나만" - 예전엔 legend_key("1"/"2")별로 완전히 독립된
+        순서(self._legend_order[legend_key])를 따로 유지했지만(각자
+        ▲▼로 재배치), 이제 Curve Features 한 곳의 Ord(▲▼)만 남기면서
+        Legend1/2가 항상 같은 상대 순서를 공유하도록 단순화했다 - 그래서
+        legend_key 인자와 무관하게 항상 self._legend_order["1"]을 쓴다
+        (인자 자체는 호출부 호환을 위해 남겨둠 - "2"로 불러도 동일하게
+        동작). Legend2 박스에 실제로 어떤 curve가 나오는지는 이 순서와
+        별개로 legend_group_vars(L2 체크 여부)가 그대로 결정한다."""
+        order = self._legend_order.get("1") or []
         if not order:
             # [수정 - 사용자 요청] "Curves 버튼/Curve Features 안 curve 기본
             # 순서는 Y1 선택 순서 다음 Y2 선택 순서로" - 아직 한 번도
@@ -6631,83 +6645,6 @@ class CathPlotGUI:
         ordered = [k for k in order if k in base_set]
         ordered += [k for k in base_keys if k not in ordered]
         return ordered
-
-    def _open_curve_select_popup(self, anchor_widget, title, get_checked, set_checked, legend_key):
-        """Legend1/Legend2 공용 curve 선택 팝업. get_checked(key)/set_checked(key, bool)로
-        체크 상태를 읽고 쓴다 - Legend1은 in_legend1_vars(bool), Legend2는
-        legend_group_vars(문자열 "1"/"2")를 각각 다르게 저장하지만 이 함수는
-        그 차이를 신경 안 쓰고 동일하게 다룬다. tk.Menu와 달리 항목을 체크해도
-        창이 안 닫혀서 여러 개를 한 번에 고를 수 있다.
-
-        [추가 - 요청] "선택한 순서대로 curve를 그려주기 - curves 선택 창에서도
-        바꿀 수 있게" - 이 팝업이 지금 Y1/Y2로 선택된 모든 curve를 한 곳에
-        모아 보여주는 건 Legend1/Legend2 어느 쪽에서 열어도 동일하지만, [수정
-        - 사용자 보고 버그] "Legend1에서 순서를 바꾸면 Legend2도 같이 바뀜 -
-        각각 독립적으로" - 순서 자체(각 줄의 ▲▼로 옮기는 것)는 legend_key
-        ("1"=Legend1, "2"=Legend2)로 구분된 self._legend_order[legend_key]를
-        따로 건드리도록 바꿔, 한쪽에서 순서를 바꿔도 다른 쪽은 그대로다."""
-        popup = tk.Toplevel(self.root)
-        popup.title(title)
-        popup.transient(self.root)
-        x = anchor_widget.winfo_rootx()
-        y = anchor_widget.winfo_rooty() + anchor_widget.winfo_height()
-        popup.geometry(f"+{x}+{y}")
-
-        list_frame = ttk.Frame(popup)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
-
-        _base_keys, _y1_set, _y2_set = self._ordered_selected_keys()
-        keys = self._legend_ordered_keys(legend_key, _base_keys)
-
-        def _reopen():
-            popup.destroy()
-            self._open_curve_select_popup(anchor_widget, title, get_checked, set_checked, legend_key)
-
-        def _move(key, delta):
-            lst = self._legend_order.get(legend_key) or []
-            if key not in lst:
-                # 트래킹 안 된 키(프로그램적 선택 등 - 안전망): 지금 표시
-                # 순서를 그대로 기준선으로 등록한 뒤 옮긴다.
-                lst = list(keys)
-            self._legend_order[legend_key] = lst
-            i = lst.index(key)
-            j = i + delta
-            if 0 <= j < len(lst):
-                lst[i], lst[j] = lst[j], lst[i]
-            _reopen()
-
-        if not keys:
-            ttk.Label(list_frame, text="(선택된 Y1/Y2 변수 없음)").pack(padx=5, pady=10)
-        else:
-            for idx, key in enumerate(keys):
-                label = self.legend_vars[key].get() if key in self.legend_vars else key
-                check_var = tk.BooleanVar(value=get_checked(key))
-
-                def _toggle(cv=check_var, k=key):
-                    set_checked(k, cv.get())
-
-                row = ttk.Frame(list_frame)
-                row.pack(fill="x", anchor="w")
-                ttk.Label(row, text=f"{idx + 1}.", width=3, anchor="e").pack(side="left")
-                self._mk_check(row, label, check_var, command=_toggle, anchor="w", pady=1, side="left")
-                self._mk_btn(row, "▲", lambda k=key: _move(k, -1), color="grey", btn_width=2, side="left", padx=(6, 1))
-                self._mk_btn(row, "▼", lambda k=key: _move(k, 1), color="grey", btn_width=2, side="left", padx=1)
-
-        def select_all():
-            for key in keys:
-                set_checked(key, True)
-            _reopen()
-
-        def select_none():
-            for key in keys:
-                set_checked(key, False)
-            _reopen()
-
-        btn_row = ttk.Frame(popup)
-        btn_row.pack(fill="x", padx=10, pady=8)
-        ttk.Button(btn_row, text="전체 선택", command=select_all).pack(side="left", padx=(0, 5))
-        ttk.Button(btn_row, text="전체 해제", command=select_none).pack(side="left")
-        ttk.Button(btn_row, text="닫기", command=popup.destroy).pack(side="right")
 
     def open_batch_queue_dialog(self):
         dlg = tk.Toplevel(self.root)
