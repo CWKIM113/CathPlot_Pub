@@ -3421,18 +3421,14 @@ class CathPlotGUI:
         # [추가 - 사용자 요청] Shape=Auto인 curve들을 이제서야 확정된 최종
         # 순서대로 다시 순번을 매겨 재계산한다(위 구성 루프의 _needs_auto
         # 표시 참고 - 그 시점엔 이 정렬이 아직 안 끝나 순서를 몰랐음).
-        # [수정 - 사용자 보고 버그 + 사용자 요청, 화면(Interactive) 렌더링과
-        # 동일한 이유] "Legend1은 open, Legend2는 fill로 각각 circle부터
-        # (Y1/Y2 구분에도 유용, 선정된 curve들만)" - 실제 그리기 순서
-        # (z-order)/legend 기본 순서는 그대로 curve_order(클릭 순서)를
-        # 유지하되, Auto 배정은 curve.legend_group 기준으로 Legend1
-        # 그룹(!=2)과 Legend2 그룹(==2)으로 나눠 각 그룹 안에서
-        # curve_order 상대 순서를 유지한 채 auto_rank를 0부터 따로
-        # 매기고 fill_on도 그룹별로 강제한다 - execute_plot_pipeline
-        # (화면)과 동일한 원칙.
-        _group1 = [(_k, _c, _n) for _k, _c, _n in curves if getattr(_c, "legend_group", 1) != 2]
-        _group2 = [(_k, _c, _n) for _k, _c, _n in curves if getattr(_c, "legend_group", 1) == 2]
-        for _grp, _force_fill in ((_group1, False), (_group2, True)):
+        # [수정 - 사용자 재요청, execute_plot_pipeline(화면)과 동일한 이유]
+        # "y1은 open, y2는 fill로, 각각 circle부터 따로 순서대로" - 모양
+        # 순번과 fill 여부 둘 다 curve.axis(Y1/Y2) 기준으로 두 그룹을 나눠
+        # 각 그룹 안에서 curve_order 상대 순서를 유지한 채 0부터 따로
+        # 매긴다(Legend1/2 소속과는 무관).
+        _group_y1 = [(_k, _c, _n) for _k, _c, _n in curves if _c.axis == "y1"]
+        _group_y2 = [(_k, _c, _n) for _k, _c, _n in curves if _c.axis != "y1"]
+        for _grp, _force_fill in ((_group_y1, False), (_group_y2, True)):
             _rank = 0
             for _key, _curve, _needs_auto in _grp:
                 if _needs_auto:
@@ -6243,7 +6239,7 @@ class CathPlotGUI:
         header_f = ttk.Frame(popup)
         header_f.pack(fill="x", padx=10, pady=(10, 2))
         ttk.Label(_cell(header_f, CURVE_PX), text="Curve", font=("Consolas", 9, "bold")).pack(side="left")
-        ttk.Label(_cell(header_f, ORD_PX), text="Ord", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, ORD_PX), text="Order", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, L1_PX), text="L1", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, L2_PX), text="L2", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, COLOR_PX), text="Color", font=("Consolas", 9, "bold")).pack(side="left")
@@ -6313,13 +6309,13 @@ class CathPlotGUI:
             if key not in self.marker_maxcount_vars:
                 self.marker_maxcount_vars[key] = tk.StringVar(value="")
             if key not in self.marker_fill_vars:
-                # [수정 - 사용자 요청] "Legend2 Curve Feature에서 Fill은 기본
-                # 체크로" - Auto Shape가 이제 Legend2 소속 curve는 항상 fill로
-                # 그리므로(_resolve_marker_shape 참고), 이 팝업에 처음 뜰 때도
-                # Legend2 소속이면 Fill 체크박스 기본값을 True로 맞춰 실제
-                # 렌더링과 화면 표시가 어긋나 보이지 않게 한다(Legend1 소속은
-                # 기존과 동일하게 기본 False/open).
-                _default_fill = bool(self.legend_group_vars.get(key) and self.legend_group_vars[key].get() == "2")
+                # [수정 - 사용자 재요청] "y1은 open, y2는 fill(체크박스도
+                # checked)로" - Auto Shape가 이제 axis 기준으로 Y1은 항상
+                # open, Y2는 항상 fill로 그리므로(_resolve_marker_shape
+                # 참고), 이 팝업에 처음 뜰 때도 Y2 curve면 Fill 체크박스
+                # 기본값을 True로 맞춰 실제 렌더링과 화면 표시가 어긋나
+                # 보이지 않게 한다.
+                _default_fill = key not in _y1_set
                 self.marker_fill_vars[key] = tk.BooleanVar(value=_default_fill)
             # [추가 - 사용자 요청] Dat list에서 옮겨온 Color/Style - 보통
             # show_variables()가 먼저 이 key를 lazy-init해두지만, 방어적으로
@@ -6350,19 +6346,12 @@ class CathPlotGUI:
             l1_cell = _cell(row_f, L1_PX)
             self._mk_check(l1_cell, "", self.in_legend1_vars[key], side="left")
 
-            # [추가 - 사용자 요청] L2를 체크/해제하면(Legend2 소속이 바뀌면)
-            # Shape=Auto인 curve는 실제 렌더링도 즉시 fill 여부가 바뀌므로
-            # (_resolve_marker_shape 참고), 화면에 보이는 Fill 체크박스도
-            # 같이 맞춰서 "체크박스는 안 바뀌었는데 그림은 fill로 나온다"는
-            # 이번에 보고된 혼란이 다시 생기지 않게 한다. Shape가 Auto가
-            # 아니면(사용자가 직접 모양/채움을 고정한 경우) 건드리지 않는다.
-            def _on_l2_toggle(k=key):
-                if self.marker_shape_vars[k].get() == "Auto":
-                    self.marker_fill_vars[k].set(self.legend_group_vars[k].get() == "2")
-
+            # [수정 - 사용자 재요청] Fill은 이제 L2 소속이 아니라 axis(Y1/
+            # Y2)로 결정되므로(_resolve_marker_shape 참고), L2 체크와 Fill
+            # 체크박스를 더 이상 서로 동기화하지 않는다 - L2는 순수하게
+            # Legend2 박스 포함 여부만 담당.
             l2_cell = _cell(row_f, L2_PX)
-            self._mk_check(l2_cell, "", self.legend_group_vars[key], onvalue="2", offvalue="1",
-                            command=_on_l2_toggle, side="left")
+            self._mk_check(l2_cell, "", self.legend_group_vars[key], onvalue="2", offvalue="1", side="left")
 
             color_cell = _cell(row_f, COLOR_PX)
             color_combo = ttk.Combobox(color_cell, textvariable=self.color_vars[key],
@@ -6392,7 +6381,26 @@ class CathPlotGUI:
             self._disable_combobox_wheel(size_combo)
 
             fill_cell = _cell(row_f, FILL_PX)
-            self._mk_check(fill_cell, "", self.marker_fill_vars[key], side="left")
+            _fill_chk = self._mk_check(fill_cell, "", self.marker_fill_vars[key], side="left")
+
+            # [수정 - 코드 검토] Shape=Auto인 curve는 fill이 axis(Y1=open,
+            # Y2=fill)로 강제돼(_get_marker_fields의 auto_fill_override) Fill
+            # 체크박스 값이 실제 그림에 반영되지 않는데, 체크박스는 그대로
+            # 눌려서 "수동 조정 가능"처럼 보였음 - Auto인 동안은 체크박스를
+            # 축 기준 값으로 맞추고 잠그며, 특정 모양을 고르면 다시 풀어
+            # curve별로 직접 채움을 정할 수 있게 한다.
+            def _sync_fill_lock(*_, k=key, chk=_fill_chk):
+                try:
+                    if self.marker_shape_vars[k].get() == "Auto":
+                        self.marker_fill_vars[k].set(k not in _y1_set)
+                        chk.configure(state="disabled")
+                    else:
+                        chk.configure(state="normal")
+                except tk.TclError:
+                    pass  # 팝업이 닫혀 위젯이 사라진 뒤의 trace 호출
+            _trace_id = self.marker_shape_vars[key].trace_add("write", _sync_fill_lock)
+            _fill_chk.bind("<Destroy>", lambda e, k=key, t=_trace_id: self._safe_trace_remove(self.marker_shape_vars[k], t), add="+")
+            _sync_fill_lock()
 
             max_cell = _cell(row_f, MAX_PX)
             ttk.Entry(max_cell, textvariable=self.marker_maxcount_vars[key],
@@ -6403,10 +6411,10 @@ class CathPlotGUI:
 
         ttk.Label(
             popup,
-            text="On 체크 해제 시 이 curve는 마커 없음(Shape는 무관). Shape=Auto면 L1/L2 소속에 따라 각각 "
-                 "Circle부터 순서대로 서로 다른 모양을 자동 배정(L1=open, L2=fill). L1/L2 체크는 Legend1/2 "
-                 "Curves 팝업과 값을 공유함(순서 변경은 그쪽에서). Max#를 비우면 자동(대략 20~30개, 데이터가 "
-                 "적으면 전부 표시). M 크기 = pointsize 1.0",
+            text="On 체크 해제 시 이 curve는 마커 없음(Shape는 무관). Shape=Auto면 Y1/Y2 각각 Circle부터 "
+                 "순서대로 서로 다른 모양을 자동 배정(Y1=open, Y2=fill - Auto인 동안 Fill은 잠김, 채움을 직접 정하려면 Shape를 지정). "
+                 "L1/L2는 Legend1/2 박스 포함 여부, Order(▲▼)는 두 Legend가 공유하는 표시 순서. Max#를 비우면 "
+                 "자동(대략 20~30개, 데이터가 적으면 전부 표시). M 크기 = pointsize 1.0",
             foreground="#555555", wraplength=680, justify="left"
         ).pack(padx=10, pady=(4, 0), anchor="w")
 
@@ -6414,10 +6422,9 @@ class CathPlotGUI:
         # 다음 set은 속이찬 마커로 순서대로" - 여러 curve를 매번 손으로
         # 하나씩 고르지 않아도, 한 번 눌러서 Curve 순서(위 목록과 동일한
         # _ordered_keys)대로 서로 다른 모양을 자동 배정한다.
-        # [수정 - 사용자 요청] "Legend1은 open, Legend2는 fill로 각각
-        # circle부터" - _resolve_marker_shape의 Auto 규칙과 동일하게,
-        # 예전의 "도형 10종 한 바퀴는 open, 두 바퀴째는 fill" 대신 L1/L2
-        # 그룹별로 순번과 fill을 따로 매긴다(L1=open 고정, L2=fill 고정,
+        # [수정 - 사용자 재요청] "y1은 open, y2는 fill로 각각 circle부터"
+        # - _resolve_marker_shape의 Auto 규칙과 동일하게, axis(Y1/Y2)
+        # 그룹별로 순번과 fill을 따로 매긴다(Y1=open 고정, Y2=fill 고정,
         # 둘 다 도형은 Circle부터). 이미 골라둔 값이 있어도 항상 이 순서로
         # 다시 채운다(예측 가능한 한 번의 초기화 버튼).
         def _auto_assign_markers():
@@ -6431,10 +6438,8 @@ class CathPlotGUI:
             n_shapes = len(shapes)
             if n_shapes == 0:
                 return
-            _group1 = [k for k in _ordered_keys if self.legend_group_vars.get(k) is None
-                       or self.legend_group_vars[k].get() != "2"]
-            _group2 = [k for k in _ordered_keys if self.legend_group_vars.get(k) is not None
-                       and self.legend_group_vars[k].get() == "2"]
+            _group1 = [k for k in _ordered_keys if k in _y1_set]
+            _group2 = [k for k in _ordered_keys if k not in _y1_set]
             for _keys, _fill in ((_group1, False), (_group2, True)):
                 for i, key in enumerate(_keys):
                     self.marker_shape_vars[key].set(shapes[i % n_shapes])
@@ -6814,15 +6819,15 @@ class CathPlotGUI:
             item.get("marker_shape_label", "Auto") for item in recipe
             if self._infer_marker_on(item) and item.get("marker_shape_label", "Auto") != "Auto"
         }
-        # [수정 - 사용자 보고 버그 + 사용자 요청, 화면(Interactive) 렌더링과
-        # 동일한 이유] "Legend1은 open, Legend2는 fill로 각각 circle부터
-        # (Y1/Y2 구분에도 유용, 선정된 curve들만)" - 실제 curve 목록/그리기
-        # 순서는 recipe 순서를 그대로 유지하되, Auto 배정은 legend_group
-        # 기준으로 Legend1 그룹(!=2)과 Legend2 그룹(==2)으로 나눠 각 그룹
-        # 안에서는 recipe 상대 순서를 유지한 채 auto_rank를 0부터 따로
-        # 매기고 fill_on도 그룹별로 강제한다(recipe 안 위치=index로 매칭).
-        _group1_indices = [i for i, item in enumerate(recipe) if item.get("legend_group", 1) != 2]
-        _group2_indices = [i for i, item in enumerate(recipe) if item.get("legend_group", 1) == 2]
+        # [수정 - 사용자 재요청, 화면(Interactive) 렌더링과 동일한 이유]
+        # "y1은 open, y2는 fill로 각각 circle부터 따로 순서대로" - 실제
+        # curve 목록/그리기 순서는 recipe 순서를 그대로 유지하되, Auto
+        # 배정은 axis 기준으로 Y1 그룹과 Y2 그룹으로 나눠 각 그룹 안에서는
+        # recipe 상대 순서를 유지한 채 auto_rank를 0부터 따로 매기고
+        # fill_on도 그룹별로 강제한다(recipe 안 위치=index로 매칭,
+        # Legend1/2 소속과는 무관).
+        _group1_indices = [i for i, item in enumerate(recipe) if item.get("axis") == "y1"]
+        _group2_indices = [i for i, item in enumerate(recipe) if item.get("axis") != "y1"]
         _marker_shape_by_index = {}
         for _indices, _force_fill in ((_group1_indices, False), (_group2_indices, True)):
             _rank = 0
@@ -11043,23 +11048,22 @@ class CathPlotGUI:
                 if self.marker_on_vars.get(k) and self.marker_on_vars[k].get()
                 and k in self.marker_shape_vars and self.marker_shape_vars[k].get() != "Auto"
             }
-            # [수정 - 사용자 보고 버그 + 사용자 요청] "Shape On Auto로 그려보면
-            # Y1/Y2가 클릭(선택)한 순서대로 뒤섞여 배정됨" -> "Legend1은
-            # open, Legend2는 fill로 각각 circle부터 (Y1/Y2 구분에도 유용,
-            # 선정된 curve들만)" - 실제 그리기 순서(temp_curves_info,
-            # z-order)는 여전히 클릭 순서를 그대로 쓰되, Auto Shape는
-            # Legend1 그룹(legend_group!=2)과 Legend2 그룹(legend_group==2)
-            # 으로 나눠 각각 Curve Features 팝업과 동일한 순서
-            # (_legend_ordered_keys)로 auto_rank를 0부터 따로 매기고,
-            # fill_on도 그룹별로 강제한다(Legend1=open, Legend2=fill) -
-            # 그래야 Legend1/2가 시각적으로도 구분되고, 팝업에서 보이는
-            # 순서와 실제 배정되는 모양 순서가 그룹 내에서 일치한다.
-            def _is_legend2(_k):
-                return bool(self.legend_group_vars.get(_k) and self.legend_group_vars[_k].get() == "2")
-            _group1_keys = [k for k in self._legend_ordered_keys("1", ordered_keys) if not _is_legend2(k)]
-            _group2_keys = [k for k in self._legend_ordered_keys("2", ordered_keys) if _is_legend2(k)]
+            # [수정 - 사용자 보고 버그 + 사용자 재요청] "Shape On Auto로 그려보면
+            # Y1/Y2가 클릭(선택)한 순서대로 뒤섞여 배정됨" -> (최종) "y1은
+            # open, y2는 fill(체크박스도 checked)로, 각각 circle부터 따로
+            # 순서대로 - L1/L2 모두 Auto가 기본, 필요시 수동 조정" - 모양
+            # 순번과 fill 여부 둘 다 axis(Y1/Y2) 기준으로 두 그룹을 나눠
+            # 각각 Circle부터 독립적으로 매긴다(Legend1/2 소속과는 무관 -
+            # 대부분 Legend2를 안 켠 채 Legend1 하나만 쓰므로 Legend 기준
+            # 으로는 Y1/Y2 구분이 안 됐었음). 실제 그리기 순서(temp_curves_
+            # info, z-order)는 그대로 클릭 순서를 쓰고, Auto 배정 순번만
+            # Curve Features와 동일한 통합 순서(_legend_ordered_keys)를
+            # axis로 걸러 씀.
+            _unified_order = self._legend_ordered_keys("1", ordered_keys)
+            _group_y1 = [k for k in _unified_order if k in active_y1_set]
+            _group_y2 = [k for k in _unified_order if k not in active_y1_set]
             _marker_fields_by_key = {}
-            for _grp_keys, _force_fill in ((_group1_keys, False), (_group2_keys, True)):
+            for _grp_keys, _force_fill in ((_group_y1, False), (_group_y2, True)):
                 _rank = 0
                 for _mk in _grp_keys:
                     _mshape, _msize, _mmax, _mused_auto = self._get_marker_fields(
@@ -11685,6 +11689,13 @@ class CathPlotGUI:
                 self.root.after(interval_ms, _poll)
 
         self.root.after(interval_ms, _poll)
+
+    @staticmethod
+    def _safe_trace_remove(var, trace_id):
+        try:
+            var.trace_remove("write", trace_id)
+        except (tk.TclError, ValueError):
+            pass
 
     @staticmethod
     def _gnuplot_crash_message(proc, what, fallback_hint):
@@ -12600,13 +12611,13 @@ class CathPlotGUI:
         순서대로)으로 자동으로 구체적인 모양을 고른다 - 그래서 Auto를
         선택해두면 매번 버튼을 눌러 값을 "고정"하지 않아도 항상 최신
         curve 구성을 따라간다.
-        [수정 - 사용자 요청] "Legend1은 open, Legend2는 fill로 circle부터
-        (Y1/Y2 구분에도 유용)" - fill_on은 호출부가 그룹별 기준값(Legend1
-        그룹=False/open, Legend2 그룹=True/fill)을 고정으로 넘기고,
-        auto_rank도 그룹별로 0부터 따로 매긴다(도형 순서는 두 그룹 모두
-        정의된 순서 그대로: Circle→Square→...→Star, 다 돌면 fill은
-        그대로 유지한 채 처음부터 반복 - "fill은 그룹별로 이미 고정돼
-        있으니 도형만 순환하면 된다"는 사용자 확인에 따름).
+        [수정 - 사용자 요청, 최종안] "y1은 open, y2는 fill로 각각 circle부터
+        따로 순서대로" - fill_on은 호출부가 axis 기준값(Y1 그룹=False/
+        open, Y2 그룹=True/fill)을 고정으로 넘기고, auto_rank도 그룹별로
+        0부터 따로 매긴다(도형 순서는 두 그룹 모두 정의된 순서 그대로:
+        Circle→Square→...→Star, 다 돌면 fill은 그대로 유지한 채 처음부터
+        반복). Legend1/Legend2 소속(L1/L2 체크)은 이 배정과 무관 - 어느
+        legend 박스에 표시되는지만 결정한다.
         [수정 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을 건너뛰고
         순차적으로" - excluded_shapes(호출부가 미리 한 번 훑어서 모은,
         "이 그림에서 marker_on=True이고 Shape를 Auto가 아닌 특정 모양으로
