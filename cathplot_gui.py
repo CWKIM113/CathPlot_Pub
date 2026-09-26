@@ -11592,27 +11592,43 @@ class CathPlotGUI:
                 # Batch/Save/Print(=custom_filepath 지정)에서는 여기서 참조하면 안 됨 -
                 # Interactive 분기 안에서만 curr_id를 계산하도록 함.
 
-                if not _crashed:
-                    curr_id = next_id
-                    # [수정] Plot Title은 비어있을 수 있어서(Batch Queue 등에서는 의도적으로
-                    # 비워둠) 그걸로 표시 이름을 만들면 "_31"처럼 제목 없이 번호만 남는
-                    # 문제가 있었음 - 실제 저장되는 plt 파일명(safe_title)을 그대로 사용
-                    self.plot_processes.append(generator.last_process)
-                    self.active_plots_cache[f"{safe_title}_{curr_id}"] = plotdef
-                    # [추가 - 사용자 요청] "먼저 그린 창을 Template Save에서 선택"
-                    # - 지금 이 화면 상태(_template_dict가 읽는 것과 같은 위젯
-                    # 값들)가 방금 이 plotdef를 만든 바로 그 상태이므로, 여기서
-                    # 같이 스냅샷 떠두면 이후 화면이 Template Load 등으로 바뀌어도
-                    # save_template이 이 키를 고르면 손실 없이 그대로 복원해
-                    # 저장할 수 있다(plotdef -> dict 역변환 없이, 위젯을 그대로
-                    # 한 번 더 읽어서 저장하는 방식이라 완전히 정확함).
-                    try:
-                        self.active_plot_templates[f"{safe_title}_{curr_id}"] = self._template_dict()
-                    except Exception:
-                        pass
-                    self.plot_process_by_title[base_name] = generator.last_process
+                if _crashed:
+                    # 띄우자마자 목록에 먼저 올려둔 항목을 되돌린다(아래 참고) -
+                    # 바로 죽은 창이 Multi Print/Save 목록에 "유령 항목"으로
+                    # 남지 않게 하는 원래 목적은 그대로.
+                    _cache_key = f"{safe_title}_{next_id}"
+                    if self.active_plots_cache.get(_cache_key) is plotdef:
+                        self.active_plots_cache.pop(_cache_key, None)
+                        self.active_plot_templates.pop(_cache_key, None)
+                    if generator.last_process in self.plot_processes:
+                        self.plot_processes.remove(generator.last_process)
+                    if self.plot_process_by_title.get(base_name) is generator.last_process:
+                        self.plot_process_by_title.pop(base_name, None)
 
             if mode == "Interactive" and generator.last_process is not None:
+                # [수정 - 사용자 요청 "사용자가 못 느끼게"] Multi Print/Save 목록
+                # 등록은 확인(최대 2초)을 기다리지 않고 창을 띄우자마자 바로
+                # 한다 - 예전처럼 PLOT 직후 곧바로 목록에서 보이고, 화면 상태
+                # 스냅샷(_template_dict)도 PLOT을 누른 바로 그 순간 값으로 뜬다.
+                # 곧바로 죽은 경우에만 _after_launch가 다시 뺀다.
+                curr_id = next_id
+                # [수정] Plot Title은 비어있을 수 있어서(Batch Queue 등에서는 의도적으로
+                # 비워둠) 그걸로 표시 이름을 만들면 "_31"처럼 제목 없이 번호만 남는
+                # 문제가 있었음 - 실제 저장되는 plt 파일명(safe_title)을 그대로 사용
+                self.plot_processes.append(generator.last_process)
+                self.active_plots_cache[f"{safe_title}_{curr_id}"] = plotdef
+                # [추가 - 사용자 요청] "먼저 그린 창을 Template Save에서 선택"
+                # - 지금 이 화면 상태(_template_dict가 읽는 것과 같은 위젯
+                # 값들)가 방금 이 plotdef를 만든 바로 그 상태이므로, 여기서
+                # 같이 스냅샷 떠두면 이후 화면이 Template Load 등으로 바뀌어도
+                # save_template이 이 키를 고르면 손실 없이 그대로 복원해
+                # 저장할 수 있다(plotdef -> dict 역변환 없이, 위젯을 그대로
+                # 한 번 더 읽어서 저장하는 방식이라 완전히 정확함).
+                try:
+                    self.active_plot_templates[f"{safe_title}_{curr_id}"] = self._template_dict()
+                except Exception:
+                    pass
+                self.plot_process_by_title[base_name] = generator.last_process
                 self._watch_plot_process_start(generator.last_process, _after_launch)
             elif _all_warn:
                 messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
