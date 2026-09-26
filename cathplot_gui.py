@@ -69,18 +69,33 @@ COLOR_MAP = {
     "Gray": "gray",
 }
 
+# [수정 - 사용자 요청] "Curve Features가 따로 뜨니 Style 입력박스를 더
+# 길게 하고 D -> Dot으로, Dash-2D -> Dash-DotDot 등으로" - 폭이 빠듯해서
+# Short-Dash/Dash-Dot/Dash-Dot-Dot을 Short-D/Dash-D/Dash-2D로 줄여
+# 썼었는데, Curve Features가 메인 화면과 분리된 별도 팝업이 되면서 폭
+# 여유가 생겨 다시 풀어 쓴다. 예전 축약 라벨로 저장된 template/batch
+# recipe와의 하위호환은 _STYLE_LABEL_ALIASES(아래)가 읽는 시점에 새
+# 라벨로 옮겨준다.
 STYLE_MAP = {
     "Auto": "",
     "Solid": "solid",
     "Dash": "dash",
     "Dot": "dot",
-    "Dash-D": "dashdot",       # Dash-Dot (일점쇄선)
-    # [수정 - 요청] "Style box 폭을 줄이기 위해 Short-Dash -> Short-D로 축약" -
-    # 최장 옵션이 10자(Short-Dash)에서 7자(Short-D/Dash-2D 동률)로 줄어서
-    # STYLE_COL_PX도 같이 줄일 수 있게 됨(아래 STYLE_COL_PX 참고).
-    "Short-D": "shortdash",
-    "Dash-2D": "dashdotdot",  # Dash-Dot-Dot (이점쇄선)
+    "Dash-Dot": "dashdot",        # 일점쇄선
+    "Short-Dash": "shortdash",
+    "Dash-DotDot": "dashdotdot",  # 이점쇄선
 }
+
+# [추가 - 사용자 요청] 위 폭 축소로 붙였던 옛 축약 라벨 -> 새 라벨. 이미
+# 저장된 template(*.json)/Batch recipe의 "linestyle" 필드가 옛 라벨
+# 문자열을 그대로 담고 있으므로, 그런 값을 읽는 자리에서 이 표로 먼저
+# 옮긴 뒤 STYLE_MAP을 찾는다(안 옮기면 STYLE_MAP에 없는 키가 돼 조용히
+# Auto/실선 취급되어 저장된 스타일이 사라져 보임).
+_STYLE_LABEL_ALIASES = {"Dash-D": "Dash-Dot", "Short-D": "Short-Dash", "Dash-2D": "Dash-DotDot"}
+
+
+def _migrate_style_label(label):
+    return _STYLE_LABEL_ALIASES.get(label, label)
 
 # Marker(점 마커) 모양 - 표시 라벨 -> (속 빈 pointtype, 채운 pointtype)
 # Cross/Star는 gnuplot에 채운/빈 구분이 따로 없어 동일값 사용
@@ -607,7 +622,8 @@ class CathPlotGUI:
         self._check_img_cache[cache_key] = imgs
         return imgs
 
-    def _mk_check(self, parent, text, variable, color="accent", command=None, no_pack=False, size=15, bold=False, **pack_kw):
+    def _mk_check(self, parent, text, variable, color="accent", command=None, no_pack=False, size=15, bold=False,
+                  onvalue=None, offvalue=None, **pack_kw):
         # [추가] "Auto X Range 등 체크박스 체크시 색상도 넣어 강조" - color는
         # self.PALETTE의 키 이름. bg는 부모(ttk.Frame 등)와 어울리도록 앱 배경색으로
         # 맞추고, 테두리는 없앤다(Windows 기본 tk.Checkbutton의 두꺼운 포커스
@@ -620,12 +636,22 @@ class CathPlotGUI:
         pal = self.PALETTE
         img_unchecked, img_checked = self._get_check_images(color, size=size)
         _font = ("Malgun Gothic", 9, "bold") if bold else ("Malgun Gothic", 9)
+        # [추가 - 사용자 요청] onvalue/offvalue - 기본은 BooleanVar(1/0)
+        # 그대로지만, legend_group_vars처럼 "1"/"2" 문자열로 상태를 담는
+        # StringVar를 체크박스로 직접 보여주고 싶을 때 지정한다(같은
+        # Variable을 다른 팝업의 위젯과도 그대로 공유하므로 별도 동기화
+        # 코드 없이 항상 한 값을 같이 반영함).
+        _extra = {}
+        if onvalue is not None:
+            _extra["onvalue"] = onvalue
+        if offvalue is not None:
+            _extra["offvalue"] = offvalue
         c = tk.Checkbutton(
             parent, text=text, variable=variable, command=command,
             bg=pal["bg"], activebackground=pal["bg"], fg=pal["text"], font=_font,
             image=img_unchecked, selectimage=img_checked, indicatoron=False,
             compound="left", highlightthickness=0, bd=0, relief="flat",
-            selectcolor=pal["bg"],
+            selectcolor=pal["bg"], **_extra,
         )
         # PhotoImage는 참조가 없으면 GC돼서 사라지므로 위젯에 직접 붙여서 유지
         c._img_unchecked = img_unchecked
@@ -3175,7 +3201,8 @@ class CathPlotGUI:
                         if key_str in self.color_vars:
                             self.color_vars[key_str].set(style.get("color", self.color_vars[key_str].get()))
                         if key_str in self.linestyle_vars:
-                            self.linestyle_vars[key_str].set(style.get("linestyle", self.linestyle_vars[key_str].get()))
+                            self.linestyle_vars[key_str].set(_migrate_style_label(
+                                style.get("linestyle", self.linestyle_vars[key_str].get())))
                         if key_str in self.linewidth_vars:
                             self.linewidth_vars[key_str].set(style.get("linewidth", self.linewidth_vars[key_str].get()))
                         if key_str in self.legend_group_vars:
@@ -3389,7 +3416,7 @@ class CathPlotGUI:
                             dat_file=target_dat_file, output_no=output_no, title=legend_text, axis=axis,
                             x_shift=file_x_shift,
                             color=COLOR_MAP.get(style.get("color", ""), None),
-                            linestyle=STYLE_MAP.get(style.get("linestyle", ""), None),
+                            linestyle=STYLE_MAP.get(_migrate_style_label(style.get("linestyle", "")), None),
                             linewidth=float(style.get("linewidth") or 1.5),
                             x_output_no=x_output_no,
                             legend_group=int(style.get("legend_group", 1) or 1),
@@ -6214,7 +6241,17 @@ class CathPlotGUI:
         popup.title("Curve Features")
         popup.transient(self.root)
 
-        CURVE_PX, COLOR_PX, STYLE_PX, SHAPE_PX, ON_PX, SIZE_PX, FILL_PX, MAX_PX = 160, 65, 65, 100, 40, 55, 50, 65
+        # [수정 - 사용자 요청] "Curve Features가 따로 뜨니 Style을 더 길게,
+        # Max#는 정수 2자리면 되니 줄여줘요" - Style은 아래에서 라벨을
+        # 축약 없이 풀어 쓰도록(Dash-Dot/Short-Dash/Dash-DotDot) 바꾸는
+        # 김에 폭을 Shape와 같은 100으로 넓히고, Max#는 65->35로 줄인다.
+        # [추가 - 사용자 요청] "Curve Feature에 Legend1/2 구분이 없다" -
+        # L1/L2 체크박스 두 칸을 추가(각각 in_legend1_vars/legend_group_vars
+        # 를 다른 팝업(Legend1/2 Curves)과 동일한 Variable로 그대로 공유) -
+        # 포함 여부는 여기서 바로 보고 바꿀 수 있고, 순서 변경(▲▼)만
+        # 기존 Legend1/2 Curves 팝업에 남겨둔다.
+        CURVE_PX, L1_PX, L2_PX, COLOR_PX, STYLE_PX, SHAPE_PX, ON_PX, SIZE_PX, FILL_PX, MAX_PX = \
+            160, 32, 32, 65, 100, 100, 40, 55, 50, 35
 
         def _cell(parent, px, height=20):
             f = tk.Frame(parent, width=px, height=height)
@@ -6225,6 +6262,8 @@ class CathPlotGUI:
         header_f = ttk.Frame(popup)
         header_f.pack(fill="x", padx=10, pady=(10, 2))
         ttk.Label(_cell(header_f, CURVE_PX), text="Curve", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, L1_PX), text="L1", font=("Consolas", 9, "bold")).pack(side="left")
+        ttk.Label(_cell(header_f, L2_PX), text="L2", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, COLOR_PX), text="Color", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, STYLE_PX), text="Style", font=("Consolas", 9, "bold")).pack(side="left")
         ttk.Label(_cell(header_f, SHAPE_PX), text="Shape", font=("Consolas", 9, "bold")).pack(side="left")
@@ -6282,6 +6321,13 @@ class CathPlotGUI:
                 self.color_vars[key] = tk.StringVar(value="Auto")
             if key not in self.linestyle_vars:
                 self.linestyle_vars[key] = tk.StringVar(value="Auto")
+            # [추가 - 사용자 요청] "Curve Feature에 Legend1/2 구분이 없다" -
+            # 아래 L1/L2 체크박스가 쓸 변수도 방어적으로 lazy-init(다른
+            # 곳과 동일한 기본값: in_legend1=True, legend_group="1").
+            if key not in self.in_legend1_vars:
+                self.in_legend1_vars[key] = tk.BooleanVar(value=True)
+            if key not in self.legend_group_vars:
+                self.legend_group_vars[key] = tk.StringVar(value="1")
 
             label = self.legend_vars[key].get() if key in self.legend_vars else key
             row_f = ttk.Frame(list_frame)
@@ -6289,6 +6335,23 @@ class CathPlotGUI:
 
             curve_cell = _cell(row_f, CURVE_PX)
             ttk.Label(curve_cell, text=label).pack(side="left")
+
+            l1_cell = _cell(row_f, L1_PX)
+            self._mk_check(l1_cell, "", self.in_legend1_vars[key], side="left")
+
+            # [추가 - 사용자 요청] L2를 체크/해제하면(Legend2 소속이 바뀌면)
+            # Shape=Auto인 curve는 실제 렌더링도 즉시 fill 여부가 바뀌므로
+            # (_resolve_marker_shape 참고), 화면에 보이는 Fill 체크박스도
+            # 같이 맞춰서 "체크박스는 안 바뀌었는데 그림은 fill로 나온다"는
+            # 이번에 보고된 혼란이 다시 생기지 않게 한다. Shape가 Auto가
+            # 아니면(사용자가 직접 모양/채움을 고정한 경우) 건드리지 않는다.
+            def _on_l2_toggle(k=key):
+                if self.marker_shape_vars[k].get() == "Auto":
+                    self.marker_fill_vars[k].set(self.legend_group_vars[k].get() == "2")
+
+            l2_cell = _cell(row_f, L2_PX)
+            self._mk_check(l2_cell, "", self.legend_group_vars[key], onvalue="2", offvalue="1",
+                            command=_on_l2_toggle, side="left")
 
             color_cell = _cell(row_f, COLOR_PX)
             color_combo = ttk.Combobox(color_cell, textvariable=self.color_vars[key],
@@ -6329,21 +6392,23 @@ class CathPlotGUI:
 
         ttk.Label(
             popup,
-            text="On 체크 해제 시 이 curve는 마커 없음(Shape는 무관). Shape=Auto면 On이 켜진 curve들에 순서대로 "
-                 "서로 다른 모양을 자동 배정. Max#를 비우면 자동(대략 20~30개, 데이터가 적으면 전부 표시). M 크기 = pointsize 1.0",
-            foreground="#555555", wraplength=560, justify="left"
+            text="On 체크 해제 시 이 curve는 마커 없음(Shape는 무관). Shape=Auto면 L1/L2 소속에 따라 각각 "
+                 "Circle부터 순서대로 서로 다른 모양을 자동 배정(L1=open, L2=fill). L1/L2 체크는 Legend1/2 "
+                 "Curves 팝업과 값을 공유함(순서 변경은 그쪽에서). Max#를 비우면 자동(대략 20~30개, 데이터가 "
+                 "적으면 전부 표시). M 크기 = pointsize 1.0",
+            foreground="#555555", wraplength=680, justify="left"
         ).pack(padx=10, pady=(4, 0), anchor="w")
 
         # [추가 - 사용자 요청] "마커를 선택하면 auto로 순서대로 속빈 마커/
         # 다음 set은 속이찬 마커로 순서대로" - 여러 curve를 매번 손으로
         # 하나씩 고르지 않아도, 한 번 눌러서 Curve 순서(위 목록과 동일한
-        # _ordered_keys)대로 서로 다른 모양을 자동 배정한다. 도형
-        # 목록(None 제외)을 한 바퀴 돌 때는 속 빈(hollow) 버전을, 그
-        # 다음(curve 수가 도형 수보다 많을 때) 바퀴는 같은 도형의 속 찬
-        # (filled) 버전을 이어서 배정해 - 도형 수(None 제외 10개) x 2(빈/
-        # 참) = 20개 조합을 다 쓸 때까지 최대한 서로 다르게 보이도록 한다.
-        # 이미 골라둔 값이 있어도 항상 이 순서로 다시 채운다(예측 가능한
-        # 한 번의 초기화 버튼).
+        # _ordered_keys)대로 서로 다른 모양을 자동 배정한다.
+        # [수정 - 사용자 요청] "Legend1은 open, Legend2는 fill로 각각
+        # circle부터" - _resolve_marker_shape의 Auto 규칙과 동일하게,
+        # 예전의 "도형 10종 한 바퀴는 open, 두 바퀴째는 fill" 대신 L1/L2
+        # 그룹별로 순번과 fill을 따로 매긴다(L1=open 고정, L2=fill 고정,
+        # 둘 다 도형은 Circle부터). 이미 골라둔 값이 있어도 항상 이 순서로
+        # 다시 채운다(예측 가능한 한 번의 초기화 버튼).
         def _auto_assign_markers():
             # [수정 - 사용자 요청] Shape에 이제 "Auto"가 생겨서 굳이 이 버튼으로
             # 값을 "고정"하지 않아도 되지만(Shape=Auto+On만 켜두면 매번 자동
@@ -6355,13 +6420,17 @@ class CathPlotGUI:
             n_shapes = len(shapes)
             if n_shapes == 0:
                 return
-            for i, key in enumerate(_ordered_keys):
-                lap, shape_idx = divmod(i, n_shapes)
-                self.marker_shape_vars[key].set(shapes[shape_idx])
-                self.marker_fill_vars[key].set(bool(lap % 2 == 1))
-                if key not in self.marker_on_vars:
-                    self.marker_on_vars[key] = tk.BooleanVar(value=False)
-                self.marker_on_vars[key].set(True)
+            _group1 = [k for k in _ordered_keys if self.legend_group_vars.get(k) is None
+                       or self.legend_group_vars[k].get() != "2"]
+            _group2 = [k for k in _ordered_keys if self.legend_group_vars.get(k) is not None
+                       and self.legend_group_vars[k].get() == "2"]
+            for _keys, _fill in ((_group1, False), (_group2, True)):
+                for i, key in enumerate(_keys):
+                    self.marker_shape_vars[key].set(shapes[i % n_shapes])
+                    self.marker_fill_vars[key].set(_fill)
+                    if key not in self.marker_on_vars:
+                        self.marker_on_vars[key] = tk.BooleanVar(value=False)
+                    self.marker_on_vars[key].set(True)
 
         btn_row = ttk.Frame(popup)
         btn_row.pack(fill="x", padx=10, pady=8)
@@ -6531,7 +6600,7 @@ class CathPlotGUI:
                 title=item.get("title") or expr,
                 axis=item.get("axis", "y1") or "y1",
                 color=COLOR_MAP.get(item.get("color", "Auto"), None) or None,
-                linestyle=STYLE_MAP.get(item.get("linestyle", "Auto"), None) or None,
+                linestyle=STYLE_MAP.get(_migrate_style_label(item.get("linestyle", "Auto")), None) or None,
                 linewidth=float(item.get("linewidth") or 1.5),
             ))
         return result
@@ -6839,7 +6908,7 @@ class CathPlotGUI:
                     axis=item["axis"],
                     x_shift=float(item.get("x_shift") or 0.0),
                     color=COLOR_MAP.get(item["color"], None),
-                    linestyle=STYLE_MAP.get(item["linestyle"], None),
+                    linestyle=STYLE_MAP.get(_migrate_style_label(item["linestyle"]), None),
                     linewidth=float(item["linewidth"] or 1.5),
                     x_output_no=x_output_no,
                     legend_group=int(item.get("legend_group", 1) or 1),
@@ -7738,7 +7807,15 @@ class CathPlotGUI:
                 if key_str not in self.linewidth_vars:
                     self.linewidth_vars[key_str] = tk.DoubleVar(value=1.5)
                 if key_str not in self.legend_group_vars:
-                    self.legend_group_vars[key_str] = tk.StringVar(value="2")
+                    # [수정 - 버그, 사용자 보고] "Legend1의 Auto Shape가 Open
+                    # 이어야 하는데 fill로 나타남" - 기본값이 여기만 "2"
+                    # (Legend2)로 잘못 초기화돼 있어서, 화면에 변수 표가
+                    # 그려지는 순간 사실상 모든 curve가(Legend2 Curves
+                    # 팝업을 한 번도 안 열었어도) Legend2 취급을 받아 Shape
+                    # Auto의 fill이 강제로 켜졌었음. CurveDefinition 등
+                    # 다른 모든 곳은 "안 정해졌으면 1(Legend1)"을 기본으로
+                    # 삼으므로(legend_group=1 or 1) 그것과 맞춘다.
+                    self.legend_group_vars[key_str] = tk.StringVar(value="1")
                 if key_str not in self.smooth_csplines_vars:
                     self.smooth_csplines_vars[key_str] = tk.BooleanVar(value=False)
 
