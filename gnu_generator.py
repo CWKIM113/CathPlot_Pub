@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
-from data_parser import CathenaDatParser, is_comment_or_blank, strip_inline_comment  # 파서 모듈 임포트
+from data_parser import load_dat_table  # 파서 모듈 임포트
+from bisect import bisect_left
 from dataclasses import dataclass, field
 import math
 import os
@@ -929,6 +930,76 @@ class PlotDefinition:
     #     clip_rx를 그대로 써서 원이 됨. 50%면 박스에 꽉 차게 내접.
     pip: dict = field(default_factory=dict)
 
+
+class _NearestUnusedFinder:
+    """[추가 - 요청 "실행속도"] marker 선택(_select_marker_points/_3d)에서
+    "아직 안 쓰인 점들 중 목표 x에 가장 가까운 점"을 찾는 부분이 목표점마다
+    전체 데이터를 처음부터 훑고 log10까지 매번 다시 계산해서(목표 25개 x 데이터
+    10만 줄이면 수백만 번) 큰 파일에서 수 초씩 걸렸음. 결과가 완전히 같은
+    (같은 거리 계산식, 동률이면 원래처럼 가장 앞 index) 정렬+이분탐색으로
+    바꾼다. log축인데 0 이하 값이 섞이면 점마다 거리 공식(log/선형)이 달라져
+    정렬 순서와 거리가 단조 관계가 아니므로, 그때만 기존 방식 그대로 전체를
+    훑는다."""
+
+    def __init__(self, xs, is_log_x):
+        self.xs = xs
+        self.is_log_x = is_log_x
+        self._fast = (not is_log_x) or all(x > 0 for x in xs)
+        if self._fast:
+            keys = [math.log10(x) for x in xs] if is_log_x else list(xs)
+            self._order = sorted(range(len(keys)), key=keys.__getitem__)
+            self._skeys = [keys[i] for i in self._order]
+
+    def _scan(self, t, used_idx):
+        best_i, best_d = None, None
+        is_log_x = self.is_log_x
+        for i, px in enumerate(self.xs):
+            if i in used_idx:
+                continue
+            d = abs(math.log10(px) - math.log10(t)) if (is_log_x and px > 0 and t > 0) else abs(px - t)
+            if best_d is None or d < best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    def find(self, t, used_idx):
+        if not self._fast or (self.is_log_x and t <= 0):
+            return self._scan(t, used_idx)
+        tk = math.log10(t) if self.is_log_x else t
+        order, skeys = self._order, self._skeys
+        n = len(order)
+        pos = bisect_left(skeys, tk)
+        l = pos - 1
+        while l >= 0 and order[l] in used_idx:
+            l -= 1
+        r = pos
+        while r < n and order[r] in used_idx:
+            r += 1
+        dl = abs(skeys[l] - tk) if l >= 0 else None
+        dr = abs(skeys[r] - tk) if r < n else None
+        if dl is None and dr is None:
+            return None
+        best_d = dl if dr is None else dr if dl is None else min(dl, dr)
+        # 같은 거리(동률)인 안 쓰인 점이 여럿이면 원래 선형 탐색과 같게
+        # 가장 앞 index를 고른다(거리는 바깥으로 갈수록 단조 증가).
+        best_i = None
+        j = l
+        while j >= 0:
+            if order[j] not in used_idx:
+                if abs(skeys[j] - tk) != best_d:
+                    break
+                if best_i is None or order[j] < best_i:
+                    best_i = order[j]
+            j -= 1
+        j = r
+        while j < n:
+            if order[j] not in used_idx:
+                if abs(skeys[j] - tk) != best_d:
+                    break
+                if best_i is None or order[j] < best_i:
+                    best_i = order[j]
+            j += 1
+        return best_i
+
 class GnuplotGenerator:
 
     def __init__(self, plot_dir=None):
@@ -1017,29 +1088,18 @@ class GnuplotGenerator:
           안 보이는 점을 경계 마커로 잘못 고를 수 있어서 대비함).
         x_shift는 여기서 이미 반영해서 반환한다(실제 plot에 그려지는 좌표 기준)."""
         try:
-            parser = CathenaDatParser()
-            dat_info = parser.parse(curve.dat_file)
-            with open(curve.dat_file, "r", encoding="utf-8", errors="ignore") as f:
-                file_lines = f.readlines()
+            _, table = load_dat_table(curve.dat_file)
         except Exception:
             return []
 
         pts = []
-        max_col = max(x_col_idx, y_col_idx)
-        for row in file_lines[dat_info.data_start_line:]:
-            text = strip_inline_comment(row).strip()
-            if is_comment_or_blank(text):
+        x_shift = curve.x_shift
+        for xv, yv in zip(*table.columns(x_col_idx, y_col_idx)):
+            if xv is None or yv is None:
                 continue
-            fields = re.split(r'[,\s]+', text)
-            if len(fields) <= max_col:
-                continue
-            try:
-                x_val = float(fields[x_col_idx].replace("D", "E").replace("d", "e").replace(",", "")) + curve.x_shift
-                y_val = float(fields[y_col_idx].replace("D", "E").replace("d", "e").replace(",", ""))
-            except ValueError:
-                continue
-            if math.isfinite(x_val) and math.isfinite(y_val):
-                pts.append((x_val, y_val))
+            x_val = xv + x_shift
+            if math.isfinite(x_val) and math.isfinite(yv):
+                pts.append((x_val, yv))
 
         if not pts:
             return []
@@ -1082,6 +1142,7 @@ class GnuplotGenerator:
 
         selected = []
         used_idx = set()
+        _finder = _NearestUnusedFinder([p[0] for p in pts], is_log_x)
         for t in targets:
             # [수정 - 사용자 보고 버그] "Auto marker가 목표 개수(예: 25)보다
             # 적게 찍히고, 끝부분에 두 개가 몰려 찍힘" - 예전엔 "전체 점 중
@@ -1098,13 +1159,7 @@ class GnuplotGenerator:
             # 점을 찾도록 바꿔서, target 개수만큼 점이 남아있는 한(위에서
             # len(pts) > len(targets) 확인됨) 매 target마다 항상 새 점을
             # 배정받는다.
-            best_i, best_d = None, None
-            for i, (px, _) in enumerate(pts):
-                if i in used_idx:
-                    continue
-                d = abs(math.log10(px) - math.log10(t)) if (is_log_x and px > 0 and t > 0) else abs(px - t)
-                if best_d is None or d < best_d:
-                    best_i, best_d = i, d
+            best_i = _finder.find(t, used_idx)
             if best_i is not None:
                 # [기존] "노이즈가 심한 curve에서 marker가 curve 선에서
                 # 떨어져 보임" - target x와 가장 가까운 점 대신, 그 앞뒤
@@ -1208,30 +1263,17 @@ class GnuplotGenerator:
         아직 없어 이 curve 자신의 X 범위만 기준으로 삼는다."""
         x_idx0, y_idx0, z_idx0 = x_col_idx - 1, y_col_idx - 1, z_col_idx - 1
         try:
-            parser = CathenaDatParser()
-            dat_info = parser.parse(dat_file)
-            with open(dat_file, "r", encoding="utf-8", errors="ignore") as f:
-                file_lines = f.readlines()
+            _, table = load_dat_table(dat_file)
         except Exception:
             return []
 
         pts = []
-        max_col = max(x_idx0, y_idx0, z_idx0)
-        for row in file_lines[dat_info.data_start_line:]:
-            text = strip_inline_comment(row).strip()
-            if is_comment_or_blank(text):
+        for xv, yv, zv in zip(*table.columns(x_idx0, y_idx0, z_idx0)):
+            if xv is None or yv is None or zv is None:
                 continue
-            fields = re.split(r'[,\s]+', text)
-            if len(fields) <= max_col:
-                continue
-            try:
-                x_val = float(fields[x_idx0].replace("D", "E").replace("d", "e").replace(",", "")) + x_shift
-                y_val = float(fields[y_idx0].replace("D", "E").replace("d", "e").replace(",", ""))
-                z_val = float(fields[z_idx0].replace("D", "E").replace("d", "e").replace(",", ""))
-            except ValueError:
-                continue
-            if math.isfinite(x_val) and math.isfinite(y_val) and math.isfinite(z_val):
-                pts.append((x_val, y_val, z_val))
+            x_val = xv + x_shift
+            if math.isfinite(x_val) and math.isfinite(yv) and math.isfinite(zv):
+                pts.append((x_val, yv, zv))
 
         if not pts or len(pts) <= target_count:
             return pts
@@ -1255,19 +1297,14 @@ class GnuplotGenerator:
 
         selected = []
         used_idx = set()
+        _finder = _NearestUnusedFinder([p[0] for p in pts], is_log_x)
         for t in all_targets:
             # [수정 - 사용자 보고 버그, 2D와 동일] "Auto marker 개수가 목표보다
             # 적게 찍히고 끝부분에 몰림" - _select_marker_points와 동일한
             # 원인(이미 쓰인 점이면 target을 그냥 건너뛰어 개수가 줄고,
             # 그 결과 끝쪽 강제 포함 로직과 겹쳐 마커가 몰려 보임) - 처음부터
             # 아직 안 쓰인 점들 중에서만 가장 가까운 점을 찾도록 수정.
-            best_i, best_d = None, None
-            for i, (px, _, _) in enumerate(pts):
-                if i in used_idx:
-                    continue
-                d = abs(math.log10(px) - math.log10(t)) if (is_log_x and px > 0 and t > 0) else abs(px - t)
-                if best_d is None or d < best_d:
-                    best_i, best_d = i, d
+            best_i = _finder.find(t, used_idx)
             if best_i is not None:
                 # [추가] 2D와 동일하게 국소 튐 보정 재사용 - _refine_marker_index는
                 # pts[j][1](Y값)만 보므로 3-tuple((x,y,z))에도 그대로 쓸 수 있다.
@@ -1402,7 +1439,6 @@ class GnuplotGenerator:
         return max(4, round(dim_in))
 
     def _nice_axis_range(self, plotdef, axis, is_log=False, extra_values=None):
-        parser = CathenaDatParser()
 
         # [수정 - 사용자 요청] "X는 major 간격 4개 대신 5개로(0~1000.07에서
         # step이 250이 아니라 200 정도 되게), Y는 axis frame 비율에 따라
@@ -1452,69 +1488,38 @@ class GnuplotGenerator:
                     continue
                 column = curve.output_no
 
+            # 헤더/데이터 경계는 이미 파서가 판단해둔 data_start_line을 그대로 사용
+            # ("---","===","OUTPUT" 등을 다시 문자열로 추측하는 중복 로직을 두지 않음).
+            # [수정 - 요청 "실행속도"] 파일 읽기/컬럼 숫자 변환은 load_dat_table
+            # 캐시를 재사용한다(이 함수는 plot 한 번에 축마다 여러 번 불림).
             try:
-                dat_info = parser.parse(curve.dat_file)
+                _, table = load_dat_table(curve.dat_file)
             except Exception:
                 continue
+            x_vals, col_vals = table.columns(x_col_idx, column)
+            x_shift = curve.x_shift
+            _x_filter = x_min is not None or x_max is not None
 
-            try:
-                with open(curve.dat_file, "r", encoding="utf-8", errors="ignore") as data:
-                    file_lines = data.readlines()
-            except OSError:
-                continue
-
-            # 헤더/데이터 경계는 이미 파서가 판단해둔 data_start_line을 그대로 사용
-            # ("---","===","OUTPUT" 등을 다시 문자열로 추측하는 중복 로직을 두지 않음)
-            for row in file_lines[dat_info.data_start_line:]:
-                text = strip_inline_comment(row).strip()
-                if is_comment_or_blank(text):
-                    continue
-
-                fields = re.split(r'[,\s]+', text)
-                if not fields:
-                    continue
-
-                max_col = max(column, x_col_idx)
-                if len(fields) <= max_col:
-                    continue
-
-                # X축 값 검증
-                try:
-                    x_val_check = float(fields[x_col_idx].replace("D", "E").replace("d", "e").replace(",", ""))
-                except ValueError:
+            for x_val_check, value in zip(x_vals, col_vals):
+                # 컬럼이 모자라거나 숫자가 아닌 행은 건너뜀
+                if x_val_check is None or value is None:
                     continue
 
                 # x_min, x_max 필터링은 오직 axis == "x" 이고 제한이 유효할 때만 작동
-                if x_min is not None or x_max is not None:
-                    try:
-                        x_val = x_val_check + curve.x_shift
-                    except (ValueError, IndexError):
-                        x_val = None
-                    if x_val is not None:
-                        if x_min is not None and x_val < x_min:
-                            continue
-                        if x_max is not None and x_val > x_max:
-                            continue
+                if _x_filter:
+                    x_val = x_val_check + x_shift
+                    if x_min is not None and x_val < x_min:
+                        continue
+                    if x_max is not None and x_val > x_max:
+                        continue
 
-                try:
-                    val_str = fields[column].replace("D", "E").replace("d", "e").replace(",", "")
-                    value = float(val_str)
-                    # [수정 - 사용자 보고 버그] "Auto X-range가 shift 적용 전
-                    # 원본 데이터 범위로 잡힘" - axis=="x"일 때 column은
-                    # x_col_idx와 같아서 여기서 다시 읽는 값이 바로 위
-                    # x_val_check(아직 shift 반영 전)와 동일한데, 정작 이
-                    # 값(value)이 그대로 Auto 범위 계산용 values 목록에
-                    # 들어가고 있었다 - x_shift는 위 필터(x_min/x_max가
-                    # 있을 때만 쓰는 x_val)에만 반영되고 있어서, 수동 X
-                    # 제한이 없는 보통의 Auto 경우엔 shift가 통째로
-                    # 무시된 채로 범위가 잡혔다(실제 플롯에 그려지는
-                    # 좌표는 이미 shift가 반영된 값인데, 축 범위만
-                    # shift 이전 값 기준으로 계산되던 불일치). X축
-                    # 계산일 때만 여기서도 shift를 더해준다.
-                    if axis == "x":
-                        value += curve.x_shift
-                except (ValueError, IndexError):
-                    continue
+                # [수정 - 사용자 보고 버그] "Auto X-range가 shift 적용 전
+                # 원본 데이터 범위로 잡힘" - axis=="x"일 때 column은
+                # x_col_idx와 같아서 이 값이 shift 이전 값이다 - 실제 플롯에
+                # 그려지는 좌표(shift 반영)와 맞추려고 X축 계산일 때만 여기서도
+                # shift를 더해준다.
+                if axis == "x":
+                    value += x_shift
 
                 if math.isfinite(value):
                     values.append(value)
@@ -1628,7 +1633,6 @@ class GnuplotGenerator:
         Y범위를 그대로 물려받음)로는 세로로 전혀 안 좁혀져서 이 목적에 안
         맞기 때문에 별도로 둔다. 파싱 방식(CathenaDatParser, 컬럼 분리 등)은
         _nice_axis_range와 동일하게 맞춰 일관성을 유지한다."""
-        parser = CathenaDatParser()
         values = []
         default_x_col = getattr(plotdef, "x_output_no", 0)
         for curve in plotdef.curves:
@@ -1638,33 +1642,15 @@ class GnuplotGenerator:
             x_col_idx = curve.x_output_no if getattr(curve, "x_output_no", None) is not None else default_x_col
             column = curve.output_no
             try:
-                dat_info = parser.parse(curve.dat_file)
+                _, table = load_dat_table(curve.dat_file)
             except Exception:
                 continue
-            try:
-                with open(curve.dat_file, "r", encoding="utf-8", errors="ignore") as data:
-                    file_lines = data.readlines()
-            except OSError:
-                continue
-            for row in file_lines[dat_info.data_start_line:]:
-                text = strip_inline_comment(row).strip()
-                if is_comment_or_blank(text):
+            x_shift = curve.x_shift
+            for xv, value in zip(*table.columns(x_col_idx, column)):
+                if xv is None or value is None:
                     continue
-                fields = re.split(r'[,\s]+', text)
-                if not fields:
-                    continue
-                max_col = max(column, x_col_idx)
-                if len(fields) <= max_col:
-                    continue
-                try:
-                    x_val = float(fields[x_col_idx].replace("D", "E").replace("d", "e").replace(",", "")) + curve.x_shift
-                except (ValueError, IndexError):
-                    continue
+                x_val = xv + x_shift
                 if x_val < x_lo or x_val > x_hi:
-                    continue
-                try:
-                    value = float(fields[column].replace("D", "E").replace("d", "e").replace(",", ""))
-                except (ValueError, IndexError):
                     continue
                 if math.isfinite(value):
                     values.append(value)

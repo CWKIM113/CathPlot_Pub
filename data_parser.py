@@ -3,7 +3,7 @@
 CathPlot
 
 Module:
-    cathena_parser.py
+    data_parser.py
 
 Purpose:
     Parse CATHENA DAT file metadata.
@@ -32,10 +32,14 @@ Version:
 ======================================================================
 """
 
+from collections import OrderedDict
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+import copy
 import json
+import os
 import re
+import threading
 
 
 # ==========================================================
@@ -65,6 +69,135 @@ def strip_inline_comment(line):
     줄 맨 앞에서만 주석으로 취급 - 요청대로 inline은 "!"만 적용)."""
     idx = line.find("!")
     return line if idx < 0 else line[:idx]
+
+
+# ==========================================================
+# 데이터 행 분리/숫자 변환 공용 헬퍼
+# ==========================================================
+# [추가 - 요청] "실행속도/중복성 검토" - 데이터 행을 컬럼으로 나누는
+# re.split(r'[,\s]+', ...)와 "D 지수 표기/천단위 콤마"를 처리하는
+# float(tok.replace("D","E").replace("d","e").replace(",",""))가 gnu_generator.py/
+# cathplot_gui.py 곳곳(8군데 이상)에 똑같이 복사돼 있었고, 매 행마다 정규식
+# 캐시 조회 + replace 3번을 거쳐 큰 파일에서 가장 비싼 구간이었음. 결과가
+# 완전히 같은 더 빠른 공용 함수로 모은다.
+_FIELD_SPLIT_RE = re.compile(r"[,\s]+")
+
+
+def split_fields(text):
+    """re.split(r'[,\\s]+', text)와 항상 같은 결과를 돌려준다. 앞/뒤가 콤마나
+    공백이 아닌(=호출부가 strip()한 보통의 데이터 행) 경우에는 결과가 같다는
+    것이 보장되는 str.split() 경로로 빠르게 처리하고, 그 밖의 드문 경우
+    (빈 문자열, 앞/뒤 콤마 등 - 정규식은 이때 빈 문자열 필드를 만듦)는 원래
+    정규식을 그대로 쓴다."""
+    if not text or text[0] == "," or text[-1] == "," or text[0].isspace() or text[-1].isspace():
+        return _FIELD_SPLIT_RE.split(text)
+    return text.replace(",", " ").split()
+
+
+def parse_number(tok):
+    """FORTRAN "D" 지수 표기(1.0D+03)와 천단위 콤마를 허용하는 float 변환.
+    float(tok.replace("D","E").replace("d","e").replace(",",""))와 같은 결과
+    (실패 시 ValueError) - "D"/"d"/","가 들어간 문자열은 float()가 절대
+    받아들이지 않으므로, 먼저 그대로 변환해보고 실패할 때만 치환한다."""
+    try:
+        return float(tok)
+    except ValueError:
+        return float(tok.replace("D", "E").replace("d", "e").replace(",", ""))
+
+
+def _file_cache_key(path):
+    """파일 내용이 바뀌면 달라지는 캐시 키(정규화 절대경로, 수정시각, 크기)."""
+    st = os.stat(path)
+    return (os.path.normcase(os.path.abspath(path)), st.st_mtime_ns, st.st_size)
+
+
+class _LRUCache:
+    """스레드 안전한 작은 LRU 캐시(Batch가 여러 스레드에서 동시에 plot을 만듦)."""
+
+    def __init__(self, maxsize):
+        self.maxsize = maxsize
+        self._data = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            val = self._data.get(key)
+            if val is not None:
+                self._data.move_to_end(key)
+            return val
+
+    def put(self, key, val):
+        with self._lock:
+            self._data[key] = val
+            self._data.move_to_end(key)
+            while len(self._data) > self.maxsize:
+                self._data.popitem(last=False)
+
+
+class DatTable:
+    """dat 파일의 실제 데이터 행(data_start_line 이후, 줄 전체 주석/빈 줄을
+    뺀 뒤 inline "!" 주석을 잘라내고 strip한 텍스트)과, 요청된 컬럼의 숫자
+    값을 한 번만 계산해 보관한다. column()이 돌려주는 리스트는 texts와 같은
+    길이이며, 그 행에 해당 컬럼이 없거나 숫자로 못 읽으면 None이다 - 기존
+    루프들의 "len(fields) <= max_col이면 건너뜀 / ValueError면 건너뜀"
+    조건이 곧 "필요한 컬럼 중 하나라도 None이면 건너뜀"과 같다."""
+
+    def __init__(self, texts):
+        self.texts = texts
+        self._cols = {}
+        self._lock = threading.Lock()
+
+    def column(self, idx):
+        return self.columns(idx)[0]
+
+    def columns(self, *idxs):
+        missing = [i for i in dict.fromkeys(idxs) if i not in self._cols]
+        if missing:
+            with self._lock:
+                missing = [i for i in missing if i not in self._cols]
+                if missing:
+                    self._build(missing)
+        return tuple(self._cols[i] for i in idxs)
+
+    def _build(self, idxs):
+        outs = {i: [] for i in idxs}
+        for text in self.texts:
+            fields = split_fields(text)
+            n = len(fields)
+            for i, out in outs.items():
+                if 0 <= i < n:
+                    try:
+                        out.append(parse_number(fields[i]))
+                    except ValueError:
+                        out.append(None)
+                else:
+                    out.append(None)
+        self._cols.update(outs)
+
+
+_PARSE_CACHE = _LRUCache(64)
+_TABLE_CACHE = _LRUCache(6)
+
+
+def load_dat_table(filename):
+    """(DatFile 메타데이터, DatTable)을 돌려준다 - 파일 내용이 바뀌지 않는 한
+    캐시를 재사용한다(한 번 plot할 때 같은 파일을 curve/축/마커 계산마다
+    여러 번 다시 읽고 파싱하던 중복을 없앰). 읽기 실패 시 예외를 그대로 낸다."""
+    key = _file_cache_key(filename)
+    cached = _TABLE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    dat_info = CathenaDatParser().parse(filename)
+    with open(filename, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+    texts = []
+    for row in lines[dat_info.data_start_line:]:
+        text = strip_inline_comment(row).strip()
+        if not is_comment_or_blank(text):
+            texts.append(text)
+    result = (dat_info, DatTable(texts))
+    _TABLE_CACHE.put(key, result)
+    return result
 
 
 # ==========================================================
@@ -149,7 +282,19 @@ class CathenaDatParser:
     output_re = re.compile(r"OUTPUT\s*#\s*(\d+)", re.IGNORECASE)
 
     def parse(self, filename):
+        # [추가 - 요청] "실행속도 검토" - 같은 dat 파일을 plot 한 번에도
+        # 수십 번(curve/축/마커 계산마다) 처음부터 다시 읽고 파싱하고 있었음.
+        # 파일 내용(수정시각/크기)이 그대로면 이전 결과를 재사용한다. 호출부가
+        # 결과 객체를 고쳐도 캐시가 오염되지 않게 항상 복사본을 돌려준다.
         path = Path(filename)
+        key = _file_cache_key(path)
+        cached = _PARSE_CACHE.get(key)
+        if cached is None:
+            cached = self._parse_uncached(path)
+            _PARSE_CACHE.put(key, cached)
+        return copy.deepcopy(cached)
+
+    def _parse_uncached(self, path):
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             lines = [x.rstrip("\n") for x in f]
 
@@ -328,7 +473,7 @@ class CathenaDatParser:
                         multiplier = float(
                             right.strip()
                         )
-                    except:
+                    except ValueError:
                         multiplier = 1.0
                 signals.append(
                     SignalDefinition(
@@ -444,7 +589,7 @@ class CathenaDatParser:
         if is_comment_or_blank(txt) or "---" in txt or "===" in txt or "**" in txt:
             return False
         try:
-            parts = re.split(r'[,\s]+', txt)
+            parts = split_fields(txt)
             if not parts:
                 return False
             float(parts[0].replace(',', ''))
@@ -484,7 +629,7 @@ if __name__ == "__main__":
 
         print()
         print("Usage:")
-        print("python cathena_parser.py sample.dat")
+        print("python data_parser.py sample.dat")
         print()
 
         raise SystemExit
