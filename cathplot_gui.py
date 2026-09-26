@@ -146,6 +146,17 @@ STYLE_3D_DISPLAY_MAP = {
 }
 STYLE_3D_INTERNAL_MAP = {v: k for k, v in STYLE_3D_DISPLAY_MAP.items()}
 
+# [추가 - 요청 "중복성"] SAVE 대화상자(단일/Multi/3D)의 파일 형식 목록 - Word 등에
+# 넣기 좋은 png를 기본/최우선으로, "png, pdf, jpg, svg, emf, eps" 순.
+SAVE_IMAGE_FILE_TYPES = (
+    ("PNG Image (*.png)", "*.png"),
+    ("Portable Document Format (*.pdf)", "*.pdf"),
+    ("JPEG Image (*.jpg)", "*.jpg"),
+    ("SVG Vector Graphic (*.svg)", "*.svg"),
+    ("Enhanced Metafile (*.emf)", "*.emf"),
+    ("Encapsulated PostScript (*.eps)", "*.eps"),
+)
+
 class CathPlotGUI:
 
     def __init__(self, root):
@@ -2129,14 +2140,7 @@ class CathPlotGUI:
             if mode == "Save":
                 # [수정] "이미지 sample 순서는 png, pdf, jpg, svg, emf, eps 순으로" -
                 # Word 등에 넣기 좋은 png를 기본/최우선으로.
-                file_types = [
-                    ("PNG Image (*.png)", "*.png"),
-                    ("Portable Document Format (*.pdf)", "*.pdf"),
-                    ("JPEG Image (*.jpg)", "*.jpg"),
-                    ("SVG Vector Graphic (*.svg)", "*.svg"),
-                    ("Enhanced Metafile (*.emf)", "*.emf"),
-                    ("Encapsulated PostScript (*.eps)", "*.eps"),
-                ]
+                file_types = list(SAVE_IMAGE_FILE_TYPES)
                 filepath = filedialog.asksaveasfilename(
                     parent=dialog,
                     initialdir=self.plot_dir,
@@ -9851,12 +9855,7 @@ class CathPlotGUI:
         next_id = self.title_counters.get(safe_title, 0) + 1
         default_name = f"{safe_title}_3D_{next_id}"
         file_types = [
-            ("PNG Image (*.png)", "*.png"),
-            ("Portable Document Format (*.pdf)", "*.pdf"),
-            ("JPEG Image (*.jpg)", "*.jpg"),
-            ("SVG Vector Graphic (*.svg)", "*.svg"),
-            ("Enhanced Metafile (*.emf)", "*.emf"),
-            ("Encapsulated PostScript (*.eps)", "*.eps"),
+            *SAVE_IMAGE_FILE_TYPES,
             # [추가 - 요청] "저장도 animation으로 되게" - GIF 확장자를 고르면
             # (Animate 체크박스와 무관하게) _generate_3d_file이 애니메이션
             # GIF로 만든다(2D의 별도 "Save GIF" 버튼과 달리, 3D는 이 Save
@@ -12390,14 +12389,7 @@ class CathPlotGUI:
             fmt = "GIF"
         else:
             # [수정] "이미지 sample 순서는 png, pdf, jpg, svg, emf, eps 순으로"
-            file_types = [
-                ("PNG Image (*.png)", "*.png"),
-                ("Portable Document Format (*.pdf)", "*.pdf"),
-                ("JPEG Image (*.jpg)", "*.jpg"),
-                ("SVG Vector Graphic (*.svg)", "*.svg"),
-                ("Enhanced Metafile (*.emf)", "*.emf"),
-                ("Encapsulated PostScript (*.eps)", "*.eps"),
-            ]
+            file_types = list(SAVE_IMAGE_FILE_TYPES)
             selected_path = filedialog.asksaveasfilename(initialdir=self.plot_dir, initialfile=default_name, title="Save Plot As...", filetypes=file_types, defaultextension=".png")
             if not selected_path: return
 
