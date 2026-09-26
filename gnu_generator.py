@@ -8243,12 +8243,8 @@ class GnuplotGenerator:
         if not want:
             return
         try:
-            if fmt_l == "emf":
-                with open(outfile, "rb") as f:
-                    found_text = self._extract_emf_texts(f.read())
-            else:  # svg
-                with open(outfile, "r", encoding="utf-8", errors="replace") as f:
-                    found_text = f.read()
+            with open(outfile, "rb") as f:
+                found_text = self._extract_emf_texts(f.read())
         except OSError:
             return
 
