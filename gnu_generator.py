@@ -254,6 +254,44 @@ def _fix_implicit_multiplication(expr):
         if ch == ")" and i < n and (expr[i].isalpha() or expr[i] in "(_" or expr[i].isdigit()):
             out.append("*")
     return "".join(out)
+
+def _run_gnuplot_stdin(gnuplot_exe, script_text, cwd, fail_msg, debug_tag=""):
+    """[추가 - 요청 "중복성"] 파일 산출물(Batch/Save/Print/GIF)용 gnuplot 실행 -
+    스크립트를 디스크에 쓰지 않고 stdin으로 바로 넘긴다. 실패했을 때만
+    디버깅할 수 있도록 스크립트를 ".cathplot_failed{debug_tag}_*.plt"로
+    남기고 stderr와 함께 RuntimeError를 낸다(예전엔 같은 20줄이 create_script/
+    multiplot/3D/animation 다섯 곳에 복사돼 있었음)."""
+    result = subprocess.run(
+        [gnuplot_exe],
+        input=script_text, text=True, encoding="utf-8", errors="replace",
+        capture_output=True, cwd=cwd, **_no_console_kwargs()
+    )
+    if result.returncode != 0:
+        debug_path = os.path.join(cwd, f".cathplot_failed{debug_tag}_{uuid.uuid4().hex}.plt")
+        try:
+            with open(debug_path, "w", encoding="utf-8") as f:
+                f.write(script_text)
+        except OSError:
+            debug_path = None
+        stderr_text = (result.stderr or "").strip()
+        msg = f"{fail_msg} (반환 코드 {result.returncode})"
+        if stderr_text:
+            msg += f":\n{stderr_text}"
+        if debug_path:
+            msg += f"\n\n(스크립트 보존됨: {debug_path})"
+        raise RuntimeError(msg)
+    return result
+
+
+def _launch_gnuplot_persist(gnuplot_exe, script_path, cwd):
+    """화면(Interactive) 창용 gnuplot 실행 - 창을 계속 띄워두므로 기다리지 않고
+    프로세스를 돌려준다. 스크립트 에러로 죽을 때 실제 에러 메시지를 사용자에게
+    보여줄 수 있도록 stderr를 파이프로 캡처한다."""
+    return subprocess.Popen(
+        [gnuplot_exe, "-persist", script_path], cwd=cwd, **_no_console_kwargs(),
+        stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
+    )
+
 _gnuplot_exe_cache = None
 
 def _resolve_gnuplot_exe():
@@ -930,6 +968,49 @@ class PlotDefinition:
     #     clip_rx를 그대로 써서 원이 됨. 50%면 박스에 꽉 차게 내접.
     pip: dict = field(default_factory=dict)
 
+
+
+# 3D에서 여러 surface를 겹쳐 그리면 전부 palette(Z값)로만 색칠돼 Z값이 비슷한
+# 구간은 구분이 안 됨 - 색은 그대로 두고 surface별로 dashtype(선 패턴)을
+# 다르게 줘서 선 자체는 겹쳐도 구분되게 한다(첫 surface는 실선).
+_SURFACE_DASH_CYCLE = ["", "6, 3", "1, 2", "8, 3, 1, 3", "3, 2"]
+
+
+# [추가 - 요청 "중복성"] 3D 정적/애니메이션 스크립트(create_3d_script/
+# create_3d_animation_script/_build_function_surface_part)에 똑같이 복사돼
+# 있던 작은 조각들을 공용 함수로 모음(출력 문자열은 기존과 동일).
+def _3d_range_clause(vmin, vmax):
+    """비어있지 않은 쪽만 채운 gnuplot 범위 "[min:max]"(둘 다 비면 None)."""
+    has_min = vmin is not None and vmin != ""
+    has_max = vmax is not None and vmax != ""
+    if not has_min and not has_max:
+        return None
+    return f"[{vmin if has_min else '*'}:{vmax if has_max else '*'}]"
+
+
+def _3d_marker_clause(style, item):
+    """style이 points/linespoints일 때만 item의 marker_shape/marker_size로
+    " pt N ps S" 절을 만든다(lines면 점 모양이 안 보이므로 빈 문자열)."""
+    clause = ""
+    if style in ("points", "linespoints"):
+        marker_pt = item.get("marker_shape")
+        marker_size = item.get("marker_size")
+        if marker_pt is not None:
+            clause += f" pt {_fmt_pointtype(marker_pt)}"
+        if marker_size:
+            clause += f" ps {marker_size}"
+    return clause
+
+
+def _3d_surface_dash_clause(surface, s_idx, fmt):
+    """surface의 Line Style(line_dash)이 지정돼 있으면 그 dashtype, Auto면
+    겹치는 surface 구분용 자동 순환(_SURFACE_DASH_CYCLE)을 쓴다."""
+    dash_key = surface.get("line_dash") or ""
+    if dash_key:
+        dash_pat = _dash_pattern_for_fmt(dash_key, fmt)
+        return f" dashtype ({dash_pat})" if dash_pat else ""
+    dash = _SURFACE_DASH_CYCLE[s_idx % len(_SURFACE_DASH_CYCLE)]
+    return f" dashtype ({dash})" if dash else ""
 
 class _NearestUnusedFinder:
     """[추가 - 요청 "실행속도"] marker 선택(_select_marker_points/_3d)에서
@@ -8967,35 +9048,13 @@ class GnuplotGenerator:
                     f.write("\n".join(self._pip_reset_fragment_lines))
             # [추가] gnuplot이 스크립트 에러로 죽을 때 실제 에러 메시지를 잡아서
             # 사용자에게 보여줄 수 있도록 stderr를 파이프로 캡처
-            self.last_process = subprocess.Popen(
-                [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
-                stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
-            )
+            self.last_process = _launch_gnuplot_persist(gnuplot_exe, script_path, plot_dir)
         else:
             # [수정] Batch/Save/Print는 결과 파일(pdf/png/emf 등)만 필요하고 스크립트
             # 자체는 안 남겨도 되는 임시 산출물이므로, 디스크에 .plt 파일을 쓰지 않고
             # gnuplot의 표준입력(stdin)으로 스크립트를 바로 넘겨서 디스크 I/O와
             # 매번 임시파일을 만들고 지우는 오버헤드를 줄인다.
-            result = subprocess.run(
-                [gnuplot_exe],
-                input=script_text, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
-            )
-            if result.returncode != 0:
-                # 실패했을 때만 디버깅할 수 있도록 스크립트를 임시 파일로 남겨둔다
-                debug_path = os.path.join(plot_dir, f".cathplot_failed_{uuid.uuid4().hex}.plt")
-                try:
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        f.write(script_text)
-                except OSError:
-                    debug_path = None
-                stderr_text = (result.stderr or "").strip()
-                msg = f"gnuplot 실행 실패 (반환 코드 {result.returncode})"
-                if stderr_text:
-                    msg += f":\n{stderr_text}"
-                if debug_path:
-                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
-                raise RuntimeError(msg)
+            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "gnuplot 실행 실패", debug_tag="")
 
             if fmt.lower() == "png":
                 _upscale_png_dpi(outfile)
@@ -9673,24 +9732,7 @@ class GnuplotGenerator:
         if is_gif:
             # 파일 산출물이라 Batch/Save와 동일하게 stdin으로 넘겨서 끝내고,
             # 실패 시에만 디버깅용으로 스크립트를 남긴다(create_script 패턴과 동일).
-            result = subprocess.run(
-                [gnuplot_exe], input=script_text, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
-            )
-            if result.returncode != 0:
-                debug_path = os.path.join(plot_dir, f".cathplot_failed_anim_{uuid.uuid4().hex}.plt")
-                try:
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        f.write(script_text)
-                except OSError:
-                    debug_path = None
-                stderr_text = (result.stderr or "").strip()
-                msg = f"애니메이션 GIF 생성 실패 (반환 코드 {result.returncode})"
-                if stderr_text:
-                    msg += f":\n{stderr_text}"
-                if debug_path:
-                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
-                raise RuntimeError(msg)
+            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "애니메이션 GIF 생성 실패", debug_tag="_anim")
             return gif_path
 
         script_path = outfile.rsplit(".", 1)[0] + ".plt"
@@ -9716,10 +9758,7 @@ class GnuplotGenerator:
         self.last_anim_ctrl_path = ctrl_path
         self.last_anim_status_path = status_path
         self.last_anim_frame_pause = frame_pause
-        self.last_process = subprocess.Popen(
-            [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
-            stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
-        )
+        self.last_process = _launch_gnuplot_persist(gnuplot_exe, script_path, plot_dir)
         # [수정 - 근본 원인 재설계, 위 참고] "space bar가 안 먹힘" - bind " "는
         # 이미 올바른 문법인데도 실측(키 입력 감지 카운터가 0에서 안 움직임)
         # 결과 gnuplot 창이 실제로 키보드 포커스를 못 받는 것으로 확인됨.
@@ -9988,14 +10027,7 @@ class GnuplotGenerator:
                 using_expr = f"{x_expr}:{c['y_col']}:{c['z_col']}:{c['z_col']}"
 
                 _c_style = self._3D_STYLE_MAP.get(_resolve_style(c), "lines")
-                _pt_clause = ""
-                if _c_style in ("points", "linespoints"):
-                    marker_pt = c.get("marker_shape")
-                    marker_size = c.get("marker_size")
-                    if marker_pt is not None:
-                        _pt_clause += f" pt {_fmt_pointtype(marker_pt)}"
-                    if marker_size:
-                        _pt_clause += f" ps {marker_size}"
+                _pt_clause = _3d_marker_clause(_c_style, c)
                 _c_dash_clause = ""
                 if _c_style in ("lines", "linespoints"):
                     _c_dash_key = c.get("line_dash") or DEFAULT_LINESTYLES[_c_idx % len(DEFAULT_LINESTYLES)]
@@ -10012,7 +10044,6 @@ class GnuplotGenerator:
 
                 parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette{_c_dash_clause}')
 
-            _SURFACE_DASH_CYCLE = ["", "6, 3", "1, 2", "8, 3, 1, 3", "3, 2"]
             for _s_idx, s in enumerate(surfaces or []):
                 abs_path = s["dat_file"] if os.path.isabs(s["dat_file"]) else os.path.abspath(s["dat_file"])
                 try:
@@ -10042,21 +10073,8 @@ class GnuplotGenerator:
                     parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with pm3d')
                 else:
                     _s_style = self._3D_STYLE_MAP.get(_s_style_raw, "lines")
-                    _s_dash_key = s.get("line_dash") or ""
-                    if _s_dash_key:
-                        _s_dash_pat = _dash_pattern_for_fmt(_s_dash_key, "interactive")
-                        _s_dash_clause = f" dashtype ({_s_dash_pat})" if _s_dash_pat else ""
-                    else:
-                        _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
-                        _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
-                    _s_pt_clause = ""
-                    if _s_style in ("points", "linespoints"):
-                        _s_marker_pt = s.get("marker_shape")
-                        _s_marker_size = s.get("marker_size")
-                        if _s_marker_pt is not None:
-                            _s_pt_clause += f" pt {_fmt_pointtype(_s_marker_pt)}"
-                        if _s_marker_size:
-                            _s_pt_clause += f" ps {_s_marker_size}"
+                    _s_dash_clause = _3d_surface_dash_clause(s, _s_idx, "interactive")
+                    _s_pt_clause = _3d_marker_clause(_s_style, s)
                     parts.append(
                         f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}'
                     )
@@ -10078,15 +10096,9 @@ class GnuplotGenerator:
         if equal_xyz:
             lines.append("set view equal xyz")
 
-        def _range_clause(vmin, vmax):
-            has_min = vmin is not None and vmin != ""
-            has_max = vmax is not None and vmax != ""
-            if not has_min and not has_max:
-                return None
-            return f"[{vmin if has_min else '*'}:{vmax if has_max else '*'}]"
-        _yr = _range_clause(y_min, y_max)
+        _yr = _3d_range_clause(y_min, y_max)
         if _yr: lines.append(f"set yrange {_yr}")
-        _zr = _range_clause(z_min, z_max)
+        _zr = _3d_range_clause(z_min, z_max)
         if _zr: lines.append(f"set zrange {_zr}")
         lines.append("set ticslevel 0")
         if xlog: lines.append("set logscale x")
@@ -10243,24 +10255,7 @@ class GnuplotGenerator:
         gnuplot_exe = _resolve_gnuplot_exe()
 
         if is_gif:
-            result = subprocess.run(
-                [gnuplot_exe], input=script_text, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
-            )
-            if result.returncode != 0:
-                debug_path = os.path.join(plot_dir, f".cathplot_failed_3d_anim_{uuid.uuid4().hex}.plt")
-                try:
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        f.write(script_text)
-                except OSError:
-                    debug_path = None
-                stderr_text = (result.stderr or "").strip()
-                msg = f"3D 애니메이션 GIF 생성 실패 (반환 코드 {result.returncode})"
-                if stderr_text:
-                    msg += f":\n{stderr_text}"
-                if debug_path:
-                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
-                raise RuntimeError(msg)
+            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "3D 애니메이션 GIF 생성 실패", debug_tag="_3d_anim")
             return gif_path
 
         script_path = outfile.rsplit(".", 1)[0] + ".plt"
@@ -10275,10 +10270,7 @@ class GnuplotGenerator:
         self.last_anim_ctrl_path = ctrl_path
         self.last_anim_status_path = status_path
         self.last_anim_frame_pause = frame_pause
-        self.last_process = subprocess.Popen(
-            [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
-            stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
-        )
+        self.last_process = _launch_gnuplot_persist(gnuplot_exe, script_path, plot_dir)
         _force_focus_window_by_title(title_disp)
         return outfile
 
@@ -10329,14 +10321,7 @@ class GnuplotGenerator:
         # gnuplot이 함수를 직접 샘플링하는 "with points/linespoints pt N"에
         # 그대로 pt/ps를 붙인다(격자 전체 샘플 지점에 마커가 찍힘 - Max#
         # 제한 개념 자체가 없음, _collect_3d_state 주석 참고).
-        _fs_pt_clause = ""
-        if fs_style in ("points", "linespoints"):
-            _fs_marker_pt = fs.get("marker_shape")
-            _fs_marker_size = fs.get("marker_size")
-            if _fs_marker_pt is not None:
-                _fs_pt_clause += f" pt {_fmt_pointtype(_fs_marker_pt)}"
-            if _fs_marker_size:
-                _fs_pt_clause += f" ps {_fs_marker_size}"
+        _fs_pt_clause = _3d_marker_clause(fs_style, fs)
         # [추가 - 사용자 요청] "3D도 2D처럼 line style(점선 종류) 필요" - curve와
         # 동일하게 line_dash(STYLE_MAP 키)가 있으면 그 dashtype을 적용한다.
         _fs_dash_clause = ""
@@ -10421,15 +10406,9 @@ class GnuplotGenerator:
         # [추가] "마우스 스크롤에 따라 Y/Z 범위가 예측 못하게 바뀜 - 명시적
         # 입력칸으로" - 비우면 gnuplot 자동 범위 그대로, 값을 채우면 그 범위로
         # 고정. 2D의 Auto Range/Min/Max와 같은 개념.
-        def _range_clause(vmin, vmax):
-            has_min = vmin is not None and vmin != ""
-            has_max = vmax is not None and vmax != ""
-            if not has_min and not has_max:
-                return None
-            return f"[{vmin if has_min else '*'}:{vmax if has_max else '*'}]"
-        _yr = _range_clause(y_min, y_max)
+        _yr = _3d_range_clause(y_min, y_max)
         if _yr: lines.append(f"set yrange {_yr}")
-        _zr = _range_clause(z_min, z_max)
+        _zr = _3d_range_clause(z_min, z_max)
         if _zr: lines.append(f"set zrange {_zr}")
         # [추가] "z축이 x,y 평면보다 너무 위로 뜸" - gnuplot 기본 ticslevel(0.5)은
         # x,y 바닥면을 z축 최소값보다 z_range*0.5만큼 아래에 그려서 z축이
@@ -10857,14 +10836,7 @@ class GnuplotGenerator:
             _c_style = self._3D_STYLE_MAP.get(_resolve_style(c), "lines")
             # [추가] 세트별 Marker(pt)/크기(ps) - style이 points/linespoints일 때만
             # 의미 있음(lines면 점 모양이 안 보이므로 무시).
-            _pt_clause = ""
-            if _c_style in ("points", "linespoints"):
-                marker_pt = c.get("marker_shape")
-                marker_size = c.get("marker_size")
-                if marker_pt is not None:
-                    _pt_clause += f" pt {_fmt_pointtype(marker_pt)}"
-                if marker_size:
-                    _pt_clause += f" ps {marker_size}"
+            _pt_clause = _3d_marker_clause(_c_style, c)
 
             # [추가 - 사용자 요청] "3D도 2D처럼 line style(점선 종류) 필요" -
             # c["line_dash"](STYLE_MAP 키)를 2D와 동일한 dashtype으로 적용한다.
@@ -10924,12 +10896,6 @@ class GnuplotGenerator:
 
             splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette{_c_dash_clause}')
 
-        # [추가] "splot에 x-set 4개 넣으니 구분 안됨" - 여러 surface를 겹쳐 그리면
-        # 전부 palette(Z값)로만 색칠돼서, 서로 다른 surface(파일)라도 Z값이
-        # 비슷한 구간은 색이 같아 보여 구분이 안 됨. 색은 그대로 Z값 팔레트로
-        # 유지하되(어느 쪽이 요청/필요할 수도 있어 색 자체는 안 건드림), surface별로
-        # dashtype(선 패턴)을 다르게 줘서 최소한 선 자체는 겹쳐도 구분되게 한다.
-        _SURFACE_DASH_CYCLE = ["", "6, 3", "1, 2", "8, 3, 1, 3", "3, 2"]  # 첫 surface는 실선
         for _s_idx, s in enumerate(surfaces or []):
             abs_path = s["dat_file"] if os.path.isabs(s["dat_file"]) else os.path.abspath(s["dat_file"])
             try:
@@ -10966,21 +10932,8 @@ class GnuplotGenerator:
                 # Line Style에서 dash 종류를 직접 골랐으면(Auto가 아니면) 그것을
                 # 쓰고, Auto면 기존처럼 surface별 자동 순환(_SURFACE_DASH_CYCLE -
                 # 겹치는 surface 구분용)을 그대로 유지한다.
-                _s_dash_key = s.get("line_dash") or ""
-                if _s_dash_key:
-                    _s_dash_pat = _dash_pattern_for_fmt(_s_dash_key, fmt)
-                    _s_dash_clause = f" dashtype ({_s_dash_pat})" if _s_dash_pat else ""
-                else:
-                    _s_dash = _SURFACE_DASH_CYCLE[_s_idx % len(_SURFACE_DASH_CYCLE)]
-                    _s_dash_clause = f" dashtype ({_s_dash})" if _s_dash else ""
-                _s_pt_clause = ""
-                if _s_style in ("points", "linespoints"):
-                    _s_marker_pt = s.get("marker_shape")
-                    _s_marker_size = s.get("marker_size")
-                    if _s_marker_pt is not None:
-                        _s_pt_clause += f" pt {_fmt_pointtype(_s_marker_pt)}"
-                    if _s_marker_size:
-                        _s_pt_clause += f" ps {_s_marker_size}"
+                _s_dash_clause = _3d_surface_dash_clause(s, _s_idx, fmt)
+                _s_pt_clause = _3d_marker_clause(_s_style, s)
 
                 # [추가 - 사용자 요청] "3D Marker 개수도 2D처럼 최대개수를 정해요" -
                 # curve와 동일하게(단, pm3d는 격자 전체가 있어야 면이 끊기지 않아
@@ -11058,30 +11011,9 @@ class GnuplotGenerator:
             script_path = outfile.rsplit(".", 1)[0] + ".plt"
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(script_text)
-            self.last_process = subprocess.Popen(
-                [gnuplot_exe, "-persist", script_path], cwd=plot_dir, **_no_console_kwargs(),
-                stderr=subprocess.PIPE, stdout=subprocess.DEVNULL
-            )
+            self.last_process = _launch_gnuplot_persist(gnuplot_exe, script_path, plot_dir)
         else:
-            result = subprocess.run(
-                [gnuplot_exe],
-                input=script_text, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
-            )
-            if result.returncode != 0:
-                debug_path = os.path.join(plot_dir, f".cathplot_failed_3d_{uuid.uuid4().hex}.plt")
-                try:
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        f.write(script_text)
-                except OSError:
-                    debug_path = None
-                stderr_text = (result.stderr or "").strip()
-                msg = f"gnuplot 실행 실패 (반환 코드 {result.returncode})"
-                if stderr_text:
-                    msg += f":\n{stderr_text}"
-                if debug_path:
-                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
-                raise RuntimeError(msg)
+            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "gnuplot 실행 실패", debug_tag="_3d")
 
         return outfile
 
@@ -12660,25 +12592,7 @@ class GnuplotGenerator:
                 raise RuntimeError(f"gnuplot 실행 실패 (스크립트 보존됨: {script_path})\n{result.stderr.strip()}")
         else:
             # Batch/Print(임시 산출물): 디스크에 스크립트 파일을 쓰지 않고 stdin으로 바로 전달
-            result = subprocess.run(
-                [gnuplot_exe],
-                input=script_text, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, cwd=plot_dir, **_no_console_kwargs()
-            )
-            if result.returncode != 0:
-                debug_path = os.path.join(plot_dir, f".cathplot_failed_{uuid.uuid4().hex}.plt")
-                try:
-                    with open(debug_path, "w", encoding="utf-8") as f:
-                        f.write(script_text)
-                except OSError:
-                    debug_path = None
-                msg = f"gnuplot 실행 실패 (반환 코드 {result.returncode})"
-                stderr_text = (result.stderr or "").strip()
-                if stderr_text:
-                    msg += f":\n{stderr_text}"
-                if debug_path:
-                    msg += f"\n\n(스크립트 보존됨: {debug_path})"
-                raise RuntimeError(msg)
+            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "gnuplot 실행 실패", debug_tag="")
 
         if fmt.lower() == "png":
             _upscale_png_dpi(outfile)
