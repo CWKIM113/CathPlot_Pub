@@ -2666,13 +2666,21 @@ class CathPlotGUI:
                 return False  # 못 읽으면 안전하게 "다르다"로 취급
             return existing == template_data
 
+        # [재수정 - 사용자 지적] "out111_1_2.json처럼 번호가 두 번 겹쳐 보임 -
+        # 뒤 번호에 +1 해서 out111_3.json이나 out111_1(1).json이 돼야" -
+        # default_name이 항상 "{제목}_{번호}" 꼴이므로(위 두 분기 모두),
+        # 새 "_2"를 덧붙이는 대신 그 끝 번호 자체를 겹치지 않을 때까지
+        # 올린다(out111_1 -> out111_2 -> out111_3...) - 겉보기에 번호가
+        # 두 번 붙는 모양을 피한다.
+        _m = re.match(r"^(.*)_(\d+)$", default_name)
+        _base, _next_n = (_m.group(1), int(_m.group(2)) + 1) if _m else (default_name, 2)
         _match = _existing_template_matches(default_name)
         if _match is False:
-            _n = 2
+            _n = _next_n
             while True:
-                _candidate = f"{default_name}_{_n}"
-                _m = _existing_template_matches(_candidate)
-                if _m is not False:
+                _candidate = f"{_base}_{_n}"
+                _m2 = _existing_template_matches(_candidate)
+                if _m2 is not False:
                     default_name = _candidate
                     break
                 _n += 1
@@ -9544,11 +9552,16 @@ class CathPlotGUI:
                     return False
                 return existing == _3d_data
 
+            # [재수정 - 2D save_template과 동일 이유] "_3D_3_2"처럼 번호가
+            # 두 번 겹쳐 보이지 않도록, 새 접미사를 덧붙이는 대신 끝 번호
+            # 자체를 올린다.
+            _m3d = re.match(r"^(.*)_(\d+)$", default_name)
+            _base3d, _next_n3d = (_m3d.group(1), int(_m3d.group(2)) + 1) if _m3d else (default_name, 2)
             _match = _existing_3d_template_matches(default_name)
             if _match is False:
-                _n = 2
+                _n = _next_n3d
                 while True:
-                    _candidate = f"{default_name}_{_n}"
+                    _candidate = f"{_base3d}_{_n}"
                     _m = _existing_3d_template_matches(_candidate)
                     if _m is not False:
                         default_name = _candidate
