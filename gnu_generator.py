@@ -283,6 +283,17 @@ def _run_gnuplot_stdin(gnuplot_exe, script_text, cwd, fail_msg, debug_tag=""):
     return result
 
 
+def _gnuplot_rel_path(abs_path, base_dir):
+    """gnuplot은 cwd를 plot 폴더로 고정해 실행하므로 데이터 파일을 그 기준
+    상대경로(슬래시 구분)로 넘긴다 - 다른 드라이브라 상대경로 계산이 안
+    되면(ValueError) 절대경로를 그대로 쓴다."""
+    try:
+        path = os.path.relpath(abs_path, start=base_dir) if base_dir else abs_path
+    except ValueError:
+        path = abs_path
+    return path.replace("\\", "/")
+
+
 def _launch_gnuplot_persist(gnuplot_exe, script_path, cwd):
     """화면(Interactive) 창용 gnuplot 실행 - 창을 계속 띄워두므로 기다리지 않고
     프로세스를 돌려준다. 스크립트 에러로 죽을 때 실제 에러 메시지를 사용자에게
@@ -4426,11 +4437,7 @@ class GnuplotGenerator:
             abs_path = curve.dat_file if os.path.isabs(curve.dat_file) else os.path.abspath(curve.dat_file)
             # gnuplot을 실행할 때 cwd를 self.plot_dir로 고정해두므로, 그 기준 상대경로를 씀
             # (다른 드라이브라 상대경로 계산이 안 되면 절대경로로 대체)
-            try:
-                path = os.path.relpath(abs_path, start=self.plot_dir) if self.plot_dir else abs_path
-            except ValueError:
-                path = abs_path
-            path = path.replace("\\", "/")
+            path = _gnuplot_rel_path(abs_path, self.plot_dir)
 
             is_y2 = getattr(curve, "axis", "y1") == "y2"
             axis = "x1y2" if is_y2 else "x1y1"
@@ -4589,11 +4596,7 @@ class GnuplotGenerator:
             color = curve.color or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
             linestyle = curve.linestyle or DEFAULT_LINESTYLES[i % len(DEFAULT_LINESTYLES)]
             abs_path = curve.dat_file if os.path.isabs(curve.dat_file) else os.path.abspath(curve.dat_file)
-            try:
-                path = os.path.relpath(abs_path, start=self.plot_dir) if self.plot_dir else abs_path
-            except ValueError:
-                path = abs_path
-            path = path.replace("\\", "/")
+            path = _gnuplot_rel_path(abs_path, self.plot_dir)
 
             is_y2 = getattr(curve, "axis", "y1") == "y2"
             axis = "x1y2" if is_y2 else "x1y1"
@@ -5218,11 +5221,7 @@ class GnuplotGenerator:
             src_ymin, src_ymax = (py2min, py2max) if is_y2 else (py1min, py1max)
             axis_spec = "x1y2" if is_y2 else "x1y1"
             abs_path = curve.dat_file if os.path.isabs(curve.dat_file) else os.path.abspath(curve.dat_file)
-            try:
-                rel_path = os.path.relpath(abs_path, start=plot_dir_) if plot_dir_ else abs_path
-            except ValueError:
-                rel_path = abs_path
-            rel_path = rel_path.replace("\\", "/")
+            rel_path = _gnuplot_rel_path(abs_path, plot_dir_)
             x_col_idx = curve.x_output_no if getattr(curve, "x_output_no", None) is not None else getattr(plotdef, "x_output_no", 0)
             x_expr = f"(${x_col_idx + 1}+{curve.x_shift})"
             y_expr = f"(${curve.output_no + 1})"
@@ -7172,11 +7171,7 @@ class GnuplotGenerator:
                 if not getattr(_curve, "smooth_csplines", False):
                     continue
                 _abs_path = _curve.dat_file if os.path.isabs(_curve.dat_file) else os.path.abspath(_curve.dat_file)
-                try:
-                    _rel_path = os.path.relpath(_abs_path, start=self.plot_dir) if self.plot_dir else _abs_path
-                except ValueError:
-                    _rel_path = _abs_path
-                _rel_path = _rel_path.replace("\\", "/")
+                _rel_path = _gnuplot_rel_path(_abs_path, self.plot_dir)
                 _x_col_idx = _curve.x_output_no if getattr(_curve, "x_output_no", None) is not None else _default_x_col
                 _using_expr_for_match = f"(${_x_col_idx + 1}+{_curve.x_shift}):{_curve.output_no + 1}"
                 for _li, _ln in enumerate(_inset_cmd_list):
@@ -9070,11 +9065,7 @@ class GnuplotGenerator:
                 if not getattr(_curve, "smooth_csplines", False):
                     continue
                 _abs_path = _curve.dat_file if os.path.isabs(_curve.dat_file) else os.path.abspath(_curve.dat_file)
-                try:
-                    _rel_path = os.path.relpath(_abs_path, start=self.plot_dir) if self.plot_dir else _abs_path
-                except ValueError:
-                    _rel_path = _abs_path
-                _rel_path = _rel_path.replace("\\", "/")
+                _rel_path = _gnuplot_rel_path(_abs_path, self.plot_dir)
                 _x_col_idx = _curve.x_output_no if getattr(_curve, "x_output_no", None) is not None else default_x_col
                 _using_expr_for_match = f"(${_x_col_idx + 1}+{_curve.x_shift}):{_curve.output_no + 1}"
                 _matched = False
@@ -9902,11 +9893,7 @@ class GnuplotGenerator:
             parts = []
             for _c_idx, c in enumerate(curves_3d):
                 abs_path = c["dat_file"] if os.path.isabs(c["dat_file"]) else os.path.abspath(c["dat_file"])
-                try:
-                    path = os.path.relpath(abs_path, start=plot_dir)
-                except ValueError:
-                    path = abs_path
-                path = path.replace("\\", "/")
+                path = _gnuplot_rel_path(abs_path, plot_dir)
                 x_shift = c.get("x_shift", 0.0)
                 _raw_ref = f"${c['x_col']}"
                 _conds = []
@@ -9941,11 +9928,7 @@ class GnuplotGenerator:
 
             for _s_idx, s in enumerate(surfaces or []):
                 abs_path = s["dat_file"] if os.path.isabs(s["dat_file"]) else os.path.abspath(s["dat_file"])
-                try:
-                    path = os.path.relpath(abs_path, start=plot_dir)
-                except ValueError:
-                    path = abs_path
-                path = path.replace("\\", "/")
+                path = _gnuplot_rel_path(abs_path, plot_dir)
                 # [수정 - 사용자 요청] "3D 그림 이름을 legend에서 구별되게
                 # 수정 입력하게 해줘요" - curve(c.get("title"))와 동일하게
                 # surface도 "title"(사용자가 지정한 legend 이름)이 있으면
@@ -10705,11 +10688,7 @@ class GnuplotGenerator:
         marker_datablocks_3d = []
         for _c_idx, c in enumerate(curves_3d):
             abs_path = c["dat_file"] if os.path.isabs(c["dat_file"]) else os.path.abspath(c["dat_file"])
-            try:
-                path = os.path.relpath(abs_path, start=plot_dir)
-            except ValueError:
-                path = abs_path
-            path = path.replace("\\", "/")
+            path = _gnuplot_rel_path(abs_path, plot_dir)
             x_shift = c.get("x_shift", 0.0)
             # [수정 - 버그] x_shift가 0이면 괄호 없이 "$1"만 썼는데, gnuplot의
             # using 절에서 "$N"은 반드시 괄호로 감싼 수식 안에서만 유효함(단독
@@ -10793,11 +10772,7 @@ class GnuplotGenerator:
 
         for _s_idx, s in enumerate(surfaces or []):
             abs_path = s["dat_file"] if os.path.isabs(s["dat_file"]) else os.path.abspath(s["dat_file"])
-            try:
-                path = os.path.relpath(abs_path, start=plot_dir)
-            except ValueError:
-                path = abs_path
-            path = path.replace("\\", "/")
+            path = _gnuplot_rel_path(abs_path, plot_dir)
             # [수정 - 사용자 요청] curve와 동일하게 surface도 사용자 지정
             # "title"이 있으면 우선 쓰고, 없으면 기존처럼 label을 그대로 씀.
             _s_title = (s.get("title") or s.get("label") or "").strip()
