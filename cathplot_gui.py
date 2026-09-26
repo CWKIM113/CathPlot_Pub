@@ -5776,6 +5776,16 @@ class CathPlotGUI:
         base_safe_name = "".join(c for c in raw_name if c.isalnum() or c in ("_", "-")).strip() or "CathPlot"
         _suffix = "".join(c for c in (out_suffix or "") if c.isalnum() or c in ("_", "-"))
 
+        # [시도했다 되돌림 - 사용자 지적] "out111_1_3_bat.png처럼 번호가
+        # 두 번 붙어 보임" - Template Save처럼 끝 번호 자체를 올리는 방식
+        # (out111_1 -> out111_2 -> ...)을 써봤으나, Batch Set은 같은
+        # 접두어(out111_N)를 쓰는 서로 다른 template 여러 개를 한 배치에서
+        # 같이 처리하는 경우가 흔해서, out111_1의 결과가 겹쳐 재시도할 때
+        # out111_2_bat라는 "실제로 out111_2.json 몫인" 이름을 먼저 차지해
+        # 버리면 그 뒤로 out111_2, out111_3...가 도미노로 한 칸씩 밀려나가
+        # 배치 전체 파일명이 뒤섞이는 더 위험한 문제가 생긴다. Template
+        # Save(한 번에 하나만 저장)와 달리 Batch는 이 위험이 실재하므로,
+        # 안전한 기존 방식(항상 새 "_n" 접미사를 덧붙임)을 그대로 쓴다.
         def _candidate_stem(n):
             base = base_safe_name if n <= 1 else f"{base_safe_name}_{n}"
             return f"{base}{_suffix}"
