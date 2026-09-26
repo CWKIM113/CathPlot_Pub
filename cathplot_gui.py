@@ -5005,7 +5005,11 @@ class CathPlotGUI:
         # 정도로" - 실측 winfo_reqwidth()(모든 위젯이 실제로 필요로 하는
         # 최소 폭)가 719px이었음 - 여유를 조금만 둔 730px로 맞춘다(800은
         # 필요 이상으로 넓었음).
-        dlg.geometry("730x620")
+        # [수정 - 사용자 요청] "같은 이름 파일 덮어쓰기" 체크박스 줄이
+        # grid_frame에 한 줄(row=2) 늘어난 만큼 높이를 30px 더 준다(listbox가
+        # expand=True라 자동으로 흡수되긴 하지만, 위 기존 사례처럼 여유를
+        # 명시적으로 둔다).
+        dlg.geometry("730x650")
 
         ttk.Label(
             dlg,
@@ -5393,6 +5397,23 @@ class CathPlotGUI:
         # 기준으로 딱 맞는 폭으로 축소(기존 7 -> 5).
         ttk.Entry(name_suffix_row, textvariable=suffix_var, width=5).grid(row=1, column=7, padx=(2, 0), pady=(5, 0), sticky="w")
 
+        # [추가 - 사용자 요청] "같은 파일명이 있을 때만 덮어쓰기 체크박스" -
+        # 기본(꺼짐)은 기존과 동일하게 안전한 "_2","_3"... 자동 회피를
+        # 그대로 쓰고, 켜면 이전 배치 실행이 만들어둔 같은 이름 결과 파일을
+        # (번호를 늘리지 않고) 그대로 덮어쓴다 - 반복 테스트로 Save할 때마다
+        # 번호만 계속 쌓이는 걸 사용자가 직접 선택해서 피할 수 있게 함.
+        # 단, 이번 배치 "안에서" 서로 다른 template끼리 같은 이름으로
+        # 겹치는 것까지 허용하면 한쪽 결과가 조용히 사라지므로, 그 경우는
+        # 이 옵션과 무관하게 항상 번호를 올려 보호한다(_process_one_batch_
+        # set_item의 reserved_names 확인 참고).
+        # [수정 - 폭 초과 방지] row=1(List Save/Load/Edit + 이름 기준/접미사)은
+        # 이미 실측 폭이 빠듯하다고 기록돼 있어(위 주석 "가로크기를 줄여서
+        # 접미사 박스가 안 잘릴 정도로" 참고), 같은 줄에 더 붙이면 창 밖으로
+        # 잘릴 위험이 있다 - 별도 줄(row=2)에 둔다.
+        overwrite_var = tk.BooleanVar(value=False)
+        _ow_cb = self._mk_check(name_suffix_row, "같은 이름 파일 덮어쓰기", overwrite_var, no_pack=True)
+        _ow_cb.grid(row=2, column=0, columnspan=4, padx=5, pady=(5, 0), sticky="w")
+
         # [추가] "3D도 Batch에 연동" - 2D Template 각각에 3D curve/surface 적격
         # 조건(Y1 1개+Y2 1개, 또는 surface)이 있으면, 여기서 고른 3D Template(회전각/
         # Style/Marker 등)을 그대로 적용해서 3D 이미지도 같이 만든다. 3D Template은
@@ -5552,7 +5573,8 @@ class CathPlotGUI:
                 except ValueError:
                     messagebox.showwarning("Batch Set", "공통 Axis Frame 크기가 숫자가 아닙니다. 개별 template 설정으로 진행합니다.")
             self._run_batch_set_async(list(queue_list), fmt_var.get(), td3_path_var.get() or None,
-                                       name_mode=_name_mode, out_suffix=suffix_var.get(), common_frame=_common_frame)
+                                       name_mode=_name_mode, out_suffix=suffix_var.get(), common_frame=_common_frame,
+                                       overwrite_images=overwrite_var.get())
 
         # [수정 - 사용자 요청] "Run Batch Set/취소 버튼은 좀 더 키우고" ->
         # 이후 "너무 크네" - btn_pady=10/큰 btn_width는 과했음, 다른 보조
@@ -5692,7 +5714,7 @@ class CathPlotGUI:
         )
         return outfile
 
-    def _process_one_batch_set_item(self, tpath, fmt, td3_data, name_mode="template", reserved_names=None, reserved_lock=None, out_suffix="_batchset", common_frame=None):
+    def _process_one_batch_set_item(self, tpath, fmt, td3_data, name_mode="template", reserved_names=None, reserved_lock=None, out_suffix="_batchset", common_frame=None, overwrite_images=False):
         """_run_batch_set의 항목 하나(템플릿 1개)를 처리해서 결과를 dict로
         반환한다(공유 리스트에 직접 쓰지 않음 - ThreadPoolExecutor로 여러
         항목을 동시에 처리해도, 결과 취합은 항상 메인(관리) 스레드의
@@ -5790,12 +5812,20 @@ class CathPlotGUI:
             base = base_safe_name if n <= 1 else f"{base_safe_name}_{n}"
             return f"{base}{_suffix}"
 
+        # [추가 - 사용자 요청] "같은 파일명이 있을 때만 덮어쓰기 체크박스" -
+        # overwrite_images가 켜져 있으면 디스크에 이미 있는(이전 배치가
+        # 남긴) 같은 이름 파일은 번호를 올리지 않고 그대로 덮어쓴다. 단,
+        # 이번 배치 "안에서" 서로 다른 template끼리 이름이 겹치는 것까지
+        # 허용하면 한쪽 결과가 조용히 사라지므로, reserved_names 검사는
+        # overwrite_images와 무관하게 항상 그대로 유지한다.
         safe_stem = _candidate_stem(1)
         if reserved_names is not None and reserved_lock is not None:
             with reserved_lock:
                 n = 1
                 safe_stem = _candidate_stem(n)
-                while safe_stem in reserved_names or os.path.exists(os.path.join(self.plot_dir, f"{safe_stem}.{fmt}")):
+                while safe_stem in reserved_names or (
+                    not overwrite_images and os.path.exists(os.path.join(self.plot_dir, f"{safe_stem}.{fmt}"))
+                ):
                     n += 1
                     safe_stem = _candidate_stem(n)
                 reserved_names.add(safe_stem)
@@ -5843,7 +5873,7 @@ class CathPlotGUI:
 
         return res
 
-    def _run_batch_set(self, template_paths, fmt, progress_callback=None, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None, overwrite_log=False):
+    def _run_batch_set(self, template_paths, fmt, progress_callback=None, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None, overwrite_log=False, overwrite_images=False):
         """template_paths(각각 완전한 plot 사양이 담긴 *.json)를 병렬로 처리해서
         이미지로 저장한다. self.xxx_var.get() 같은 Tkinter 접근을 안 하므로
         백그라운드 스레드에서 호출해도 안전함.
@@ -5889,7 +5919,8 @@ class CathPlotGUI:
         with ThreadPoolExecutor(max_workers=_BATCH_MAX_WORKERS) as executor:
             futures = {
                 executor.submit(self._process_one_batch_set_item, tpath, fmt, td3_data,
-                                 name_mode, _reserved_names, _reserved_lock, out_suffix, common_frame): tpath
+                                 name_mode, _reserved_names, _reserved_lock, out_suffix, common_frame,
+                                 overwrite_images): tpath
                 for tpath in template_paths
             }
             for future in as_completed(futures):
@@ -5963,7 +5994,8 @@ class CathPlotGUI:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _run_batch_set_async(self, template_paths, fmt, td3_path=None, name_mode="template", out_suffix="_batchset", common_frame=None):
+    def _run_batch_set_async(self, template_paths, fmt, td3_path=None, name_mode="template", out_suffix="_batchset",
+                              common_frame=None, overwrite_images=False):
         """Batch Set을 백그라운드 스레드에서 실행하며 진행창을 보여준다."""
         # [추가 - 사용자 요청] "매 Batch 실행 시작 시 새로 덮어쓰기 물어보고
         # 처리" - 진행창을 띄우거나 worker 스레드를 시작하기 전, 메인
@@ -5974,7 +6006,7 @@ class CathPlotGUI:
             lambda progress_callback: self._run_batch_set(
                 template_paths, fmt, progress_callback=progress_callback, td3_path=td3_path,
                 name_mode=name_mode, out_suffix=out_suffix, common_frame=common_frame,
-                overwrite_log=overwrite_log),
+                overwrite_log=overwrite_log, overwrite_images=overwrite_images),
             label_width=55, bar_length=340,
         )
 
@@ -6817,7 +6849,7 @@ class CathPlotGUI:
             "extra_gnuplot": self.raw_gnuplot_text.get("1.0", "end-1c"),
         }
 
-    def _process_one_batch_queue_item(self, rel_path, fmt, recipe, x_output_no, settings):
+    def _process_one_batch_queue_item(self, rel_path, fmt, recipe, x_output_no, settings, reserved_names=None, reserved_lock=None):
         """_run_batch_queue의 항목 하나(dat 파일 1개)를 처리해서 결과를 dict로
         반환한다 - _process_one_batch_set_item과 동일한 이유(ThreadPoolExecutor로
         병렬 처리해도 결과 취합은 as_completed 루프 한 곳에서만 하기 위함)."""
@@ -6963,8 +6995,32 @@ class CathPlotGUI:
             plotdef.frame_width, plotdef.frame_height = self._compute_auto_frame_size_cm(for_print=True)
             plotdef.frame_unit = "cm"
 
+        # [수정 - 사용자 지적] "서로 다른 파일에서 그리므로 파일명이 같다고
+        # 같은 건 아님 - 구별해야 함" - base_stem이 dat 파일명만 기준이라
+        # (예: case1/out111.dat, case2/out111.dat처럼 서로 다른 폴더의
+        # 같은 이름 dat), 지금까지는 충돌 회피가 전혀 없어 뒤에 처리된
+        # 쪽이 앞의 결과를 조용히 덮어썼다. 이번 배치 안에서의 예약
+        # (reserved_names)과 디스크의 실제 존재 여부를 함께 확인해 겹치면
+        # 번호를 붙인다. [수정 - 사용자 요청] "처음 파일은 _# 없이, 다음
+        # 부터는 _1~ 등으로 구별" - 첫 항목은 그대로, 겹치는 두 번째부터
+        # "_1","_2"...로 매긴다(Batch Set/Template Save가 쓰는 "_2"부터
+        # 시작하는 기존 관례와는 다르게, 이 기능은 이번에 새로 추가된
+        # 것이라 별도로 지정된 규칙을 그대로 따름).
         base_stem = os.path.splitext(os.path.basename(abs_path))[0]
-        outfile = os.path.join(self.plot_dir, f"{base_stem}_batch.{fmt}")
+
+        def _candidate_stem(n):
+            return base_stem if n <= 1 else f"{base_stem}_{n - 1}"
+
+        safe_stem = _candidate_stem(1)
+        if reserved_names is not None and reserved_lock is not None:
+            with reserved_lock:
+                n = 1
+                safe_stem = _candidate_stem(n)
+                while safe_stem in reserved_names or os.path.exists(os.path.join(self.plot_dir, f"{safe_stem}_batch.{fmt}")):
+                    n += 1
+                    safe_stem = _candidate_stem(n)
+                reserved_names.add(safe_stem)
+        outfile = os.path.join(self.plot_dir, f"{safe_stem}_batch.{fmt}")
 
         try:
             plotdef, font_warn = self._check_and_fix_fonts(plotdef)
@@ -6996,10 +7052,18 @@ class CathPlotGUI:
         warnings = []
         total = len(relative_paths)
 
+        # [추가 - 사용자 지적] "서로 다른 파일에서 그리므로 파일명이 같다고
+        # 같은 건 아님" - _run_batch_set과 동일한 이유로, 여러 dat 파일이
+        # (서로 다른 폴더에서) 같은 이름을 쓸 때 출력 파일이 조용히
+        # 덮어써지지 않도록 배치 전체가 공유하는 예약 집합/lock을 만든다.
+        _reserved_lock = threading.Lock()
+        _reserved_names = set()
+
         done = 0
         with ThreadPoolExecutor(max_workers=_BATCH_MAX_WORKERS) as executor:
             futures = {
-                executor.submit(self._process_one_batch_queue_item, rel_path, fmt, recipe, x_output_no, settings): rel_path
+                executor.submit(self._process_one_batch_queue_item, rel_path, fmt, recipe, x_output_no, settings,
+                                 _reserved_names, _reserved_lock): rel_path
                 for rel_path in relative_paths
             }
             for future in as_completed(futures):
