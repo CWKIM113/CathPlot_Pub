@@ -2109,7 +2109,6 @@ class CathPlotGUI:
 
             layout = self.layout_var.get()
             rows, cols = self.LAYOUT_GRID.get(layout, (1, 1))
-            orientation = self.orientation_var.get()
 
             if layout != "Auto" and len(selected_defs) > rows * cols:
                 messagebox.showwarning(
@@ -2121,7 +2120,6 @@ class CathPlotGUI:
                 )
                 return
 
-            import re
             base_title = re.sub(r"_\d+$", "", selected_names[0])
 
             self.multi_counters[base_title] = self.multi_counters.get(base_title, 0) + 1
@@ -9781,38 +9779,35 @@ class CathPlotGUI:
         # 같은 크래시 확인 + Animation Control 패널 오픈 패턴(_open_animation_
         # control_panel은 2D/3D 구분 없이 ctrl_path/status_path 프로토콜에만
         # 의존하므로 그대로 재사용됨).
+        # [수정 - 요청 "실행속도"] 2D(execute_plot_pipeline)와 같은 이유로 UI를
+        # 막는 time.sleep 대기 대신 _watch_plot_process_start로 비동기 확인한다.
         if animate3d and generator.last_process is not None:
-            import time as _time
-            _crashed = False
-            for _ in range(10):  # 0.2초 간격으로 최대 2초
-                _time.sleep(0.2)
-                if generator.last_process.poll() is not None:
-                    _crashed = True
-                    break
-            if _crashed:
-                _err_detail = ""
-                try:
-                    if generator.last_process.stderr:
-                        _err_detail = generator.last_process.stderr.read().decode("utf-8", errors="ignore").strip()
-                except Exception:
+            def _after_launch(_crashed):
+                if _crashed:
                     _err_detail = ""
-                # [수정 - 사용자 보고, 2D PLOT 메시지와 동일하게 개선] 실제
-                # 오류 내용을 잡았으면 그 사실 그대로만 보여주고(축 설정/
-                # 데이터 범위와 무관한 원인일 때 오해를 줄 수 있음), 못
-                # 잡았을 때만 기존 추정 문구를 대신 보여준다.
-                if _err_detail:
-                    _msg = f"gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
-                else:
-                    _msg = "gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n축 설정이나 데이터 범위를 확인해주세요."
-                messagebox.showwarning("3D Plot", _msg)
-                generator.last_process = None
-            elif getattr(generator, "last_anim_ctrl_path", None):
-                self._open_animation_control_panel(
-                    generator.last_anim_ctrl_path, generator.last_anim_frame_pause,
-                    status_path=getattr(generator, "last_anim_status_path", None),
-                    proc=generator.last_process,
-                    plot_window_title=os.path.splitext(os.path.basename(outfile))[0],
-                )
+                    try:
+                        if generator.last_process.stderr:
+                            _err_detail = generator.last_process.stderr.read().decode("utf-8", errors="ignore").strip()
+                    except Exception:
+                        _err_detail = ""
+                    # [수정 - 사용자 보고, 2D PLOT 메시지와 동일하게 개선] 실제
+                    # 오류 내용을 잡았으면 그 사실 그대로만 보여주고(축 설정/
+                    # 데이터 범위와 무관한 원인일 때 오해를 줄 수 있음), 못
+                    # 잡았을 때만 기존 추정 문구를 대신 보여준다.
+                    if _err_detail:
+                        _msg = f"gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n\ngnuplot 오류 내용:\n{_err_detail[:500]}"
+                    else:
+                        _msg = "gnuplot이 3D 애니메이션을 그리지 못하고 바로 종료됐습니다.\n축 설정이나 데이터 범위를 확인해주세요."
+                    messagebox.showwarning("3D Plot", _msg)
+                elif getattr(generator, "last_anim_ctrl_path", None):
+                    self._open_animation_control_panel(
+                        generator.last_anim_ctrl_path, generator.last_anim_frame_pause,
+                        status_path=getattr(generator, "last_anim_status_path", None),
+                        proc=generator.last_process,
+                        plot_window_title=os.path.splitext(os.path.basename(outfile))[0],
+                    )
+
+            self._watch_plot_process_start(generator.last_process, _after_launch)
 
     def _generate_3d_file(self, outfile, fmt, curves, rot_x, rot_z, style, palette, colorbox,
                            annotations_3d, arrows_3d, equal_xyz, surfaces, xlabel3d="", ylabel3d="", zlabel3d="",
@@ -10987,7 +10982,6 @@ class CathPlotGUI:
 
     def execute_plot_pipeline(self, mode="Interactive", custom_filepath=None, custom_format=None):
         # 연타(더블클릭)로 인해 gnuplot 창이 동시에 여러 개 뜨는 것을 방지하기 위한 디바운스 가드
-        import time
         now = time.monotonic()
         last = getattr(self, "_last_plot_time", 0)
         if now - last < 0.7:
@@ -11523,14 +11517,14 @@ class CathPlotGUI:
             # 시간이 더 걸리는 경우(0.4초 시점엔 아직 안 죽어서) 놓치는 문제가
             # 있었음 - 최대 2초까지 짧은 간격으로 반복 확인하도록 개선. 또한
             # gnuplot의 실제 stderr 에러 메시지를 잡아서 같이 보여준다
-            if mode == "Interactive" and generator.last_process is not None:
-                import time as _time
-                _crashed = False
-                for _ in range(10):  # 0.2초 간격으로 최대 2초
-                    _time.sleep(0.2)
-                    if generator.last_process.poll() is not None:
-                        _crashed = True
-                        break
+            # [수정 - 요청 "실행속도"] 예전엔 여기서 time.sleep(0.2)을 최대 10번
+            # 반복하며 메인(UI) 스레드를 막고 gnuplot이 바로 죽는지 확인해서,
+            # 정상적으로 뜬 경우에도 PLOT을 누를 때마다 CathPlot 창 전체가 항상
+            # 2초씩 멈췄다(실측 2.01s). 같은 확인(0.2초 간격, 최대 2초)을
+            # root.after로 비동기 진행하고, 결과에 따라 해야 할 일(오류 안내/
+            # 애니메이션 컨트롤·PIP 오버레이 창/경고/Multi Print·Save 목록
+            # 등록)은 아래 _after_launch에서 기존과 같은 순서로 처리한다.
+            def _after_launch(_crashed):
                 if _crashed:
                     _err_detail = ""
                     try:
@@ -11550,7 +11544,6 @@ class CathPlotGUI:
                     else:
                         _msg = "gnuplot이 그래프를 그리지 못하고 바로 종료됐습니다.\n축 설정(특히 Log Scale)이나 데이터 범위를 확인해주세요."
                     messagebox.showwarning("PLOT", _msg)
-                    generator.last_process = None
                 elif getattr(generator, "last_anim_ctrl_path", None):
                     # [추가 - space bar 재설계] 애니메이션이 정상적으로 떠 있으면
                     # (크래시 아님) Pause/Speed/Exit 컨트롤 패널을 띄운다.
@@ -11592,52 +11585,58 @@ class CathPlotGUI:
                         os.path.splitext(os.path.basename(outfile))[0],
                     )
 
-            # [수정 - 버그] "PIP+Animation(spline 등 경고 포함) 중 멈춘 것처럼
-            # 보임" - 이 경고창(messagebox.showwarning, 모달)이 예전엔 위
-            # create_animation_script 직후 곧바로 떴는데, 그러면 그 뒤에 오는
-            # Animation Control 패널/PIP 오버레이 창 띄우기가 사용자가 이
-            # 경고를 닫을 때까지 전부 미뤄져서(같은 메인 스레드) 애니메이션
-            # 컨트롤이 안 뜨고 멈춘 것처럼 보였음 - 경고 자체는 정보성이라
-            # 어디서 띄우든 상관없으므로, 크래시 확인/컨트롤 패널·오버레이
-            # 띄우기가 전부 끝난 뒤로 옮겨서 실제 애니메이션 UI가 먼저 보이게 한다.
-            if _all_warn:
-                # [수정 - 요청, 재수정] "CathPlot 메인 화면이 맨 위에 고정됨 -
-                # 지금 Anim 중인 plot창이 맨 위에 나와야 함" - root 전체를
-                # topmost로 올렸다 내리던 이전 수정이 바로 그 원인이었다
-                # (Animation처럼 경고가 반복되는 상황에서 CathPlot 메인
-                # 창이 활성 plot/Animation 창 위로 계속 튀어 올라옴).
-                # messagebox 자체가 모달이라 원래도 포커스는 알아서 받으므로
-                # root를 통째로 topmost로 만들 필요가 없었다 - 제거.
-                messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
+                # [수정 - 버그] "PIP+Animation(spline 등 경고 포함) 중 멈춘 것처럼
+                # 보임" - 이 경고창(messagebox.showwarning, 모달)이 예전엔 위
+                # create_animation_script 직후 곧바로 떴는데, 그러면 그 뒤에 오는
+                # Animation Control 패널/PIP 오버레이 창 띄우기가 사용자가 이
+                # 경고를 닫을 때까지 전부 미뤄져서(같은 메인 스레드) 애니메이션
+                # 컨트롤이 안 뜨고 멈춘 것처럼 보였음 - 경고 자체는 정보성이라
+                # 어디서 띄우든 상관없으므로, 크래시 확인/컨트롤 패널·오버레이
+                # 띄우기가 전부 끝난 뒤로 옮겨서 실제 애니메이션 UI가 먼저 보이게 한다.
+                if _all_warn:
+                    # [수정 - 요청, 재수정] "CathPlot 메인 화면이 맨 위에 고정됨 -
+                    # 지금 Anim 중인 plot창이 맨 위에 나와야 함" - root 전체를
+                    # topmost로 올렸다 내리던 이전 수정이 바로 그 원인이었다
+                    # (Animation처럼 경고가 반복되는 상황에서 CathPlot 메인
+                    # 창이 활성 plot/Animation 창 위로 계속 튀어 올라옴).
+                    # messagebox 자체가 모달이라 원래도 포커스는 알아서 받으므로
+                    # root를 통째로 topmost로 만들 필요가 없었다 - 제거.
+                    messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
 
-            # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로
-            # 고정되던 버그. 같은 Plot Title로 Interactive PLOT을 여러 번 누르면
-            # active_plots_cache가 매번 같은 키("...+_default")로 덮어써져서,
-            # 이전 창들이 실제로는 열려있는데도 Multi Print/Save 목록에서 사라지는
-            # 문제가 있었음. 위에서 이미 파일명용으로 계산해둔 next_id(1,2,3...)를
-            # 그대로 재사용해서 매번 고유한 키가 되도록 함.
-            # [주의] next_id는 custom_filepath가 없을 때(Interactive)만 위에서 계산되므로,
-            # Batch/Save/Print(=custom_filepath 지정)에서는 여기서 참조하면 안 됨 -
-            # Interactive 분기 안에서만 curr_id를 계산하도록 함.
+                # [수정] self.current_dataset_id는 어디서도 설정되지 않아 항상 'default'로
+                # 고정되던 버그. 같은 Plot Title로 Interactive PLOT을 여러 번 누르면
+                # active_plots_cache가 매번 같은 키("...+_default")로 덮어써져서,
+                # 이전 창들이 실제로는 열려있는데도 Multi Print/Save 목록에서 사라지는
+                # 문제가 있었음. 위에서 이미 파일명용으로 계산해둔 next_id(1,2,3...)를
+                # 그대로 재사용해서 매번 고유한 키가 되도록 함.
+                # [주의] next_id는 custom_filepath가 없을 때(Interactive)만 위에서 계산되므로,
+                # Batch/Save/Print(=custom_filepath 지정)에서는 여기서 참조하면 안 됨 -
+                # Interactive 분기 안에서만 curr_id를 계산하도록 함.
+
+                if not _crashed:
+                    curr_id = next_id
+                    # [수정] Plot Title은 비어있을 수 있어서(Batch Queue 등에서는 의도적으로
+                    # 비워둠) 그걸로 표시 이름을 만들면 "_31"처럼 제목 없이 번호만 남는
+                    # 문제가 있었음 - 실제 저장되는 plt 파일명(safe_title)을 그대로 사용
+                    self.plot_processes.append(generator.last_process)
+                    self.active_plots_cache[f"{safe_title}_{curr_id}"] = plotdef
+                    # [추가 - 사용자 요청] "먼저 그린 창을 Template Save에서 선택"
+                    # - 지금 이 화면 상태(_template_dict가 읽는 것과 같은 위젯
+                    # 값들)가 방금 이 plotdef를 만든 바로 그 상태이므로, 여기서
+                    # 같이 스냅샷 떠두면 이후 화면이 Template Load 등으로 바뀌어도
+                    # save_template이 이 키를 고르면 손실 없이 그대로 복원해
+                    # 저장할 수 있다(plotdef -> dict 역변환 없이, 위젯을 그대로
+                    # 한 번 더 읽어서 저장하는 방식이라 완전히 정확함).
+                    try:
+                        self.active_plot_templates[f"{safe_title}_{curr_id}"] = self._template_dict()
+                    except Exception:
+                        pass
+                    self.plot_process_by_title[base_name] = generator.last_process
+
             if mode == "Interactive" and generator.last_process is not None:
-                curr_id = next_id
-                # [수정] Plot Title은 비어있을 수 있어서(Batch Queue 등에서는 의도적으로
-                # 비워둠) 그걸로 표시 이름을 만들면 "_31"처럼 제목 없이 번호만 남는
-                # 문제가 있었음 - 실제 저장되는 plt 파일명(safe_title)을 그대로 사용
-                self.plot_processes.append(generator.last_process)
-                self.active_plots_cache[f"{safe_title}_{curr_id}"] = plotdef
-                # [추가 - 사용자 요청] "먼저 그린 창을 Template Save에서 선택"
-                # - 지금 이 화면 상태(_template_dict가 읽는 것과 같은 위젯
-                # 값들)가 방금 이 plotdef를 만든 바로 그 상태이므로, 여기서
-                # 같이 스냅샷 떠두면 이후 화면이 Template Load 등으로 바뀌어도
-                # save_template이 이 키를 고르면 손실 없이 그대로 복원해
-                # 저장할 수 있다(plotdef -> dict 역변환 없이, 위젯을 그대로
-                # 한 번 더 읽어서 저장하는 방식이라 완전히 정확함).
-                try:
-                    self.active_plot_templates[f"{safe_title}_{curr_id}"] = self._template_dict()
-                except Exception:
-                    pass
-                self.plot_process_by_title[base_name] = generator.last_process
+                self._watch_plot_process_start(generator.last_process, _after_launch)
+            elif _all_warn:
+                messagebox.showwarning("PLOT 경고", "\n\n".join(_all_warn))
 
             if plotdef not in self.history_plots:
                 self.history_plots.append(plotdef)
@@ -11648,6 +11647,23 @@ class CathPlotGUI:
         except Exception as e:
             messagebox.showerror("오류", f"plot 생성 중 오류가 발생했습니다: {e}")
 
+
+    def _watch_plot_process_start(self, proc, on_done, interval_ms=200, max_checks=10):
+        """새로 띄운 화면(Interactive) gnuplot 프로세스가 스크립트 오류로 곧바로
+        죽는지 interval_ms 간격으로 최대 max_checks번 확인한 뒤 on_done(crashed)
+        를 부른다 - UI 스레드를 막지 않도록 root.after로 진행한다."""
+        state = {"n": 0}
+
+        def _poll():
+            state["n"] += 1
+            if proc.poll() is not None:
+                on_done(True)
+            elif state["n"] >= max_checks:
+                on_done(False)
+            else:
+                self.root.after(interval_ms, _poll)
+
+        self.root.after(interval_ms, _poll)
 
     def execute_multi_plot_pipeline(self, selected_plot_defs, mode, custom_filepath=None, custom_format=None):
         if not selected_plot_defs:
@@ -11661,8 +11677,7 @@ class CathPlotGUI:
         if custom_filepath:
             outfile = custom_filepath
         else:
-            #outfile = os.path.join(self.plot_dir, f"MultiPlot_Temp.gnu" if target == "screen" else f"MultiPlot_Output.{fmt}")
-            outfile = os.path.join(self.plot_dir, f"MultiPlot.gnu" if target == "screen" else f"MultiPlot_Output.{fmt}")
+            outfile = os.path.join(self.plot_dir, "MultiPlot.gnu" if target == "screen" else f"MultiPlot_Output.{fmt}")
 
         layout_opt = self.layout_var.get()
         is_auto = self.frame_auto_var.get()
