@@ -6286,14 +6286,18 @@ class CathPlotGUI:
             self._open_curve_settings_popup()
 
         def _move_curve(key, delta):
-            lst = self._legend_order.get("1") or []
-            if key not in lst:
-                lst = list(_ordered_keys)
-            self._legend_order["1"] = lst
-            i = lst.index(key)
+            # [수정 - 버그, 코드 검토] 예전 Legend Curves 팝업에서 그대로 옮겨온
+            # 방식은 저장된 순서 목록(선택 해제된 curve까지 남아 있음) 안에서
+            # 바로 옆 칸과 자리를 바꿔서, 그 옆 칸이 지금 화면에 없는(선택 해제된)
+            # curve면 ▲▼를 눌러도 보이는 순서가 전혀 안 바뀌었음 - 지금 이
+            # 팝업에 보이는 순서 기준으로 바꾸고, 안 보이는 curve는 뒤에 보존한다.
+            shown = list(_ordered_keys)
+            i = shown.index(key)
             j = i + delta
-            if 0 <= j < len(lst):
-                lst[i], lst[j] = lst[j], lst[i]
+            if 0 <= j < len(shown):
+                shown[i], shown[j] = shown[j], shown[i]
+            old = self._legend_order.get("1") or []
+            self._legend_order["1"] = shown + [k for k in old if k not in shown]
             _reopen_curve_settings()
 
         any_added = False
@@ -6510,7 +6514,7 @@ class CathPlotGUI:
             'title': tk.StringVar(value=init.get('title', "")),
             'axis': tk.StringVar(value=init.get('axis', "y1")),
             'color': tk.StringVar(value=init.get('color', "Auto")),
-            'linestyle': tk.StringVar(value=init.get('linestyle', "Auto")),
+            'linestyle': tk.StringVar(value=_migrate_style_label(init.get('linestyle', "Auto"))),
             'linewidth': tk.StringVar(value=init.get('linewidth', "1.5")),
             'frame': None,
         }
@@ -6570,7 +6574,7 @@ class CathPlotGUI:
                 title=data['title'].get().strip() or expr,
                 axis=data['axis'].get() or "y1",
                 color=COLOR_MAP.get(data['color'].get(), None) or None,
-                linestyle=STYLE_MAP.get(data['linestyle'].get(), None) or None,
+                linestyle=STYLE_MAP.get(_migrate_style_label(data['linestyle'].get()), None) or None,
                 linewidth=float(data['linewidth'].get() or 1.5),
             ))
         return result
@@ -8448,7 +8452,7 @@ class CathPlotGUI:
         # (points=Line Style None+On, linespoints=Lines+On, lines=Lines+Off).
         # [수정 - 사용자 요청] "3D도 2D처럼 line style 필요함(Color Palette는
         # 다른 문제로 선택사항)" - "Lines" 한 가지로 뭉쳐놨던 선택지를 2D와
-        # 동일한 STYLE_LIST(Auto/Solid/Dash/Dot/Dash-D/Short-D/Dash-2D)로
+        # 동일한 STYLE_LIST(Auto/Solid/Dash/Dot/Dash-Dot/Short-Dash/Dash-DotDot)로
         # 넓히고, 선을 아예 안 그리는 "None"만 그대로 별도 항목으로 남긴다
         # (Color Palette는 원래부터 surface 전용의 독립된 선택지라 그대로
         # 유지 - 이번 변경과 무관). 실제 dashtype 적용은 gnu_generator의
@@ -8720,7 +8724,7 @@ class CathPlotGUI:
             data = {
                 'expression': tk.StringVar(value=init.get('expression', "")),
                 'title': tk.StringVar(value=init.get('title', "")),
-                'style': tk.StringVar(value=init.get('line_style', _fs_line_style)),
+                'style': tk.StringVar(value=_migrate_style_label(init.get('line_style', _fs_line_style))),
                 'shape': tk.StringVar(value=init.get('shape', "Auto")),
                 'size': tk.StringVar(value=init.get('size', "M")),
                 'marker_on': tk.BooleanVar(value=init.get('marker_on', _fs_marker_on_default)),
@@ -8825,7 +8829,7 @@ class CathPlotGUI:
             # 들어있을 수 있음)는 _legacy_style_to_line_style_and_marker_on으로
             # 변환한다. shape 기본값도 미리 고정 배정하던 것에서 "Auto"로.
             _mc_line_style, _mc_marker_on_default = self._legacy_style_to_line_style_and_marker_on(init.get("style"))
-            style_var = tk.StringVar(value=init.get('line_style', _mc_line_style))
+            style_var = tk.StringVar(value=_migrate_style_label(init.get('line_style', _mc_line_style)))
             shape_var = tk.StringVar(value=init.get('shape', "Auto"))
             marker_on_var = tk.BooleanVar(value=init.get('marker_on', _mc_marker_on_default))
             size_var = tk.StringVar(value=init.get('size', "M"))
@@ -9575,7 +9579,7 @@ class CathPlotGUI:
                     # 수 있는데, 이제 콤보박스 선택지에 "Lines"가 없으므로
                     # (STYLE_LIST로 대체) 같은 의미인 "Auto"로 정규화한다.
                     _saved_ls = _line_styles[label]
-                    style_var_row.set("Auto" if _saved_ls == "Lines" else _saved_ls)
+                    style_var_row.set("Auto" if _saved_ls == "Lines" else _migrate_style_label(_saved_ls))
                     if _marker_ons is not None and label in _marker_ons:
                         marker_on_var.set(bool(_marker_ons[label]))
                 elif label in _legacy_styles:
@@ -12576,7 +12580,9 @@ class CathPlotGUI:
         if line_style_label == "Color Palette":
             return "pm3d", ""
         line_on = line_style_label != "None"
-        dash_key = STYLE_MAP.get(line_style_label, "") if line_on else ""
+        # 예전 축약 라벨(Short-D 등)로 저장된 3D Template/Batch 값도 같은 dash로
+        # 해석되게 먼저 새 라벨로 옮긴다(안 옮기면 조용히 실선이 됨).
+        dash_key = STYLE_MAP.get(_migrate_style_label(line_style_label), "") if line_on else ""
         if not line_on:
             return ("points", "") if marker_on else ("lines", "")
         return ("linespoints" if marker_on else "lines"), dash_key

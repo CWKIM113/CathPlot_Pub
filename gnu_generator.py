@@ -4373,6 +4373,15 @@ class GnuplotGenerator:
         ) + [
             fc for fc in getattr(plotdef, "function_curves", []) if getattr(fc, "legend_group", 1) == 2
         ]
+        # [추가 - 코드 검토] Legend2 소속 기본값이 "1"(Legend1)로 바로잡히면서
+        # (Auto Shape가 항상 fill로 나오던 버그 수정), Legend2 On만 켜고
+        # Curve Features의 L2를 하나도 체크하지 않으면 box2가 그냥 안 그려진다 -
+        # 사용자가 켰는데 왜 안 보이는지 알 수 있게 안내한다.
+        if getattr(plotdef, "legend2_on", False) and not group2_curves:
+            _l2_msg = ("Legend2가 켜져 있지만 L2에 포함된 curve가 없어 Legend2 박스를 그리지 않았습니다 - "
+                       "Curve Features에서 넣을 curve의 L2를 체크하세요.")
+            if _l2_msg not in self.warnings:
+                self.warnings.append(_l2_msg)
         if getattr(plotdef, "legend2_on", False) and group2_curves:
             legend2_thick_val = min(float(getattr(plotdef, "legend2_thick", "1.5") or 1.5), _frame_border_lw)
             self._render_legend_box(
