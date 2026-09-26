@@ -6282,14 +6282,18 @@ class CathPlotGUI:
             self._open_curve_settings_popup()
 
         def _move_curve(key, delta):
-            lst = self._legend_order.get("1") or []
-            if key not in lst:
-                lst = list(_ordered_keys)
-            self._legend_order["1"] = lst
-            i = lst.index(key)
+            # [수정 - 버그, 코드 검토] 예전 Legend Curves 팝업에서 그대로 옮겨온
+            # 방식은 저장된 순서 목록(선택 해제된 curve까지 남아 있음) 안에서
+            # 바로 옆 칸과 자리를 바꿔서, 그 옆 칸이 지금 화면에 없는(선택 해제된)
+            # curve면 ▲▼를 눌러도 보이는 순서가 전혀 안 바뀌었음 - 지금 이
+            # 팝업에 보이는 순서 기준으로 바꾸고, 안 보이는 curve는 뒤에 보존한다.
+            shown = list(_ordered_keys)
+            i = shown.index(key)
             j = i + delta
-            if 0 <= j < len(lst):
-                lst[i], lst[j] = lst[j], lst[i]
+            if 0 <= j < len(shown):
+                shown[i], shown[j] = shown[j], shown[i]
+            old = self._legend_order.get("1") or []
+            self._legend_order["1"] = shown + [k for k in old if k not in shown]
             _reopen_curve_settings()
 
         any_added = False
@@ -6377,7 +6381,26 @@ class CathPlotGUI:
             self._disable_combobox_wheel(size_combo)
 
             fill_cell = _cell(row_f, FILL_PX)
-            self._mk_check(fill_cell, "", self.marker_fill_vars[key], side="left")
+            _fill_chk = self._mk_check(fill_cell, "", self.marker_fill_vars[key], side="left")
+
+            # [수정 - 코드 검토] Shape=Auto인 curve는 fill이 axis(Y1=open,
+            # Y2=fill)로 강제돼(_get_marker_fields의 auto_fill_override) Fill
+            # 체크박스 값이 실제 그림에 반영되지 않는데, 체크박스는 그대로
+            # 눌려서 "수동 조정 가능"처럼 보였음 - Auto인 동안은 체크박스를
+            # 축 기준 값으로 맞추고 잠그며, 특정 모양을 고르면 다시 풀어
+            # curve별로 직접 채움을 정할 수 있게 한다.
+            def _sync_fill_lock(*_, k=key, chk=_fill_chk):
+                try:
+                    if self.marker_shape_vars[k].get() == "Auto":
+                        self.marker_fill_vars[k].set(k not in _y1_set)
+                        chk.configure(state="disabled")
+                    else:
+                        chk.configure(state="normal")
+                except tk.TclError:
+                    pass  # 팝업이 닫혀 위젯이 사라진 뒤의 trace 호출
+            _trace_id = self.marker_shape_vars[key].trace_add("write", _sync_fill_lock)
+            _fill_chk.bind("<Destroy>", lambda e, k=key, t=_trace_id: self._safe_trace_remove(self.marker_shape_vars[k], t), add="+")
+            _sync_fill_lock()
 
             max_cell = _cell(row_f, MAX_PX)
             ttk.Entry(max_cell, textvariable=self.marker_maxcount_vars[key],
@@ -6389,8 +6412,8 @@ class CathPlotGUI:
         ttk.Label(
             popup,
             text="On 체크 해제 시 이 curve는 마커 없음(Shape는 무관). Shape=Auto면 Y1/Y2 각각 Circle부터 "
-                 "순서대로 서로 다른 모양을 자동 배정(Y1=open, Y2=fill 기본, Fill 체크박스로 수동 조정 가능). "
-                 "L1/L2는 Legend1/2 박스 포함 여부, Ord(▲▼)는 두 Legend가 공유하는 표시 순서. Max#를 비우면 "
+                 "순서대로 서로 다른 모양을 자동 배정(Y1=open, Y2=fill - Auto인 동안 Fill은 잠김, 채움을 직접 정하려면 Shape를 지정). "
+                 "L1/L2는 Legend1/2 박스 포함 여부, Order(▲▼)는 두 Legend가 공유하는 표시 순서. Max#를 비우면 "
                  "자동(대략 20~30개, 데이터가 적으면 전부 표시). M 크기 = pointsize 1.0",
             foreground="#555555", wraplength=680, justify="left"
         ).pack(padx=10, pady=(4, 0), anchor="w")
@@ -6496,7 +6519,7 @@ class CathPlotGUI:
             'title': tk.StringVar(value=init.get('title', "")),
             'axis': tk.StringVar(value=init.get('axis', "y1")),
             'color': tk.StringVar(value=init.get('color', "Auto")),
-            'linestyle': tk.StringVar(value=init.get('linestyle', "Auto")),
+            'linestyle': tk.StringVar(value=_migrate_style_label(init.get('linestyle', "Auto"))),
             'linewidth': tk.StringVar(value=init.get('linewidth', "1.5")),
             'frame': None,
         }
@@ -6556,7 +6579,7 @@ class CathPlotGUI:
                 title=data['title'].get().strip() or expr,
                 axis=data['axis'].get() or "y1",
                 color=COLOR_MAP.get(data['color'].get(), None) or None,
-                linestyle=STYLE_MAP.get(data['linestyle'].get(), None) or None,
+                linestyle=STYLE_MAP.get(_migrate_style_label(data['linestyle'].get()), None) or None,
                 linewidth=float(data['linewidth'].get() or 1.5),
             ))
         return result
@@ -8434,7 +8457,7 @@ class CathPlotGUI:
         # (points=Line Style None+On, linespoints=Lines+On, lines=Lines+Off).
         # [수정 - 사용자 요청] "3D도 2D처럼 line style 필요함(Color Palette는
         # 다른 문제로 선택사항)" - "Lines" 한 가지로 뭉쳐놨던 선택지를 2D와
-        # 동일한 STYLE_LIST(Auto/Solid/Dash/Dot/Dash-D/Short-D/Dash-2D)로
+        # 동일한 STYLE_LIST(Auto/Solid/Dash/Dot/Dash-Dot/Short-Dash/Dash-DotDot)로
         # 넓히고, 선을 아예 안 그리는 "None"만 그대로 별도 항목으로 남긴다
         # (Color Palette는 원래부터 surface 전용의 독립된 선택지라 그대로
         # 유지 - 이번 변경과 무관). 실제 dashtype 적용은 gnu_generator의
@@ -8706,7 +8729,7 @@ class CathPlotGUI:
             data = {
                 'expression': tk.StringVar(value=init.get('expression', "")),
                 'title': tk.StringVar(value=init.get('title', "")),
-                'style': tk.StringVar(value=init.get('line_style', _fs_line_style)),
+                'style': tk.StringVar(value=_migrate_style_label(init.get('line_style', _fs_line_style))),
                 'shape': tk.StringVar(value=init.get('shape', "Auto")),
                 'size': tk.StringVar(value=init.get('size', "M")),
                 'marker_on': tk.BooleanVar(value=init.get('marker_on', _fs_marker_on_default)),
@@ -8811,7 +8834,7 @@ class CathPlotGUI:
             # 들어있을 수 있음)는 _legacy_style_to_line_style_and_marker_on으로
             # 변환한다. shape 기본값도 미리 고정 배정하던 것에서 "Auto"로.
             _mc_line_style, _mc_marker_on_default = self._legacy_style_to_line_style_and_marker_on(init.get("style"))
-            style_var = tk.StringVar(value=init.get('line_style', _mc_line_style))
+            style_var = tk.StringVar(value=_migrate_style_label(init.get('line_style', _mc_line_style)))
             shape_var = tk.StringVar(value=init.get('shape', "Auto"))
             marker_on_var = tk.BooleanVar(value=init.get('marker_on', _mc_marker_on_default))
             size_var = tk.StringVar(value=init.get('size', "M"))
@@ -9561,7 +9584,7 @@ class CathPlotGUI:
                     # 수 있는데, 이제 콤보박스 선택지에 "Lines"가 없으므로
                     # (STYLE_LIST로 대체) 같은 의미인 "Auto"로 정규화한다.
                     _saved_ls = _line_styles[label]
-                    style_var_row.set("Auto" if _saved_ls == "Lines" else _saved_ls)
+                    style_var_row.set("Auto" if _saved_ls == "Lines" else _migrate_style_label(_saved_ls))
                     if _marker_ons is not None and label in _marker_ons:
                         marker_on_var.set(bool(_marker_ons[label]))
                 elif label in _legacy_styles:
@@ -11668,6 +11691,13 @@ class CathPlotGUI:
         self.root.after(interval_ms, _poll)
 
     @staticmethod
+    def _safe_trace_remove(var, trace_id):
+        try:
+            var.trace_remove("write", trace_id)
+        except (tk.TclError, ValueError):
+            pass
+
+    @staticmethod
     def _gnuplot_crash_message(proc, what, fallback_hint):
         """[추가 - 요청 "중복성"] 화면 gnuplot이 바로 종료됐을 때의 안내 문구 -
         2D PLOT/3D Plot/3D Animation 공용. gnuplot의 실제 오류 내용(stderr)을
@@ -12561,7 +12591,9 @@ class CathPlotGUI:
         if line_style_label == "Color Palette":
             return "pm3d", ""
         line_on = line_style_label != "None"
-        dash_key = STYLE_MAP.get(line_style_label, "") if line_on else ""
+        # 예전 축약 라벨(Short-D 등)로 저장된 3D Template/Batch 값도 같은 dash로
+        # 해석되게 먼저 새 라벨로 옮긴다(안 옮기면 조용히 실선이 됨).
+        dash_key = STYLE_MAP.get(_migrate_style_label(line_style_label), "") if line_on else ""
         if not line_on:
             return ("points", "") if marker_on else ("lines", "")
         return ("linespoints" if marker_on else "lines"), dash_key
