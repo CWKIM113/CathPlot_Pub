@@ -25,6 +25,7 @@ import re
 import uuid
 import hashlib
 import copy
+import contextlib
 
 from tkinter import ttk
 from tkinter import filedialog
@@ -11827,23 +11828,10 @@ class CathPlotGUI:
                 시점의 현재 GUI Frame 설정을 따른다"로 통일한다(Multi-Print/
                 Save, '현재 화면 설정'과 동일 원칙). 고른 plot은 내용(curve 등)만
                 제공하고, 크기는 pd가 아니라 현재 GUI 상태에서 가져온다."""
-                if self.frame_auto_var.get():
-                    w_str, h_str = self._compute_auto_frame_size_cm(for_print=True, orientation=orientation)
-                    w, h = float(w_str), float(h_str)
-                    unit = "cm"
-                else:
-                    try:
-                        w = float((self.frame_width_var.get() or "10").strip() or 10.0)
-                        h = float((self.frame_height_var.get() or "8").strip() or 8.0)
-                    except ValueError:
-                        w, h = 10.0, 8.0
-                    unit = self.frame_unit_var.get()
-                    # [수정 - 재검토] "가로/세로는 그대로 두고 위치만 가로세로로
-                    # 두면 어떨까"라는 지적으로 여기 있던 orientation 기반 w/h
-                    # 스왑을 없앰 - Manual로 지정한 축 크기의 x:y는 orientation
-                    # 선택과 무관하게 항상 그대로 유지된다(_compute_auto_frame_size_cm
-                    # 주석 참고 - 실제 인쇄 단계가 EMF 비율은 유지한 채 페이지만
-                    # 돌리므로 스왑이 애초에 불필요했음).
+                # orientation 기반 w/h 스왑은 하지 않는다 - Manual로 지정한 축 크기의
+                # x:y는 orientation과 무관하게 유지(실제 인쇄 단계가 EMF 비율은 유지한
+                # 채 페이지만 돌리므로 스왑이 애초에 불필요했음).
+                w, h, unit = self._resolve_output_frame_size(for_print=True, orientation=orientation)
                 return dataclasses.replace(pd, frame_auto=False, frame_width=str(w), frame_height=str(h), frame_unit=unit)
 
             if chosen_plotdef is not None:
@@ -11865,39 +11853,12 @@ class CathPlotGUI:
             else:
                 # 현재 화면 설정 그대로 인쇄하는 경우 - GUI 변수를 임시로 방향에 맞게
                 # 바꿔서 생성한 뒤 원래 값으로 되돌린다
-                _orig_auto = self.frame_auto_var.get()
-                _orig_w = self.frame_width_var.get()
-                _orig_h = self.frame_height_var.get()
-                _orig_unit = self.frame_unit_var.get()
-                # [수정] Auto가 켜져 있으면 여기서 5x4in라는 임의의 작은 고정값으로
-                # 대체해버려서, 실제 용지를 거의 다 채워야 할 Auto 인쇄가 그보다
-                # 훨씬 작게(약 1/3 크기) 나오는 문제가 있었음 - Multi-Print의 1/p
-                # Auto/Save의 Auto와 동일하게 _compute_auto_frame_size_cm으로
-                # 용지 크기 기준 값을 계산해서 써야 함
-                if _orig_auto:
-                    w_str, h_str = self._compute_auto_frame_size_cm(for_print=True, orientation=orientation)
-                    w, h = float(w_str), float(h_str)
-                    unit = "cm"
-                else:
-                    try:
-                        w = float((_orig_w or "10").strip() or 10.0)
-                        h = float((_orig_h or "8").strip() or 8.0)
-                    except ValueError:
-                        w, h = 10.0, 8.0
-                    unit = _orig_unit
-                # [수정 - 재검토] orientation 기반 w/h 스왑 제거 (위
-                # _apply_orientation_to_plotdef 주석과 동일한 이유).
-                self.frame_auto_var.set(False)
-                self.frame_width_var.set(str(w))
-                self.frame_height_var.set(str(h))
-                self.frame_unit_var.set(unit)
-                try:
+                # [수정] Auto가 켜져 있으면 임의의 작은 고정값(5x4in) 대신 Multi-Print의
+                # 1/p Auto/Save의 Auto와 동일하게 용지 기준 크기를 쓴다(_resolve_
+                # output_frame_size). orientation 기반 w/h 스왑은 하지 않는다(위와 동일).
+                w, h, unit = self._resolve_output_frame_size(for_print=True, orientation=orientation)
+                with self._frame_vars_overridden(w, h, unit):
                     success_path = self.execute_plot_pipeline("Batch", custom_filepath=temp_emf, custom_format="EMF")
-                finally:
-                    self.frame_auto_var.set(_orig_auto)
-                    self.frame_width_var.set(_orig_w)
-                    self.frame_height_var.set(_orig_h)
-                    self.frame_unit_var.set(_orig_unit)
         except Exception as e:
             messagebox.showerror("인쇄 오류", f"인쇄용 파일 생성 중 오류가 발생했습니다:\n{e}")
             return
@@ -11919,10 +11880,48 @@ class CathPlotGUI:
             target=self._print_emf_and_cleanup, args=(success_path, raw_title, printer_name, orientation), daemon=True
         ).start()
 
-    def _pick_plot_to_print_dialog(self):
-        """PRINT 버튼을 눌렀을 때 무엇을 인쇄할지, 어떤 용지 방향으로 인쇄할지 고르는 창.
-        (Multi Print/Save는 이미 자체 orientation 선택이 있어서 중복이라, 단일
-        PRINT 전용으로 여기서 방향까지 같이 물어봄)
+    def _resolve_output_frame_size(self, for_print, orientation):
+        """[추가 - 요청 "중복성"] 단일 PRINT/SAVE가 실제로 쓸 axis frame 크기
+        (w, h, unit)를 현재 GUI의 Frame 설정에서 정한다 - Auto면 용지 기준
+        기본 크기(_compute_auto_frame_size_cm, cm), Manual이면 입력칸 값(숫자가
+        아니면 10x8). 예전엔 같은 계산이 PRINT/SAVE의 "현재 화면"/"이전 plot"
+        분기 네 곳에 복사돼 있었음."""
+        if self.frame_auto_var.get():
+            w_str, h_str = self._compute_auto_frame_size_cm(for_print=for_print, orientation=orientation)
+            return float(w_str), float(h_str), "cm"
+        try:
+            w = float((self.frame_width_var.get() or "10").strip() or 10.0)
+            h = float((self.frame_height_var.get() or "8").strip() or 8.0)
+        except ValueError:
+            w, h = 10.0, 8.0
+        return w, h, self.frame_unit_var.get()
+
+    @contextlib.contextmanager
+    def _frame_vars_overridden(self, w, h, unit):
+        """GUI의 Frame 입력값을 잠깐 (Manual, w, h, unit)으로 바꿔 두고 끝나면
+        (예외가 나도) 원래 값으로 되돌린다 - "현재 화면 설정" 기준 PRINT/SAVE가
+        execute_plot_pipeline을 그대로 재사용하기 위한 장치."""
+        orig = (self.frame_auto_var.get(), self.frame_width_var.get(),
+                self.frame_height_var.get(), self.frame_unit_var.get())
+        self.frame_auto_var.set(False)
+        self.frame_width_var.set(str(w))
+        self.frame_height_var.set(str(h))
+        self.frame_unit_var.set(unit)
+        try:
+            yield
+        finally:
+            self.frame_auto_var.set(orig[0])
+            self.frame_width_var.set(orig[1])
+            self.frame_height_var.set(orig[2])
+            self.frame_unit_var.set(orig[3])
+
+    def _pick_plot_target_dialog(self, action):
+        """PRINT/SAVE 버튼을 눌렀을 때 무엇을(현재 화면 설정 또는 이전에 그린
+        plot), 어떤 용지 방향으로 {action}할지 고르는 창. (Multi Print/Save는
+        이미 자체 orientation 선택이 있어서, 단일 PRINT/SAVE 전용으로 여기서
+        방향까지 같이 물어봄)
+        [수정 - 요청 "중복성"] 예전엔 문구만 다른 똑같은 창이 PRINT/SAVE용으로
+        두 벌 있었음 - action("인쇄"/"저장")만 받아 하나로 합침.
         반환값: (choice, orientation) 튜플.
           choice: None = '현재 화면 설정'을 고름(기존 방식), False = 취소,
                   그 외 = 선택된 PlotDefinition 객체
@@ -11933,11 +11932,11 @@ class CathPlotGUI:
 
         result = {"choice": False, "orientation": self.orientation_var.get()}
         dlg = tk.Toplevel(self.root)
-        dlg.title("인쇄할 Plot 선택")
+        dlg.title(f"{action}할 Plot 선택")
         dlg.transient(self.root)
         dlg.grab_set()
 
-        ttk.Label(dlg, text="인쇄할 대상을 선택하세요:").pack(padx=15, pady=(15, 5))
+        ttk.Label(dlg, text=f"{action}할 대상을 선택하세요:").pack(padx=15, pady=(15, 5))
         choice_var = tk.StringVar(value=CURRENT_SCREEN_LABEL)
         ttk.Combobox(
             dlg, textvariable=choice_var, values=names, width=35, state="readonly"
@@ -11962,6 +11961,12 @@ class CathPlotGUI:
 
         self.root.wait_window(dlg)
         return result["choice"], result["orientation"]
+
+    def _pick_plot_to_print_dialog(self):
+        return self._pick_plot_target_dialog("인쇄")
+
+    def _pick_plot_to_save_dialog(self):
+        return self._pick_plot_target_dialog("저장")
 
     def _ask_file_conflict(self, filename):
         """같은 이름의 출력 파일이 이미 있을 때 어떻게 할지 물어본다.
@@ -12424,37 +12429,12 @@ class CathPlotGUI:
         if chosen_plotdef is None:
             # 현재 화면 설정 - PRINT와 동일하게, 선택한 방향에 맞춰 GUI의 frame
             # 값을 잠깐 덮어써서 생성한 뒤 원래 값으로 되돌린다
-            import dataclasses
-            _orig_auto = self.frame_auto_var.get()
-            _orig_w = self.frame_width_var.get()
-            _orig_h = self.frame_height_var.get()
-            _orig_unit = self.frame_unit_var.get()
-            if _orig_auto:
-                w_cm, h_cm = self._compute_auto_frame_size_cm(for_print=False, orientation=orientation)
-                w, h = float(w_cm), float(h_cm)
-                unit = "cm"
-            else:
-                try:
-                    w = float((_orig_w or "10").strip() or 10.0)
-                    h = float((_orig_h or "8").strip() or 8.0)
-                except ValueError:
-                    w, h = 10.0, 8.0
-                # [수정 - 재검토] orientation 기반 w/h 스왑 제거 - Save는
-                # "페이지" 개념이 없어(캔버스=frame 그 자신) 스왑하면 Manual로
-                # 지정한 x:y가 orientation 선택만으로 뒤집혀버림(왜곡). 사용자
-                # 확인 후 Print와 동일하게 스왑 없이 그대로 유지하기로 함.
-                unit = _orig_unit
-            self.frame_auto_var.set(False)
-            self.frame_width_var.set(str(w))
-            self.frame_height_var.set(str(h))
-            self.frame_unit_var.set(unit)
-            try:
+            # orientation 기반 w/h 스왑은 하지 않는다 - Save는 "페이지" 개념이
+            # 없어(캔버스=frame 그 자신) 스왑하면 Manual로 지정한 x:y가
+            # orientation 선택만으로 뒤집혀버림(왜곡). Print와 동일.
+            w, h, unit = self._resolve_output_frame_size(for_print=False, orientation=orientation)
+            with self._frame_vars_overridden(w, h, unit):
                 self.execute_plot_pipeline("Batch", custom_filepath=os.path.abspath(selected_path), custom_format=fmt)
-            finally:
-                self.frame_auto_var.set(_orig_auto)
-                self.frame_width_var.set(_orig_w)
-                self.frame_height_var.set(_orig_h)
-                self.frame_unit_var.set(_orig_unit)
             return
 
         # 캐시된(Interactive) plot을 골랐을 때 - 화면 전용이던 plotdef를 파일
@@ -12465,19 +12445,9 @@ class CathPlotGUI:
         # plot이 들고 있는 값은 의도적으로 고른 값이 아닐 수 있기 때문("크기는
         # 항상 저장 시점의 현재 GUI 설정을 따른다"로 PRINT와 통일).
         import dataclasses
-        if self.frame_auto_var.get():
-            w_cm, h_cm = self._compute_auto_frame_size_cm(for_print=False, orientation=orientation)
-            w, h = float(w_cm), float(h_cm)
-            unit_out = "cm"
-        else:
-            try:
-                w = float((self.frame_width_var.get() or "10").strip() or 10.0)
-                h = float((self.frame_height_var.get() or "8").strip() or 8.0)
-            except ValueError:
-                w, h = 10.0, 8.0
-            unit_out = self.frame_unit_var.get()
-            # [수정 - 재검토] orientation 기반 w/h 스왑 제거 (위 두 곳과 동일한
-            # 이유 - Save도 Manual 지정 x:y를 orientation과 무관하게 유지).
+        # orientation 기반 w/h 스왑 없음(Save도 Manual 지정 x:y를 orientation과
+        # 무관하게 유지).
+        w, h, unit_out = self._resolve_output_frame_size(for_print=False, orientation=orientation)
         save_plotdef = dataclasses.replace(
             chosen_plotdef, is_print_mode=True, frame_auto=False,
             frame_width=str(w), frame_height=str(h), frame_unit=unit_out,
@@ -12496,49 +12466,6 @@ class CathPlotGUI:
             messagebox.showwarning("SAVE 경고", "\n\n".join(_all_warn))
         self.update_plot_file_list()
         messagebox.showinfo("완료", f"저장했습니다: {os.path.basename(selected_path)}")
-
-    def _pick_plot_to_save_dialog(self):
-        """SAVE 버튼을 눌렀을 때 무엇을 + 어떤 용지 방향으로 저장할지 고르는 창
-        (PRINT의 _pick_plot_to_print_dialog와 동일한 패턴).
-        반환값: (choice, orientation) 튜플.
-          choice: None = '현재 화면 설정'을 고름(기존 방식), False = 취소,
-                  그 외 = 선택된 PlotDefinition 객체
-          orientation: "portrait" 또는 "landscape" (취소 시 의미 없음)"""
-        CURRENT_SCREEN_LABEL = "현재 화면 설정"
-        self._cleanup_stale_plot_cache()
-        names = [CURRENT_SCREEN_LABEL] + sorted(self.active_plots_cache.keys())
-
-        result = {"choice": False, "orientation": self.orientation_var.get()}
-        dlg = tk.Toplevel(self.root)
-        dlg.title("저장할 Plot 선택")
-        dlg.transient(self.root)
-        dlg.grab_set()
-
-        ttk.Label(dlg, text="저장할 대상을 선택하세요:").pack(padx=15, pady=(15, 5))
-        choice_var = tk.StringVar(value=CURRENT_SCREEN_LABEL)
-        ttk.Combobox(
-            dlg, textvariable=choice_var, values=names, width=35, state="readonly"
-        ).pack(padx=15, pady=5)
-
-        ttk.Label(dlg, text="용지 방향:").pack(padx=15, pady=(5, 2))
-        orient_var = tk.StringVar(value=self.orientation_var.get())
-        ttk.Combobox(
-            dlg, textvariable=orient_var, values=["portrait", "landscape"], width=15, state="readonly"
-        ).pack(padx=15, pady=5)
-
-        def do_ok():
-            picked = choice_var.get()
-            result["choice"] = None if picked == CURRENT_SCREEN_LABEL else self.active_plots_cache.get(picked)
-            result["orientation"] = orient_var.get()
-            dlg.destroy()
-
-        btn_row = ttk.Frame(dlg)
-        btn_row.pack(pady=10)
-        ttk.Button(btn_row, text="취소", command=dlg.destroy).pack(side="right", padx=5)
-        ttk.Button(btn_row, text="확인", command=do_ok).pack(side="right", padx=5)
-
-        self.root.wait_window(dlg)
-        return result["choice"], result["orientation"]
 
     def set_active_entry(self, entry):
         self.active_entry = entry
