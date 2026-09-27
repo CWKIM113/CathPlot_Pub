@@ -5723,9 +5723,15 @@ class CathPlotGUI:
             time_min=_parse_opt_float(td3_data.get("time_min", "")), time_max=_parse_opt_float(td3_data.get("time_max", "")),
             y_min=_parse_opt_float(td3_data.get("y_min", "")), y_max=_parse_opt_float(td3_data.get("y_max", "")),
             z_min=_parse_opt_float(td3_data.get("z_min", "")), z_max=_parse_opt_float(td3_data.get("z_max", "")),
-            # 3D Template에 저장된 폰트(저장 시점의 설정) 우선 - 이 필드가 없는
-            # 예전 3D Template만 같이 처리 중인 2D Template 값으로 대체.
-            fonts=self._3d_fonts(self._3d_template_font_src(td3_data) or data),
+            # [수정 - 사용자 지적] "3D Template에 저장된 폰트 우선, 없는 옛
+            # 3D Template은 같이 처리 중인 2D Template 값으로 대체" - 이러면
+            # 같은 옛 3D Template이 배치마다 어떤 2D Template과 짝지어지는지에
+            # 따라 결과 폰트가 달라졌다. _3d_fonts({})는 인자를 빈 dict로 받아
+            # data.get(k)가 항상 None이 되므로 함수 자신의 고정 기본값
+            # (Malgun Gothic/14/11/9 - 이 폰트 공유 기능이 생기기 전의 3D
+            # 기본값과 동일)으로 떨어진다 - 옛 3D Template은 항상 이 고정값을
+            # 쓰게 해서 배치 짝꿍과 무관하게 일관되게 한다.
+            fonts=self._3d_fonts(self._3d_template_font_src(td3_data) or {}),
         )
         return outfile
 

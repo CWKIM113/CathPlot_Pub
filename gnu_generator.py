@@ -610,22 +610,59 @@ _CHAR_MARKERS = ("◁", "◀", "▷", "▶")
 _CHAR_MARKER_FONT = "Malgun Gothic"
 _CHAR_MARKER_INK_FALLBACK = (0.77, 0.26)  # DejaVu Sans 실측(잉크 높이, 잉크 중심의 baseline 위 높이 - em)
 _char_marker_ink_cache = {}
+_char_marker_font_support_cache = {}
 
 
-def _char_marker_ink(ch):
-    """_CHAR_MARKER_FONT로 그린 ch의 (세로 잉크 높이, 잉크 세로 중심의
-    baseline 위 높이) - 둘 다 폰트 크기(em) 비율. PIL로 실제 폰트 파일을
-    측정하고, 불가하면 실측 근사값.
-    [시도했다 되돌림 - 코드 검토] "사용자가 고른 Legend Font로 측정" - 이
-    문자(◁▷ 등)의 유니코드 글리프가 없는 폰트(예: Times New Roman)에서
-    PIL 잉크 측정이 비정상값을 반환해 글자 크기 계산이 폭주하는 것을 실제
-    렌더링으로 확인해 되돌림 - 이 글리프들을 항상 정상 지원하는
-    _CHAR_MARKER_FONT 고정."""
-    if ch in _char_marker_ink_cache:
-        return _char_marker_ink_cache[ch]
+def _font_supports_char_markers(font_name):
+    """font_name(Legend Font 콤보 값)이 ◁◀▷▶ 유니코드 글리프를 실제로
+    갖고 있는지 판정한다.
+    [배경 - 코드 검토] "Legend Font로 그리려다 화면이 깨지는 걸 확인해
+    되돌림"(이전 시도) - 실제 원인을 gnuplot 스크립트를 직접 찍어 확인한
+    결과, 계산된 폰트 크기(pt)나 보정값(raise_r) 자체는 정상이었고, 문제는
+    이 글리프가 없는 폰트(Times New Roman/Arial/Consolas/Courier New 등
+    대부분의 서양 폰트 - 실측: _FONT_FILE_MAP의 5개 중 Malgun Gothic
+    제외 전부)에서 gnuplot(cairo)이 없는 글자를 대체 글리프로 그리며
+    깨지는 것이었다. PIL도 이런 폰트에서는 서로 다른 두 글자(◁/▶)의
+    bbox가 완전히 같게 나온다(.notdef 대체 상자를 그대로 반환) - 실제
+    글리프가 있으면 방향이 달라 bbox도 달라짐(Malgun Gothic 실측 확인).
+    이 신호로 "이 폰트가 이 글리프들을 정말 지원하는지"를 값싸게, 안전하게
+    판정한다."""
+    if font_name in _char_marker_font_support_cache:
+        return _char_marker_font_support_cache[font_name]
+    result = False
+    try:
+        path = _FONT_FILE_MAP.get((font_name or "").strip().lower())
+        if path and os.path.exists(path):
+            from PIL import ImageFont
+            f = ImageFont.truetype(path, 200)
+            b1 = f.getbbox("◁", anchor="ls")
+            b2 = f.getbbox("▶", anchor="ls")
+            result = bool(b1 and b2 and b1 != b2 and b1[3] > b1[1])
+    except Exception:
+        result = False
+    _char_marker_font_support_cache[font_name] = result
+    return result
+
+
+def _char_marker_effective_font(font_name):
+    """실제로 ◁◀▷▶를 그릴 때 쓸 폰트 - font_name이 이 글리프를 지원하면
+    그대로, 아니면(대부분의 서양 폰트) 검증된 _CHAR_MARKER_FONT로 대체."""
+    if font_name and _font_supports_char_markers(font_name):
+        return font_name
+    return _CHAR_MARKER_FONT
+
+
+def _char_marker_ink(ch, font_name=None):
+    """_char_marker_effective_font(font_name)로 그린 ch의 (세로 잉크 높이,
+    잉크 세로 중심의 baseline 위 높이) - 둘 다 폰트 크기(em) 비율. PIL로
+    실제 폰트 파일을 측정하고, 불가하면 실측 근사값."""
+    _font = _char_marker_effective_font(font_name)
+    _cache_key = (_font, ch)
+    if _cache_key in _char_marker_ink_cache:
+        return _char_marker_ink_cache[_cache_key]
     res = _CHAR_MARKER_INK_FALLBACK
     try:
-        path = _FONT_FILE_MAP.get(_CHAR_MARKER_FONT.lower())
+        path = _FONT_FILE_MAP.get(_font.lower())
         if path and os.path.exists(path):
             from PIL import ImageFont
             b = ImageFont.truetype(path, 200).getbbox(ch, anchor="ls")
@@ -633,12 +670,12 @@ def _char_marker_ink(ch):
                 res = (min(max((b[3] - b[1]) / 200.0, 0.3), 1.5), -(b[1] + b[3]) / 2 / 200.0)
     except Exception:
         res = _CHAR_MARKER_INK_FALLBACK
-    _char_marker_ink_cache[ch] = res
+    _char_marker_ink_cache[_cache_key] = res
     return res
 
 
-def _char_marker_ink_ratio(ch):
-    return _char_marker_ink(ch)[0]
+def _char_marker_ink_ratio(ch, font_name=None):
+    return _char_marker_ink(ch, font_name)[0]
 
 
 # [추가 - 사용자 요청] "marker 도형과 curve/legend line 중심 맞추기" - gnuplot
@@ -652,8 +689,8 @@ def _char_marker_ink_ratio(ch):
 _CHAR_MARKER_CENTER_EM = 0.372
 
 
-def _char_marker_text(ch):
-    raise_r = (_CHAR_MARKER_CENTER_EM - _char_marker_ink(ch)[1]) * 4.0 / 3.0
+def _char_marker_text(ch, font_name=None):
+    raise_r = (_CHAR_MARKER_CENTER_EM - _char_marker_ink(ch, font_name)[1]) * 4.0 / 3.0
     return f"~{{&{{{ch}}}}}{{{raise_r:.3f}{ch}}}"
 
 
@@ -665,8 +702,8 @@ def _char_marker_text(ch):
 _CHAR_MARKER_TERM_FONT_FACTOR = 1.5
 
 
-def _char_marker_font_pt(ch, ps):
-    return max(6.0 * float(ps) * (23 / 29) / _char_marker_ink_ratio(ch) * _CHAR_MARKER_TERM_FONT_FACTOR, 1.0)
+def _char_marker_font_pt(ch, ps, font_name=None):
+    return max(6.0 * float(ps) * (23 / 29) / _char_marker_ink_ratio(ch, font_name) * _CHAR_MARKER_TERM_FONT_FACTOR, 1.0)
 
 
 _CHAR_POINTS_RE = re.compile(
@@ -3143,18 +3180,21 @@ class GnuplotGenerator:
                 if _up_pt and axis_h_in:
                     symbol_y += _up_pt / (axis_h_in * 72.0)
                 if marker_shape in _CHAR_MARKERS:
-                    # [시도했다 되돌림 - 코드 검토] "◁◀▷▶이 Legend Font와 무관
-                    # 하게 항상 Malgun Gothic" - 실제 font_name으로 바꿔봤으나,
-                    # 이 문자(◁▷ 등)의 유니코드 글리프가 없는 폰트(예: Times
-                    # New Roman)에서 PIL 잉크 측정이 비정상값을 반환해 글자
-                    # 크기 계산이 폭주, 화면을 뒤덮는 거대한 도형으로 깨지는
-                    # 것을 실제 렌더링으로 확인함 - 검증된 _CHAR_MARKER_FONT
-                    # (Malgun Gothic, 이 글리프들을 항상 정상 지원)로 되돌림.
-                    # curve 쪽(_char_points_to_labels)과 같은 글자·같은 크기.
+                    # [재시도 - 코드 검토] "◁◀▷▶이 Legend Font와 무관하게 항상
+                    # Malgun Gothic" - 처음엔 그냥 font_name을 쓰려다 Times New
+                    # Roman 등에서 화면이 깨지는 걸 확인해 되돌렸었는데, 실제
+                    # 원인은 계산값이 아니라 "그 폰트에 이 글리프 자체가 없어서
+                    # gnuplot이 대체 글리프로 그리며 깨지는 것"이었음(스크립트를
+                    # 직접 찍어 확인 - font_pt/raise_r 계산값은 정상이었음). 이제
+                    # _char_marker_effective_font로 그 폰트가 이 글리프를 실제
+                    # 지원하는지 먼저 확인해서, 지원하면 Legend Font 그대로,
+                    # 아니면(대부분의 서양 폰트) 안전하게 Malgun Gothic으로
+                    # 대체한다 - curve 쪽(_char_points_to_labels)은 이 폰트
+                    # 판단 신호(legend_font)가 없어 기존처럼 고정 유지.
                     lines.append(
-                        f'set label {id_offset + 5000 + row_i + 1} "{_char_marker_text(marker_shape)}" '
+                        f'set label {id_offset + 5000 + row_i + 1} "{_char_marker_text(marker_shape, font_name)}" '
                         f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front enhanced '
-                        f'font "{_CHAR_MARKER_FONT},{_char_marker_font_pt(marker_shape, _mk_ps):.3g}" '
+                        f'font "{_char_marker_effective_font(font_name)},{_char_marker_font_pt(marker_shape, _mk_ps, font_name):.3g}" '
                         f'textcolor rgb "{color}"'
                     )
                 else:
