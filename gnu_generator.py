@@ -532,27 +532,48 @@ def _effective_marker_size(curve, legend_size):
 # 이 글자의 세로 잉크 높이가 같아지도록 폰트 크기를 정한다.
 _CHAR_MARKERS = ("◁", "◀", "▷", "▶")
 _CHAR_MARKER_FONT = "Malgun Gothic"
-_CHAR_MARKER_INK_FALLBACK = 0.77  # DejaVu Sans 실측(글자 크기 대비 잉크 높이)
+_CHAR_MARKER_INK_FALLBACK = (0.77, 0.26)  # DejaVu Sans 실측(잉크 높이, 잉크 중심의 baseline 위 높이 - em)
 _char_marker_ink_cache = {}
 
 
-def _char_marker_ink_ratio(ch):
-    """_CHAR_MARKER_FONT로 그린 ch의 세로 잉크 높이 / 폰트 크기(em) - PIL로
-    실제 폰트 파일을 측정하고, 불가하면 실측 근사값."""
+def _char_marker_ink(ch):
+    """_CHAR_MARKER_FONT로 그린 ch의 (세로 잉크 높이, 잉크 세로 중심의
+    baseline 위 높이) - 둘 다 폰트 크기(em) 비율. PIL로 실제 폰트 파일을
+    측정하고, 불가하면 실측 근사값."""
     if ch in _char_marker_ink_cache:
         return _char_marker_ink_cache[ch]
-    ratio = _CHAR_MARKER_INK_FALLBACK
+    res = _CHAR_MARKER_INK_FALLBACK
     try:
         path = _FONT_FILE_MAP.get(_CHAR_MARKER_FONT.lower())
         if path and os.path.exists(path):
             from PIL import ImageFont
-            b = ImageFont.truetype(path, 200).getbbox(ch)
+            b = ImageFont.truetype(path, 200).getbbox(ch, anchor="ls")
             if b and b[3] > b[1]:
-                ratio = min(max((b[3] - b[1]) / 200.0, 0.3), 1.5)
+                res = (min(max((b[3] - b[1]) / 200.0, 0.3), 1.5), -(b[1] + b[3]) / 2 / 200.0)
     except Exception:
-        ratio = _CHAR_MARKER_INK_FALLBACK
-    _char_marker_ink_cache[ch] = ratio
-    return ratio
+        res = _CHAR_MARKER_INK_FALLBACK
+    _char_marker_ink_cache[ch] = res
+    return res
+
+
+def _char_marker_ink_ratio(ch):
+    return _char_marker_ink(ch)[0]
+
+
+# [추가 - 사용자 요청] "marker 도형과 curve/legend line 중심 맞추기" - gnuplot
+# (cairo)은 글자 label의 세로 "center"를 글자 잉크가 아니라 baseline 위
+# 0.372em 지점에 맞춤(폰트 4종 실측: DejaVu 0.3725 / FreeSans 0.371 /
+# FreeSerif 0.371 / Noto Sans Mono 0.373 - 폰트와 무관하게 일정). 그래서
+# ◀ 잉크 중심(DejaVu 0.26em)이 그만큼 선 아래로 처졌음(실측 약 13%).
+# enhanced text의 겹쳐쓰기 "~{&{◀}}{r◀}"(같은 폭 빈칸 위에 r만큼 올려 쓰기)로
+# 폰트 측정값에서 계산한 만큼 올린다. r 단위는 실측으로 확인(r=0.15가
+# DejaVu의 0.112em 오차를 정확히 상쇄 -> r = 4/3 x em 오차).
+_CHAR_MARKER_CENTER_EM = 0.372
+
+
+def _char_marker_text(ch):
+    raise_r = (_CHAR_MARKER_CENTER_EM - _char_marker_ink(ch)[1]) * 4.0 / 3.0
+    return f"~{{&{{{ch}}}}}{{{raise_r:.3f}{ch}}}"
 
 
 # gnuplot cairo 터미널은 요청한 폰트 pt의 약 2/3 크기로 글자를 그림(실측:
@@ -580,7 +601,7 @@ def _char_points_to_labels(cmd):
     def _repl(m):
         using, mid, ch, ps, color = m.groups()
         tc = f' tc rgb "{color}"' if color else ""
-        return (f'using {using}:("{ch}"){mid} with labels center '
+        return (f'using {using}:("{_char_marker_text(ch)}"){mid} with labels center enhanced '
                 f'font "{_CHAR_MARKER_FONT},{_char_marker_font_pt(ch, float(ps)):.3g}"{tc}')
     return _CHAR_POINTS_RE.sub(_repl, cmd)
 
@@ -957,15 +978,30 @@ def _3d_marker_clause(style, item, auto_ps=None):
     return clause
 
 
+def _3d_linespoints_keyentry(title_clause, pt_clause, dash_clause):
+    """[수정 - 사용자 보고 버그] 3D Linespoints는 선(전체 데이터)과 마커(듬성듬성
+    고른 점 데이터블록)를 splot 절 2개로 나눠 그리는데, legend 제목을 선 쪽에만
+    붙여서 legend에는 선만 나오고 마커가 안 보였음 - 두 절 모두 notitle로 두고
+    같은 pt/ps/dashtype의 keyentry(선+마커 견본)로 legend를 따로 만든다. 색은
+    palette(Z값) 전용이라 keyentry에서 palette 색이 그려지지 않아(실측) 짙은
+    회색 고정. title이 없으면(notitle) 빈 문자열."""
+    if not title_clause or title_clause.strip() == "notitle":
+        return None
+    return f'keyentry with linespoints{pt_clause} lc rgb "#404040"{dash_clause} {title_clause}'
+
+
 # [추가 - 사용자 요청] "3D도 2D처럼 Title/Axis Title/Tic/Legend 폰트를 공유" -
 # 예전 3D는 모든 글자가 터미널 기본 폰트 하나(화면 11pt, 저장 14pt)였음. 이제
 # 메인 화면(2D)의 Title / Axis Title / Legend(=Tic·Comment 공용) 폰트·크기를
-# 그대로 받아 쓴다. 2D Axis Title 기본값(11)이 예전 3D 글자 크기(화면 11pt /
-# 저장 14pt)와 같아지도록 화면은 1.0배, 저장/인쇄는 14/11배로 환산한다(저장
-# 캔버스가 화면보다 커서 예전에도 터미널 폰트를 14로 키웠던 것과 같은 비율).
-_3D_FONT_BASE_PT = 11.0
+# 그대로 받아 쓴다. 화면은 입력값 그대로(1.0배). 저장/인쇄(cairo/emf/svg 등)는
+# gnuplot cairo가 요청한 pt의 2/3 크기로 글자를 그리므로(실측) 1.5배로
+# 요청해서, 저장 이미지 안의 실제 글자 크기가 입력한 pt와 같게 한다 - 2D
+# 저장 이미지도 입력값과 거의 같은 크기로 나옴(실측: 기본 9/11/14pt ->
+# PDF 안 9.3/11.3/14.7pt). [수정 - 사용자 확인] 처음엔 예전 3D 터미널
+# 폰트 비율(14/11)을 썼는데, 실측하니 저장 글자가 입력값보다 작게(9pt ->
+# 7.7pt) 나와 2D와 기준이 달랐음.
 _3D_FONT_SCALE_SCREEN = 1.0
-_3D_FONT_SCALE_PRINT = 14.0 / 11.0
+_3D_FONT_SCALE_PRINT = 1.5
 
 
 def _3d_fonts_resolved(fonts):
@@ -2880,8 +2916,8 @@ class GnuplotGenerator:
                 if marker_shape in _CHAR_MARKERS:
                     # curve 쪽(_char_points_to_labels)과 같은 글자·같은 크기
                     lines.append(
-                        f'set label {id_offset + 5000 + row_i + 1} "{marker_shape}" '
-                        f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front '
+                        f'set label {id_offset + 5000 + row_i + 1} "{_char_marker_text(marker_shape)}" '
+                        f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front enhanced '
                         f'font "{_CHAR_MARKER_FONT},{_char_marker_font_pt(marker_shape, _mk_ps):.3g}" '
                         f'textcolor rgb "{color}"'
                     )
@@ -10741,8 +10777,9 @@ class GnuplotGenerator:
                     if _c_style == "points":
                         splot_parts.append(f'{dbname} using 1:2:3:3 {_title_clause} with points{_pt_clause} palette')
                     else:
-                        splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with lines palette{_c_dash_clause}')
+                        splot_parts.append(f'"{path}" using {using_expr} notitle with lines palette{_c_dash_clause}')
                         splot_parts.append(f'{dbname} using 1:2:3:3 notitle with points{_pt_clause} palette')
+                        splot_parts.append(_3d_linespoints_keyentry(_title_clause, _pt_clause, _c_dash_clause))
                     continue
                 # marker_pts가 비면(파일 파싱 실패 등) 아래 공통 처리로 폴백해서
                 # 예전처럼 파일을 직접 참조하는 단일 splot 절로 그린다.
@@ -10807,8 +10844,9 @@ class GnuplotGenerator:
                     if _s_style == "points":
                         splot_parts.append(f'{_s_dbname} using 1:2:3:3 {_s_title_clause} with points{_s_pt_clause} palette')
                     else:
-                        splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with lines palette{_s_dash_clause}')
+                        splot_parts.append(f'"{path}" using {_s_x_using}:2:3 notitle with lines palette{_s_dash_clause}')
                         splot_parts.append(f'{_s_dbname} using 1:2:3:3 notitle with points{_s_pt_clause} palette')
+                        splot_parts.append(_3d_linespoints_keyentry(_s_title_clause, _s_pt_clause, _s_dash_clause))
                 else:
                     splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}')
 
@@ -10824,7 +10862,7 @@ class GnuplotGenerator:
         for _block in marker_datablocks_3d:
             lines.extend(_block)
 
-        lines.append("splot " + ", \\\n      ".join(splot_parts))
+        lines.append("splot " + ", \\\n      ".join(p for p in splot_parts if p))
 
         # [수정 - 버그] "s-plot에서 마우스 휠(확대/이동)을 누르자마자 z-range가
         # 바뀜 - 오류로 보임" - 직접 실측(splot 후 x-range만 줄이고 GPVAL_Z_MIN/
