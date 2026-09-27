@@ -6404,7 +6404,8 @@ class CathPlotGUI:
             popup,
             text="On 체크 해제 시 이 curve는 마커 없음(Shape는 무관). Shape=Auto면 Fill 해제 curve끼리 open 모양, "
                  "Fill 체크 curve끼리 filled 모양을 각각 Y1->Y2 순서로 Circle부터 서로 다르게 자동 배정. "
-                 "Auto 초기화 = 선택된 curve 전체를 Shape Auto + On + Fill 기본값(Y1 해제, Y2 체크)으로 초기화. "
+                 "Auto 초기화 = 선택된 curve 전체를 Shape Auto + On + Fill 기본값(Y1 해제, Y2 체크)으로, "
+                 "Order도 기본(Y1 -> Y2 선택 순서)으로 초기화. "
                  "L1/L2는 Legend1/2 박스 포함 여부, Order(▲▼)는 두 Legend가 공유하는 표시 순서. Max#를 비우면 "
                  "자동(대략 20~30개, 데이터가 적으면 전부 표시). M 크기 = pointsize 1.0",
             foreground="#555555", wraplength=680, justify="left"
@@ -6436,6 +6437,10 @@ class CathPlotGUI:
                 if key not in self.marker_on_vars:
                     self.marker_on_vars[key] = tk.BooleanVar(value=False)
                 self.marker_on_vars[key].set(True)
+            # [추가 - 사용자 요청] 목록(Legend) 순서도 기본값(Y1 선택 순서 -> Y2
+            # 선택 순서, _legend_ordered_keys)으로 되돌린다 - ▲▼로 바꾼 순서 해제.
+            self._legend_order["1"] = []
+            _reopen_curve_settings()
 
         # [추가 - 사용자 지적] "L1/L2 한번에 모두 선택해제 버튼은 있나요" -
         # 옛 Legend1/2 Curves 팝업에 있던 "전체 선택"/"전체 해제"가 Curve
