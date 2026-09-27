@@ -180,7 +180,7 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/26/2026.")
+        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/27/2026.")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움
         # [수정 - 사용자 요청] "가로 길이도 flexible하게(노트북에선 가로를
@@ -3199,7 +3199,11 @@ class CathPlotGUI:
                         self.marker_on_vars[key_str].set(self._infer_marker_on(style))
                         if key_str not in self.marker_size_vars:
                             self.marker_size_vars[key_str] = tk.StringVar(value="Auto")
-                        self.marker_size_vars[key_str].set(style.get("marker_size_label", "M"))
+                        # [수정 - 코드 검토] 기본값이 바로 위(Auto)와 다른 "M"으로
+                        # 남아있어서, marker_size_label이 없는(이 PR 이전에 저장된)
+                        # Template을 불러오면 새 기본값 Auto 대신 예전 M으로
+                        # 조용히 덮어써지고 있었음.
+                        self.marker_size_vars[key_str].set(style.get("marker_size_label", "Auto"))
                         if key_str not in self.marker_maxcount_vars:
                             self.marker_maxcount_vars[key_str] = tk.StringVar(value="")
                         self.marker_maxcount_vars[key_str].set(str(style.get("marker_max_count", "") or ""))
@@ -3403,7 +3407,11 @@ class CathPlotGUI:
                             legend_group=int(style.get("legend_group", 2) or 2),
                             in_legend1=style.get("in_legend1", True),
                             marker_shape=_marker_shape,
-                            marker_size=MARKER_SIZE_MAP.get(style.get("marker_size_label", "M"), 1.0),
+                            # [수정 - 코드 검토] 기본값이 "M"(고정 ps=1.0)으로
+                            # 남아있어서, marker_size_label이 없는 옛 Template을
+                            # Batch Set으로 그리면 새 기본값 Auto(legend font
+                            # 비례) 대신 예전 M으로 조용히 바뀌었음.
+                            marker_size=MARKER_SIZE_MAP.get(style.get("marker_size_label", "Auto"), 1.0),
                             marker_max_count=(int(style["marker_max_count"]) if str(style.get("marker_max_count", "")).strip() else None),
                             smooth_csplines=style.get("smooth_csplines", False),
                             orig_dat_file=rel_path,
@@ -6938,7 +6946,10 @@ class CathPlotGUI:
                     legend_group=int(item.get("legend_group", 2) or 2),
                     in_legend1=item.get("in_legend1", True),
                     marker_shape=_marker_shape,
-                    marker_size=MARKER_SIZE_MAP.get(item.get("marker_size_label", "M"), 1.0),
+                    # [수정 - 코드 검토] 위 Batch Set과 동일한 이유로 기본값을
+                    # "M" 대신 "Auto"로 맞춤(일관성 - recipe는 보통 화면에서
+                    # 바로 채워지지만 방어적으로 통일).
+                    marker_size=MARKER_SIZE_MAP.get(item.get("marker_size_label", "Auto"), 1.0),
                     marker_max_count=(int(item["marker_max_count"]) if str(item.get("marker_max_count", "")).strip() else None),
                     smooth_csplines=item.get("smooth_csplines", False),
                     orig_dat_file=_orig_rel,
@@ -9704,6 +9715,29 @@ class CathPlotGUI:
             animate3d_var.set(data.get("animate3d", False))
             animate3d_duration_var.set(data.get("animate3d_duration", animate3d_duration_var.get()))
 
+            # [수정 - 코드 검토] "3D 창에서 직접 Plot/Save/Print하면 3D
+            # Template에 저장해둔 폰트가 무시됨(Batch Set만 반영)" - 이 3D
+            # 다이얼로그의 Plot/Save/Print는 self._3d_fonts()를 인자 없이
+            # 불러 항상 메인 화면(2D)의 지금 값을 쓰는데, 그 값이 바로 이
+            # Template의 폰트를 담는 곳이기도 하다(2D Template Load가 이미
+            # 같은 방식으로 이 값들을 되돌리는 것과 동일한 원리) - 저장된
+            # fonts가 있으면 메인 화면 값도 같이 맞춰서, 이후 이 다이얼로그의
+            # Plot/Save/Print가 Batch Set과 동일한 폰트로 그리게 한다.
+            _t3_fonts = data.get("fonts")
+            if isinstance(_t3_fonts, dict):
+                if _t3_fonts.get("title_font"):
+                    self.title_font_var.set(_t3_fonts["title_font"])
+                if _t3_fonts.get("title_size"):
+                    self.title_size_var.set(_t3_fonts["title_size"])
+                if _t3_fonts.get("label_font"):
+                    self.xlabel_font_var.set(_t3_fonts["label_font"])
+                if _t3_fonts.get("label_size"):
+                    self.xlabel_size_var.set(_t3_fonts["label_size"])
+                if _t3_fonts.get("legend_font"):
+                    self.legend_font_var.set(_t3_fonts["legend_font"])
+                if _t3_fonts.get("legend_size"):
+                    self.legend_size_var.set(_t3_fonts["legend_size"])
+
             # [수정] "Marker Size, Style을 세트별로" - label 기준으로 각 행에
             # 복원(예전 템플릿의 "marker_size"/"style" 전역 키는 없으면 무시됨).
             _shapes = data.get("marker_shapes", {})
@@ -10448,24 +10482,50 @@ class CathPlotGUI:
         VIEW_SAVE_PENDING_SUFFIX 참고) - 그 창이 떠 있는 동안 1초마다 plot 폴더를
         보고, 다 써진 대기 파일을 팝업 Save와 같은 PyMuPDF 변환으로 최종
         PNG/JPG(300dpi)/SVG로 바꾼 뒤 대기 파일을 지운다(백그라운드 스레드).
-        창(gnuplot)이 닫히면 마지막으로 한 번 더 확인하고 멈춘다."""
+        창(gnuplot)이 닫히면 마지막으로 한 번 더 확인하고 멈춘다.
+        [수정 - 코드 검토] "변환이 계속 실패하면(대상 파일이 다른 프로그램에서
+        열려있는 등) 조용히 1초마다 영원히 재시도하고, 사용자는 gnuplot 창의
+        '저장 중...' 문구만 보고 아무 안내도 못 받음" - 대기 파일별 실패
+        횟수를 세어 _MAX_CONV_ATTEMPTS번 넘게 실패하면 포기하고, 대기 PDF
+        파일명 그대로 두되(사용자가 원인 파악 후 수동 재시도할 수 있게 보존)
+        더는 재시도하지 않으며, 메인 스레드에서 오류 메시지를 한 번 보여준다."""
         if not hasattr(self, "_pending_conv_busy"):
             self._pending_conv_busy = set()
+            self._pending_conv_fail_count = {}
+            self._pending_conv_giveup = set()
             self._pending_conv_lock = threading.Lock()
+
+        _MAX_CONV_ATTEMPTS = 5
 
         def _convert(pdf_path):
             target = pdf_path[:-len(VIEW_SAVE_PENDING_SUFFIX)]
             ext = os.path.splitext(target)[1].lower().lstrip(".")
+            _ok = False
+            _err = ""
             try:
-                ok = (_convert_pdf_to_svg(pdf_path, target) if ext == "svg"
-                      else _rasterize_pdf_to_image(pdf_path, target, ext))
-                if ok:
+                _ok = (_convert_pdf_to_svg(pdf_path, target) if ext == "svg"
+                       else _rasterize_pdf_to_image(pdf_path, target, ext))
+                if _ok:
                     os.remove(pdf_path)
-            except Exception:
-                pass
+            except Exception as e:
+                _err = str(e)
             finally:
                 with self._pending_conv_lock:
                     self._pending_conv_busy.discard(pdf_path)
+                    if _ok:
+                        self._pending_conv_fail_count.pop(pdf_path, None)
+                    else:
+                        n = self._pending_conv_fail_count.get(pdf_path, 0) + 1
+                        self._pending_conv_fail_count[pdf_path] = n
+                        if n >= _MAX_CONV_ATTEMPTS:
+                            self._pending_conv_giveup.add(pdf_path)
+                            self.root.after(0, lambda p=target, e=_err: messagebox.showwarning(
+                                "3D 저장 실패",
+                                f"'{os.path.basename(p)}' 저장에 실패했습니다"
+                                f"({_MAX_CONV_ATTEMPTS}회 재시도 후 중단).\n"
+                                f"대상 파일이 다른 프로그램에서 열려 있지 않은지 확인 후 3D 창에서 "
+                                f"다시 저장해주세요.\n\n{e}"
+                            ))
 
         def _scan():
             try:
@@ -10483,7 +10543,7 @@ class CathPlotGUI:
                 except OSError:
                     continue
                 with self._pending_conv_lock:
-                    if path in self._pending_conv_busy:
+                    if path in self._pending_conv_busy or path in self._pending_conv_giveup:
                         continue
                     self._pending_conv_busy.add(path)
                 threading.Thread(target=_convert, args=(path,), daemon=True).start()

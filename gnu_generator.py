@@ -615,7 +615,12 @@ _char_marker_ink_cache = {}
 def _char_marker_ink(ch):
     """_CHAR_MARKER_FONT로 그린 ch의 (세로 잉크 높이, 잉크 세로 중심의
     baseline 위 높이) - 둘 다 폰트 크기(em) 비율. PIL로 실제 폰트 파일을
-    측정하고, 불가하면 실측 근사값."""
+    측정하고, 불가하면 실측 근사값.
+    [시도했다 되돌림 - 코드 검토] "사용자가 고른 Legend Font로 측정" - 이
+    문자(◁▷ 등)의 유니코드 글리프가 없는 폰트(예: Times New Roman)에서
+    PIL 잉크 측정이 비정상값을 반환해 글자 크기 계산이 폭주하는 것을 실제
+    렌더링으로 확인해 되돌림 - 이 글리프들을 항상 정상 지원하는
+    _CHAR_MARKER_FONT 고정."""
     if ch in _char_marker_ink_cache:
         return _char_marker_ink_cache[ch]
     res = _CHAR_MARKER_INK_FALLBACK
@@ -1696,7 +1701,12 @@ class GnuplotGenerator:
         """세모 marker를 무게중심 기준으로 옮기는 데이터 좌표 변환 함수(위
         _triangle_centroid_up_pt 참고). Y 범위를 직접 입력한 경우만(Auto는
         범위 미확정이라 None), log 축이면 곱셈으로 옮긴다."""
-        up_pt = _triangle_centroid_up_pt(marker_shape, ps, fmt)
+        # [수정 - 코드 검토] "EPS는 미측정"(위 _triangle_centroid_up_pt 주석)
+        # - EPS 저장은 이 recursion에서 fmt="pdf"로 넘어오지만(_eps_out 플래그로
+        # 구분), cairo가 아니라 PostScript 자체 렌더러라 이 pdfcairo 캘리브레이션
+        # 값을 그대로 적용하면 오히려 어긋날 수 있어 eps로 넘겨 보정을 끈다.
+        _tri_fmt = "eps" if getattr(self, "_eps_out", False) else fmt
+        up_pt = _triangle_centroid_up_pt(marker_shape, ps, _tri_fmt)
         if not up_pt or not axis_h_in or axis_h_in <= 0:
             return None
         if is_y2:
@@ -3126,11 +3136,21 @@ class GnuplotGenerator:
                 # 세모는 무게중심을 샘플선에 맞춤(_triangle_centroid_up_pt 참고 -
                 # legend는 graph 좌표라 Y 범위 Auto여도 항상 보정 가능).
                 symbol_y = row_y
-                _up_pt = _triangle_centroid_up_pt(marker_shape, _mk_ps, fmt)
+                # [수정 - 코드 검토] EPS는 미측정 cairo 보정을 적용하지 않음
+                # (_marker_y_shift_fn과 동일한 이유).
+                _tri_fmt = "eps" if getattr(self, "_eps_out", False) else fmt
+                _up_pt = _triangle_centroid_up_pt(marker_shape, _mk_ps, _tri_fmt)
                 if _up_pt and axis_h_in:
                     symbol_y += _up_pt / (axis_h_in * 72.0)
                 if marker_shape in _CHAR_MARKERS:
-                    # curve 쪽(_char_points_to_labels)과 같은 글자·같은 크기
+                    # [시도했다 되돌림 - 코드 검토] "◁◀▷▶이 Legend Font와 무관
+                    # 하게 항상 Malgun Gothic" - 실제 font_name으로 바꿔봤으나,
+                    # 이 문자(◁▷ 등)의 유니코드 글리프가 없는 폰트(예: Times
+                    # New Roman)에서 PIL 잉크 측정이 비정상값을 반환해 글자
+                    # 크기 계산이 폭주, 화면을 뒤덮는 거대한 도형으로 깨지는
+                    # 것을 실제 렌더링으로 확인함 - 검증된 _CHAR_MARKER_FONT
+                    # (Malgun Gothic, 이 글리프들을 항상 정상 지원)로 되돌림.
+                    # curve 쪽(_char_points_to_labels)과 같은 글자·같은 크기.
                     lines.append(
                         f'set label {id_offset + 5000 + row_i + 1} "{_char_marker_text(marker_shape)}" '
                         f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front enhanced '
@@ -10572,7 +10592,13 @@ class GnuplotGenerator:
         _font_cmds_by_term = {k: _3d_font_cmds(fonts, v, bool(ylabel), _ann_label_ids)
                               for k, v in _3D_FONT_SCALE_BY_TERM.items()}
         lines = ["set encoding utf8",
-                 f"_cp_mk = {(_3D_EMF_MARKER_MULT if _fmt == 'emf' else 1.0):.4g}"]
+                 f"_cp_mk = {(_3D_EMF_MARKER_MULT if _fmt == 'emf' else 1.0):.4g}",
+                 # [추가 - 코드 검토] N/J/S 저장 키가 같은 초 안에 두 번(연타/키
+                 # 반복입력) 눌리면 대기 파일명이 초 단위(HHMMSS)까지만 구분돼
+                 # 겹칠 수 있었음(아래 bind의 _outexpr 참고) - 누를 때마다 1씩
+                 # 늘어나는 세션 카운터를 파일명에 같이 넣어 항상 서로 다른
+                 # 이름이 되게 한다(초 표시는 사람이 보기 편하라고 그대로 둠).
+                 "_cp_seq = 0"]
         # [추가] "3D Plot도 저장/인쇄 지원" - 2D create_script처럼 확장자별로
         # 맞는 gnuplot 터미널을 골라야 하는데, 3D 다이얼로그는 2D의 Frame
         # Auto/Width/Height 설정이 없어 크기는 고정값(2D의 A4 기본값과 비슷한
@@ -10923,10 +10949,21 @@ class GnuplotGenerator:
                 # plot_dir를 cwd로 고정해 실행하므로(2687줄 부근), 저장 시
                 # 폴더 절대경로를 안 붙이고 파일명만 써도 같은 위치에 저장되고
                 # 알림(label 9004)에도 짧은 상대경로만 표시됨.
-                _outexpr = (f'sprintf("{title_disp}_view_%s.{_ext}", '
-                            f'strftime("%H%M%S", time(0)))')
+                # [수정 - 코드 검토] "같은 초 안에 두 번 눌리면 겹침" - 초 표시
+                # (사람이 보기 편함) 뒤에 세션 카운터(_cp_seq, 누를 때마다 +1)를
+                # 더해 항상 고유한 파일명이 되게 한다.
+                _outexpr = (f'sprintf("{title_disp}_view_%s_%02d.{_ext}", '
+                            f'strftime("%H%M%S", time(0)), _cp_seq)')
+                # [수정 - 코드 검토] "PNG/JPG/SVG는 PDF 대기 파일만 쓰고 실제
+                # 변환은 CathPlot이 나중에(비동기, 보통 1~3초) 한다" - 이 세
+                # 형식은 이 시점엔 아직 최종 파일이 없는데 기존엔 곧바로
+                # "저장됨"이라고 안내해 사실과 다를 수 있었다(변환이 실패해도
+                # 사용자는 저장된 줄 앎). PDF/EMF(즉시·동기 저장)만 "저장됨"을
+                # 쓰고, 비동기 세 형식은 "저장 중..."으로 정직하게 안내한다.
+                _done_word = "저장 중... (잠시 후 완료)" if _via_pdf else "저장됨"
                 _cmd = (
                     'unset label 9003; unset label 9004; '
+                    '_cp_seq = _cp_seq + 1; '
                     f'fn9004={_outexpr}; '
                     f'set terminal {_term_spec}; '
                     f'{"; ".join(_font_cmds_by_term[_font_key])}; '
@@ -10938,7 +10975,7 @@ class GnuplotGenerator:
                     f'{"; ".join(_font_cmds_screen)}; '
                     'rx=GPVAL_VIEW_ROT_X; rz=GPVAL_VIEW_ROT_Z; '
                     f'{_status_label_cmd}; '
-                    'set label 9004 sprintf("저장됨: %s", fn9004) '
+                    f'set label 9004 sprintf("{_done_word}: %s", fn9004) '
                     'at screen 0.02, screen 0.02 front noenhanced; '
                     'replot; '
                     f'{_AUTO_HIDE_TAIL_CMDS}'
