@@ -551,15 +551,6 @@ SCREEN_TIC_MINOR_SCALE = 1.0
 #----------------------------------------------------------
 # Print / Save Output Scale
 #----------------------------------------------------------
-# [추가 - 요청] "반투명일 때 in-plot이 화면에 고정되고(창을 움직여도 안
-# 따라옴), 고정된 내용이 사각형 모양으로 보임" - 화면 실시간 오버레이 창
-# (_open_pip_overlay_window)은 진짜 OS 투명(Windows Tk의 -transparentcolor)
-# 을 쓰는데, 그러려면 원/타원 "바깥" 픽셀을 이 특정 색으로 정확히 채워야
-# 한다(예전엔 메인 plot을 미리 찍어둔 스냅샷을 붙여넣었는데, 그건 창을
-# 움직이면 바로 어긋나 보이는 원인이었음 - 진짜 투명이면 그 문제 자체가
-# 없어짐). 실제 plot에 거의 안 나올 특이한 마젠타 계열로 고름.
-PIP_OVERLAY_CHROMA_KEY = (255, 0, 254)
-
 def _fmt_pointtype(v):
     """[추가 - 요청] "마커에 좌,우 방향 세모 추가" - gnuplot 내장 숫자
     pointtype(8/9/10/11 등)에는 좌/우 삼각형이 없어서, MARKER_SHAPE_MAP의
@@ -655,6 +646,27 @@ def _font_supports_char_markers(font_name):
 
 
 _CHAR_MARKER_FALLBACK_CHAIN = ("Malgun Gothic", "Segoe UI Symbol")
+
+
+def _pip_opacity_value(pip):
+    """pip 설정의 배경 불투명도(%) - 구 opaque(bool) 키도 읽는다."""
+    raw = str(pip.get("opacity", "")).strip()
+    try:
+        v = float(raw) if raw else (100.0 if pip.get("opaque", True) else 0.0)
+    except (TypeError, ValueError):
+        v = 100.0
+    return max(0.0, min(100.0, v))
+
+
+def _normalize_pip_opacity(pip):
+    """PIP 배경은 불투명(100)/투명(0) 두 가지만 지원(반투명 1~99%는 문제가 있어
+    제거함) - 그 사이 값이 들어오면 50% 기준 가까운 쪽으로 맞춘 사본을 돌려준다."""
+    if not pip:
+        return pip
+    v = _pip_opacity_value(pip)
+    if 1e-6 < v < 100.0 - 1e-6:
+        return dict(pip, opacity=100.0 if v >= 50.0 else 0.0)
+    return pip
 
 
 def _char_marker_effective_font(font_name):
@@ -1238,24 +1250,14 @@ class PlotDefinition:
     #   axis_title_on: bool - 작은 plot에 X/Y1/Y2 축 제목(axis label)을 그릴지
     #     (title_on과 별개 - 기본 꺼짐, 꺼져 있으면 기존처럼 항상 안 그림)
     #   font_scale: str - 메인 plot 폰트 크기 대비 배율(예: "0.6")
-    #   opacity: str(%, 0~100, 기본 100) - 작은 plot "배경"의 불투명도
-    #     슬라이더. 100이면 흰 배경을 깔아 메인 plot을 완전히 가림(기존
-    #     opaque=True와 동일 - 기본값), 0이면 배경이 완전히 사라져 메인
-    #     plot이 그대로 비쳐 보임(기존 opaque=False와 동일), 중간값이면
-    #     배경만 그 비율로 메인 plot과 섞임 - 작은 plot 자신의 곡선/눈금/
-    #     라벨(잉크)은 배경과 무관하게 항상 그대로 보임(배경만 옅어질 뿐
-    #     잉크가 같이 옅어지지 않음). 100 미만이면 rect 모양이어도 PDF
-    #     후처리(_apply_pip_clip)를 거친다(구 opaque bool 필드로 저장된
-    #     예전 Template도 opaque=True->100/False->0으로 자동 변환해 읽음).
+    #   opacity: 100(불투명 - 흰 배경을 깔아 메인 plot을 가림, 기본값) 또는
+    #     0(투명 - 배경 없이 메인 plot이 비쳐 보임) 둘 중 하나(반투명 1~99%는
+    #     제거 - 그 사이 값은 입구에서 _normalize_pip_opacity로 가까운 쪽으로 맞춤).
     #   clip_shape: str - "rect"(기본, 지금까지의 사각 박스) / "circle" / "ellipse".
-    #     사각형이 아니거나 opacity가 100 미만이면 create_script가 PDF를 다
-    #     그린 뒤 PyMuPDF로 실제 후처리한다(gnuplot 자체엔 비사각형 클리핑도
-    #     배경만 반투명하게 섞는 기능도 없음 - _apply_pip_clip 참고). PDF/
-    #     PNG/JPG/SVG는 전부 같은 PDF에서 파생되므로 자동으로 같이 반영
-    #     되지만, EMF는 별도 드라이버라 항상 사각형/불투명으로 남는다.
-    #     Multi-Plot 안에서는 원/타원 클리핑도 반투명(opacity<100)도 아직
-    #     지원 안 함(경고 후 사각형/불투명으로 대체 - PDF 후처리가 M-P 페이지
-    #     전체 재구성과 얽혀 복잡함, 1차 구현 범위 밖).
+    #     원/타원은 X/Y 범위가 구체적 숫자면 gnuplot 네이티브로 그리고, 아니면
+    #     PDF를 다 그린 뒤 PyMuPDF로 잘라 낸다(_apply_pip_clip). EPS/EMF는
+    #     벡터 클리핑으로 합성(_apply_vector_pip_clip). Multi-Plot 안에서는
+    #     원/타원이 범위 조건을 못 맞추면 경고 후 사각형으로 대체.
     #   clip_rx, clip_ry: str(%, 이 작은 plot 자신의 size_w/size_h 박스 기준
     #     반지름 - annotation의 Circle과 같은 관례) - clip_shape가 rect가
     #     아닐 때만 의미 있음. clip_ry를 비워두면(또는 clip_shape=="circle")
@@ -7876,8 +7878,8 @@ class GnuplotGenerator:
         # [추가 - 요청] "원/타원으로 클리핑" + "배경 불투명도 슬라이더" -
         # _rect_fully_opaque/_rect_no_bg/_ellipse_native_ok(원·타원의 완전
         # 불투명/완전 투명 - 위에서 이미 네이티브로 다 그림) 셋 다 아니면
-        # (=중간 반투명이거나, 원/타원인데 X/Y 범위가 구체적 숫자로 확정되지
-        # 않은 드문 경우) 지금까지 그린 건 아직 "흰 배경 위에 확대 plot이
+        # (=원/타원인데 X/Y 범위가 구체적 숫자로 확정되지 않았거나, 파일 출력이라
+        # 후처리를 강제한 경우) 지금까지 그린 건 아직 "흰 배경 위에 확대 plot이
         # 그려진 사각 박스"일 뿐이고 실제 최종 모습(클리핑 모양, 배경
         # 불투명도)은 gnuplot이 아니라 create_script가 PDF를 다 그린 뒤
         # PyMuPDF/PIL로 후처리(_apply_pip_clip)해서 만든다 - 그 후처리에
@@ -7893,121 +7895,6 @@ class GnuplotGenerator:
                 "opacity": _opacity,
             }
         return None
-
-    def _chroma_mask_patch(self, patch, clip_info):
-        """[추가 - 요청] "반투명일 때 in-plot이 화면에 고정되고, 고정된 내용이
-        사각형 모양으로 보임" - 화면 실시간 오버레이 창(_open_pip_overlay_
-        window) 전용 후처리. 원/타원 바깥 픽셀을 PIP_OVERLAY_CHROMA_KEY로
-        덮어써서, 그 창이 -transparentcolor(Windows Tk)로 그 색만 진짜
-        투명하게 뚫을 수 있게 만든다 - 예전엔 그 자리에 메인 plot을 미리
-        찍어둔 스냅샷("beneath")을 붙여넣었는데, 진짜 투명이 아니라 정지된
-        이미지라서 메인 창을 움직이면 바로 어긋나 보였다(그 스냅샷 자체가
-        그대로 "고정된 사각형"으로 보이는 원인). PDF/PNG 등 실제 파일로
-        저장하는 _apply_pip_clip 쪽은 이 함수를 안 쓴다(파일에는 OS 투명이
-        없어서 여전히 beneath 스냅샷이 맞는 방식)."""
-        _shape = str(clip_info.get("clip_shape", "rect")).strip().lower()
-        if _shape not in ("circle", "ellipse"):
-            return patch
-        from PIL import Image, ImageDraw
-        w, h = patch.size
-        try:
-            _rx_pct = float(clip_info.get("clip_rx") or 50.0)
-        except (TypeError, ValueError):
-            _rx_pct = 50.0
-        try:
-            _ry_pct = float(clip_info.get("clip_ry") or _rx_pct)
-        except (TypeError, ValueError):
-            _ry_pct = _rx_pct
-        _rx = _rx_pct / 100.0 * w
-        _ry = _ry_pct / 100.0 * h
-        cx, cy = w / 2.0, h / 2.0
-        mask = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(mask).ellipse([cx - _rx, cy - _ry, cx + _rx, cy + _ry], fill=255)
-        bg = Image.new("RGB", (w, h), PIP_OVERLAY_CHROMA_KEY)
-        return Image.composite(patch.convert("RGB"), bg, mask)
-
-    def build_pip_static_overlay_patch(self, plotdef, annotations=None, arrows=None, circles=None, plot_dir_hint=None):
-        """[추가 - 요청] "정적(비-Animation) 화면 PLOT에서도 PIP 원/타원+부분
-        반투명(1~99%)이 제대로 보이게" - Animation의 실시간 오버레이 창
-        (_build_pip_blended_frames + cathplot_gui._open_pip_overlay_window)과
-        같은 아이디어를 프레임이 하나뿐인 정적 버전으로 구현한다.
-
-        방식: 이 plotdef를 fmt="pdf"로 한 번 렌더링하면(create_script가
-        내부적으로 _apply_pip_clip까지 이미 적용해서) PIP 원/타원·반투명이
-        완전히 올바르게 합성된 PDF가 나온다(PNG/JPG/SVG가 저장될 때 이미
-        거치는 것과 완전히 같은, 검증된 경로) - 이 PDF에서 PIP 박스 부분만
-        잘라내면 그게 곧 "화면에 겹쳐 보여줄 정확한 조각"이다. 화면
-        (Interactive) 창 자체는 PIP 없이 메인 곡선만 그리게 하고
-        (cathplot_gui 쪽에서 처리), 이 조각을 그 위에 겹치는 별도 오버레이
-        창으로 보여준다 - gnuplot의 windows 터미널/기존 튜닝은 전혀 안
-        건드림.
-
-        실패(PIL/PyMuPDF 없음, PIP가 애초에 이 후처리 대상이 아님 등)하면
-        조용히 None을 반환 - 호출자가 안전한 기본값(완전 불투명 등)으로
-        대체하도록 한다."""
-        try:
-            import pymupdf as fitz
-            from PIL import Image
-        except ImportError:
-            return None
-
-        plot_dir = plot_dir_hint or os.getcwd()
-        tmp_pdf = os.path.join(plot_dir, f".cathplot_pip_static_{uuid.uuid4().hex}.pdf")
-        try:
-            self.create_script(plotdef, tmp_pdf, fmt="pdf", annotations=annotations, arrows=arrows, circles=circles, pip_for_overlay=True)
-            clip_info = getattr(self, "last_pip_clip_info", None)
-            if clip_info is None or not os.path.exists(tmp_pdf):
-                return None
-
-            _dpi = 300.0
-            _zoom = _dpi / 72.0
-            # 페이지 크기(픽셀)는 래스터화 없이 메타데이터만으로 저비용 계산.
-            doc = fitz.open(tmp_pdf)
-            page = doc[0]
-            page_w = int(round(page.rect.width * _zoom))
-            page_h = int(round(page.rect.height * _zoom))
-
-            ox, oy = clip_info["origin_x"], clip_info["origin_y"]
-            sw, sh = clip_info["size_w"], clip_info["size_h"]
-            px0 = int(round(ox * page_w))
-            px1 = int(round((ox + sw) * page_w))
-            py0 = int(round((1.0 - (oy + sh)) * page_h))
-            py1 = int(round((1.0 - oy) * page_h))
-            if px1 - px0 <= 0 or py1 - py0 <= 0:
-                doc.close()
-                return None
-
-            # [수정 - 성능] "PIP plot이 너무 늦게 그려짐" - create_script가
-            # 방금 이 tmp_pdf를 만들면서(원/타원이면) 내부적으로 _apply_pip_
-            # clip을 이미 실행해 완성된 조각을 last_pip_composite_patch에
-            # 남겨뒀다 - 크기(px1-px0, py1-py0)가 지금 계산과 정확히 일치하면
-            # (같은 _dpi=300을 쓰므로 보통 일치함) 그걸 그대로 재사용해서,
-            # 페이지 전체를 또 한 번 300dpi로 래스터화하는 걸 생략한다(이
-            # 함수 하나만으로도 gnuplot 재실행 1회 + 전체 페이지 300dpi
-            # 래스터화 2회가 이미 드는데, 그 위에 세 번째 래스터화까지
-            # 얹었던 게 느려진 핵심 원인이었음).
-            _cached = getattr(self, "last_pip_composite_patch", None)
-            if _cached is not None and _cached.size == (px1 - px0, py1 - py0):
-                patch = _cached
-            else:
-                pix = page.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
-                page_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-                patch = page_img.crop((px0, py0, px1, py1))
-            patch = self._chroma_mask_patch(patch, clip_info)
-            doc.close()
-
-            return {
-                "patch": patch, "page_w": page_w, "page_h": page_h,
-                "origin_x": ox, "origin_y": oy, "size_w": sw, "size_h": sh,
-                "clip_shape": clip_info.get("clip_shape"),
-            }
-        except Exception:
-            return None
-        finally:
-            try:
-                os.remove(tmp_pdf)
-            except OSError:
-                pass
 
     def _apply_vector_pip_clip(self, plotdef, out_path, kind, clip_info):
         """[추가 - 사용자 요청] EPS/EMF의 원/타원 PIP를 벡터 그대로 만든다(PDF의
@@ -8046,11 +7933,10 @@ class GnuplotGenerator:
             except OSError:
                 pass
 
-    def _apply_pip_clip(self, plotdef, pdf_path, fmt, clip_info, skip_beneath_if_opaque=False):
+    def _apply_pip_clip(self, plotdef, pdf_path, fmt, clip_info):
         """[수정 구현] "원/타원 PIP를 흰색으로 덮는 게 아니라 실제로
-        클리핑" + "배경 불투명도 슬라이더(0~100%)" - gnuplot 자신은 사각형이
-        아닌 모양으로 잘라내는 기능도, 배경만 원하는 비율로 반투명하게 섞는
-        기능도 없어서, 이미 다 그린(흰 배경 위에 확대 plot이 그려진 사각
+        클리핑" - gnuplot 자신은 사각형이 아닌 모양으로 잘라내는 기능이 없어서
+        (배경은 불투명 100 / 투명 0 두 가지), 이미 다 그린(흰 배경 위에 확대 plot이 그려진 사각
         박스) PDF를 PyMuPDF/PIL로 후처리해서 진짜로 만든다.
 
         [시행착오 기록] 처음엔 "작은 조각만 잘라(get_pixmap clip=) 알파
@@ -8075,45 +7961,35 @@ class GnuplotGenerator:
            "잉크가 있는 자리"만 골라내는 알파 마스크를 만든다(글자색이
            검정이든 곡선색이든 흰색과 다르기만 하면 잡힘 - 순수 배경만 남는
            자리는 차이가 0이라 안 걸림).
-        4) 배경(=1번의 "메인만" 조각)과 순백색을 opacity(%) 비율로
-           Image.blend해서 "이 비율만큼 섞인 배경"을 만들고, 그 위에 3번
-           마스크로 잉크만 그대로 붙여넣는다 - 즉 잉크는 항상 100% 그대로
-           보이고 배경만 슬라이더 비율로 메인 plot과 섞인다(opacity=100 ->
-           흰 배경 그대로 = 기존 opaque=True와 동일, opacity=0 -> 배경이
-           메인 plot 그대로 = 기존 opaque=False와 동일, 그 사이는 매끄럽게
-           보간됨).
+        4) 배경을 만들고(불투명 100이면 순백색, 투명 0이면 1번의 "메인만"
+           조각 그대로) 그 위에 3번 마스크로 잉크만 그대로 붙여넣는다 - 잉크는
+           항상 100% 그대로 보임.
         5) clip_shape가 원/타원이면 이렇게 만든 "배경+잉크" 조각을 다시 원/
            타원 알파 마스크로 걸러 "메인만" 이미지 위에 붙인다(마스크
            밖(귀퉁이)은 자동으로 메인 plot 그대로 비쳐 보임 - clip_rx/ry(%)는
            이 박스(size_w/size_h) 자신을 기준으로 한 반지름, 50%면 박스에
            꽉 차게 내접). rect면 박스 전체가 이미 배경+잉크 조각 그대로이므로
            추가 마스킹 없이 그대로 붙인다.
-        6) 경계선을 그린다 - opacity>=100(완전 불투명)이면 실선, 그 밖(부분
-           반투명 포함)은 점선(배경이 옅어지거나 없어 경계가 안 보일 수
-           있어서 - 점선을 항상 유지). rect 모양이면 사각 테두리를, 원/
+        6) 경계선을 그린다 - 불투명이면 실선, 투명이면 점선(배경이 없어
+           경계가 안 보일 수 있어서). rect 모양이면 사각 테두리를, 원/
            타원이면 그 모양 테두리를 점/실선으로 그림.
         7) 이 합성된 래스터 이미지 한 장을 새 PDF 페이지에 통째로 얹어
            pdf_path를 덮어씀 - PyMuPDF가 직접 만든 빈 페이지에는
            insert_image가 문제없이 동작함(위 시행착오 기록 참고 - gnuplot이
            만든 페이지에서만 재현되던 문제라 새 페이지를 쓰면 우회됨).
            PNG/JPG(래스터화)와 SVG(변환)는 이 PDF에서 파생되므로
-           (create_script 구조 참고) 자동으로 같이 반영됨. EMF는 이 PDF
-           파이프라인을 안 타는 별도 드라이버라 적용 안 됨(1차 구현 범위
-           밖 - 항상 사각형/불투명으로 남음).
+           (create_script 구조 참고) 자동으로 같이 반영됨. EPS/EMF는 이 PDF
+           파이프라인을 안 타서 벡터 클리핑(_apply_vector_pip_clip)으로 따로 처리.
 
         [트레이드오프] 페이지 전체가 벡터에서 고해상도(300dpi) 래스터
-        이미지로 바뀐다(원/타원 클리핑도 배경 반투명도 안 쓰는(= rect +
-        opacity 100, 기존 기본값) plot이나 PIP를 안 쓰는 plot은 전혀 영향
-        없음 - 이 함수 자체가 그럴 때만 호출됨). 300dpi라 일반적인 화면/
+        이미지로 바뀐다(사각형 PIP나 PIP를 안 쓰는 plot은 전혀 영향 없음 -
+        이 함수 자체가 그럴 때만 호출됨). 300dpi라 일반적인 화면/
         인쇄 품질에서는 벡터와 육안으로 구분이 거의 안 되지만, 아주 크게
         확대하면 계단 현상이 보일 수 있음.
 
         실패해도(PyMuPDF 없음, 렌더링 실패 등) 조용히 원본(사각형/불투명)
         PDF를 그대로 둔다 - 이 후처리는 "있으면 좋은" 장식이지 핵심
         기능이 아님."""
-        # 이번 호출에서 못 만들면(예외/조기 return) 이전 호출의 결과를
-        # 엉뚱하게 재사용하지 않도록 먼저 비워둔다.
-        self.last_pip_composite_patch = None
         try:
             import pymupdf as fitz
             from PIL import Image, ImageDraw, ImageChops
@@ -8128,31 +8004,17 @@ class GnuplotGenerator:
         )
         doc_full, doc_main, new_doc = None, None, None
         try:
-            # [수정 - 성능] "반투명 없이 투명/불투명만 쓰면 더 빨라지는지?" -
-            # opacity가 정확히 100%(완전 불투명)면 배경은 항상 순백색이 되어
-            # (아래 4번 단계의 Image.blend(beneath, white, 1.0) == white,
-            # beneath 값과 무관), beneath(=메인만 다시 그린 결과)가 배경
-            # 계산에는 전혀 안 쓰인다. skip_beneath_if_opaque=True(화면
-            # 오버레이 전용 - build_pip_static_overlay_patch가 넘김. 실제
-            # SAVE/PRINT 파일에서는 박스 바깥 내용이 진짜로 필요하므로 이
-            # 플래그를 안 씀)일 때는 이 경우 gnuplot 재실행 자체를 생략한다 -
-            # dat 파일이 커서 gnuplot 실행 자체가 오래 걸리는 경우에 가장 크게
-            # 도움이 됨.
-            _opacity_val = float(clip_info.get("opacity", 100.0) or 100.0)
-            _skip_beneath = bool(skip_beneath_if_opaque) and _opacity_val >= 100.0 - 1e-6
-
             doc_full = fitz.open(pdf_path)
             page_full = doc_full[0]
             pw, ph = page_full.rect.width, page_full.rect.height
 
-            if not _skip_beneath:
-                _main_only_plotdef = copy.copy(plotdef)
-                _main_only_plotdef.pip = {}
-                self.create_script(_main_only_plotdef, _main_only_pdf, fmt="pdf")
-                if not os.path.exists(_main_only_pdf):
-                    return
-                doc_main = fitz.open(_main_only_pdf)
-                page_main = doc_main[0]
+            _main_only_plotdef = copy.copy(plotdef)
+            _main_only_plotdef.pip = {}
+            self.create_script(_main_only_plotdef, _main_only_pdf, fmt="pdf")
+            if not os.path.exists(_main_only_pdf):
+                return
+            doc_main = fitz.open(_main_only_pdf)
+            page_main = doc_main[0]
 
             # gnuplot의 origin/size는 캔버스 전체 기준 screen fraction(0~1),
             # x는 왼쪽=0/오른쪽=100%, y는 아래=0/위=100%(gnuplot 관례) -
@@ -8173,13 +8035,8 @@ class GnuplotGenerator:
             _zoom = _dpi / 72.0
             pix_full = page_full.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
             img_full = Image.frombytes("RGB", (pix_full.width, pix_full.height), pix_full.samples)
-            if not _skip_beneath:
-                pix_main = page_main.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
-                img_main = Image.frombytes("RGB", (pix_main.width, pix_main.height), pix_main.samples)
-            else:
-                # opacity=100%라 beneath 값 자체가 배경 계산에 안 쓰이므로
-                # (위 설명 참고), 크기만 맞는 빈 백지로 대신한다.
-                img_main = Image.new("RGB", img_full.size, (255, 255, 255))
+            pix_main = page_main.get_pixmap(matrix=fitz.Matrix(_zoom, _zoom))
+            img_main = Image.frombytes("RGB", (pix_main.width, pix_main.height), pix_main.samples)
 
             px0, py0 = int(round(x0 * _zoom)), int(round(y0 * _zoom))
             px1, py1 = px0 + int(round((x1 - x0) * _zoom)), py0 + int(round((y1 - y0) * _zoom))
@@ -8273,17 +8130,6 @@ class GnuplotGenerator:
 
             # 7) 이 합성 래스터를 새 PDF 페이지 한 장에 통째로 얹어 pdf_path를
             # 덮어씀.
-            # [수정 - 성능] "PIP plot이 너무 늦게 그려짐" - build_pip_static_
-            # overlay_patch/_build_pip_blended_frames가 이 함수 호출 직후
-            # (create_script 안에서 이미 이 함수가 다 끝난 뒤) 화면 오버레이용
-            # patch를 만들려고 방금 이 함수가 쓴 pdf_path를 다시 열어 페이지
-            # 전체를 300dpi로 세 번째 래스터화하고 있었음(이 함수 안에서 이미
-            # 2번 했는데 또) - 여기서 만든 최종 조각(경계선까지 포함해서
-            # img_main에서 박스 부분만 자른 것)을 캐시해두면 그 세 번째
-            # 래스터화를 완전히 생략할 수 있다. 같은 _dpi(300)를 쓰므로
-            # 픽셀 단위로 그대로 재사용 가능.
-            self.last_pip_composite_patch = img_main.crop((px0, py0, px1, py1)).copy()
-
             img_main.save(_composite_png, format="PNG")
             doc_full.close()
             doc_full = None
@@ -8730,7 +8576,7 @@ class GnuplotGenerator:
                 f"늘리거나 title/label을 줄여 보세요."
             )
 
-    def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None, circles=None, pip_for_overlay=False):
+    def create_script(self, plotdef, outfile, fmt="pdf", annotations=None, arrows=None, circles=None):
         # [수정] "PNG/JPG를 PDF 기준으로" - gnuplot의 pngcairo/jpeg 터미널을
         # 각각 따로 부르는 대신, 이미 검증된 pdfcairo 결과를 PyMuPDF로
         # 래스터화해서 만든다(포맷 간 legend/폰트 크기 불일치의 근본 원인이던
@@ -8749,6 +8595,10 @@ class GnuplotGenerator:
         # PyMuPDF가 없는 환경이면 _rasterize_pdf_to_image/_convert_pdf_to_svg가
         # False를 반환하니 그때만 기존 gnuplot 자체 터미널 방식으로 대체
         # (fallback)한다.
+        _pip_n = _normalize_pip_opacity(getattr(plotdef, "pip", None))
+        if _pip_n is not getattr(plotdef, "pip", None):
+            plotdef = copy.copy(plotdef)
+            plotdef.pip = _pip_n
         _fmt_l0 = (fmt or "").lower()
         if _fmt_l0 == "eps" and not getattr(self, "_eps_out", False):
             # [수정 - 사용자 요청] EPS는 PDF와 같은 레이아웃 경로로 그리고 터미널
@@ -8756,7 +8606,7 @@ class GnuplotGenerator:
             self._eps_out = True
             try:
                 return self.create_script(plotdef, outfile, fmt="pdf", annotations=annotations, arrows=arrows,
-                                          circles=circles, pip_for_overlay=pip_for_overlay)
+                                          circles=circles)
             finally:
                 self._eps_out = False
         if _fmt_l0 in ("png", "jpg", "jpeg", "svg"):
@@ -8962,25 +8812,9 @@ class GnuplotGenerator:
         _pip_clip_info = None
         _vector_pip_clip = None   # EPS/EMF 원/타원 벡터 클리핑(_apply_vector_pip_clip) 정보
         if _pip_on:
-            # [수정 - 버그(사용자 보고)] "PIP 원/타원(또는 사각형)+부분 반투명
-            # (1~99%)이 EMF/EPS에서 깨짐" - 이 조합은 PDF 후처리(_apply_pip_clip)
-            # 로만 제대로 그려지는데, EMF/EPS는 PDF를 거치지 않는 별도
-            # 드라이버라(PNG/JPG/SVG는 내부적으로 PDF를 거쳐서 자동으로
-            # 적용됨) 후처리 자체가 아예 안 걸리고, 그 결과 클리핑도 반투명도
-            # 없는 깨진 모습(사각형 테두리 없음, 잉크가 안 잘리고, 범례
-            # 자리에 이상한 조각까지 남음 - 실제 렌더로 확인)이 그대로
-            # 남았음. Multi-Plot/Animation이 이미 "지원 안 되면 사각형+
-            # 완전불투명으로 안전하게 대체 + 경고"로 처리하는 것과 동일하게,
-            # EMF/EPS(및 만약을 위한 안전망으로 interactive도 포함 - 화면
-            # PLOT은 cathplot_gui가 별도 오버레이 창으로 먼저 처리하므로
-            # 보통 여기 도달하지 않음)도 똑같이 대체한다.
-            # [수정 - 요청, 재수정] "원 PIP가 rect처럼 메인 창에 같이 붙어서
-            # 나오고 진하기도 같아야 하는데, 화면 오버레이 방식은 항상
-            # 별도 창으로 맨 위에 따로 뜨고 화질도 못 미침" - 반투명을
-            # 없애고 투명/불투명 라디오버튼 두 개만 남긴 지금은, 화면
-            # (interactive)에서 굳이 오버레이를 쓸 이유가 없다(오버레이는
-            # 원래 "진짜 반투명"을 실시간으로 배경과 섞을 방법이 없어서
-            # 만든 것 - 이제 그 경우 자체가 UI에서 선택 불가능함).
+            # 원/타원 PIP는 PDF 후처리(_apply_pip_clip)가 필요한 경우가 있는데
+            # EMF/EPS/화면은 PDF를 거치지 않음 - 아래(_pip_clip_info 처리)에서
+            # EMF/EPS는 벡터 클리핑, 화면은 사각형으로 대체한다.
             # force_postprocess는 SAVE/PRINT/Batch 같은 실제 파일 출력에서만
             # 강제한다(파일은 한 번 만들면 고정이라 완벽한 클리핑이 더
             # 중요하고, 별도 창 문제도 없음) - 화면(interactive)은 다시
@@ -9245,76 +9079,30 @@ class GnuplotGenerator:
                           # 중간에 끊기는 문법 오류가 됨.
                           _main_state_snapshot[_last_idx + 1:_last_idx + 1] = _new_clause_lines
             if _pip_clip_info is not None and (fmt.lower() in ("emf", "eps", "interactive") or getattr(self, "_eps_out", False)):
-                # [수정 - 요청] "반투명이 EMF에 불가능하면 50%를 기준으로
-                # 투명/불투명으로 구분" - 항상 완전불투명으로 대체하면, 사용자가
-                # 낮은 opacity(주로 메인 plot이 비쳐 보이길 원함)를 준 경우
-                # 의도와 반대로 배경이 완전히 가려짐 - 원래 요청한 opacity 값을
-                # 그대로 보고 50% 미만이면 완전투명(0), 50% 이상이면 완전
-                # 불투명(100)으로 더 가까운 쪽으로 반올림한다.
-                _orig_opacity_raw = str((plotdef.pip or {}).get("opacity", "")).strip()
-                try:
-                    _orig_opacity = float(_orig_opacity_raw) if _orig_opacity_raw else (
-                        100.0 if (plotdef.pip or {}).get("opaque", True) else 0.0
-                    )
-                except (TypeError, ValueError):
-                    _orig_opacity = 100.0
-                _fallback_opacity = 100.0 if _orig_opacity >= 50.0 else 0.0
-                # [추가 - 사용자 요청] "EPS/EMF에서 원/타원 PIP가 사각형으로 대체됨" -
-                # EPS(PostScript)와 EMF는 벡터 클리핑 경로를 지원하므로, 사각형
-                # 인셋으로 그린 결과를 원/타원 모양으로 잘라 메인 위에 합성한다
-                # (_apply_vector_pip_clip - 렌더링 후 처리). 반투명(1~99%)은 두
-                # 형식 모두 알파가 없어 기존처럼 50% 기준 불투명/투명으로 반올림.
+                # PDF 후처리(_apply_pip_clip)가 필요한 원/타원(X/Y 범위가 구체적
+                # 숫자가 아니라 네이티브로 못 그린 경우)인데 이 형식은 PDF를 거치지
+                # 않음 - EPS/EMF는 벡터 클리핑(_apply_vector_pip_clip)으로 원/타원을
+                # 그대로 합성하고, 화면은 사각형으로 대체한다.
                 _shape0 = str(_pip_clip_info.get("clip_shape", "rect")).strip().lower()
                 if (_shape0 in ("circle", "ellipse")
                         and (fmt.lower() == "emf" or getattr(self, "_eps_out", False))):
-                    _vector_pip_clip = dict(_pip_clip_info, opacity=_fallback_opacity)
+                    _vector_pip_clip = dict(_pip_clip_info)
                 _fallback_plotdef = copy.copy(plotdef)
-                if _vector_pip_clip is not None:
-                    # 원/타원 모양 그대로(인셋 안쪽 축 배치가 PDF와 같게) - 반투명도만 반올림
-                    _fallback_plotdef.pip = dict(plotdef.pip, opacity=_fallback_opacity)
-                else:
-                    _fallback_plotdef.pip = dict(plotdef.pip, clip_shape="rect", opacity=_fallback_opacity)
+                if _vector_pip_clip is None:
+                    _fallback_plotdef.pip = dict(plotdef.pip, clip_shape="rect")
                 _pip_probe_lines = list(lines)
                 _pip_clip_info = self._render_pip_inset(_fallback_plotdef, _pip_probe_lines, _main_cmd_list, fmt)
-                _pip_name = (plotdef.title or "plot").strip() or "plot"
-                _fallback_desc = "완전불투명" if _fallback_opacity >= 50.0 else "완전투명"
-                # [수정 - 사용자 보고 버그] "opacity를 완전불투명(100%)으로
-                # 뒀는데도 이 경고가 뜨고 원이 사각형으로 대체됨 - 메시지가
-                # '반투명이라 이 형식에서 지원 안 됨'이라고 하는데 반투명이
-                # 아닌데 왜?" - 실제 코드를 다시 살펴보고 확인한 근본 원인:
-                # 이 fallback은 opacity가 진짜 중간값(반투명)일 때뿐 아니라,
-                # 원/타원인데 X/Y(+Y2) 확대 구간이 "구체적인 숫자"로 안
-                # 잡혀 있어도(_ellipse_native_ok가 요구) 똑같이 걸림 - 그런데
-                # 위 xrange_cmd/yrange_cmd/y2range_cmd 구성 로직상, PIP 소스가
-                # "현재 화면"이 아니면(예: ".plt 파일"/"저장된 plot") Y(Y2도)
-                # 범위를 사용자가 직접 안 채우는 한 항상 autoscale로 빠지게
-                # 되어 있어서, opacity와 무관하게 이 경우엔 사실상 "항상"
-                # 사각형으로 대체됨. 그런데 메시지는 opacity가 원인인 것처럼만
-                # 말해서 "opacity를 이미 100%로 뒀는데 왜 이 경고가 뜨나"라는
-                # 혼란을 그대로 남겼음 - opacity가 실제로 0/100(완전)인데도
-                # 대체된 경우는 "범위가 구체적이지 않아서"가 진짜 원인이므로
-                # 그 경우를 구분해서 실제로 고칠 수 있는 방법(Min/Max 채우기)을
-                # 알려준다.
-                _pip_shape_now = str((plotdef.pip or {}).get("clip_shape", "rect")).strip().lower()
-                _is_partial_opacity = 0.0 + 1e-6 < _orig_opacity < 100.0 - 1e-6
-                if _vector_pip_clip is not None:
-                    if _is_partial_opacity:
-                        self.warnings.append(
-                            f"'{_pip_name}'의 PIP 배경 반투명({_orig_opacity:.0f}%)은 {'EPS' if getattr(self, '_eps_out', False) else fmt.upper()} "
-                            f"형식에서 지원되지 않아 {_fallback_desc}으로 대체했습니다(원/타원 모양은 유지)."
-                        )
-                elif _pip_shape_now in ("circle", "ellipse") and not _is_partial_opacity:
+                # [수정 - 사용자 보고 버그] "불투명인데도 원이 사각형으로 대체됨" -
+                # PIP 소스가 "현재 화면"이 아니면(저장된 plot/.plt) Y 범위를 직접
+                # 안 채우는 한 autoscale로 빠져 네이티브 조건을 못 맞춤 - 실제로
+                # 고칠 수 있는 방법(Min/Max 채우기)을 알려준다.
+                if _vector_pip_clip is None:
+                    _pip_name = (plotdef.title or "plot").strip() or "plot"
                     self.warnings.append(
                         f"'{_pip_name}'의 PIP 원/타원은 X·Y(Y2 곡선을 쓰면 Y2도) 확대 구간이 "
-                        f"구체적인 숫자로 지정되지 않아 사각형으로 대체했습니다(opacity와는 무관 - "
-                        f"완전불투명/완전투명이어도 발생) - 데이터 소스가 '현재 화면'이 아니면(저장된 "
-                        f"plot/.plt 파일) Y 범위가 자동으로 비워지니, PIP 팝업의 확대 구간에서 X min/max, "
-                        f"Y1 min/max(및 필요하면 Y2 min/max)를 직접 채워 넣어보세요."
-                    )
-                else:
-                    self.warnings.append(
-                        f"'{_pip_name}'의 PIP 원/타원(또는 부분 반투명)은 {fmt.upper()} 형식에서는 "
-                        f"지원되지 않아 사각형+{_fallback_desc}(원래 opacity {_orig_opacity:.0f}% 기준)으로 대체했습니다."
+                        f"구체적인 숫자로 지정되지 않아 사각형으로 대체했습니다 - 데이터 소스가 '현재 "
+                        f"화면'이 아니면(저장된 plot/.plt 파일) Y 범위가 자동으로 비워지니, PIP 팝업의 "
+                        f"확대 구간에서 X min/max, Y1 min/max(및 필요하면 Y2 min/max)를 직접 채워 넣어보세요."
                     )
             lines[:] = _pip_probe_lines
 
@@ -9461,14 +9249,7 @@ class GnuplotGenerator:
                 self._apply_vector_pip_clip(plotdef, outfile, "eps" if getattr(self, "_eps_out", False) else "emf",
                                             _vector_pip_clip)
             if fmt.lower() == "pdf" and _pip_clip_info and not getattr(self, "_eps_out", False):
-                self._apply_pip_clip(plotdef, outfile, fmt, _pip_clip_info, skip_beneath_if_opaque=pip_for_overlay)
-            # [추가 - 요청] "정적(비-Animation) 화면 PLOT에서도 PIP 원/타원+
-            # 부분 반투명이 제대로 보이게" - cathplot_gui가 이 값을 읽어서
-            # (fmt="pdf"로 한 번 그려 이미 위에서 _apply_pip_clip까지 적용된
-            # 상태) 그 PDF에서 PIP 박스 부분만 잘라내 화면(Interactive) 위에
-            # 겹치는 오버레이 창을 만드는 데 쓴다(Animation의 라이브 오버레이와
-            # 같은 방식, 단 프레임이 하나뿐인 정적 버전).
-            self.last_pip_clip_info = _pip_clip_info if (fmt.lower() == "pdf" and not getattr(self, "_eps_out", False)) else None
+                self._apply_pip_clip(plotdef, outfile, fmt, _pip_clip_info)
 
             _want_texts = []
             for _raw in (plotdef.title, plotdef.xlabel, plotdef.ylabel, plotdef.y2label):
@@ -9513,6 +9294,10 @@ class GnuplotGenerator:
         기존과 완전히 동일하게 결정됨) GPVAL_X_MIN/MAX로 실제 X 범위를 읽어온
         뒤, 그 curve 명령들을 문턱값 필터가 걸린 버전으로 바꿔 반복문 안에서
         다시 그린다 - 축 계산 로직을 새로 만들지 않고 기존 것을 그대로 씀."""
+        _pip_n = _normalize_pip_opacity(getattr(plotdef, "pip", None))
+        if _pip_n is not getattr(plotdef, "pip", None):
+            plotdef = copy.copy(plotdef)
+            plotdef.pip = _pip_n
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
         is_gif = bool(gif_path)
@@ -9639,10 +9424,7 @@ class GnuplotGenerator:
             for ln in static_curve_lines
         ]
 
-        # [추가 - 요청] "PIP+Animation" - PIP가 켜져 있으면(cathplot_gui의
-        # _normalize_pip_for_animation이 미리 사각형+완전불투명/완전투명으로
-        # 정리해서 넘겨줌 - 반투명/원·타원은 PDF 후처리가 필요해 프레임마다
-        # 돌릴 수 없으므로 애초에 여기 도달하지 않음) inset도 메인과 "같은
+        # [추가 - 요청] "PIP+Animation" - PIP가 켜져 있으면 inset도 메인과 "같은
         # X(시간)값"(thresh, 실제 데이터 값 그대로 - 정규화된 0~1 비율이
         # 아님)으로 threshold를 걸어 같이 진행되게 한다 - 같은 thresh를 그대로
         # 재사용하므로 PIP 자신의 xmin/xmax(확대 구간)가 메인과 달라도 그
@@ -9660,9 +9442,8 @@ class GnuplotGenerator:
             _pip_probe_lines = list(lines)
             _probe_len_before = len(_pip_probe_lines)
             _pip_clip_info = self._render_pip_inset(plotdef, _pip_probe_lines, main_cmd_list, "interactive")
-            # [추가 - 방어] "네이티브 경로를 못 타는 드문 경우" - cathplot_gui.
-            # _normalize_pip_for_animation이 opacity는 미리 0/100으로 정리해
-            # 넘기지만, 원/타원 클리핑이 네이티브로 처리되려면 그 시점에 X/Y
+            # [추가 - 방어] "네이티브 경로를 못 타는 드문 경우" - opacity는 입구
+            # (_normalize_pip_opacity)에서 0/100으로 정리되지만, 원/타원 클리핑이 네이티브로 처리되려면 그 시점에 X/Y
             # 범위가 이미 구체적 숫자로 확정돼 있어야 한다(_render_pip_inset의
             # _ellipse_native_ok 참고) - 반환값이 None이 아니면(=PDF 후처리가
             # 필요하다는 뜻인데 Animation은 그걸 프레임마다 돌릴 수 없음)
@@ -10165,193 +9946,6 @@ class GnuplotGenerator:
         # ctrl_path 파일 기반 방식(포커스와 무관하게 항상 동작)이 담당한다.
         _force_focus_window_by_title(os.path.splitext(os.path.basename(outfile))[0])
         return outfile
-
-    def _build_pip_blended_frames(self, plotdef, annotations=None, arrows=None, circles=None,
-                                   duration_sec=20.0, plot_dir_hint=None, build_full_frames=False):
-        """[추가 - 요청] "PIP+Animation, 반투명(1~99%)" 공용 코어 - GIF 저장과
-        화면 실시간 재생(오버레이 창)이 이 로직을 그대로 같이 쓴다. 매
-        프레임 무거운 PDF 후처리(_apply_pip_clip) 없이 진짜 배경 반투명을
-        만드는 방법:
-        1) PIP를 "완전 불투명"(opacity=100 - _render_pip_inset의 네이티브
-           빠른 경로, rect든 원/타원이든 그대로 clip_shape 유지)으로 강제한
-           애니메이션 GIF를 gnuplot이 한 번에(do-for 루프, 저비용) 만든다.
-        2) PIP를 아예 끈("메인 plot만") 애니메이션 GIF도 gnuplot이 한 번에
-           만든다.
-        3) 두 GIF는 같은 duration_sec/프레임 수/크기로 만들어지므로 프레임
-           번호가 1:1로 대응됨 - 각 프레임 쌍에서 PIP 박스 영역만 크롭해서
-           PIL로 섞는다(_apply_pip_clip과 같은 원리 - 흰색과의 차이로 잉크만
-           추출, 배경은 opacity 비율로 "완전불투명 버전"과 "메인만 버전"을
-           Image.blend, 잉크는 항상 그대로 위에 얹음 - PDF/PyMuPDF는 전혀
-           필요 없고 이미 만들어진 GIF 프레임끼리 순수 PIL 합성만 함).
-
-        [알려진 제한] 1)번(완전 불투명 버전)의 경계선은 항상 실선으로
-        그려지는데(_render_pip_inset의 네이티브 규칙 - opacity=100이면
-        실선), 합성 후 실제로는 반투명이라 점선이어야 이상적이지만 이미
-        그려진 실선을 지우고 다시 그리기가 어려워 1차 구현에서는 그대로
-        둔다(배경이 진짜로 반투명하게 섞이는 핵심 기능은 정확함 - 경계선
-        스타일만 완전불투명 때와 같은 실선으로 보임).
-
-        build_full_frames=False(기본, 화면 오버레이용)면 PIP 박스만 크롭한
-        작은 조각(patches)만 만든다(메모리 절약 - 오버레이 창은 라이브
-        gnuplot 창 위에 이 조각만 올려두면 되고, 메인 plot 전체는 이미 그
-        gnuplot 창 자신이 보여줌). True(GIF 저장용)면 "메인만" 전체 페이지에
-        조각을 붙여넣은 완성 프레임(full_frames)까지 같이 만든다.
-
-        반환: 성공하면 dict(patches, durations, origin_x, origin_y, size_w,
-        size_h, page_w, page_h, full_frames 또는 None). 실패하면 None(호출자가
-        완전 불투명 등 안전한 대체 경로를 쓰도록)."""
-        pip = getattr(plotdef, "pip", None) or {}
-        _opacity_raw = str(pip.get("opacity", "")).strip()
-        try:
-            _opacity = float(_opacity_raw) if _opacity_raw else (100.0 if pip.get("opaque", True) else 0.0)
-        except (TypeError, ValueError):
-            _opacity = 100.0
-        _alpha_frac = max(0.0, min(100.0, _opacity)) / 100.0
-
-        try:
-            from PIL import Image, ImageChops
-        except ImportError:
-            return None
-
-        plot_dir = plot_dir_hint or self.plot_dir or "."
-        os.makedirs(plot_dir, exist_ok=True)
-
-        # [1단계] PIP 박스의 위치/크기(화면 fraction)를 알아내야 크롭 좌표를
-        # 계산할 수 있는데, opacity=100/0인 "빠른 경로"는 _render_pip_inset이
-        # 후처리 정보(clip_info)를 안 돌려준다(필요 없으니까) - 여기서는
-        # 위치/크기 "숫자"만 필요하므로, 렌더링에는 안 쓸 프로브용 복사본의
-        # opacity를 일부러 50으로 바꿔 clip_info를 받아낸다(진짜 렌더링은
-        # 아래 2/3단계에서 opacity=100으로 다시 만듦 - 여기 50은 좌표 계산
-        # 목적일 뿐 실제로 그려지지 않음).
-        _size_scale = self._compute_size_scale(plotdef)
-        _geom_lines = ["set encoding utf8", "set term unknown"]
-        _geom_main_cmd_list = self._build_plot_commands(
-            plotdef, _geom_lines, is_multiplot=False, annotations=annotations, arrows=arrows,
-            circles=circles, panel_scale=_size_scale, fmt="interactive"
-        )
-        _geom_plotdef = copy.copy(plotdef)
-        _geom_plotdef.pip = dict(pip, opacity=50.0)
-        _clip_info = self._render_pip_inset(_geom_plotdef, list(_geom_lines), _geom_main_cmd_list, "interactive")
-        if _clip_info is None:
-            return None
-        origin_x, origin_y = _clip_info["origin_x"], _clip_info["origin_y"]
-        size_w, size_h = _clip_info["size_w"], _clip_info["size_h"]
-
-        _tmp_full_gif = os.path.join(plot_dir, f".cathplot_pip_blend_full_{uuid.uuid4().hex}.gif")
-        _tmp_main_gif = os.path.join(plot_dir, f".cathplot_pip_blend_main_{uuid.uuid4().hex}.gif")
-        full_im = main_im = None
-        try:
-            # [2단계] "완전 불투명" 버전(clip_shape는 요청한 그대로 유지 -
-            # rect든 원/타원이든 이미 opacity=100에서 네이티브로 저비용 지원됨).
-            _full_plotdef = copy.copy(plotdef)
-            _full_plotdef.pip = dict(pip, opacity=100.0)
-            self.create_animation_script(_full_plotdef, _tmp_full_gif, annotations=annotations, arrows=arrows,
-                                          circles=circles, duration_sec=duration_sec, gif_path=_tmp_full_gif)
-            if not os.path.exists(_tmp_full_gif):
-                return None
-
-            # [3단계] "메인만"(PIP 완전히 끔) 버전.
-            _main_only_plotdef = copy.copy(plotdef)
-            _main_only_plotdef.pip = {}
-            self.create_animation_script(_main_only_plotdef, _tmp_main_gif, annotations=annotations, arrows=arrows,
-                                          circles=circles, duration_sec=duration_sec, gif_path=_tmp_main_gif)
-            if not os.path.exists(_tmp_main_gif):
-                return None
-
-            # [4단계] 프레임끼리 짝지어 PIL로 섞기.
-            full_im = Image.open(_tmp_full_gif)
-            main_im = Image.open(_tmp_main_gif)
-            n_frames = getattr(full_im, "n_frames", 1)
-            page_w, page_h = full_im.size
-
-            px0 = int(round(origin_x * page_w))
-            px1 = int(round((origin_x + size_w) * page_w))
-            py0 = int(round((1.0 - (origin_y + size_h)) * page_h))
-            py1 = int(round((1.0 - origin_y) * page_h))
-            if px1 - px0 <= 0 or py1 - py0 <= 0:
-                return None
-            _white = Image.new("RGB", (px1 - px0, py1 - py0), (255, 255, 255))
-
-            patches, durations, full_frames = [], [], ([] if build_full_frames else None)
-            for i in range(n_frames):
-                full_im.seek(i)
-                main_im.seek(min(i, getattr(main_im, "n_frames", 1) - 1))
-                full_frame = full_im.convert("RGB")
-                main_frame = main_im.convert("RGB")
-
-                patch = full_frame.crop((px0, py0, px1, py1))     # 흰 배경(또는 클리핑된 모양) 위 잉크
-                beneath = main_frame.crop((px0, py0, px1, py1))   # 이 자리의 "메인 plot만"
-
-                _diff = ImageChops.difference(patch, _white)
-                _dr, _dg, _db = _diff.split()
-                _ink_mask = ImageChops.lighter(ImageChops.lighter(_dr, _dg), _db)
-                # [수정 - 버그] 정적 PIP와 동일한 이유(위 _apply_pip_clip 주석
-                # 참고) - 얇은/점선이 흐릿하게 보이던 문제 보정.
-                _ink_mask = _ink_mask.point(lambda v: min(255, int(255.0 * ((v / 255.0) ** 0.45))))
-                _bg_blend = Image.blend(beneath, _white, _alpha_frac)
-                _composite = _bg_blend.copy()
-                _composite.paste(patch, (0, 0), mask=_ink_mask)
-                # [추가 - 요청] "반투명 + 화면 실시간 재생일 때 in-plot이
-                # 화면에 고정되고, 고정된 내용이 사각형 모양으로 보임" - 화면
-                # 오버레이 창은 이제 진짜 OS 투명(-transparentcolor)을 쓰므로,
-                # 원/타원 바깥을 크로마키 색으로 덮어씌운다(정적 PLOT과 동일한
-                # _chroma_mask_patch 재사용). GIF 파일로 저장할 때(build_full_
-                # frames=True)는 파일에 크로마키 색이 그대로 찍히면 안 되므로
-                # 이 마스킹을 건너뛴다.
-                if not build_full_frames:
-                    _composite = self._chroma_mask_patch(_composite, _clip_info)
-
-                patches.append(_composite)
-                durations.append(full_im.info.get("duration", 20))
-                if build_full_frames:
-                    _result = main_frame.copy()
-                    _result.paste(_composite, (px0, py0))
-                    full_frames.append(_result)
-
-            if not patches:
-                return None
-            return {
-                "patches": patches, "durations": durations,
-                "origin_x": origin_x, "origin_y": origin_y, "size_w": size_w, "size_h": size_h,
-                "page_w": page_w, "page_h": page_h, "full_frames": full_frames,
-                "clip_shape": _clip_info.get("clip_shape"),
-            }
-        finally:
-            # [수정 - 코드 검토] PIL은 여러 프레임 GIF를 seek용으로 열어 둔 채라,
-            # 닫지 않으면 Windows에서 아래 삭제가 PermissionError로 조용히 실패해
-            # 임시 GIF 두 개가 plot 폴더에 계속 쌓였음(실측) - 먼저 닫는다.
-            for _im in (full_im, main_im):
-                if _im is not None:
-                    _im.close()
-            for _tmp in (_tmp_full_gif, _tmp_main_gif):
-                try:
-                    os.remove(_tmp)
-                except OSError:
-                    pass
-
-    def create_pip_animation_gif_blended(self, plotdef, gif_path, annotations=None, arrows=None, circles=None,
-                                          duration_sec=20.0):
-        """[추가 - 요청] "PIP+Animation, 반투명(1~99%) + GIF 저장" -
-        _build_pip_blended_frames(공용 코어, 위 참고)로 만든 완성 프레임을
-        그대로 GIF로 저장한다. 실패(예: PIL 없음, 위치 계산 실패)하면
-        완전 불투명(opacity=100)으로 안전하게 대체한다."""
-        result = self._build_pip_blended_frames(
-            plotdef, annotations=annotations, arrows=arrows, circles=circles,
-            duration_sec=duration_sec, plot_dir_hint=os.path.dirname(os.path.abspath(gif_path)),
-            build_full_frames=True,
-        )
-        if result is None or not result.get("full_frames"):
-            pip = getattr(plotdef, "pip", None) or {}
-            _fallback_plotdef = copy.copy(plotdef)
-            _fallback_plotdef.pip = dict(pip, opacity=100.0)
-            self.create_animation_script(_fallback_plotdef, gif_path, annotations=annotations, arrows=arrows,
-                                          circles=circles, duration_sec=duration_sec, gif_path=gif_path)
-            return gif_path
-        frames = result["full_frames"]
-        frames[0].save(
-            gif_path, save_all=True, append_images=frames[1:], duration=result["durations"], loop=0, optimize=False
-        )
-        return gif_path
 
     def create_3d_animation_script(self, curves_3d, outfile, xlabel="", ylabel="", zlabel="", title="",
                                     xlog=False, ylog=False, zlog=False, rot_x=60, rot_z=30,
@@ -13065,43 +12659,11 @@ class GnuplotGenerator:
                     (cell_right_in - cell_left_in) / page_w,
                     (cell_top_in - cell_bottom_in) / page_h,
                 )
-                _mp_plotdef = plotdef
-                # [수정 - 발견] "원/타원 클리핑은 항상 사각형으로 강제" -
-                # opacity가 0(완전 투명) 또는 100(완전 불투명)이면 원/타원도
-                # gnuplot 네이티브(_render_pip_inset의 _ellipse_native_ok)로
-                # 처리 가능함을 확인해서, 이제 클리핑 모양 자체는 미리 강제
-                # 하지 않는다 - 배경 반투명(1~99%, 여전히 PDF 후처리
-                # 필요·M-P 페이지 재구성과 얽혀 복잡함 - 1차 구현 범위 밖)만
-                # 강제로 정리한다. 드물게(X/Y 범위가 아직 구체적 숫자로
-                # 확정 안 된 경우) 그래도 네이티브 경로를 못 타면, 아래에서
-                # _render_pip_inset의 반환값을 보고 한 번 더 사각형으로
-                # 안전하게 대체한다(방어적 폴백).
-                _mp_overrides = {}
-                _mp_warn_targets = []
-                _mp_opacity_raw = str(plotdef.pip.get("opacity", "")).strip()
-                try:
-                    _mp_opacity_val = (
-                        float(_mp_opacity_raw) if _mp_opacity_raw
-                        else (100.0 if plotdef.pip.get("opaque", True) else 0.0)
-                    )
-                except (TypeError, ValueError):
-                    _mp_opacity_val = 100.0
-                # [수정] opacity=0(완전 투명)은 clip_shape="rect"일 때 후처리가
-                # 필요 없는 빠른 경로가 됐으므로(_render_pip_inset의 _rect_no_bg
-                # 참고 - 배경 오브젝트를 아예 안 그려 M-P 페이지 재구성과 얽힐
-                # 일이 없음), 강제 대상에서 뺀다. 0도 100도 아닌(진짜 중간)
-                # 반투명값만 여전히 강제한다.
-                if 0.0 + 1e-6 < _mp_opacity_val < 100.0 - 1e-6:
-                    _mp_overrides["opacity"] = 100.0
-                    _mp_warn_targets.append("배경 반투명 → 불투명")
-                if _mp_overrides:
-                    _mp_plotdef = copy.copy(plotdef)
-                    _mp_plotdef.pip = dict(plotdef.pip, **_mp_overrides)
-                    _pip_name = (plotdef.title or "plot").strip() or "plot"
-                    self.warnings.append(
-                        f"'{_pip_name}'의 PIP {', '.join(_mp_warn_targets)}은(는) Multi-Plot에서는 "
-                        f"아직 지원하지 않아 강제로 바꿔 표시했습니다."
-                    )
+                # 원/타원은 X/Y 범위가 구체적 숫자면 gnuplot 네이티브로 그리고(opacity
+                # 0/100 모두), 드물게 네이티브 경로를 못 타면 아래에서 _render_pip_inset의
+                # 반환값을 보고 사각형으로 안전하게 대체한다(방어적 폴백).
+                _mp_plotdef = copy.copy(plotdef)
+                _mp_plotdef.pip = _normalize_pip_opacity(plotdef.pip)
                 _mp_probe_lines = list(lines)
                 _mp_clip_info = self._render_pip_inset(_mp_plotdef, _mp_probe_lines, _cell_cmd_list, fmt, parent_box=_pb)
                 if _mp_clip_info is not None:
