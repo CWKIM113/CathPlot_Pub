@@ -12603,7 +12603,12 @@ class CathPlotGUI:
         import glob
         import time
         now = time.time()
-        for path in glob.glob(os.path.join(self.plot_dir, ".cathplot_pipfold_*.dat")):
+        # 화면 PIP/Animation의 Cubic Spline 사전계산 파일(.cathplot_presmooth_*)
+        # 도 같은 수명(열린 창이 다시 읽음)인데 정리 대상에서 빠져 있어 계속
+        # 쌓였음(실측 확인) - 같이 정리한다.
+        _paths = (glob.glob(os.path.join(self.plot_dir, ".cathplot_pipfold_*.dat"))
+                  + glob.glob(os.path.join(self.plot_dir, ".cathplot_presmooth_*.dat")))
+        for path in _paths:
             try:
                 if now - os.path.getmtime(path) >= min_age_sec:
                     os.remove(path)
@@ -12630,6 +12635,11 @@ class CathPlotGUI:
             )
             if not proceed:
                 return
+            # Batch는 daemon 스레드지만 그 안의 ThreadPoolExecutor 작업자는
+            # non-daemon이라, 창을 닫아도 Python이 남은 항목을 전부 끝낼
+            # 때까지 프로세스가 창 없이 살아 있었음(실측 재현) - 위 안내대로
+            # "즉시 중단"되도록 mainloop 이후 강제 종료 표시.
+            self._force_exit_on_close = True
 
         # 0. [추가 - 버그 수정] 앱을 켜자마자(예열이 끝나기 전에) 바로 닫으면,
         # 아직 실행 중인 예열용 gnuplot.exe가 곧바로 아래 "남은 gnuplot 프로세스"
@@ -12667,8 +12677,12 @@ class CathPlotGUI:
         # 먼저 몇 개나 남아있는지 세어서, 하나도 없으면(가장 흔한 경우) 조용히
         # 넘어가고, 남아있으면(이 프로그램이 놓친 창일 수도, 완전히 남의
         # 프로세스일 수도 있음을 명시) 사용자에게 물어서 종료 여부를 맡긴다.
+        def _count_gnuplot():
+            return self._count_running_processes("gnuplot.exe") + self._count_running_processes("gnuplot_qt.exe")
+
+        n_left = None
         try:
-            n_left = self._count_running_processes("gnuplot.exe") + self._count_running_processes("gnuplot_qt.exe")
+            n_left = _count_gnuplot()
             if n_left > 0:
                 do_kill = messagebox.askyesno(
                     "gnuplot 프로세스 남음",
@@ -12680,15 +12694,16 @@ class CathPlotGUI:
                 if do_kill:
                     subprocess.run(["taskkill", "/F", "/IM", "gnuplot_qt.exe"], capture_output=True, **_no_console_kwargs())
                     subprocess.run(["taskkill", "/F", "/IM", "gnuplot.exe"], capture_output=True, **_no_console_kwargs())
+                    n_left = _count_gnuplot()
         except Exception:
-            pass
+            n_left = None
 
         # 3. 화면 PIP 확대/이동용 임시 데이터 정리 - gnuplot 창이 하나도 안 남았을
         #    때만(남긴 창은 확대/이동 시 이 파일을 계속 읽음). 남겨 둔 경우는 다음
-        #    실행 때 하루 지난 것부터 지운다(__main__ 참고).
+        #    실행 때 하루 지난 것부터 지운다(__main__ 참고). 위 2단계에서 센
+        #    개수를 재사용(0이었으면 다시 tasklist를 두 번 돌리지 않음).
         try:
-            if (self._count_running_processes("gnuplot.exe")
-                    + self._count_running_processes("gnuplot_qt.exe")) == 0:
+            if n_left == 0:
                 self._cleanup_pip_fold_tempfiles()
         except Exception:
             pass
@@ -12855,7 +12870,12 @@ def _install_global_error_handlers(root):
     def report_callback_exception(exc_type, exc_value, exc_tb):
         if not _root_alive():
             return
-        show_error_popup(exc_type, exc_value, exc_tb)
+        # 방금 살아 있던 창이 팝업을 만드는 도중 닫히면(종료 경합) 팝업 생성
+        # 자체가 두 번째 예외를 내므로 여기서 삼킨다.
+        try:
+            show_error_popup(exc_type, exc_value, exc_tb)
+        except (tk.TclError, RuntimeError):
+            pass
 
     root.report_callback_exception = report_callback_exception
 
@@ -12887,3 +12907,5 @@ if __name__ == "__main__":
     app._cleanup_pip_fold_tempfiles(min_age_sec=24 * 3600)
     _check_gnuplot_installed(root)  # 백그라운드에서 확인 - 화면은 바로 뜸
     root.mainloop()
+    if getattr(app, "_force_exit_on_close", False):
+        os._exit(0)

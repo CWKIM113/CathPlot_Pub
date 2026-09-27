@@ -794,8 +794,8 @@ def _char_marker_term_vars(term=None, term_font_pt=11.0):
             f"_cpm_C1={model['C1']:.4g}; _cpm_k={1.0 / (model['H'] * float(term_font_pt)):.5g}")
 
 
-_CHAR_POINTS_RE = re.compile(
-    r'using (\S+)(.*?) with points pt "([' + "".join(_CHAR_MARKERS) + r'])" ps ([\d.eE+-]+)(?: lc rgb "([^"]*)")?'
+_CHAR_POINTS_TAIL_RE = re.compile(
+    r' with points pt "([' + "".join(_CHAR_MARKERS) + r'])" ps ([\d.eE+-]+)(?: lc rgb "([^"]*)")?'
 )
 
 
@@ -804,13 +804,37 @@ def _char_points_to_labels(cmd, term=None, term_font_pt=11.0):
     바꾼다(다른 모양/일반 curve 절은 그대로). 생성 단계에서는 계속 ps 형식을
     유지해서(PIP 인셋 ps 축소 등 기존 처리 그대로 재사용), plot 절을 실제로
     내보내는 곳에서만 이 변환을 적용한다. term은 _char_marker_label_parts 참고."""
-    def _repl(m):
-        using, mid, ch, ps, color = m.groups()
+    # [수정 - 버그, 실측 재현] using 절을 예전엔 \S+(첫 공백까지)로 잡아서, PIP 원/타원
+    # 클리핑이 마커 using을 "(f(($1),($2)) ? ($1) : (0/0)):(...)"처럼 공백 있는 식으로
+    # 감싼 경우(EMF/EPS 네이티브 원/타원) 글자 열 :("◀")가 식 중간에 끼어 gnuplot이
+    # "')' expected"로 죽었음 - 괄호 깊이를 세어 using 절 끝(깊이 0의 첫 공백)을 찾는다.
+    out = []
+    pos = 0
+    for m in _CHAR_POINTS_TAIL_RE.finditer(cmd):
+        u = cmd.rfind("using ", pos, m.start())
+        if u < 0:
+            continue
+        i = u + len("using ")
+        depth = 0
+        while i < m.start():
+            c = cmd[i]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+            elif c.isspace() and depth <= 0:
+                break
+            i += 1
+        using, mid = cmd[u + len("using "):i], cmd[i:m.start()]
+        ch, ps, color = m.groups()
         tc = f' tc rgb "{color}"' if color else ""
         text, font_clause, offset_clause = _char_marker_label_parts(ch, float(ps), term, term_font_pt)
-        return (f'using {using}:("{text}"){mid} with labels center enhanced '
-                f'{font_clause}{offset_clause}{tc}')
-    return _CHAR_POINTS_RE.sub(_repl, cmd)
+        out.append(cmd[pos:u])
+        out.append(f'using {using}:("{text}"){mid} with labels center enhanced '
+                   f'{font_clause}{offset_clause}{tc}')
+        pos = m.end()
+    out.append(cmd[pos:])
+    return "".join(out)
 
 
 def _compose_eps_vector_clip(main_path, full_path, geom, opaque):
@@ -5640,6 +5664,7 @@ class GnuplotGenerator:
             # 그 결과 파일을, 실패하면(3점 미만 등) 원본 파일을 그대로
             # 대상으로 삼는다.
             _fold_src_path, _fold_src_using = rel_path, f"{x_expr}:{y_expr}"
+            _presmoothed_path = None
             if getattr(curve, "smooth_csplines", False):
                 _match_using = f"{x_expr}:{curve.output_no + 1}"
                 _orig_line_for_match = f'"{rel_path}" using {_match_using} smooth csplines notitle with lines'
@@ -5664,6 +5689,13 @@ class GnuplotGenerator:
                     [_gp], input=_mini_script, text=True, encoding="utf-8", errors="replace",
                     capture_output=True, cwd=plot_dir_, timeout=20, **_no_console_kwargs()
                 )
+                # 스플라인 사전계산 파일은 위 1회 실행의 입력으로만 쓰이므로 바로
+                # 지운다(지우지 않아 plot 폴더에 계속 쌓였음 - 실측 확인).
+                if _presmoothed_path:
+                    try:
+                        os.remove(_presmoothed_path)
+                    except OSError:
+                        pass
                 if _res.returncode != 0 or not os.path.exists(_tmp_path):
                     continue
                 # [수정 - 실측으로 발견된 버그] "set table"는 xrange/yrange
@@ -7607,7 +7639,10 @@ class GnuplotGenerator:
                     if f'"{_rel_path}"' in _ln and f":{_curve.output_no + 1} smooth csplines" in _ln:
                         _result = self._presmooth_spline_curve(_ln, _rel_path, _using_expr_for_match, self.plot_dir)
                         if _result:
-                            _inset_cmd_list[_li], _ = _result
+                            _inset_cmd_list[_li], _ps_tmp = _result
+                            # 파일 출력은 gnuplot 실행이 끝난 뒤 create_script에서
+                            # 지운다(예전엔 버려져 EMF/EPS 원/타원 저장마다 쌓였음 - 실측).
+                            self._pip_presmooth_tmpfiles = getattr(self, "_pip_presmooth_tmpfiles", []) + [_ps_tmp]
                             _pip_spline_titles_ok.append(_curve.title)
                         else:
                             _pip_spline_titles_failed.append(_curve.title)
@@ -8096,7 +8131,10 @@ class GnuplotGenerator:
             _fully_opaque = _alpha_frac >= 1.0 - 1e-6
             if _shape in ("circle", "ellipse"):
                 if _fully_opaque:
-                    draw.ellipse([px0, py0, px1, py1], outline=(0, 0, 0), width=2)
+                    # 클리핑 마스크와 같은 반지름(_ex/_ey)으로 - 예전엔 박스 전체에
+                    # 그려서 Rx/Ry<100%면 테두리가 잘린 내용 바깥에 떠 있었음(실측).
+                    draw.ellipse([px0 + _cx - _ex, py0 + _cy - _ey, px0 + _cx + _ex, py0 + _cy + _ey],
+                                 outline=(0, 0, 0), width=2)
                 else:
                     _n_dots = 72
                     _dot_r = 2
@@ -9229,12 +9267,23 @@ class GnuplotGenerator:
             # [추가] gnuplot이 스크립트 에러로 죽을 때 실제 에러 메시지를 잡아서
             # 사용자에게 보여줄 수 있도록 stderr를 파이프로 캡처
             self.last_process = _launch_gnuplot_persist(gnuplot_exe, script_path, plot_dir)
+            # 열린 창이 계속 읽으므로 지우지 않고 목록만 비움(종료/시작 시 정리 대상)
+            self._pip_presmooth_tmpfiles = []
         else:
             # [수정] Batch/Save/Print는 결과 파일(pdf/png/emf 등)만 필요하고 스크립트
             # 자체는 안 남겨도 되는 임시 산출물이므로, 디스크에 .plt 파일을 쓰지 않고
             # gnuplot의 표준입력(stdin)으로 스크립트를 바로 넘겨서 디스크 I/O와
             # 매번 임시파일을 만들고 지우는 오버헤드를 줄인다.
-            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "gnuplot 실행 실패", debug_tag="")
+            try:
+                _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "gnuplot 실행 실패", debug_tag="")
+            finally:
+                # PIP 인셋의 스플라인 사전계산 파일 - 파일 출력은 여기서 실행이 끝났으므로 삭제.
+                _ps_list, self._pip_presmooth_tmpfiles = getattr(self, "_pip_presmooth_tmpfiles", []), []
+                for _p in _ps_list:
+                    try:
+                        os.remove(_p)
+                    except OSError:
+                        pass
 
             if fmt.lower() == "png":
                 _upscale_png_dpi(outfile)
@@ -9319,7 +9368,9 @@ class GnuplotGenerator:
             "set term unknown",
         ]
         # 배치 계산은 화면 기준("interactive") 그대로, ◁◀▷▶ 그리기 방식만 실제 터미널(GIF)에 맞춤
-        self._char_marker_term_override = ("gif", 11.0) if is_gif else None
+        # 화면도 명시(항상 11pt) - 이 경로는 _get_terminal_cmd를 먼저 부르지 않아,
+        # None이면 같은 generator가 이전에 남긴 _term_font_pt(예: EMF 14pt)를 읽었음.
+        self._char_marker_term_override = ("gif", 11.0) if is_gif else ("windows", 11.0)
         try:
             main_cmd_list = self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations,
                                                         arrows=arrows, circles=circles, panel_scale=_size_scale, fmt="interactive")
@@ -9911,7 +9962,16 @@ class GnuplotGenerator:
         if is_gif:
             # 파일 산출물이라 Batch/Save와 동일하게 stdin으로 넘겨서 끝내고,
             # 실패 시에만 디버깅용으로 스크립트를 남긴다(create_script 패턴과 동일).
-            _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "애니메이션 GIF 생성 실패", debug_tag="_anim")
+            try:
+                _run_gnuplot_stdin(gnuplot_exe, script_text, plot_dir, "애니메이션 GIF 생성 실패", debug_tag="_anim")
+            finally:
+                # GIF는 여기서 동기로 끝나므로 스플라인 사전계산 파일을 바로 지운다
+                # (화면 애니메이션은 창이 다시 읽으므로 종료/시작 시 정리에 맡김).
+                for _p in _presmooth_temp_files:
+                    try:
+                        os.remove(_p)
+                    except OSError:
+                        pass
             return gif_path
 
         script_path = outfile.rsplit(".", 1)[0] + ".plt"
