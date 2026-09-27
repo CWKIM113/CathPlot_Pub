@@ -128,90 +128,6 @@ def _measure_text_width_in(text, font_name, font_pt):
     except Exception:
         return None
 
-# [추가 - 사용자 보고 버그] "맑은 고딕은 marker가 같은데 Times New Roman은
-# legend에서 작아짐" - legend의 marker 기호(MARKER_SYMBOL_MAP, "○"/"△" 등
-# 유니코드 도형 문자를 set label로 찍는 방식)는 MARKER_SIZE_SCALE 등 지금까지
-# 전부 Malgun Gothic 기준으로 실측된 보정값을 쓰는데, 같은 문자라도 폰트마다
-# 실제 그려지는 잉크 크기(글리프 디자인 자체)가 크게 다르다(직접 측정 확인:
-# 40pt 기준 "○"의 실제 폭이 Times New Roman에서는 Malgun Gothic의 약 60%뿐).
-# Legend Font가 Malgun Gothic이 아니면 PIL로 두 폰트에서 같은 문자를 그려
-# 실제 잉크 bbox 면적을 비교하고, 그 비율(면적비의 제곱근 = 선형 크기비)만큼
-# symbol_pt를 보정한다. 측정 불가(폰트 파일이 없거나 이 문자를 아예 지원
-# 안 함)이면 안전하게 1.0(보정 없음 - 기존 동작 그대로).
-_MARKER_FONT_REF = "malgun gothic"
-_MARKER_FONT_REF_PT = 60  # 작은 폰트에서는 bbox가 정수 픽셀 반올림 오차에 민감해 크게 잡아 측정
-_marker_font_bbox_cache = {}
-
-def _get_marker_font_bboxes(symbol_char, font_name):
-    """symbol_char를 기준 폰트(Malgun Gothic)와 font_name 둘 다로 _MARKER_FONT_
-    REF_PT 크기로 그렸을 때의 PIL bbox(left, top, right, bottom, top-left
-    원점·y는 아래로 증가)를 함께 돌려준다. 측정 불가하면 (None, None)."""
-    _font_key = (font_name or "").strip().lower()
-    cache_key = (symbol_char, _font_key)
-    if cache_key in _marker_font_bbox_cache:
-        return _marker_font_bbox_cache[cache_key]
-    result = (None, None)
-    try:
-        ref_path = _FONT_FILE_MAP.get(_MARKER_FONT_REF)
-        tgt_path = _FONT_FILE_MAP.get(_font_key)
-        if ref_path and tgt_path and os.path.exists(ref_path) and os.path.exists(tgt_path):
-            from PIL import ImageFont
-            ref_bbox = ImageFont.truetype(ref_path, _MARKER_FONT_REF_PT).getbbox(symbol_char)
-            tgt_bbox = ImageFont.truetype(tgt_path, _MARKER_FONT_REF_PT).getbbox(symbol_char)
-            if ref_bbox and tgt_bbox:
-                result = (ref_bbox, tgt_bbox)
-    except Exception:
-        result = (None, None)
-    _marker_font_bbox_cache[cache_key] = result
-    return result
-
-def _marker_font_size_ratio(symbol_char, font_name):
-    _font_key = (font_name or "").strip().lower()
-    if not symbol_char or _font_key == _MARKER_FONT_REF:
-        return 1.0
-    ref_bbox, tgt_bbox = _get_marker_font_bboxes(symbol_char, font_name)
-    if ref_bbox is None:
-        return 1.0
-    ref_area = max(ref_bbox[2] - ref_bbox[0], 1) * max(ref_bbox[3] - ref_bbox[1], 1)
-    tgt_area = max(tgt_bbox[2] - tgt_bbox[0], 1) * max(tgt_bbox[3] - tgt_bbox[1], 1)
-    if tgt_area <= 0:
-        return 1.0
-    return max(0.5, min((ref_area / tgt_area) ** 0.5, 3.0))
-
-def _marker_font_y_delta_rowh(symbol_char, font_name, row_mult):
-    """[추가 - 사용자 보고 버그] "Courier New, Consolas 등에서는 네모가
-    중심 위로 올라감(legend에서만)" - MARKER_Y_OFFSET(_SCREEN)의 기존
-    보정치는 Malgun Gothic 기준으로 실측된 값인데, 폰트마다 "center" 정렬
-    기준(텍스트 베이스라인 메트릭)과 실제 글리프 잉크가 그 안에서 차지하는
-    위치가 달라(특히 고정폭 폰트는 상하 여백 비율이 크게 다름) 같은
-    보정치를 그대로 쓰면 기호가 위/아래로 더 어긋나 보인다. 기준 폰트와
-    대상 폰트에서 같은 문자의 잉크 bbox 수직 중심을 비교해 그 차이를
-    ROW_H 배수 단위로 돌려준다(호출부가 MARKER_Y_OFFSET(_SCREEN) 값에
-    더해 쓴다) - 기준 폰트이거나 측정 불가면 0.0(보정 없음)."""
-    _font_key = (font_name or "").strip().lower()
-    if not symbol_char or _font_key == _MARKER_FONT_REF:
-        return 0.0
-    ref_bbox, tgt_bbox = _get_marker_font_bboxes(symbol_char, font_name)
-    if ref_bbox is None:
-        return 0.0
-    ref_center = (ref_bbox[1] + ref_bbox[3]) / 2.0
-    tgt_center = (tgt_bbox[1] + tgt_bbox[3]) / 2.0
-    # PIL 좌표는 아래로 증가 - tgt_center가 ref_center보다 작으면(=화면에서
-    # 더 위쪽) 대상 폰트의 잉크가 기준보다 위로 치우쳐 있다는 뜻이라(실제
-    # 재보고 증상과 일치) 아래로 내려주도록(오프셋 감소) 부호를 반대로 뒤집는다
-    # ("+면 위로" 관례에 맞춰 offset += 이 값 그대로 쓸 수 있게).
-    delta_em_frac = (tgt_center - ref_center) / _MARKER_FONT_REF_PT
-    # [주의 - 실측 보정] PIL bbox 좌표계(글리프 자체의 잉크 범위)와 gnuplot의
-    # "center" 정렬 기준(폰트의 베이스라인/ascent-descent 메트릭)이 완전히
-    # 같은 기준점을 쓰지 않아서, 위 delta_em_frac을 그대로(또는 절반만)
-    # 반영하면 실측상 여전히 과보정(너무 아래로 내려감)됨을 실제 PNG
-    # 렌더링(delta 0~-0.236 구간을 촘촘히 스윕해 legend 마커를 확대 비교)으로
-    # 확인함 - 약 13%(0.13배)만 반영했을 때 Consolas에서 눈에 보이는 어긋남이
-    # 가장 적었음(경험적 보정 계수 - 정확한 이론값 아님, 추후 재보고 있으면
-    # 다시 조정 필요).
-    _MARKER_FONT_YDELTA_SCALE = 0.13
-    return (delta_em_frac * _MARKER_FONT_YDELTA_SCALE) / max(row_mult, 0.001)
-
 _GNUPLOT_FALLBACK_PATHS = [
     r"C:\Program Files\gnuplot\bin\gnuplot.exe",
     r"C:\Program Files\gnuplot\bin\wgnuplot.exe",
@@ -475,7 +391,9 @@ def _dash_pattern_for_fmt(linestyle, fmt):
         return base
     return ", ".join(f"{v:.3g}" for v in nums)
 
-# Legend 샘플선 위에 마커를 표시할 때 쓰는 유니코드 기호 (pointtype 번호 -> 기호)
+# 지원 marker pointtype -> 대응 유니코드 기호. legend 마커는 이제 curve와 같은
+# 네이티브 point로 찍으므로(_render_legend_box 참고) 이 dict는 "유효한 marker
+# 모양인지" 판정용으로 쓰인다(기호 문자 자체는 더 이상 그리지 않음).
 MARKER_SYMBOL_MAP = {
     6: "○", 7: "●",    # Circle (속빈/채운)
     4: "□", 5: "■",    # Square
@@ -489,7 +407,7 @@ MARKER_SYMBOL_MAP = {
     "◁": "◁", "◀": "◀",
     "▷": "▷", "▶": "▶",
     # [수정 - 버그] "오각형이 그려지지 않음" - Pentagon(pt 14/15) 추가 때
-    # MARKER_Y_OFFSET/_SCREEN에는 14/15 항목을 넣었지만 정작 이 dict(어떤
+    # 다른 보정 테이블에는 14/15 항목을 넣었지만 정작 이 dict(어떤
     # marker_shape가 "유효"한지 판단하는 기준)에는 빠뜨렸음 - legend 아이콘이
     # 그 자리에서 아예 안 그려질 뿐 아니라(if marker_shape in
     # MARKER_SYMBOL_MAP 검사), PIP 인셋의 자체 marker 오버레이도 같은
@@ -498,76 +416,6 @@ MARKER_SYMBOL_MAP = {
     # ⬟(U+2B1F, 채운 오각형) 유니코드로 추가.
     14: "⬠", 15: "⬟",  # Pentagon (속빈/채운)
 }
-# Legend 샘플선 위 마커 기호의 수직 보정치(ROW_H 배수, +면 위로/-면 아래로).
-# 세모류(△▲▽▼)는 잉크 무게중심이 위/아래로 치우쳐 있어 "center" 정렬만으로는
-# 샘플선 대비 어긋나 보임 - 실측(마커 전체 종류를 그려서 비교)으로 보정.
-# [수정 - 사용자 재지적, 원격(리눅스) 세션에서 대체 측정] "원조차 legend에서
-# 중심이 안 맞아 보인다"는 재지적 - 지금까지 이 dict가 세모류(8/9/10/11)만
-# 다루고 원/사각형/마름모/십자/별/좌우세모는 보정 0(그대로 center)이었던 게
-# 원인일 가능성이 큼. Windows 화면 캡처가 막혀 있어(e30e5e8 참고) 대신
-# gnuplot(pdfcairo, print 경로와 동일 렌더러)+PyMuPDF로 각 기호를 큰 폰트
-# (40pt)로 그려 실제 잉크 픽셀 bbox를 기준선과 직접 비교 측정함(DejaVu Sans
-# 대체 폰트 - Malgun Gothic 실측 아님, 아래 참고). 결과: 원/사각형/위세모는
-# 거의 동일하게 폰트 크기의 약 7.8%만큼, 마름모/아래세모/좌우세모는 약
-# 7.5%, "+"는 약 4%, "★"는 약 1.3% 잉크 중심이 기준선보다 아래로 치우쳐
-# 있었음 - 세모 전용이 아니라 이 폰트가 "center" 정렬 자체를 텍스트 베이스라인
-# 기준으로 계산하고 도형 글자의 실제 잉크는 그 위쪽에 쏠려 그려지는, 글꼴
-# 전반에 걸친 현상으로 보임(fitz/PIL로 픽셀 직접 측정, 재현 가능한 스크립트로
-# 확인 - /tmp 스크래치패드에 보존). 기존에 이미 실측 검증된 세모(8/9/10/11)
-# 값은 건드리지 않고, 지금까지 보정이 아예 없던(0.0) 기호에만 이 측정을
-# 반영해 추가한다.
-# [주의 - 미검증] 이 값들은 폰트(Malgun Gothic 아님)와 터미널(pdfcairo -
-# print/save 경로와는 동일하지만 화면 windows 터미널과는 다름)이 실제 운영
-# 환경과 달라 근사치다. print/save 출력에서 실제로 보고 눈에 띄게 벗어나면
-# 값을 조정해야 할 수 있음 - 방향(항상 양수=위로 당김)과 대략적 크기(세모와
-# 비슷한 수준)는 신뢰할 만하나 정확한 소수점까지는 Windows 재확인 필요.
-MARKER_Y_OFFSET = {
-    8: 0.08, 9: 0.08, 10: 0.10, 11: 0.18,
-    6: 0.08, 7: 0.08,      # Circle
-    4: 0.08, 5: 0.08,      # Square
-    12: 0.075, 13: 0.075,  # Diamond
-    1: 0.04,                # Cross(+)
-    3: 0.01,                # Star
-    14: 0.075, 15: 0.075,  # Pentagon - [추가] 아직 실측 전, Diamond와 비슷한 크기의
-                            # 닫힌 다각형이라 같은 값을 임시로 사용(재보고 있으면 조정)
-    "◁": 0.075, "◀": 0.075, "▷": 0.075, "▶": 0.075,  # Tri-Left/Right
-}
-# [수정 - 사용자 재보고, "반대 방향" 가정이 틀렸음을 실측으로 확인] 예전
-# 주석(과 세모류 값 8:0.05/9:0.00/10:-0.15/11:-0.10)은 "화면은 pngcairo와
-# 기준선 방향이 반대"라는 가정 하에 나온 것이었는데, 실제 Windows 화면
-# 실측 재보고 결과 이 가정 자체가 틀렸던 것으로 확인됨: "역세모(▽▼,
-# 10/11)는 중심선 아래로 나타남(뚜렷하게), 정세모(△▲, 8/9)도 아주 약간
-# 아래로 처짐, 네모도 아래로 약간 처짐" - 전부 "아래로 처짐(=더 위로
-# 당겨야 함=양수 보정 필요)" 방향이라, print와 정확히 같은 방향(반대 아님).
-# 세모류를 포함해 전부 원(화면에서 유일하게 확인된 기준점 0.12) 대비
-# print 실측값의 상대 비율로 다시 비례(1.5배) 환산 - 역세모(0.10~0.18)가
-# 정세모(0.08)보다 더 큰 보정이 필요하다는 print의 상대적 크기 관계도
-# "역세모가 더 심하게 처진다"는 이번 보고와 일치함. 네모는 원과 print
-# 값이 같은데도 "약간 더 처짐"이 보고돼 원보다 살짝 더 준다. 나머지
-# (마름모/+/★/좌우세모)는 아직 화면 확인 전이라 이전 비례값 유지.
-MARKER_Y_OFFSET_SCREEN = {
-    8: 0.10, 9: 0.08,       # Triangle(정세모) - "아주 약간 처짐" 정도만 소폭 상향
-    # [수정 - 사용자 재보고] "네모/다이아몬드/역세모가 중심선보다 약간
-    # 위로 나타남(font=9, 12 둘 다 동일), font=12는 circle도 아주 약간
-    # 높게 나타남" - "+면 위로" 관례상 위로 떠 보이면 값을 줄여야(덜
-    # 당겨야) 한다 - 네 값 모두 소폭(0.02) 하향.
-    10: 0.07, 11: 0.11,     # Tri-Down(역세모)
-    6: 0.10, 7: 0.10,       # Circle
-    4: 0.07, 5: 0.07,       # Square
-    12: 0.09, 13: 0.09,     # Diamond
-    1: 0.06,                 # Cross(+) - 아직 화면 미확인
-    3: 0.02,                 # Star - 아직 화면 미확인
-    14: 0.09, 15: 0.09,     # Pentagon - 아직 화면 미확인, Diamond와 같은 값 임시 사용
-    "◁": 0.11, "◀": 0.11, "▷": 0.11, "▶": 0.11,  # Tri-Left/Right - 아직 화면 미확인
-}
-# 위와 같은 이유로, 기호별 em-box 잉크 크기 차이를 보정하는 폰트 크기 배율
-# (1.0=그대로). "+"(pointtype 1)는 원/사각형/별표보다 훨씬 얇고 작게 그려져서
-# 눈에 띄게 작아 보인다는 피드백으로 확대. [주의] 이 dict는 legend 안
-# 유니코드 글자 기호(MARKER_SYMBOL_MAP, "with points"가 아니라 폰트로
-# 그리는 별개 경로)에만 쓰인다 - 실제 curve 위 marker(gnuplot 네이티브
-# "with points pt N ps ...")의 크기 보정은 아래 MARKER_NATIVE_PS_SCALE로
-# 완전히 분리돼 있다(두 렌더링 경로 자체가 다르므로 보정값도 서로 다름).
-MARKER_SIZE_SCALE = {1: 1.8}
 # [추가 - 사용자 보고 버그, 실측으로 확인] "PIP 붉은 세모 marker 크기가
 # main-plot과 거의 동일한데(PIP legend 안에서는 작게 나옴), 검은 원
 # marker는 줄어든 듯" - 실제 gnuplot 네이티브 pointtype을 같은 ps=3으로
@@ -643,6 +491,34 @@ def _fmt_pointtype(v):
         return s
     except (TypeError, ValueError):
         return f'"{s}"'
+
+
+# [추가 - 사용자 요청] "marker 크기 Auto - 기본 M을 Auto로, font 크기에
+# 비례" - curve 위 marker는 gnuplot 네이티브 point(ps 1 = 약 6pt, 터미널
+# 폰트와 무관한 절대 크기)라 Legend Font를 키워도 그대로였음. Size=Auto
+# (CurveDefinition.marker_size=None)면 Legend Font 크기에 비례시킨다 -
+# 기본 9pt에서 1.0(=M)이므로 기본 조건의 결과는 예전 M과 동일.
+AUTO_MARKER_BASE_FONT_PT = 9.0
+
+
+def _auto_marker_size(legend_size):
+    try:
+        pt = float(legend_size or AUTO_MARKER_BASE_FONT_PT)
+    except (TypeError, ValueError):
+        pt = AUTO_MARKER_BASE_FONT_PT
+    return min(max(pt / AUTO_MARKER_BASE_FONT_PT, 0.3), 4.0)
+
+
+def _effective_marker_size(curve, legend_size):
+    """curve.marker_size(XS~XL 배율)를 돌려주되, None(Auto)이면 Legend
+    Font 크기 비례값(_auto_marker_size)을 쓴다."""
+    ms = getattr(curve, "marker_size", 1.0)
+    if ms is None:
+        return _auto_marker_size(legend_size)
+    try:
+        return float(ms) or 1.0
+    except (TypeError, ValueError):
+        return 1.0
 
 
 PRINT_FONT_SCALE = 1.60     # [수정 - 버그] "PDF 그림에서 font size가 plot 대비 너무 작음(폰트
@@ -791,7 +667,7 @@ class CurveDefinition:
     legend1_order: int = 0
     legend2_order: int = 0
     marker_shape: int | str | None = None  # gnuplot pointtype 번호 또는 유니코드 문자(Tri-Left/Right) (None = 마커 없음)
-    marker_size: float = 1.0         # gnuplot pointsize
+    marker_size: float | None = None  # gnuplot pointsize 배율 (None = Auto: Legend Font 비례, 9pt=1.0)
     marker_max_count: int | None = None  # None = Auto(20~30개 근처로 자동 계산)
     # [추가 - 요청] "Cubic Spline" - 팝업에 별도 칸을 새로 넣을 자리가 없어서
     # (요청: "선택된 커브에 대해 check box로 지정") 이 curve 자신의 데이터에
@@ -2029,7 +1905,7 @@ class GnuplotGenerator:
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
                             axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None,
                             align="Auto", fmt=None, box_w_pct_override=None, box_h_pct_override=None,
-                            axis_x_span=None, axis_y_span=None, compact=False, marker_size_factor=1.0):
+                            axis_x_span=None, axis_y_span=None, compact=False, marker_ps_map=None):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -2863,97 +2739,33 @@ class GnuplotGenerator:
                 f"to graph {sample_x2:.4f},{row_y:.4f} nohead front "
                 f"lc rgb \"{color}\" lw {lw2}{dt_clause}"
             )
-            # [추가] 마커가 설정된 curve는 샘플선 중앙에 마커 모양(유니코드 기호)을
-            # 같이 찍어서, legend만 보고도 이 curve에 마커가 있는지 알 수 있게 함
+            # [추가] 마커가 설정된 curve는 샘플선 중앙에 마커를 같이 찍어서,
+            # legend만 보고도 이 curve에 마커가 있는지 알 수 있게 함
+            # [수정 - 사용자 보고 버그] "SAVE된 이미지(png/pdf)·화면 모두 curve
+            # 위 marker가 legend marker보다 작게 그려짐" - 예전엔 legend
+            # 마커를 유니코드 도형 글자(○△□...)로 legend 폰트 크기에 맞춰
+            # 찍었고(폰트 비례), curve 위 마커는 gnuplot 네이티브 point(ps,
+            # 폰트와 무관한 절대 크기 - ps 1 = 약 6pt)라 두 렌더링 경로 자체가
+            # 달라 크기가 어긋났음(도형별/폰트별 보정 테이블로 계속 맞춰 왔지만
+            # Legend Font를 키우면 다시 벌어짐). legend 마커도 curve와 똑같은
+            # 네이티브 point("set label ... point pt N ps S")로 찍고 ps도 curve
+            # 실제 값을 그대로 써서, 두 크기가 정의상 항상 같게 한다.
             marker_shape = getattr(curve, "marker_shape", None)
             if marker_shape in MARKER_SYMBOL_MAP:
                 sample_mid_x = (sample_x1 + sample_x2) / 2
-                # [수정] "center" 정렬은 폰트의 cap-height 기준 중심에 맞추는데,
-                # 세모(△▲▽▼) 같은 기호는 실제 잉크(도형)의 무게중심이 위/아래로
-                # 치우쳐 있어서 그 기준으로는 샘플선 대비 위 또는 아래로 치우쳐
-                # 보이는 문제가 있었음(위쪽 세모는 위로, 아래쪽 세모는 아래로) -
-                # 기호별로 작은 보정치를 둬서 샘플선에 시각적으로 맞춘다.
-                # [추가] 화면(Interactive, windows 터미널)은 pngcairo와 텍스트
-                # 기준선 방향이 달라서, 위 보정치(pngcairo 기준)를 그대로 쓰면
-                # 세모가 반대로 어긋남(실측: 위쪽 세모가 화면에서는 오히려
-                # 아래로, 아래쪽 세모는 위로) - 화면 전용 MARKER_Y_OFFSET_SCREEN을
-                # 쓴다.
-                # [수정 - 사용자 재보고] "circle외에는 조금씩 조정 필요함" -
-                # 예전엔 세모류만 실측값이 있고 나머지 전부 "0.12 하나로
-                # 뭉뚱그림"이었는데, 위 MARKER_Y_OFFSET_SCREEN에 도형별
-                # 근사값을 채워 넣었으므로 이제 "+0.12" 없이 그 값을 그대로
-                # 쓴다(기본값 0.12는 미등록 기호에 대한 안전한 폴백일 뿐).
-                if is_print_mode:
-                    _marker_offset = MARKER_Y_OFFSET.get(marker_shape, 0.0)
-                else:
-                    _marker_offset = MARKER_Y_OFFSET_SCREEN.get(marker_shape, 0.12)
-                # [추가 - 사용자 보고 버그] "Courier New, Consolas 등에서는
-                # 네모가 중심 위로 올라감(legend에서만)" - 위 오프셋들은
-                # Malgun Gothic 기준 실측값이라, 폰트마다 다른 "center"
-                # 정렬 기준(베이스라인 메트릭) 대비 실제 글리프 위치 차이를
-                # 반영 못 함(고정폭 폰트일수록 이 차이가 큼) - 기준 폰트
-                # 대비 이 문자의 잉크 수직 중심 차이를 측정해 보정한다.
-                _marker_offset += _marker_font_y_delta_rowh(
-                    MARKER_SYMBOL_MAP[marker_shape], font_name, _legend_tuning["row_mult"]
-                )
-                symbol_y = row_y + _marker_offset * ROW_H
-                # [추가] 유니코드 기호마다 글자 em-box 안에 그려지는 잉크 크기가
-                # 서로 달라서(예: "+"는 원/사각형보다 훨씬 작고 얇게 그려짐),
-                # 같은 font_pt로 찍어도 시각적 크기가 들쭥날쭥해 보이는 문제 -
-                # 기호별 배율을 둬서 시각적 크기를 서로 맞춘다.
-                # [수정 - 사용자 요청] "in-plot marker 크기가 인셋 크기 비율을
-                # 반영해야" - curve 위 marker(ps)는 이제 인셋 크기(size_w/
-                # size_h)에 비례해 줄어드는데(_render_pip_inset의
-                # marker_size_factor로 여기 전달), 이 legend 기호는 여전히
-                # font_pt(폰트 축소 배율 기준)만 따라가면 서로 다시 어긋나
-                # 보일 수 있어(이전에 이미 한 번 고쳤던 "legend와 curve
-                # marker 크기가 다르다" 문제 재발 방지) 같은 배율을 곱한다
-                # (텍스트 자체 크기(font_pt)는 안 건드림 - 가독성 유지).
-                # [수정 - 사용자 보고 버그, 전체 재검토] "in-plot curve의
-                # 마커 크기가 shape마다 legend 대비 제각각임(원은 legend보다
-                # 작게, 세모는 legend보다 크게)" - 근본 원인: 이 기호는
-                # marker_size_factor를 곱한 뒤 아래에서 "절대 pt 하한(5)"으로
-                # 눌렀는데, curve 쪽 marker(ps, _render_pip_inset의
-                # _marker_ps_scale)는 "원래 크기 대비 최소 30% 비율" 하한을
-                # 쓴다 - 서로 다른 종류의 하한(절대값 vs 비율)이라, 작은
-                # 인셋에서 어느 한쪽만 먼저 하한에 걸리면(도형마다 원래
-                # 크기가 달라 하한에 걸리는 시점도 달라짐) 도형별로 legend
-                # 대비 curve 크기가 서로 다른 방향/정도로 어긋났음. curve와
-                # 같은 "최소 30% 비율" 하한으로 통일한다(marker_size_factor
-                # 자체를 0.3 밑으로는 안 내려가게) - 그래도 극단적으로 작은
-                # 경우를 대비해 최후 판독 안전장치로 3pt 절대 하한만 남긴다
-                # (이전 5pt보다 낮춤 - 5pt 자체가 비율 하한과 어긋나는 또
-                # 다른 기준점이 되지 않도록).
-                # [수정 - 사용자 보고 버그] "legend 내 marker 크기가 화면
-                # plot의 크기보다 작게 나타남" - 여기까지는 legend 기호
-                # 크기가 legend 폰트 크기·도형별 보정값·(PIP 인셋 축소용)
-                # marker_size_factor로만 정해지고, 정작 사용자가 Marker
-                # Settings에서 고른 크기(S/M/L/XL - 실제 curve 위 마커의
-                # ps를 그대로 곱하는 그 배율, curve.marker_size)는 전혀 반영
-                #되지 않고 있었음 - curve를 "M"(배율 1.0, 지금까지 이 공식이
-                # 맞춰져 있던 기준값) 말고 L/XL로 키우면 실제 마커는 커지는데
-                # legend 기호만 그대로라 legend가 상대적으로 작아 보였음
-                # (Template Load로 자주 눈에 띈 것은 저장된 템플릿들이 M이
-                # 아닌 크기를 쓰는 경우가 많았을 뿐, 첫 그리기에서도 M이 아닌
-                # 크기를 고르면 동일하게 나타나는 일반 버그).
-                _curve_marker_size = getattr(curve, "marker_size", 1.0) or 1.0
-                # [추가 - 사용자 보고 버그] "맑은 고딕은 marker가 같은데
-                # Times New Roman은 legend에서 작아짐" - MARKER_SIZE_SCALE
-                # 자체가 Malgun Gothic 기준 실측값이라, Legend Font를 다른
-                # 폰트로 바꾸면 같은 유니코드 도형 문자라도 실제 그려지는
-                # 잉크 크기가 달라 작게(또는 크게) 보임 - _marker_font_size_
-                # ratio로 그 차이를 보정한다(Malgun Gothic이면 1.0, 측정
-                # 불가한 폰트도 안전하게 1.0).
-                _font_size_ratio = _marker_font_size_ratio(MARKER_SYMBOL_MAP[marker_shape], font_name)
-                symbol_pt = (
-                    _label_font_pt * MARKER_SIZE_SCALE.get(marker_shape, 1.0)
-                    * max(marker_size_factor, 0.3) * _curve_marker_size * _font_size_ratio
-                )
-                symbol_pt = max(symbol_pt, 3.0)
+                _mk_ps = (marker_ps_map or {}).get(idx)
+                if _mk_ps is None:
+                    _mk_ps = (_effective_marker_size(curve, legend_size) * line_scale
+                              * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0))
+                # curve 위 세모 마커와 같은 화면 전용 중심 보정(MARKER_Y_SHIFT_PER_PS
+                # 는 graph 좌표 비율 기준 계수라 그대로 곱하면 됨).
+                symbol_y = row_y
+                if (fmt or "").lower() == "interactive":
+                    symbol_y += MARKER_Y_SHIFT_PER_PS.get(marker_shape, 0.0) * _mk_ps
                 lines.append(
-                    f'set label {id_offset + 5000 + row_i + 1} "{MARKER_SYMBOL_MAP[marker_shape]}" '
-                    f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front '
-                    f'font "{font_name},{max(int(round(symbol_pt)), 3)}" textcolor rgb "{color}"'
+                    f'set label {id_offset + 5000 + row_i + 1} "" '
+                    f'at graph {sample_mid_x:.4f},{symbol_y:.4f} front '
+                    f'point pt {_fmt_pointtype(marker_shape)} ps {_mk_ps:.4g} lc rgb "{color}"'
                 )
             lbl_text, lbl_enh = self._render_text(_capped_titles[id(curve)])
             lines.append(
@@ -4503,7 +4315,7 @@ class GnuplotGenerator:
                 _y_bounds = (_y2_min_val, _y2_max_val) if is_y2 else (_y1_min_val, _y1_max_val)
                 marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, is_log_x, shared_x_range=effective_shared_range, y_bounds=_y_bounds)
                 if marker_pts:
-                    marker_size = getattr(curve, "marker_size", 1.0) * line_scale * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
+                    marker_size = _effective_marker_size(curve, getattr(plotdef, "legend_size", None)) * line_scale * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
                     _y_shift = self._marker_y_shift_for_curve(plotdef, marker_shape, is_y2, marker_size, fmt)
                     if _y_shift:
                         marker_pts = [(px, py + _y_shift) for px, py in marker_pts]
@@ -4576,7 +4388,7 @@ class GnuplotGenerator:
         # 버려짐) 아무 영향 없음.
         return cmd_list
 
-    def _curve_cmd_list_for(self, curves, fmt, lines=None, y_range=None, y2_range=None):
+    def _curve_cmd_list_for(self, curves, fmt, lines=None, y_range=None, y2_range=None, legend_size=None):
         """[추가 - 요청] "PIP inset이 메인 plot이 아니라 다른(이미 그려진) plot의
         곡선을 보여줄 수 있게" - _build_plot_commands의 curve 루프(경로 계산,
         using 표현식, 색상/dashtype)를 재사용. main_cmd_list(메인과 같은
@@ -4640,7 +4452,7 @@ class GnuplotGenerator:
                 target = curve.marker_max_count if is_manual_count else 25
                 marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, False)
                 if marker_pts:
-                    marker_size = getattr(curve, "marker_size", 1.0) * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
+                    marker_size = _effective_marker_size(curve, legend_size) * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
                     # [추가 - 사용자 보고 버그, 재보고로 재보정] 위
                     # MARKER_Y_SHIFT_PER_PS/_marker_y_shift_for_curve 참고 -
                     # override curve(PIP 인셋 등)에도 main과 동일한 세모
@@ -5440,7 +5252,7 @@ class GnuplotGenerator:
                 # 구간을 나누는 빈 줄)에서 실제 좌표 줄만 세어 대체한다.
                 _n_kept = sum(1 for _l in _out_lines if _l)
                 _every = max(_n_kept // 10, 1)
-                _ps = (getattr(curve, "marker_size", 1.0) or 1.0) * MARKER_NATIVE_PS_SCALE.get(_marker_shape, 1.0) * marker_scale
+                _ps = _effective_marker_size(curve, getattr(plotdef, "legend_size", None)) * MARKER_NATIVE_PS_SCALE.get(_marker_shape, 1.0) * marker_scale
                 fragments.append(
                     f'"{_tmp_name}" using {_tx}:{_ty} every {_every} notitle axes {axis_spec} '
                     f'with points pt {_fmt_pointtype(_marker_shape)} ps {_ps:.3f} lc rgb "{color}"'
@@ -5474,8 +5286,12 @@ class GnuplotGenerator:
                     _lname = (_lcurve.title or "").strip()
                     if _lname:
                         _l_linestyle = _lcurve.linestyle or DEFAULT_LINESTYLES[_ci % len(DEFAULT_LINESTYLES)]
+                        _l_shape = getattr(_lcurve, "marker_shape", None)
+                        # legend 마커는 curve 위 마커(위 _ps)와 같은 ps의 네이티브 point
+                        _l_ps = (_effective_marker_size(_lcurve, getattr(plotdef, "legend_size", None))
+                                 * MARKER_NATIVE_PS_SCALE.get(_l_shape, 1.0) * marker_scale)
                         _titled.append((_lcurve.color or DEFAULT_COLORS[_ci % len(DEFAULT_COLORS)], _lname,
-                                        getattr(_lcurve, "marker_shape", None), _l_linestyle))
+                                        (_l_shape, _l_ps), _l_linestyle))
                 _n_rows = len(_titled)
                 if _n_rows:
                     # [수정 - 사용자 지적] "main legend에서 이미 다 설계
@@ -5778,11 +5594,11 @@ class GnuplotGenerator:
                         fragments.append(f'$PipFoldLegSmp{_li} using 1:2 notitle axes x1y1 with lines lw 1.2 lc rgb "{_lcolor}"{_l_dash_clause}')
                     if marker_on:
                         for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle, _row_sx1, _row_sx2) in enumerate(_leg_rows):
-                            _sym = MARKER_SYMBOL_MAP.get(_lmarker)
-                            if not _sym:
+                            _l_shape, _l_ps = _lmarker
+                            if _l_shape not in MARKER_SYMBOL_MAP:
                                 continue
-                            fragments.append(f'$PipFoldLegMk{_li} << EOD\n{_mk_x:.6g} {_ly:.6g} "{_sym}"\nEOD')
-                            fragments.append(f'$PipFoldLegMk{_li} using 1:2:3 notitle axes x1y1 with labels center font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
+                            fragments.append(f'$PipFoldLegMk{_li} << EOD\n{_mk_x:.6g} {_ly:.6g}\nEOD')
+                            fragments.append(f'$PipFoldLegMk{_li} using 1:2 notitle axes x1y1 with points pt {_fmt_pointtype(_l_shape)} ps {_l_ps:.3f} lc rgb "{_lcolor}"')
                     for _li, (_lx, _ly, _esc, _lcolor, _lmarker, _mk_x, _llinestyle, _row_sx1, _row_sx2) in enumerate(_leg_rows):
                         fragments.append(f"$PipFoldLeg{_li} << EOD\n{_lx:.6g} {_ly:.6g} \"{_esc}\"\nEOD")
                         fragments.append(f'$PipFoldLeg{_li} using 1:2:3 notitle axes x1y1 with labels {_justify} font "Malgun Gothic,{_font_leg:.1f}" textcolor rgb "{_lcolor}"')
@@ -5944,6 +5760,7 @@ class GnuplotGenerator:
                 _override_curves, fmt, lines=lines,
                 y_range=(pip.get("ymin"), pip.get("ymax")),
                 y2_range=(pip.get("y2min"), pip.get("y2max")),
+                legend_size=getattr(plotdef, "legend_size", None),
             )
         elif _pip_source == "pltfile" and str(pip.get("pltfile_path", "")).strip():
             # [수정 - 사용자 보고 버그] "in-plot으로 .plt를 지정하면 그 파일이
@@ -7002,6 +6819,19 @@ class GnuplotGenerator:
             _pip_legend_axis_w_in = max((_inset_rmargin - _inset_lmargin) * _pip_canvas_w_in, 0.3)
             _pip_legend_axis_h_in = max((_inset_tmargin - _inset_bmargin) * _pip_canvas_h_in, 0.3)
             curve_index_map = {id(c): i for i, c in enumerate(_inset_curves)}
+            # [수정 - 사용자 보고 버그] "legend marker와 curve marker 크기가
+            # 다름" - 인셋 legend 마커는 인셋 curve 위 마커의 "실제" ps(아래
+            # _scale_marker_ps가 main_cmd_list의 "$MarkerN ... ps X"에
+            # _marker_ps_scale을 곱한 값)를 curve 순번(N)으로 그대로 가져다
+            # 쓴다(main의 line_scale/Auto 크기까지 이미 반영된 값).
+            _inset_marker_ps = {}
+            for _mc in main_cmd_list:
+                _mm = re.match(r"\$Marker(\d+) .* with points .* ps ([\d.]+)", _mc)
+                if _mm:
+                    try:
+                        _inset_marker_ps[int(_mm.group(1))] = float(_mm.group(2)) * _marker_ps_scale
+                    except ValueError:
+                        pass
             # [수정 - 사용자 요청] "in-plot marker 크기가 인셋 크기 비율을
             # 반영해야" - 위(legend_on 여부와 무관하게 계산해 둔) _size_factor를
             # legend 쪽 marker 기호에도 그대로 써서, curve 위 marker와
@@ -7016,7 +6846,7 @@ class GnuplotGenerator:
                 curve_index_map, plotdef.legend_font,
                 axis_w_in=_pip_legend_axis_w_in, legend_size=float(plotdef.legend_size or 9),
                 axis_h_in=_pip_legend_axis_h_in, fmt=fmt, compact=True,
-                marker_size_factor=_size_factor,
+                marker_ps_map=_inset_marker_ps,
             )
 
         # [수정 - 버그] 메인 plot이 y2축 미사용시 넣어두는 "NaN axes x1y2
