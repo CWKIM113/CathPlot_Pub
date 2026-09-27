@@ -4761,9 +4761,11 @@ class GnuplotGenerator:
         # (cathplot_gui.py가 Legend1 Curves 팝업에서 독립적으로 관리)로 따로
         # 정렬한다. function_curves는 이 정렬 대상이 아니라(재정렬 UI가 아직
         # 없음) 예전처럼 항상 데이터 curve들 뒤에 그대로 붙인다.
+        # [수정 - 사용자 요청] Legend는 항상 Y1 curve 먼저, 그다음 Y2 - 각 그룹
+        # 안에서는 legend 순서(사용자가 바꾼 순서, 없으면 선택 순서) 유지(안정 정렬).
         group1_curves = sorted(
             [c for c in plotdef.curves if getattr(c, "in_legend1", True)],
-            key=lambda c: getattr(c, "legend1_order", 0)
+            key=lambda c: (getattr(c, "axis", "y1") != "y1", getattr(c, "legend1_order", 0))
         ) + [
             fc for fc in getattr(plotdef, "function_curves", []) if getattr(fc, "in_legend1", True)
         ]
@@ -4783,7 +4785,7 @@ class GnuplotGenerator:
 
         group2_curves = sorted(
             [c for c in plotdef.curves if getattr(c, "legend_group", 2) == 2],
-            key=lambda c: getattr(c, "legend2_order", 0)
+            key=lambda c: (getattr(c, "axis", "y1") != "y1", getattr(c, "legend2_order", 0))
         ) + [
             fc for fc in getattr(plotdef, "function_curves", []) if getattr(fc, "legend_group", 2) == 2
         ]
@@ -7470,7 +7472,9 @@ class GnuplotGenerator:
             # line/marker와 같은 배율(_marker_ps_scale)을 써서 인셋 크기에
             # 비례해 얇아지게 한다.
             self._render_legend_box(
-                lines, _inset_curves, "right top", True, 1.0, 7500,
+                # 메인 legend와 같이 Y1 curve 먼저, 그다음 Y2(각 그룹 안 순서는 유지)
+                lines, sorted(_inset_curves, key=lambda c: getattr(c, "axis", "y1") != "y1"),
+                "right top", True, 1.0, 7500,
                 font_scale, _marker_ps_scale, 1.0, getattr(plotdef, "is_print_mode", False),
                 curve_index_map, plotdef.legend_font,
                 axis_w_in=_pip_legend_axis_w_in, legend_size=float(plotdef.legend_size or 9),

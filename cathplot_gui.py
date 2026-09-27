@@ -3449,6 +3449,22 @@ class CathPlotGUI:
             if _n[0]:
                 _curve.marker_shape, _ = self._resolve_marker_shape(
                     "Auto", _n[1], True, _auto_ranks[_i], excluded_shapes=_excluded_shapes_2d)
+        # [추가 - 사용자 요청] Legend 순서 - Template에 저장된 ▲▼ 순서(legend1/2_
+        # curve_order)를 Batch Set에도 적용(예전엔 화면 Load 때만 복원돼 여기선
+        # 클릭 순서로 나왔음). 키가 정확히 없으면 output_no로 맞추고(Template Load와
+        # 같은 방식), 그래도 없으면 뒤로. Y1 -> Y2 그룹 분리는 gnu_generator가 한다.
+        for _lg, _attr in (("legend1_curve_order", "legend1_order"), ("legend2_curve_order", "legend2_order")):
+            _saved = data.get(_lg) or data.get("curve_order") or []
+            _by_key = {str(k): i for i, k in enumerate(_saved)}
+            _by_no = {}
+            for i, k in enumerate(_saved):
+                try:
+                    _by_no.setdefault(int(str(k).rsplit("||", 1)[1]), i)
+                except (IndexError, ValueError):
+                    pass
+            for _pos, (_key, _curve, _n) in enumerate(curves):
+                _idx = _by_key.get(_key, _by_no.get(_curve.output_no))
+                setattr(_curve, _attr, _idx if _idx is not None else len(_saved) + _pos)
         curves = [c for _key, c, _needs_auto in curves]
 
         head_label_map = {"nohead": "No head", "head": "Forward", "backhead": "Backhead", "heads": "Both heads"}
@@ -6080,6 +6096,9 @@ class CathPlotGUI:
         # (_ordered_selected_keys)를 그대로 따른다.
         recipe = []
         ordered_keys, y1_set, _y2_set = self._ordered_selected_keys()
+        # [추가 - 사용자 요청] legend 순서(▲▼로 바꾼 순서, Y1 -> Y2)도 같이 기록해
+        # Batch Queue에서도 화면과 같은 legend 순서로 그리게 한다.
+        _legend_pos = {k: i for i, k in enumerate(self._legend_ordered_keys("1", ordered_keys))}
         for key in ordered_keys:
             _datfile_for_key, out_no = key.split("||")
             # [추가 - 사용자 보고 크리티컬 버그] "Template load 해서 그리면
@@ -6100,6 +6119,7 @@ class CathPlotGUI:
                 "output_no": int(out_no),
                 "file": _rel_file_for_key,
                 "axis": "y1" if key in y1_set else "y2",
+                "legend_order": _legend_pos.get(key, len(_legend_pos)),
                 # [추가 - 사용자 보고 버그] "변수명(legend)을 수정해서 저장했는데
                 # load하니 원래 이름으로 되돌아감" - 지금까지 이 레시피가
                 # legend 텍스트(사용자가 직접 고친 curve 이름) 자체를 아예
@@ -6294,7 +6314,8 @@ class CathPlotGUI:
             shown = list(_ordered_keys)
             i = shown.index(key)
             j = i + delta
-            if 0 <= j < len(shown):
+            # Legend는 항상 Y1 그룹 -> Y2 그룹이라, 같은 axis 안에서만 순서를 바꾼다.
+            if 0 <= j < len(shown) and ((shown[i] in _y1_set) == (shown[j] in _y1_set)):
                 shown[i], shown[j] = shown[j], shown[i]
             old = self._legend_order.get("1") or []
             self._legend_order["1"] = shown + [k for k in old if k not in shown]
@@ -6668,7 +6689,10 @@ class CathPlotGUI:
         base_set = set(base_keys)
         ordered = [k for k in order if k in base_set]
         ordered += [k for k in base_keys if k not in ordered]
-        return ordered
+        # [수정 - 사용자 요청] "Legend에는 항상 Y1, Y2 순서로 - 각 curve 순서는
+        # 사용자가 바꾼 순서로" - ▲▼로 바꾼 순서도 Y1 그룹 -> Y2 그룹으로 나눈다.
+        y1_set = {k for k, v in self.selected_y1_vars.items() if v.get()}
+        return [k for k in ordered if k in y1_set] + [k for k in ordered if k not in y1_set]
 
     def open_batch_queue_dialog(self):
         dlg = tk.Toplevel(self.root)
@@ -6872,6 +6896,9 @@ class CathPlotGUI:
                     x_output_no=x_output_no,
                     legend_group=int(item.get("legend_group", 2) or 2),
                     in_legend1=item.get("in_legend1", True),
+                    # 화면과 같은 legend 순서(없는 옛 레시피는 레시피 순서 그대로)
+                    legend1_order=int(item.get("legend_order", _idx)),
+                    legend2_order=int(item.get("legend_order", _idx)),
                     marker_shape=_marker_shape,
                     # [수정 - 코드 검토] 위 Batch Set과 동일한 이유로 기본값을
                     # "M" 대신 "Auto"로 맞춤(일관성 - recipe는 보통 화면에서
