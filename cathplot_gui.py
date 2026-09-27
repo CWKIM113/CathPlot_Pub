@@ -13278,7 +13278,7 @@ def _check_gnuplot_installed(root):
                 "gnuplot을 찾을 수 없습니다.\n\n"
                 "CathPlot은 gnuplot 5.0 이상이 설치되어 있어야 정상 동작합니다.\n\n"
                 "설치 방법:\n"
-                "1. http://www.gnuplot.info 에서 Windows용 gnuplot(5.4 이상 권장)을 다운로드\n"
+                "1. http://www.gnuplot.info 에서 Windows용 gnuplot(6.0 이상 권장)을 다운로드\n"
                 "2. 설치 중 'Add application directory to your PATH environment variable'\n"
                 "   옵션을 반드시 체크하세요 (꺼져 있으면 CathPlot이 gnuplot을 못 찾습니다)\n"
                 "3. 설치 후 CathPlot을 다시 시작하세요\n\n"
@@ -13303,7 +13303,7 @@ def _check_gnuplot_installed(root):
                     "gnuplot 버전 확인",
                     f"감지된 gnuplot 버전: {ver}\n\n"
                     "CathPlot은 gnuplot 5.0 이상이 필요합니다. "
-                    "http://www.gnuplot.info 에서 최신 버전(5.4 이상 권장)으로 업데이트해주세요."
+                    "http://www.gnuplot.info 에서 최신 버전(6.0 이상 권장)으로 업데이트해주세요."
                 ))
         except Exception:
             pass  # 버전 확인 실패는 무시 (exe는 이미 찾았으므로 대부분 정상 설치)

@@ -101,6 +101,11 @@ _FONT_FILE_MAP = {
     "times new roman": r"C:\Windows\Fonts\times.ttf",
     "courier new": r"C:\Windows\Fonts\cour.ttf",
     "consolas": r"C:\Windows\Fonts\consola.ttf",
+    # [추가 - 사용자 지적] "맑은고딕 자체가 없는 환경이면?" 대비용 - Legend
+    # Font 선택지로 노출되진 않고(콤보 목록엔 없음), ◁◀▷▶ 폰트 대체 체인
+    # (_char_marker_effective_font)에서만 조회된다. Windows 7+에 로케일과
+    # 무관하게 기본 포함되는 시스템 기호 전용 폰트.
+    "segoe ui symbol": r"C:\Windows\Fonts\seguisym.ttf",
 }
 _font_measure_cache = {}
 
@@ -451,7 +456,12 @@ MARKER_NATIVE_PS_SCALE = {8: 23 / 29, 9: 23 / 29, 10: 23 / 29, 11: 23 / 29}
 #     이 환경 실측값 a=1.01, b=-0.66 사용).
 #   * EMF/SVG: gnuplot이 원래 무게중심 기준으로 그려 보정 불필요(실측 - EMF
 #     MoveTo/LineTo 좌표: 무게중심-선 차이 0.0%(ps 1/2/4), SVG 세모 정의
-#     "M0,-1.33 L-1.33,0.67 L1.33,0.67"의 무게중심 = (0, 0.003)). EPS는 미측정.
+#     "M0,-1.33 L-1.33,0.67 L1.33,0.67"의 무게중심 = (0, 0.003)).
+#   * EPS: PostScript 자체 렌더러(cairo 아님)라 위 pdfcairo 캘리브레이션 값을
+#     그대로 적용하면 오히려 어긋날 수 있어, 실측 없이 보정을 아예 끈다
+#     (_triangle_centroid_up_pt에 fmt="eps"로 넘겨 0을 받음 - 아래 함수 참고).
+#     EPS 자체의 무게중심-선 어긋남 여부/크기는 아직 실측되지 않은 채로 남아
+#     있음 - 필요해지면 EMF/SVG와 같은 방식으로 직접 측정할 것.
 # curve 위 세모는 데이터 좌표로 옮겨야 해서 Y 범위를 직접 입력했을 때만
 # 보정하고(Auto는 범위가 아직 확정 전이라 생략 - 사용자 확인: "auto는 약간
 # 어긋나더라도"), legend 마커는 graph 좌표라 항상 보정한다.
@@ -644,11 +654,28 @@ def _font_supports_char_markers(font_name):
     return result
 
 
+_CHAR_MARKER_FALLBACK_CHAIN = ("Malgun Gothic", "Segoe UI Symbol")
+
+
 def _char_marker_effective_font(font_name):
     """실제로 ◁◀▷▶를 그릴 때 쓸 폰트 - font_name이 이 글리프를 지원하면
-    그대로, 아니면(대부분의 서양 폰트) 검증된 _CHAR_MARKER_FONT로 대체."""
+    그대로, 아니면(대부분의 서양 폰트) 검증된 폰트로 대체.
+    [수정 - 사용자 지적] "맑은고딕 자체가 안 깔려 있는 환경(영문 Windows
+    등)이면?" - 예전엔 대체 후보가 무조건 Malgun Gothic 하나뿐이라, 이
+    폰트마저 없으면(파일이 없어 _font_supports_char_markers가 False를
+    반환해도) 그 판정을 무시하고 검증되지 않은 채로 그냥 내보내 다시
+    깨질 위험이 있었음 - 이제 Malgun Gothic도 지원이 확인 안 되면,
+    Windows 7+에 언어팩과 무관하게 항상 포함되는 시스템 기호 전용 폰트
+    "Segoe UI Symbol"까지 순서대로 시도한다(실측: ◁◀▷▶ 4개 전부 서로
+    다른 bbox로 지원 확인됨). 그래도 전부 실패하면(Windows가 아니거나
+    극단적으로 폰트가 지워진 환경) 검증 불가 상태에서 고를 수 있는 더
+    나은 대안이 없으므로 기존과 같이 Malgun Gothic 이름을 그대로
+    내보낸다(회귀 없음 - 예전에도 이 경우 항상 이 값이었음)."""
     if font_name and _font_supports_char_markers(font_name):
         return font_name
+    for _fallback in _CHAR_MARKER_FALLBACK_CHAIN:
+        if _font_supports_char_markers(_fallback):
+            return _fallback
     return _CHAR_MARKER_FONT
 
 
@@ -706,21 +733,71 @@ def _char_marker_font_pt(ch, ps, font_name=None):
     return max(6.0 * float(ps) * (23 / 29) / _char_marker_ink_ratio(ch, font_name) * _CHAR_MARKER_TERM_FONT_FACTOR, 1.0)
 
 
+# [수정 - 실측으로 발견한 버그] 위 겹쳐쓰기(~) 세로 보정은 cairo(PDF/PNG/JPG/
+# SVG)/postscript(EPS)에서만 제대로 동작함 - windows(화면)/emf 터미널은 겹쳐쓰기를
+# 지원하지 않아 "빈칸 다음에 글자"로 이어 써 버려서, 마커가 글자 폭의 절반만큼
+# 데이터 점 오른쪽으로 밀려 보였음(2D 화면/EMF에서도 그동안 그랬음 - 세 터미널에
+# 같은 스크립트를 그려 확인). 이 터미널들은 글자 하나만 쓰고(가로 중심 정확),
+# 세로는 label offset(문자 단위)으로 보정한다. 터미널별 실측값:
+#   C, C1 : "center" 정렬 시 데이터 점에 맞춰지는 높이 = C + C1/글자pt (label
+#           폰트 em, baseline 위 - gif(libgd)만 글자 크기와 무관한 고정분 C1(pt)이 있음)
+#   H     : offset 1(문자 단위)의 높이(터미널 기본 폰트 em)
+#   fs    : 네이티브 마커(pt 8~11)와 크기를 맞추기 위한 글자 크기 배율(cairo=1)
+# offset(문자) = ((C - 글자 잉크 중심 em) x 글자 pt + C1) / (H x 터미널 폰트 pt).
+# (실측 결과 - 실제 2D 출력에서 ◀ 중심과 데이터 점의 차이: 화면/EMF/GIF 모두 글자
+# 높이의 3~7% 이내, PDF 기준과 같은 수준. 화면은 Windows 글꼴 힌팅 때문에 작은
+# 크기일수록 글자가 더 작아져 Size 1/2/4에서 △ 대비 0.77/1.01/1.22 - 흔히 쓰는
+# 0.5~2 구간에 맞춰 fs=1. GIF(libgd)는 크기와 무관하게 약 1.45배라 fs=0.68.)
+_CHAR_MARKER_PLAIN_TERMS = {
+    "windows": {"C": 0.445, "C1": 0.0, "H": 1.34, "fs": 1.0},
+    "emf": {"C": 0.39, "C1": 0.0, "H": 1.31, "fs": 1.0},
+    # 3D EMF는 네이티브 마커를 _3D_EMF_MARKER_MULT(1/1.56)로 줄여 PDF에 맞추므로
+    # 글자 마커도 그 기준에 맞춰 따로 둠(실측: fs 1.0이면 PDF 대비 0.89배).
+    "emf3d": {"C": 0.39, "C1": 0.0, "H": 1.31, "fs": 1.12},
+    "gif": {"C": -0.055, "C1": 3.0, "H": 1.07, "fs": 0.68},
+}
+
+
+def _char_marker_label_parts(ch, ps, term=None, term_font_pt=11.0, font_name=None):
+    """(label 텍스트, font 절, offset 절). term이 _CHAR_MARKER_PLAIN_TERMS에 있으면
+    글자 하나 + 세로 offset, 없으면(cairo/postscript) 기존 겹쳐쓰기 텍스트."""
+    font = _char_marker_effective_font(font_name)
+    pt = _char_marker_font_pt(ch, ps, font_name)
+    model = _CHAR_MARKER_PLAIN_TERMS.get(term)
+    if not model:
+        return _char_marker_text(ch, font_name), f'font "{font},{pt:.3g}"', ""
+    pt *= model["fs"]
+    dy = (((model["C"] - _char_marker_ink(ch, font_name)[1]) * pt + model["C1"])
+          / (model["H"] * float(term_font_pt)))
+    return ch, f'font "{font},{pt:.3g}"', f" offset 0,{dy:.3f}"
+
+
+def _char_marker_term_vars(term=None, term_font_pt=11.0):
+    """3D 스크립트용 gnuplot 변수 설정문 - 화면 창이 저장 키(P/E 등)로 터미널을
+    바꿔 replot할 때 글자 마커 모양(겹쳐쓰기/글자+offset)도 같이 바뀌게 한다."""
+    model = _CHAR_MARKER_PLAIN_TERMS.get(term)
+    if not model:
+        return "_cpm_plain=0; _cpm_fs=1; _cpm_C=0; _cpm_C1=0; _cpm_k=0"
+    return (f"_cpm_plain=1; _cpm_fs={model['fs']:.4g}; _cpm_C={model['C']:.4g}; "
+            f"_cpm_C1={model['C1']:.4g}; _cpm_k={1.0 / (model['H'] * float(term_font_pt)):.5g}")
+
+
 _CHAR_POINTS_RE = re.compile(
     r'using (\S+)(.*?) with points pt "([' + "".join(_CHAR_MARKERS) + r'])" ps ([\d.eE+-]+)(?: lc rgb "([^"]*)")?'
 )
 
 
-def _char_points_to_labels(cmd):
+def _char_points_to_labels(cmd, term=None, term_font_pt=11.0):
     """plot 절의 'with points pt "◀" ps S' 를 같은 크기의 'with labels'로
     바꾼다(다른 모양/일반 curve 절은 그대로). 생성 단계에서는 계속 ps 형식을
     유지해서(PIP 인셋 ps 축소 등 기존 처리 그대로 재사용), plot 절을 실제로
-    내보내는 곳에서만 이 변환을 적용한다."""
+    내보내는 곳에서만 이 변환을 적용한다. term은 _char_marker_label_parts 참고."""
     def _repl(m):
         using, mid, ch, ps, color = m.groups()
         tc = f' tc rgb "{color}"' if color else ""
-        return (f'using {using}:("{_char_marker_text(ch)}"){mid} with labels center enhanced '
-                f'font "{_CHAR_MARKER_FONT},{_char_marker_font_pt(ch, float(ps)):.3g}"{tc}')
+        text, font_clause, offset_clause = _char_marker_label_parts(ch, float(ps), term, term_font_pt)
+        return (f'using {using}:("{text}"){mid} with labels center enhanced '
+                f'{font_clause}{offset_clause}{tc}')
     return _CHAR_POINTS_RE.sub(_repl, cmd)
 
 
@@ -1215,6 +1292,45 @@ def _3d_marker_clause(style, item, auto_ps=None):
             # 스크립트 앞에서 정의, 창의 E/Ctrl+P 키가 저장하는 동안만 바꿈)
             clause += f" ps {float(marker_size):.4g}*_cp_mk"
     return clause
+
+
+# [수정 - 사용자 확인 버그] "3D의 ◁◀▷▶도 Size가 안 먹음" - 2D와 같은 원인
+# (gnuplot 문자 pointtype은 ps를 무시하고 터미널 폰트 크기로만 그림 - 3D에서
+# ps 0.5/3.0을 실제로 그려 크기가 같음을 확인). 2D(_char_points_to_labels)와
+# 같은 방식으로 이 네 모양만 "with labels"(글자 마커, 색은 tc palette z로
+# 기존 palette 색 그대로)로 그린다. 3D의 네이티브 세모(pt 8~11)는 2D와 달리
+# MARKER_NATIVE_PS_SCALE(23/29)를 안 곱하므로, 같은 Size의 △와 크기를
+# 맞추려고 ps에 29/23을 곱해 환산한다(3D pdfcairo 실측: ps 1/2/4에서 ◀
+# 세로 5.6/11.9/23.8pt vs △ 세로 5.5/11.5/23.5pt). 수식만으로 그리는
+# Function Surface는 글자 열을 줄 데이터가 없어 기존 네이티브 방식 유지.
+_3D_CHAR_MARKER_PS_SCALE = 29 / 23
+
+
+def _3d_char_marker_label_part(src, using_xyz, style, item, auto_ps=None):
+    """item의 마커가 ◁◀▷▶이고 style이 points/linespoints면 그 점들을 그리는
+    splot "with labels" 절을, 아니면 None을 돌려준다."""
+    if style not in ("points", "linespoints"):
+        return None
+    ch = item.get("marker_shape")
+    if ch not in _CHAR_MARKERS:
+        return None
+    ps = float(item.get("marker_size") or auto_ps or 1.0)
+    font_pt = _char_marker_font_pt(ch, ps * _3D_CHAR_MARKER_PS_SCALE)
+    # 글자 모양/크기/세로 보정은 스크립트 변수(_cpm_*, _char_marker_term_vars)로 -
+    # 화면 창에서 저장 키로 터미널을 바꿔 replot해도 그 터미널에 맞게 다시 계산됨.
+    ink_c = _char_marker_ink(ch)[1]
+    return (f'{src} using {using_xyz}:(_cpm_plain ? "{ch}" : "{_char_marker_text(ch)}") notitle '
+            f'with labels center enhanced '
+            f'font sprintf("{_char_marker_effective_font(None)},%g", {font_pt:.4g}*_cpm_fs) '
+            f'offset 0,(_cpm_plain ? ((_cpm_C-{ink_c:.4f})*{font_pt:.4g}*_cpm_fs+_cpm_C1)*_cpm_k : 0) tc palette z')
+
+
+def _3d_points_keyentry(title_clause, pt_clause):
+    """글자 마커(with labels)는 legend 견본이 안 그려져서(실측) points 견본을
+    keyentry로 따로 만든다 - _3d_linespoints_keyentry와 같은 짙은 회색 고정."""
+    if not title_clause or title_clause.strip() == "notitle":
+        return None
+    return f'keyentry with points{pt_clause} lc rgb "#404040" {title_clause}'
 
 
 def _3d_linespoints_keyentry(title_clause, pt_clause, dash_clause):
@@ -1733,6 +1849,19 @@ class GnuplotGenerator:
             if best_dev is None or dev < best_dev:
                 best_j, best_dev = j, dev
         return best_j if best_j is not None else idx
+
+    def _char_marker_term(self, fmt):
+        """2D 출력 형식 -> (◁◀▷▶ 그리기용 터미널 종류, 터미널 기본 폰트 pt) -
+        _char_marker_label_parts 참고. 2D 스크립트는 실행 중 터미널을 바꾸지 않으므로
+        (3D 화면 창의 저장 키 같은 것이 없음) 생성 시점에 형식별로 정한다."""
+        _ov = getattr(self, "_char_marker_term_override", None)
+        if _ov:
+            return _ov
+        f = (fmt or "").lower()
+        if getattr(self, "_eps_out", False):
+            return None, 11.0
+        term = {"interactive": "windows", "emf": "emf", "gif": "gif", "jpg": "gif"}.get(f)
+        return term, float(getattr(self, "_term_font_pt", 11) or 11)
 
     def _marker_y_shift_fn(self, plotdef, marker_shape, is_y2, ps, fmt, axis_h_in):
         """세모 marker를 무게중심 기준으로 옮기는 데이터 좌표 변환 함수(위
@@ -3191,11 +3320,14 @@ class GnuplotGenerator:
                     # 아니면(대부분의 서양 폰트) 안전하게 Malgun Gothic으로
                     # 대체한다 - curve 쪽(_char_points_to_labels)은 이 폰트
                     # 판단 신호(legend_font)가 없어 기존처럼 고정 유지.
+                    # 화면/EMF/GIF는 겹쳐쓰기 대신 글자+offset(_char_marker_label_parts 참고).
+                    _cm_term, _cm_tpt = self._char_marker_term(fmt)
+                    _cm_text, _cm_font, _cm_ofs = _char_marker_label_parts(
+                        marker_shape, _mk_ps, _cm_term, _cm_tpt, font_name)
                     lines.append(
-                        f'set label {id_offset + 5000 + row_i + 1} "{_char_marker_text(marker_shape, font_name)}" '
+                        f'set label {id_offset + 5000 + row_i + 1} "{_cm_text}" '
                         f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front enhanced '
-                        f'font "{_char_marker_effective_font(font_name)},{_char_marker_font_pt(marker_shape, _mk_ps, font_name):.3g}" '
-                        f'textcolor rgb "{color}"'
+                        f'{_cm_font}{_cm_ofs} textcolor rgb "{color}"'
                     )
                 else:
                     lines.append(
@@ -4809,8 +4941,9 @@ class GnuplotGenerator:
         if not uses_y2 and cmd_list:
             cmd_list.append("NaN axes x1y2 notitle")
 
+        _cm_term, _cm_tpt = self._char_marker_term(fmt)
         for i, cmd in enumerate(cmd_list):
-            cmd = _char_points_to_labels(cmd)
+            cmd = _char_points_to_labels(cmd, _cm_term, _cm_tpt)
             if i != len(cmd_list) - 1: cmd += ", \\"
             lines.append(cmd)
 
@@ -4825,7 +4958,8 @@ class GnuplotGenerator:
         # 버려짐) 아무 영향 없음.
         return cmd_list
 
-    def _curve_cmd_list_for(self, curves, fmt, lines=None, y_range=None, y2_range=None, legend_size=None):
+    def _curve_cmd_list_for(self, curves, fmt, lines=None, y_range=None, y2_range=None, legend_size=None,
+                             axis_h_in=None):
         """[추가 - 요청] "PIP inset이 메인 plot이 아니라 다른(이미 그려진) plot의
         곡선을 보여줄 수 있게" - _build_plot_commands의 curve 루프(경로 계산,
         using 표현식, 색상/dashtype)를 재사용. main_cmd_list(메인과 같은
@@ -4841,7 +4975,8 @@ class GnuplotGenerator:
         인셋은 이후 별도로 인셋 크기에 맞게 마커를 다시 골라 재생성하므로
         여기서는 "일단 있게" 만드는 것으로 충분함). lines를 주면 마커
         데이터블록을 그 lines 끝에 덧붙인다(안 주면 마커 자체를 생략 -
-        기존 호출부 보호)."""
+        기존 호출부 보호). axis_h_in은 세모 마커의 저장 이미지용 무게중심
+        보정(아래 marker 루프 참고)에만 쓰는 이 인셋의 물리적 높이(인치)."""
         cmd_list = []
         for i, curve in enumerate(curves):
             color = curve.color or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
@@ -4890,10 +5025,33 @@ class GnuplotGenerator:
                 marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, False)
                 if marker_pts:
                     marker_size = _effective_marker_size(curve, legend_size) * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
-                    # [수정 - 사용자 요청] 세모 무게중심 맞추기(_triangle_centroid_up_pt)
-                    # - 화면은 gnuplot 자체가 무게중심 기준이라 보정 불필요(예전의
-                    # bbox 중심 보정 제거). 저장 이미지용 보정은 이 경로(PIP 인셋의
-                    # 다른 plot 곡선)엔 인셋 축 높이 정보가 없어 생략.
+                    # [수정 - 코드 검토 재확인, 사용자 재지적] 세모 무게중심 맞추기
+                    # (_triangle_centroid_up_pt) - 화면은 gnuplot 자체가 무게중심
+                    # 기준이라 보정 불필요(예전의 bbox 중심 보정 제거). 저장
+                    # 이미지(pdf/png/jpg)용 보정은 예전엔 "이 경로(PIP 인셋의 다른
+                    # plot 곡선)엔 인셋 축 높이 정보가 없어 생략"이었으나, 호출부
+                    # (_render_pip_inset)가 이제 이 인셋의 물리 높이(axis_h_in,
+                    # 인치)를 curve 목록 확정 "전"에 먼저 계산해 넘겨주므로, main
+                    # curve(_marker_y_shift_fn)와 같은 공식으로 데이터 y좌표
+                    # 자체를 미리 옮겨 보정한다(이 함수는 $MarkerN을 리터럴
+                    # 좌표로 직접 쓰므로 gnuplot 쪽 함수가 아니라 여기서 직접
+                    # 더함). main과 동일하게 Y 범위가 확정돼 있을 때만(Auto면
+                    # y_range/y2_range의 min/max가 비어 있어 자동으로 생략) -
+                    # 이 함수엔 plotdef가 없어 log 축 여부를 판별할 수 없으므로
+                    # 선형으로만 처리한다(세모 중심을 1pt 안팎으로 옮기는 미세
+                    # 보정이라 log축이어도 육안 영향은 미미함).
+                    _tri_fmt = "eps" if getattr(self, "_eps_out", False) else fmt
+                    _up_pt = _triangle_centroid_up_pt(marker_shape, marker_size, _tri_fmt)
+                    _mk_rng = y2_range if is_y2 else y_range
+                    if _up_pt and axis_h_in and axis_h_in > 0 and _mk_rng:
+                        _rlo, _rhi = _mk_rng
+                        if str(_rlo).strip() and str(_rhi).strip():
+                            try:
+                                _rlo, _rhi = float(_rlo), float(_rhi)
+                                _dy = _up_pt / (axis_h_in * 72.0) * (_rhi - _rlo)
+                                marker_pts = [(px, py + _dy) for px, py in marker_pts]
+                            except (TypeError, ValueError):
+                                pass
                     dbname = f"$Marker{i}"
                     block = [f"{dbname} << EOD"]
                     block.extend(f"{px:.10g} {py:.10g}" for px, py in marker_pts)
@@ -6148,6 +6306,77 @@ class GnuplotGenerator:
         # 인셋 전용 독립 토글(pip_grid_on_var)을 추가한다. 간단히 표시가
         # 켜지면 이 값과 무관하게 항상 꺼짐(위 _minimal이 우선).
         _pip_grid_on = bool(pip.get("grid_on", True)) and not _minimal
+
+        # [추가 - 사용자 요청 검토] override curve(다른 plot의 곡선을 그대로
+        # 보여주는 PIP)의 세모 마커도 저장 이미지(pdf/png/jpg)에서 무게중심
+        # 보정(_triangle_centroid_up_pt)을 받을 수 있도록, 이 인셋의 물리적
+        # 높이(인치)를 curve 목록을 확정하기 "전에" 먼저 계산해 둔다 - 예전엔
+        # 이 계산(호스트 축 프레임 찾기 + 크기 환산 - 지금 여기로 끌어올림)이
+        # main_cmd_list 확정 "후"에만 있어서 override 경로(_curve_cmd_list_for
+        # 호출 시점)엔 넘겨줄 수 없었음(그래서 "인셋 축 높이 정보가 없어 생략"
+        # 상태였음). 이 계산 자체는 pip 설정값과 호스트가 이미 emit해둔
+        # margin/size 문자열(lines)에서만 나오고 main_cmd_list와는 무관하므로
+        # 순서를 옮겨도 안전함(호스트 축 프레임을 못 찾을 때의 fallback 동작도
+        # 그대로 유지).
+        pb_x, pb_y, pb_w, pb_h = parent_box if parent_box else (0.0, 0.0, 1.0, 1.0)
+
+        def _find_last_margin(prefix):
+            val = None
+            for _l in lines:
+                if _l.startswith(prefix):
+                    val = _l
+            if val is None:
+                return None
+            _m = re.search(r"at screen\s+([-\d.eE]+)", val)
+            return float(_m.group(1)) if _m else None
+
+        _axis_l = _find_last_margin("set lmargin at screen")
+        _axis_r = _find_last_margin("set rmargin at screen")
+        _axis_t = _find_last_margin("set tmargin at screen")
+        _axis_b = _find_last_margin("set bmargin at screen")
+        if None not in (_axis_l, _axis_r, _axis_t, _axis_b) and _axis_r > _axis_l and _axis_t > _axis_b:
+            ab_x, ab_y, ab_w, ab_h = _axis_l, _axis_b, _axis_r - _axis_l, _axis_t - _axis_b
+        else:
+            ab_x, ab_y, ab_w, ab_h = pb_x, pb_y, pb_w, pb_h
+
+        def _num(key, default):
+            try:
+                v = pip.get(key, "")
+                return float(v) if str(v).strip() else default
+            except (TypeError, ValueError):
+                return default
+
+        _local_pos_x = _num("pos_x", 60.0) / 100.0
+        _local_pos_y = _num("pos_y", 60.0) / 100.0
+
+        _canvas_w_in_early, _canvas_h_in_early = None, None
+        for _l in lines:
+            _m = re.search(r"size\s+([\d.]+)in\s*,\s*([\d.]+)in", _l)
+            if _m:
+                _canvas_w_in_early, _canvas_h_in_early = float(_m.group(1)), float(_m.group(2))
+                break
+
+        _size_unit = str(pip.get("size_unit", "%") or "%").strip()
+        if _size_unit in ("in", "cm") and _canvas_w_in_early and _canvas_h_in_early:
+            _raw_w = _num("size_w", 35.0)
+            _raw_h = _num("size_h", 35.0)
+            if _size_unit == "cm":
+                _raw_w, _raw_h = _raw_w / 2.54, _raw_h / 2.54
+            size_w_page = max(_raw_w / _canvas_w_in_early, 0.01)
+            size_h_page = max(_raw_h / _canvas_h_in_early, 0.01)
+        elif _size_unit in ("in", "cm"):
+            size_w_page = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0
+            size_h_page = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0
+        else:
+            size_w_page = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0 * ab_w
+            size_h_page = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0 * ab_h
+
+        # override curve 세모 보정용 인셋 물리 높이(인치) - 캔버스 높이를
+        # 못 찾으면(이론상 발생 안 함) None으로 두어 보정을 그냥 생략시킨다.
+        _pip_axis_h_in_for_markers = (
+            size_h_page * _canvas_h_in_early if _canvas_h_in_early else None
+        )
+
         # [수정 - 사용자 요청] "PIP 내 plot이 다르면 내용이 달라지므로 현재
         # main-plot으로 대체하지 말고, PIP를 빼고 진행하지요" - source가
         # "current"(기본값, 의도적으로 메인 자신을 보여주는 정상 경로)가
@@ -6186,6 +6415,7 @@ class GnuplotGenerator:
                 y_range=(pip.get("ymin"), pip.get("ymax")),
                 y2_range=(pip.get("y2min"), pip.get("y2max")),
                 legend_size=getattr(plotdef, "legend_size", None),
+                axis_h_in=_pip_axis_h_in_for_markers,
             )
         elif _pip_source == "pltfile" and str(pip.get("pltfile_path", "")).strip():
             # [수정 - 사용자 보고 버그] "in-plot으로 .plt를 지정하면 그 파일이
@@ -6220,72 +6450,6 @@ class GnuplotGenerator:
 
         if not main_cmd_list:
             return
-
-        pb_x, pb_y, pb_w, pb_h = parent_box if parent_box else (0.0, 0.0, 1.0, 1.0)
-
-        # [추가] 호스트 plot이 이미 emit해둔 실제 축 프레임 경계(절대 screen
-        # 좌표)를 찾는다 - 여러 개 있으면(M-P는 칸마다 하나씩) 가장 마지막
-        # 것이 "지금 이 칸"의 값이므로 뒤에서부터 찾는다. 못 찾으면(이론상
-        # 발생하면 안 되지만 안전하게) parent_box를 그대로 axis_box로 쓴다.
-        def _find_last_margin(prefix):
-            val = None
-            for _l in lines:
-                if _l.startswith(prefix):
-                    val = _l
-            if val is None:
-                return None
-            _m = re.search(r"at screen\s+([-\d.eE]+)", val)
-            return float(_m.group(1)) if _m else None
-
-        _axis_l = _find_last_margin("set lmargin at screen")
-        _axis_r = _find_last_margin("set rmargin at screen")
-        _axis_t = _find_last_margin("set tmargin at screen")
-        _axis_b = _find_last_margin("set bmargin at screen")
-        if None not in (_axis_l, _axis_r, _axis_t, _axis_b) and _axis_r > _axis_l and _axis_t > _axis_b:
-            ab_x, ab_y, ab_w, ab_h = _axis_l, _axis_b, _axis_r - _axis_l, _axis_t - _axis_b
-        else:
-            ab_x, ab_y, ab_w, ab_h = pb_x, pb_y, pb_w, pb_h
-
-        def _num(key, default):
-            try:
-                v = pip.get(key, "")
-                return float(v) if str(v).strip() else default
-            except (TypeError, ValueError):
-                return default
-
-        # pos_x/pos_y(%)는 항상 "axis_box(호스트 plot의 실제 축 프레임) 안에서"의
-        # 상대 위치 - 박스의 좌측 "하단" 모서리 기준(annotation/legend와 통일).
-        _local_pos_x = _num("pos_x", 60.0) / 100.0
-        _local_pos_y = _num("pos_y", 60.0) / 100.0
-
-        # [추가 - 요청] 크기(size_w/h)를 %뿐 아니라 실제 물리적 길이(cm/in)로도
-        # 지정할 수 있게 - pip["size_unit"]이 "%"(기본)면 이 박스(parent_box)
-        # 기준 비율로, "in"/"cm"이면 캔버스 전체의 실제 물리 크기(터미널 명령의
-        # "size W in,H in"에서 역산 - 물리 길이는 어느 칸에 있든 절대적이므로
-        # parent_box와 무관)에 대한 비율로 환산해 "캔버스 전체 기준" 크기
-        # (size_w_page/size_h_page)를 먼저 구한다.
-        _size_unit = str(pip.get("size_unit", "%") or "%").strip()
-        if _size_unit in ("in", "cm"):
-            _canvas_w_in, _canvas_h_in = None, None
-            for _l in lines:
-                _m = re.search(r"size\s+([\d.]+)in\s*,\s*([\d.]+)in", _l)
-                if _m:
-                    _canvas_w_in, _canvas_h_in = float(_m.group(1)), float(_m.group(2))
-                    break
-            if _canvas_w_in and _canvas_h_in:
-                _raw_w = _num("size_w", 35.0)
-                _raw_h = _num("size_h", 35.0)
-                if _size_unit == "cm":
-                    _raw_w, _raw_h = _raw_w / 2.54, _raw_h / 2.54
-                size_w_page = max(_raw_w / _canvas_w_in, 0.01)
-                size_h_page = max(_raw_h / _canvas_h_in, 0.01)
-            else:
-                size_w_page = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0
-                size_h_page = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0
-        else:
-            # %는 axis_box(호스트 plot의 실제 축 프레임) 기준 비율.
-            size_w_page = min(max(_num("size_w", 35.0), 5.0), 100.0) / 100.0 * ab_w
-            size_h_page = min(max(_num("size_h", 35.0), 5.0), 100.0) / 100.0 * ab_h
 
         # [수정 - 요청] "축 프레임보다 크면(넘치면) 맞게 줄이고 메시지를 남길
         # 것" - 기준이 axis_box로 바뀌면서 단일 plot에서도 축보다 큰 PIP를
@@ -7657,8 +7821,9 @@ class GnuplotGenerator:
             lines.append(f'plot {_warmup_y:.6g} notitle with lines lc rgb "white"')
 
         lines.append("plot \\")
+        _cm_term, _cm_tpt = self._char_marker_term(fmt)
         for i, cmd in enumerate(_inset_cmd_list):
-            cmd = _char_points_to_labels(cmd)
+            cmd = _char_points_to_labels(cmd, _cm_term, _cm_tpt)
             if i != len(_inset_cmd_list) - 1:
                 cmd += ", \\"
             lines.append(cmd)
@@ -8153,6 +8318,9 @@ class GnuplotGenerator:
         # 실제 폰트 크기와 일치하게 한다.
         _term_font_pt = max(int(round(11 * (panel_scale or 1.0))), 8)
         _term_font = f"Malgun Gothic,{_term_font_pt}"
+        # ◁◀▷▶ 글자 마커의 세로 보정 offset(문자 단위)이 터미널 기본 폰트 크기에 비례해서
+        # 기억해 둔다(_char_marker_term 참고) - 화면 창은 아래처럼 항상 11pt.
+        self._term_font_pt = 11 if fmt == "interactive" else _term_font_pt
         def size_clause(default):
             if size_override: return f"size {size_override}"
             if plotdef is not None and not getattr(plotdef, "frame_auto", True):
@@ -9043,7 +9211,9 @@ class GnuplotGenerator:
                       )
                       self._last_pip_fold_tempfiles = (getattr(self, "_last_pip_fold_tempfiles", None) or []) + _fold_tempfiles
                       _decls = [f for f in _fold_fragments if f.startswith("$") and "<< EOD" in f]
-                      _clauses = [_char_points_to_labels(f) for f in _fold_fragments if not (f.startswith("$") and "<< EOD" in f)]
+                      _cm_term, _cm_tpt = self._char_marker_term(fmt)
+                      _clauses = [_char_points_to_labels(f, _cm_term, _cm_tpt) for f in _fold_fragments
+                                  if not (f.startswith("$") and "<< EOD" in f)]
                       for _d in reversed(_decls):
                           _main_state_snapshot.insert(_snap_plot_idx, _d)
                           _snap_plot_idx += 1
@@ -9357,8 +9527,13 @@ class GnuplotGenerator:
             "set encoding utf8",
             "set term unknown",
         ]
-        main_cmd_list = self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations,
-                                                    arrows=arrows, circles=circles, panel_scale=_size_scale, fmt="interactive")
+        # 배치 계산은 화면 기준("interactive") 그대로, ◁◀▷▶ 그리기 방식만 실제 터미널(GIF)에 맞춤
+        self._char_marker_term_override = ("gif", 11.0) if is_gif else None
+        try:
+            main_cmd_list = self._build_plot_commands(plotdef, lines, is_multiplot=False, annotations=annotations,
+                                                        arrows=arrows, circles=circles, panel_scale=_size_scale, fmt="interactive")
+        finally:
+            self._char_marker_term_override = None
 
         plot_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "plot \\"), None)
         if plot_idx is None:
@@ -9710,7 +9885,9 @@ class GnuplotGenerator:
             # 아무것도 안 그려짐), 여기서 처음으로 실제 gif 터미널을 연다.
             delay_cs = max(int(round(frame_pause * 100)), 2)  # 최소 2(=0.02초/프레임) - 0이면 일부 뷰어가 "가능한 빨리"로 해석해 재생이 너무 빨라짐
             gif_w, gif_h = 900, 650
-            lines.append(f'set terminal gif animate delay {delay_cs} size {gif_w},{gif_h} optimize')
+            # 기본 폰트 명시(화면 애니메이션 창과 동일) - ◁◀▷▶ 세로 보정 offset(문자 단위)의
+            # 기준이 되고, 지정 안 하면 gd 기본 폰트라 한글/기호가 □로 나올 수 있음.
+            lines.append(f"set terminal gif animate delay {delay_cs} size {gif_w},{gif_h} optimize font 'Malgun Gothic,11'")
             lines.append(f"set output '{gif_path.replace(chr(92), '/')}'")
             lines.append("do for [_frame_i=0:n_frames_anim] {")
             lines.append("    thresh = xmin_anim + (xmax_anim - xmin_anim) * _frame_i / n_frames_anim")
@@ -10254,6 +10431,19 @@ class GnuplotGenerator:
                 else:
                     _title_clause = "notitle"
 
+                _lbl = _3d_char_marker_label_part(f'"{path}"', f"{x_expr}:{c['y_col']}:{c['z_col']}",
+                                                  _c_style, c, getattr(self, "_3d_auto_ps", None))
+                if _lbl:
+                    if _c_style == "linespoints":
+                        parts.append(f'"{path}" using {using_expr} notitle with lines palette{_c_dash_clause}')
+                        parts.append(_lbl)
+                        _ke = _3d_linespoints_keyentry(_title_clause, _pt_clause, _c_dash_clause)
+                    else:
+                        parts.append(_lbl)
+                        _ke = _3d_points_keyentry(_title_clause, _pt_clause)
+                    if _ke:
+                        parts.append(_ke)
+                    continue
                 parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette{_c_dash_clause}')
 
             for _s_idx, s in enumerate(surfaces or []):
@@ -10283,9 +10473,22 @@ class GnuplotGenerator:
                     _s_style = self._3D_STYLE_MAP.get(_s_style_raw, "lines")
                     _s_dash_clause = _3d_surface_dash_clause(s, _s_idx, "interactive")
                     _s_pt_clause = _3d_marker_clause(_s_style, s, getattr(self, "_3d_auto_ps", None))
-                    parts.append(
-                        f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}'
-                    )
+                    _s_lbl = _3d_char_marker_label_part(f'"{path}"', f"{_s_x_using}:2:3", _s_style, s,
+                                                        getattr(self, "_3d_auto_ps", None))
+                    if _s_lbl:
+                        if _s_style == "linespoints":
+                            parts.append(f'"{path}" using {_s_x_using}:2:3 notitle with lines palette{_s_dash_clause}')
+                            parts.append(_s_lbl)
+                            _s_ke = _3d_linespoints_keyentry(_s_title_clause, _s_pt_clause, _s_dash_clause)
+                        else:
+                            parts.append(_s_lbl)
+                            _s_ke = _3d_points_keyentry(_s_title_clause, _s_pt_clause)
+                        if _s_ke:
+                            parts.append(_s_ke)
+                    else:
+                        parts.append(
+                            f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}'
+                        )
 
             for fs in (function_surfaces or []):
                 _fs_part = self._build_function_surface_part(fs, _resolve_style, _n_sets_anim > 1, fmt="interactive")
@@ -10299,7 +10502,8 @@ class GnuplotGenerator:
         # [재사용] create_3d_script와 동일한 view/축/palette 설정 - 회전-반응형
         # title 재정렬, 저장/인쇄 단축키 등 정적 3D Plot 전용의 화면-상호작용
         # 편의 기능(위 docstring 범위 제한 참고)은 애니메이션에서는 뺀다.
-        lines = ["set encoding utf8", "set term unknown", "_cp_mk = 1"]
+        lines = ["set encoding utf8", "set term unknown", "_cp_mk = 1",
+                 _char_marker_term_vars("gif" if is_gif else "windows", 11)]
         lines.append(f"set view {rot_x},{rot_z}")
         if equal_xyz:
             lines.append("set view equal xyz")
@@ -10400,7 +10604,9 @@ class GnuplotGenerator:
             # 고정하므로 Pause/Speed/Exit(실시간 컨트롤)은 의미가 없어 뺀다.
             delay_cs = max(int(round(frame_pause * 100)), 2)
             gif_w, gif_h = 900, 650
-            lines.append(f'set terminal gif animate delay {delay_cs} size {gif_w},{gif_h} optimize')
+            # 기본 폰트를 화면 애니메이션 창과 같은 Malgun Gothic으로 - 지정 안 하면
+            # gd 기본 폰트라 legend의 ◁◀▷▶ 견본(keyentry)이 □로 나왔음(실측).
+            lines.append(f"set terminal gif animate delay {delay_cs} size {gif_w},{gif_h} optimize font 'Malgun Gothic,11'")
             lines.append(f"set output '{gif_path.replace(chr(92), '/')}'")
             lines.append("do for [_frame_i=0:n_frames_anim] {")
             lines.append("    thresh = xmin_anim + (xmax_anim - xmin_anim) * _frame_i / n_frames_anim")
@@ -10631,8 +10837,14 @@ class GnuplotGenerator:
         _font_cmds_screen = _3d_font_cmds(fonts, _3D_FONT_SCALE_SCREEN, bool(ylabel), _ann_label_ids)
         _font_cmds_by_term = {k: _3d_font_cmds(fonts, v, bool(ylabel), _ann_label_ids)
                               for k, v in _3D_FONT_SCALE_BY_TERM.items()}
+        # ◁◀▷▶ 글자 마커의 터미널별 그리기 방식(_char_marker_term_vars 참고) - 화면은
+        # windows(기본 폰트 11pt), EMF는 emf(14pt), 나머지(cairo/postscript)는 겹쳐쓰기.
+        _cpm_screen_vars = _char_marker_term_vars("windows", 11)
+        _cpm_emf_vars = _char_marker_term_vars("emf3d", 14)
+        _cpm_cairo_vars = _char_marker_term_vars(None)
         lines = ["set encoding utf8",
                  f"_cp_mk = {(_3D_EMF_MARKER_MULT if _fmt == 'emf' else 1.0):.4g}",
+                 (_cpm_screen_vars if is_interactive else _cpm_emf_vars if _fmt == "emf" else _cpm_cairo_vars),
                  # [추가 - 코드 검토] N/J/S 저장 키가 같은 초 안에 두 번(연타/키
                  # 반복입력) 눌리면 대기 파일명이 초 단위(HHMMSS)까지만 구분돼
                  # 겹칠 수 있었음(아래 bind의 _outexpr 참고) - 누를 때마다 1씩
@@ -10944,10 +11156,10 @@ class GnuplotGenerator:
                 'unset label 9003; unset label 9004; '
                 'set terminal emf enhanced size 1500,1200 font "Malgun Gothic,14"; '
                 f'{"; ".join(_font_cmds_by_term["emf"])}; '
-                f'_cp_mk={_3D_EMF_MARKER_MULT:.4g}; '
+                f'_cp_mk={_3D_EMF_MARKER_MULT:.4g}; {_cpm_emf_vars}; '
                 'set output "PRN"; '
                 'replot; '
-                'set output; _cp_mk=1; '
+                f'set output; _cp_mk=1; {_cpm_screen_vars}; '
                 f'set terminal {_restore_term}; '
                 f'{"; ".join(_font_cmds_screen)}; '
                 'rx=GPVAL_VIEW_ROT_X; rz=GPVAL_VIEW_ROT_Z; '
@@ -11008,9 +11220,10 @@ class GnuplotGenerator:
                     f'set terminal {_term_spec}; '
                     f'{"; ".join(_font_cmds_by_term[_font_key])}; '
                     f'{_set_out}'
-                    + (f'_cp_mk={_3D_EMF_MARKER_MULT:.4g}; ' if _ext == "emf" else '')
+                    + (f'_cp_mk={_3D_EMF_MARKER_MULT:.4g}; {_cpm_emf_vars}; ' if _ext == "emf"
+                       else f'{_cpm_cairo_vars}; ')
                     + f'replot; '
-                    f'set output; _cp_mk=1; '
+                    f'set output; _cp_mk=1; {_cpm_screen_vars}; '
                     f'set terminal {_restore_term}; '
                     f'{"; ".join(_font_cmds_screen)}; '
                     'rx=GPVAL_VIEW_ROT_X; rz=GPVAL_VIEW_ROT_Z; '
@@ -11182,16 +11395,32 @@ class GnuplotGenerator:
                     block.append("EOD")
                     marker_datablocks_3d.append(block)
 
+                    _lbl = _3d_char_marker_label_part(dbname, "1:2:3", _c_style, c, getattr(self, "_3d_auto_ps", None))
                     if _c_style == "points":
-                        splot_parts.append(f'{dbname} using 1:2:3:3 {_title_clause} with points{_pt_clause} palette')
+                        if _lbl:
+                            splot_parts.append(_lbl)
+                            splot_parts.append(_3d_points_keyentry(_title_clause, _pt_clause))
+                        else:
+                            splot_parts.append(f'{dbname} using 1:2:3:3 {_title_clause} with points{_pt_clause} palette')
                     else:
                         splot_parts.append(f'"{path}" using {using_expr} notitle with lines palette{_c_dash_clause}')
-                        splot_parts.append(f'{dbname} using 1:2:3:3 notitle with points{_pt_clause} palette')
+                        splot_parts.append(_lbl or f'{dbname} using 1:2:3:3 notitle with points{_pt_clause} palette')
                         splot_parts.append(_3d_linespoints_keyentry(_title_clause, _pt_clause, _c_dash_clause))
                     continue
                 # marker_pts가 비면(파일 파싱 실패 등) 아래 공통 처리로 폴백해서
                 # 예전처럼 파일을 직접 참조하는 단일 splot 절로 그린다.
 
+            _lbl = _3d_char_marker_label_part(f'"{path}"', f"{x_expr}:{c['y_col']}:{c['z_col']}",
+                                              _c_style, c, getattr(self, "_3d_auto_ps", None))
+            if _lbl:
+                if _c_style == "linespoints":
+                    splot_parts.append(f'"{path}" using {using_expr} notitle with lines palette{_c_dash_clause}')
+                    splot_parts.append(_lbl)
+                    splot_parts.append(_3d_linespoints_keyentry(_title_clause, _pt_clause, _c_dash_clause))
+                else:
+                    splot_parts.append(_lbl)
+                    splot_parts.append(_3d_points_keyentry(_title_clause, _pt_clause))
+                continue
             splot_parts.append(f'"{path}" using {using_expr} {_title_clause} with {_c_style}{_pt_clause} palette{_c_dash_clause}')
 
         for _s_idx, s in enumerate(surfaces or []):
@@ -11249,14 +11478,30 @@ class GnuplotGenerator:
                     _s_block.append("EOD")
                     marker_datablocks_3d.append(_s_block)
 
+                    _s_lbl = _3d_char_marker_label_part(_s_dbname, "1:2:3", _s_style, s, getattr(self, "_3d_auto_ps", None))
                     if _s_style == "points":
-                        splot_parts.append(f'{_s_dbname} using 1:2:3:3 {_s_title_clause} with points{_s_pt_clause} palette')
+                        if _s_lbl:
+                            splot_parts.append(_s_lbl)
+                            splot_parts.append(_3d_points_keyentry(_s_title_clause, _s_pt_clause))
+                        else:
+                            splot_parts.append(f'{_s_dbname} using 1:2:3:3 {_s_title_clause} with points{_s_pt_clause} palette')
                     else:
                         splot_parts.append(f'"{path}" using {_s_x_using}:2:3 notitle with lines palette{_s_dash_clause}')
-                        splot_parts.append(f'{_s_dbname} using 1:2:3:3 notitle with points{_s_pt_clause} palette')
+                        splot_parts.append(_s_lbl or f'{_s_dbname} using 1:2:3:3 notitle with points{_s_pt_clause} palette')
                         splot_parts.append(_3d_linespoints_keyentry(_s_title_clause, _s_pt_clause, _s_dash_clause))
                 else:
-                    splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}')
+                    _s_lbl = _3d_char_marker_label_part(f'"{path}"', f"{_s_x_using}:2:3", _s_style, s,
+                                                        getattr(self, "_3d_auto_ps", None))
+                    if _s_lbl:
+                        if _s_style == "linespoints":
+                            splot_parts.append(f'"{path}" using {_s_x_using}:2:3 notitle with lines palette{_s_dash_clause}')
+                            splot_parts.append(_s_lbl)
+                            splot_parts.append(_3d_linespoints_keyentry(_s_title_clause, _s_pt_clause, _s_dash_clause))
+                        else:
+                            splot_parts.append(_s_lbl)
+                            splot_parts.append(_3d_points_keyentry(_s_title_clause, _s_pt_clause))
+                    else:
+                        splot_parts.append(f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}')
 
         # [추가 - 요청] "2D+3D 한번에" - Function Surface(수식만으로 그리는 Z=f(X,Y)).
         for fs in (function_surfaces or []):
