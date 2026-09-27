@@ -138,7 +138,10 @@ MARKER_SHAPE_MAP = {
 MARKER_SHAPE_LIST = ["Auto"] + list(MARKER_SHAPE_MAP.keys())
 
 # Marker 크기 - 표시 라벨 -> gnuplot pointsize 값
+# [추가 - 사용자 요청] "Auto"(기본) = None - 2D는 Legend Font 크기에 비례
+# (gnu_generator._auto_marker_size, 9pt에서 M과 동일), 3D는 gnuplot 기본 ps.
 MARKER_SIZE_MAP = {
+    "Auto": None,
     "XS": 0.5,
     "S": 0.75,
     "M": 1.0,
@@ -304,7 +307,7 @@ class CathPlotGUI:
         self.legend_vars = {}
         self.file_xshift_vars = {}  # 파일당 하나의 X Shift (그 파일의 모든 curve에 공통 적용)
         self.marker_shape_vars = {}   # key_str -> StringVar (기본 "Auto")
-        self.marker_size_vars = {}    # key_str -> StringVar (기본 "M")
+        self.marker_size_vars = {}    # key_str -> StringVar (기본 "Auto")
         self.marker_maxcount_vars = {}  # key_str -> StringVar (빈 문자열 = Auto)
         self.marker_fill_vars = {}      # key_str -> BooleanVar (기본 False = 속 빔)
         # [추가 - 사용자 요청] "Shape 우측에 마커 표시 on/off 체크박스 추가
@@ -3194,7 +3197,7 @@ class CathPlotGUI:
                             self.marker_on_vars[key_str] = tk.BooleanVar(value=False)
                         self.marker_on_vars[key_str].set(self._infer_marker_on(style))
                         if key_str not in self.marker_size_vars:
-                            self.marker_size_vars[key_str] = tk.StringVar(value="M")
+                            self.marker_size_vars[key_str] = tk.StringVar(value="Auto")
                         self.marker_size_vars[key_str].set(style.get("marker_size_label", "M"))
                         if key_str not in self.marker_maxcount_vars:
                             self.marker_maxcount_vars[key_str] = tk.StringVar(value="")
@@ -6163,7 +6166,7 @@ class CathPlotGUI:
                 "in_legend1": self.in_legend1_vars[key].get() if key in self.in_legend1_vars else True,
                 "marker_shape_label": self.marker_shape_vars[key].get() if key in self.marker_shape_vars else "Auto",
                 "marker_on": self.marker_on_vars[key].get() if key in self.marker_on_vars else False,
-                "marker_size_label": self.marker_size_vars[key].get() if key in self.marker_size_vars else "M",
+                "marker_size_label": self.marker_size_vars[key].get() if key in self.marker_size_vars else "Auto",
                 "marker_max_count": (self.marker_maxcount_vars[key].get() if key in self.marker_maxcount_vars else ""),
                 "marker_fill": (self.marker_fill_vars[key].get() if key in self.marker_fill_vars else False),
                 "smooth_csplines": (self.smooth_csplines_vars[key].get() if key in self.smooth_csplines_vars else False),
@@ -6354,7 +6357,7 @@ class CathPlotGUI:
             if key not in self.marker_on_vars:
                 self.marker_on_vars[key] = tk.BooleanVar(value=False)
             if key not in self.marker_size_vars:
-                self.marker_size_vars[key] = tk.StringVar(value="M")
+                self.marker_size_vars[key] = tk.StringVar(value="Auto")
             if key not in self.marker_maxcount_vars:
                 self.marker_maxcount_vars[key] = tk.StringVar(value="")
             if key not in self.marker_fill_vars:
@@ -8644,7 +8647,7 @@ class CathPlotGUI:
             # 있어 이전과 동일하게 markers 없이 시작한다.
             shape_var = tk.StringVar(value="Auto")
             marker_on_var = tk.BooleanVar(value=False)
-            size_var = tk.StringVar(value="M")
+            size_var = tk.StringVar(value="Auto")
             style_var_row = tk.StringVar(value="Auto")
             title_var_row = tk.StringVar(value="")
             maxno_var = tk.StringVar(value="")
@@ -8669,7 +8672,7 @@ class CathPlotGUI:
             # MaxNo는 Curve Features 팝업으로 이동.
             shape_var = tk.StringVar(value="Auto")
             marker_on_var = tk.BooleanVar(value=False)
-            size_var = tk.StringVar(value="M")
+            size_var = tk.StringVar(value="Auto")
             style_var_row = tk.StringVar(value="Auto")
             title_var_row = tk.StringVar(value="")
             maxno_var = tk.StringVar(value="")
@@ -8938,7 +8941,7 @@ class CathPlotGUI:
             style_var = tk.StringVar(value=_migrate_style_label(init.get('line_style', _mc_line_style)))
             shape_var = tk.StringVar(value=init.get('shape', "Auto"))
             marker_on_var = tk.BooleanVar(value=init.get('marker_on', _mc_marker_on_default))
-            size_var = tk.StringVar(value=init.get('size', "M"))
+            size_var = tk.StringVar(value=init.get('size', "Auto"))
             maxcount_var = tk.StringVar(value=init.get('maxcount', ""))
             data = {
                 'file_label': file_label_var, 'x': x_var, 'y': y_var, 'z': z_var,
@@ -12787,7 +12790,7 @@ class CathPlotGUI:
             fill_on = auto_fill_override
         marker_on = self.marker_on_vars[key].get() if key in self.marker_on_vars else False
         marker_shape, used_auto = self._resolve_marker_shape(shape_label, fill_on, marker_on, auto_rank, excluded_shapes)
-        size_label = self.marker_size_vars[key].get() if key in self.marker_size_vars else "M"
+        size_label = self.marker_size_vars[key].get() if key in self.marker_size_vars else "Auto"
         marker_size = MARKER_SIZE_MAP.get(size_label, 1.0)
         maxcount_str = (self.marker_maxcount_vars[key].get() if key in self.marker_maxcount_vars else "").strip()
         try:
