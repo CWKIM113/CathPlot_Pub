@@ -521,6 +521,70 @@ def _effective_marker_size(curve, legend_size):
         return 1.0
 
 
+# [추가 - 사용자 요청] "Tri-Left/Right(◁◀▷▶)에도 Size(XS~XL/Auto) 반영" -
+# 이 네 모양은 gnuplot 내장 pointtype이 없어 유니코드 문자를 pointtype으로
+# 쓰는데(pt "◀"), gnuplot은 문자 pointtype의 크기를 ps가 아니라 "터미널
+# 전체 폰트" 크기로만 그려서(실측: ps 0.4/1/3 모두 같은 크기) Size 설정이
+# 전혀 반영되지 않았음. 이 모양만 "with labels"(점 위치에 같은 문자를
+# 글자로 찍기)로 바꿔 그리고, 글자 크기(pt)를 ps에서 환산해 다른 도형과
+# 같은 규칙으로 커지고 작아지게 한다. 환산 기준: 같은 ps의 네이티브 세모
+# (pt 8, MARKER_NATIVE_PS_SCALE 적용 후) 밑변 길이(ps 1 = 6pt x 23/29)와
+# 이 글자의 세로 잉크 높이가 같아지도록 폰트 크기를 정한다.
+_CHAR_MARKERS = ("◁", "◀", "▷", "▶")
+_CHAR_MARKER_FONT = "Malgun Gothic"
+_CHAR_MARKER_INK_FALLBACK = 0.77  # DejaVu Sans 실측(글자 크기 대비 잉크 높이)
+_char_marker_ink_cache = {}
+
+
+def _char_marker_ink_ratio(ch):
+    """_CHAR_MARKER_FONT로 그린 ch의 세로 잉크 높이 / 폰트 크기(em) - PIL로
+    실제 폰트 파일을 측정하고, 불가하면 실측 근사값."""
+    if ch in _char_marker_ink_cache:
+        return _char_marker_ink_cache[ch]
+    ratio = _CHAR_MARKER_INK_FALLBACK
+    try:
+        path = _FONT_FILE_MAP.get(_CHAR_MARKER_FONT.lower())
+        if path and os.path.exists(path):
+            from PIL import ImageFont
+            b = ImageFont.truetype(path, 200).getbbox(ch)
+            if b and b[3] > b[1]:
+                ratio = min(max((b[3] - b[1]) / 200.0, 0.3), 1.5)
+    except Exception:
+        ratio = _CHAR_MARKER_INK_FALLBACK
+    _char_marker_ink_cache[ch] = ratio
+    return ratio
+
+
+# gnuplot cairo 터미널은 요청한 폰트 pt의 약 2/3 크기로 글자를 그림(실측:
+# font ",10" -> PDF 안 6.7pt, ",20" -> 13.3pt) - 반면 점(ps 1 = 6pt)은 실제
+# pt 그대로라, 그 비율만큼 글자 크기를 키워 요청해야 둘이 맞는다. 화면
+# (windows 터미널)도 예전 legend 실측(9pt 글자 기호 = ps 1 마커)상 같은
+# 비율로 보여 공통 적용한다.
+_CHAR_MARKER_TERM_FONT_FACTOR = 1.5
+
+
+def _char_marker_font_pt(ch, ps):
+    return max(6.0 * float(ps) * (23 / 29) / _char_marker_ink_ratio(ch) * _CHAR_MARKER_TERM_FONT_FACTOR, 1.0)
+
+
+_CHAR_POINTS_RE = re.compile(
+    r'using (\S+)(.*?) with points pt "([' + "".join(_CHAR_MARKERS) + r'])" ps ([\d.eE+-]+)(?: lc rgb "([^"]*)")?'
+)
+
+
+def _char_points_to_labels(cmd):
+    """plot 절의 'with points pt "◀" ps S' 를 같은 크기의 'with labels'로
+    바꾼다(다른 모양/일반 curve 절은 그대로). 생성 단계에서는 계속 ps 형식을
+    유지해서(PIP 인셋 ps 축소 등 기존 처리 그대로 재사용), plot 절을 실제로
+    내보내는 곳에서만 이 변환을 적용한다."""
+    def _repl(m):
+        using, mid, ch, ps, color = m.groups()
+        tc = f' tc rgb "{color}"' if color else ""
+        return (f'using {using}:("{ch}"){mid} with labels center '
+                f'font "{_CHAR_MARKER_FONT},{_char_marker_font_pt(ch, float(ps)):.3g}"{tc}')
+    return _CHAR_POINTS_RE.sub(_repl, cmd)
+
+
 PRINT_FONT_SCALE = 1.60     # [수정 - 버그] "PDF 그림에서 font size가 plot 대비 너무 작음(폰트
 # 크기 입력으로 해결될 사항 아님), Legend box도 너무 작음 - 폰트·legend 모두
 # 2배로" - PDF가 PNG/JPG의 기준(기준 포맷을 PyMuPDF로 래스터화)이 되면서
@@ -877,18 +941,69 @@ def _3d_range_clause(vmin, vmax):
     return f"[{vmin if has_min else '*'}:{vmax if has_max else '*'}]"
 
 
-def _3d_marker_clause(style, item):
+def _3d_marker_clause(style, item, auto_ps=None):
     """style이 points/linespoints일 때만 item의 marker_shape/marker_size로
-    " pt N ps S" 절을 만든다(lines면 점 모양이 안 보이므로 빈 문자열)."""
+    " pt N ps S" 절을 만든다(lines면 점 모양이 안 보이므로 빈 문자열).
+    [추가 - 사용자 요청] marker_size가 없으면(Size=Auto) auto_ps(Legend
+    Font 크기 비례, _3d_fonts_resolved 참고)를 쓴다 - 둘 다 없으면 gnuplot 기본."""
     clause = ""
     if style in ("points", "linespoints"):
         marker_pt = item.get("marker_shape")
-        marker_size = item.get("marker_size")
+        marker_size = item.get("marker_size") or auto_ps
         if marker_pt is not None:
             clause += f" pt {_fmt_pointtype(marker_pt)}"
         if marker_size:
-            clause += f" ps {marker_size}"
+            clause += f" ps {float(marker_size):.4g}"
     return clause
+
+
+# [추가 - 사용자 요청] "3D도 2D처럼 Title/Axis Title/Tic/Legend 폰트를 공유" -
+# 예전 3D는 모든 글자가 터미널 기본 폰트 하나(화면 11pt, 저장 14pt)였음. 이제
+# 메인 화면(2D)의 Title / Axis Title / Legend(=Tic·Comment 공용) 폰트·크기를
+# 그대로 받아 쓴다. 2D Axis Title 기본값(11)이 예전 3D 글자 크기(화면 11pt /
+# 저장 14pt)와 같아지도록 화면은 1.0배, 저장/인쇄는 14/11배로 환산한다(저장
+# 캔버스가 화면보다 커서 예전에도 터미널 폰트를 14로 키웠던 것과 같은 비율).
+_3D_FONT_BASE_PT = 11.0
+_3D_FONT_SCALE_SCREEN = 1.0
+_3D_FONT_SCALE_PRINT = 14.0 / 11.0
+
+
+def _3d_fonts_resolved(fonts):
+    """fonts(dict 또는 None)를 기본값(2D 기본 폰트)으로 채워 돌려준다."""
+    f = dict(fonts or {})
+    def _num(key, default):
+        try:
+            v = float(str(f.get(key) or "").strip())
+            return v if v > 0 else default
+        except (TypeError, ValueError):
+            return default
+    return {
+        "title_font": f.get("title_font") or "Malgun Gothic", "title_size": _num("title_size", 14.0),
+        "label_font": f.get("label_font") or "Malgun Gothic", "label_size": _num("label_size", 11.0),
+        "legend_font": f.get("legend_font") or "Malgun Gothic", "legend_size": _num("legend_size", 9.0),
+    }
+
+
+def _3d_font_cmds(fonts, scale, ylabel_on, label_ids=()):
+    """3D 글자 요소별 font 설정 명령 목록(텍스트는 안 바꾸고 font만 지정).
+    화면에서 저장 키(P/N/…)로 터미널을 바꿀 때도 같은 목록을 저장용 배율로
+    다시 보내서, 화면과 저장 파일의 글자 크기 비율이 예전과 같게 유지된다."""
+    r = _3d_fonts_resolved(fonts)
+    def _f(name, size):
+        return f'font "{name},{size * scale:.3g}"'
+    cmds = [
+        f'set title {_f(r["title_font"], r["title_size"])}',
+        f'set xlabel {_f(r["label_font"], r["label_size"])}',
+        f'set zlabel {_f(r["label_font"], r["label_size"])}',
+        # 2D와 동일: tic 숫자는 Axis Title 폰트 + Legend 크기
+        f'set tics {_f(r["label_font"], r["legend_size"])}',
+        f'set key {_f(r["legend_font"], r["legend_size"])}',
+    ]
+    if ylabel_on:
+        cmds.append(f'set label 9001 {_f(r["label_font"], r["label_size"])}')
+    for i in label_ids:
+        cmds.append(f'set label {i} {_f(r["legend_font"], r["legend_size"])}')
+    return cmds
 
 
 def _3d_surface_dash_clause(surface, s_idx, fmt):
@@ -2762,11 +2877,20 @@ class GnuplotGenerator:
                 symbol_y = row_y
                 if (fmt or "").lower() == "interactive":
                     symbol_y += MARKER_Y_SHIFT_PER_PS.get(marker_shape, 0.0) * _mk_ps
-                lines.append(
-                    f'set label {id_offset + 5000 + row_i + 1} "" '
-                    f'at graph {sample_mid_x:.4f},{symbol_y:.4f} front '
-                    f'point pt {_fmt_pointtype(marker_shape)} ps {_mk_ps:.4g} lc rgb "{color}"'
-                )
+                if marker_shape in _CHAR_MARKERS:
+                    # curve 쪽(_char_points_to_labels)과 같은 글자·같은 크기
+                    lines.append(
+                        f'set label {id_offset + 5000 + row_i + 1} "{marker_shape}" '
+                        f'at graph {sample_mid_x:.4f},{symbol_y:.4f} center front '
+                        f'font "{_CHAR_MARKER_FONT},{_char_marker_font_pt(marker_shape, _mk_ps):.3g}" '
+                        f'textcolor rgb "{color}"'
+                    )
+                else:
+                    lines.append(
+                        f'set label {id_offset + 5000 + row_i + 1} "" '
+                        f'at graph {sample_mid_x:.4f},{symbol_y:.4f} front '
+                        f'point pt {_fmt_pointtype(marker_shape)} ps {_mk_ps:.4g} lc rgb "{color}"'
+                    )
             lbl_text, lbl_enh = self._render_text(_capped_titles[id(curve)])
             lines.append(
                 f'set label {id_offset + row_i + 1} "{lbl_text}" at graph {label_x:.4f},{row_y:.4f} '
@@ -4374,6 +4498,7 @@ class GnuplotGenerator:
             cmd_list.append("NaN axes x1y2 notitle")
 
         for i, cmd in enumerate(cmd_list):
+            cmd = _char_points_to_labels(cmd)
             if i != len(cmd_list) - 1: cmd += ", \\"
             lines.append(cmd)
 
@@ -7233,6 +7358,7 @@ class GnuplotGenerator:
 
         lines.append("plot \\")
         for i, cmd in enumerate(_inset_cmd_list):
+            cmd = _char_points_to_labels(cmd)
             if i != len(_inset_cmd_list) - 1:
                 cmd += ", \\"
             lines.append(cmd)
@@ -8566,7 +8692,7 @@ class GnuplotGenerator:
                       )
                       self._last_pip_fold_tempfiles = (getattr(self, "_last_pip_fold_tempfiles", None) or []) + _fold_tempfiles
                       _decls = [f for f in _fold_fragments if f.startswith("$") and "<< EOD" in f]
-                      _clauses = [f for f in _fold_fragments if not (f.startswith("$") and "<< EOD" in f)]
+                      _clauses = [_char_points_to_labels(f) for f in _fold_fragments if not (f.startswith("$") and "<< EOD" in f)]
                       for _d in reversed(_decls):
                           _main_state_snapshot.insert(_snap_plot_idx, _d)
                           _snap_plot_idx += 1
@@ -9668,7 +9794,7 @@ class GnuplotGenerator:
                                     equal_xyz=False, surfaces=None, function_surfaces=None,
                                     y_min=None, y_max=None, z_min=None, z_max=None,
                                     time_min=None, time_max=None,
-                                    duration_sec=20.0, gif_path=None):
+                                    duration_sec=20.0, gif_path=None, fonts=None):
         """[신규] 3D Plot(splot)도 create_animation_script(2D)와 같은 방식으로
         X(보통 Time) 값이 늘어남에 따라 curve/surface가 점점 그려지는(progress)
         애니메이션을 만든다. 기본은 Interactive 창(화면)이고, gif_path를 주면
@@ -9706,6 +9832,7 @@ class GnuplotGenerator:
         os.makedirs(plot_dir, exist_ok=True)
         is_gif = bool(gif_path)
         title_disp = os.path.splitext(os.path.basename(outfile))[0]
+        self._3d_auto_ps = _auto_marker_size(_3d_fonts_resolved(fonts)["legend_size"])
 
         def _resolve_style(item):
             return (item.get("style") or style or "lines")
@@ -9737,7 +9864,7 @@ class GnuplotGenerator:
                 using_expr = f"{x_expr}:{c['y_col']}:{c['z_col']}:{c['z_col']}"
 
                 _c_style = self._3D_STYLE_MAP.get(_resolve_style(c), "lines")
-                _pt_clause = _3d_marker_clause(_c_style, c)
+                _pt_clause = _3d_marker_clause(_c_style, c, getattr(self, "_3d_auto_ps", None))
                 _c_dash_clause = ""
                 if _c_style in ("lines", "linespoints"):
                     _c_dash_key = c.get("line_dash") or DEFAULT_LINESTYLES[_c_idx % len(DEFAULT_LINESTYLES)]
@@ -9780,7 +9907,7 @@ class GnuplotGenerator:
                 else:
                     _s_style = self._3D_STYLE_MAP.get(_s_style_raw, "lines")
                     _s_dash_clause = _3d_surface_dash_clause(s, _s_idx, "interactive")
-                    _s_pt_clause = _3d_marker_clause(_s_style, s)
+                    _s_pt_clause = _3d_marker_clause(_s_style, s, getattr(self, "_3d_auto_ps", None))
                     parts.append(
                         f'"{path}" using {_s_x_using}:2:3 {_s_title_clause} with {_s_style}{_s_pt_clause} palette{_s_dash_clause}'
                     )
@@ -9860,6 +9987,9 @@ class GnuplotGenerator:
                       [(fs.get("title") or "").strip() for fs in (function_surfaces or [])]
         if any(_all_titles) and _n_sets_anim > 1:
             lines.append("set key outside right top box")
+        # [추가 - 사용자 요청] 2D와 공유하는 폰트 - 애니메이션은 화면(1000x700)과
+        # GIF(900x650) 둘 다 화면 크기급 캔버스라 화면 배율을 쓴다.
+        lines.extend(_3d_font_cmds(fonts, _3D_FONT_SCALE_SCREEN, bool(ylabel)))
         if any(_resolve_style(s).lower() == "pm3d" for s in (surfaces or [])) or \
            any(_resolve_style(fs).lower() == "pm3d" for fs in (function_surfaces or [])):
             lines.append("set pm3d depthorder")
@@ -10027,7 +10157,7 @@ class GnuplotGenerator:
         # gnuplot이 함수를 직접 샘플링하는 "with points/linespoints pt N"에
         # 그대로 pt/ps를 붙인다(격자 전체 샘플 지점에 마커가 찍힘 - Max#
         # 제한 개념 자체가 없음, _collect_3d_state 주석 참고).
-        _fs_pt_clause = _3d_marker_clause(fs_style, fs)
+        _fs_pt_clause = _3d_marker_clause(fs_style, fs, getattr(self, "_3d_auto_ps", None))
         # [추가 - 사용자 요청] "3D도 2D처럼 line style(점선 종류) 필요" - curve와
         # 동일하게 line_dash(STYLE_MAP 키)가 있으면 그 dashtype을 적용한다.
         _fs_dash_clause = ""
@@ -10044,7 +10174,7 @@ class GnuplotGenerator:
                           colorbox=True, annotations_3d=None, arrows_3d=None,
                           equal_xyz=False, surfaces=None, function_surfaces=None,
                           time_min=None, time_max=None,
-                          y_min=None, y_max=None, z_min=None, z_max=None):
+                          y_min=None, y_max=None, z_min=None, z_max=None, fonts=None):
         """[추가] 3D Plot(splot) - "X/Y1/Y2를 X/Y/Z로 매핑, 여러 세트를 같은 화면에
         겹쳐 그리고 Z값 기준 palette(낮음=파랑, 높음=빨강)로 색칠"하는 기능.
         2D curve와 동일하게 gnuplot이 dat 파일을 직접 읽게(using 컬럼 인덱스)
@@ -10086,6 +10216,20 @@ class GnuplotGenerator:
         _fmt = (fmt or "interactive").lower()
         is_interactive = _fmt == "interactive"
         title_disp = os.path.splitext(os.path.basename(outfile))[0]
+        # [추가 - 사용자 요청] 2D 폰트 공유 + Marker Size Auto(Legend Font 비례)
+        self._3d_auto_ps = _auto_marker_size(_3d_fonts_resolved(fonts)["legend_size"])
+        # 아래 annotation 루프와 같은 조건으로, 실제로 만들어질 comment label 번호
+        _ann_label_ids = []
+        for _ai, _ann in enumerate(annotations_3d or []):
+            if not (_ann.get("text") or "").strip():
+                continue
+            try:
+                float(_ann["x"]), float(_ann["y"]), float(_ann["z"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            _ann_label_ids.append(_ai + 1)
+        _font_cmds_screen = _3d_font_cmds(fonts, _3D_FONT_SCALE_SCREEN, bool(ylabel), _ann_label_ids)
+        _font_cmds_print = _3d_font_cmds(fonts, _3D_FONT_SCALE_PRINT, bool(ylabel), _ann_label_ids)
         lines = ["set encoding utf8"]
         # [추가] "3D Plot도 저장/인쇄 지원" - 2D create_script처럼 확장자별로
         # 맞는 gnuplot 터미널을 골라야 하는데, 3D 다이얼로그는 2D의 Frame
@@ -10310,6 +10454,7 @@ class GnuplotGenerator:
                     f'set label 9001 "{_ylabel_text}" at graph ax, graph 0.5, graph 0 '
                     f'rotate by yr offset 4.0,-2.1 {_ylabel_enh}'
                 )
+                _bind_parts.append([c for c in _font_cmds_screen if c.startswith("set label 9001 ")][0])
             # [수정] "task bar의 view에도 회전각이 나오는데 굳이 따로 찍을
             # 필요 있나? 저장/인쇄 가능하다는 표시+format 안내가 더 유용할 듯" -
             # 예전엔 회전각(Rot X/Z)과 저장 키 안내를 label 9002/9003 두 줄로
@@ -10384,10 +10529,12 @@ class GnuplotGenerator:
             _print_cmd = (
                 'unset label 9003; unset label 9004; '
                 'set terminal emf enhanced size 1680,1200 font "Malgun Gothic,14"; '
+                f'{"; ".join(_font_cmds_print)}; '
                 'set output "PRN"; '
                 'replot; '
                 'set output; '
                 f'set terminal {_restore_term}; '
+                f'{"; ".join(_font_cmds_screen)}; '
                 'rx=GPVAL_VIEW_ROT_X; rz=GPVAL_VIEW_ROT_Z; '
                 f'{_status_label_cmd}; '
                 'set label 9004 "인쇄 완료 (기본 프린터로 전송됨)" '
@@ -10416,10 +10563,12 @@ class GnuplotGenerator:
                     'unset label 9003; unset label 9004; '
                     f'fn9004={_outexpr}; '
                     f'set terminal {_term_spec}; '
+                    f'{"; ".join(_font_cmds_print)}; '
                     f'set output fn9004; '
                     f'replot; '
                     f'set output; '
                     f'set terminal {_restore_term}; '
+                    f'{"; ".join(_font_cmds_screen)}; '
                     'rx=GPVAL_VIEW_ROT_X; rz=GPVAL_VIEW_ROT_Z; '
                     f'{_status_label_cmd}; '
                     'set label 9004 sprintf("저장됨: %s", fn9004) '
@@ -10491,6 +10640,8 @@ class GnuplotGenerator:
         _n_sets = len(curves_3d) + len(surfaces or []) + len(function_surfaces or [])
         if has_title and _n_sets > 1:
             lines.append("set key outside right top box")
+        # [추가 - 사용자 요청] 2D와 공유하는 Title/Axis Title/Tic/Legend/Comment 폰트
+        lines.extend(_font_cmds_screen if is_interactive else _font_cmds_print)
 
         # [추가 - 요청] "2D+3D 한번에" - Function Surface가 있으면 기본
         # isosamples(10)는 면이 각져 보일 만큼 성겨서 40으로 올린다(surfaces/curves는
@@ -10538,7 +10689,7 @@ class GnuplotGenerator:
             _c_style = self._3D_STYLE_MAP.get(_resolve_style(c), "lines")
             # [추가] 세트별 Marker(pt)/크기(ps) - style이 points/linespoints일 때만
             # 의미 있음(lines면 점 모양이 안 보이므로 무시).
-            _pt_clause = _3d_marker_clause(_c_style, c)
+            _pt_clause = _3d_marker_clause(_c_style, c, getattr(self, "_3d_auto_ps", None))
 
             # [추가 - 사용자 요청] "3D도 2D처럼 line style(점선 종류) 필요" -
             # c["line_dash"](STYLE_MAP 키)를 2D와 동일한 dashtype으로 적용한다.
@@ -10631,7 +10782,7 @@ class GnuplotGenerator:
                 # 쓰고, Auto면 기존처럼 surface별 자동 순환(_SURFACE_DASH_CYCLE -
                 # 겹치는 surface 구분용)을 그대로 유지한다.
                 _s_dash_clause = _3d_surface_dash_clause(s, _s_idx, fmt)
-                _s_pt_clause = _3d_marker_clause(_s_style, s)
+                _s_pt_clause = _3d_marker_clause(_s_style, s, getattr(self, "_3d_auto_ps", None))
 
                 # [추가 - 사용자 요청] "3D Marker 개수도 2D처럼 최대개수를 정해요" -
                 # curve와 동일하게(단, pm3d는 격자 전체가 있어야 면이 끊기지 않아
