@@ -1078,6 +1078,19 @@ def _3d_linespoints_keyentry(title_clause, pt_clause, dash_clause):
 # 7.7pt) 나와 2D와 기준이 달랐음.
 _3D_FONT_SCALE_SCREEN = 1.0
 _3D_FONT_SCALE_PRINT = 1.5
+# [수정 - 사용자 지적] "PDF/PNG/JPG/SVG는 같은 크기여야" - gnuplot 터미널마다
+# 글자를 그리는 배율이 달라서, 같은 pt를 요청하면 캔버스 대비 글자 크기가
+# 제각각이었음(3D는 2D와 달리 PNG/JPG/SVG를 각 터미널로 직접 그렸음). 3D
+# 저장(파일)은 2D와 같이 PNG/JPG/SVG를 PDF에서 변환해 PDF와 완전히 같게 하고,
+# 화면 창의 저장 키(N/J/S/E, Ctrl+P - gnuplot 안에서 바로 저장이라 변환 불가)와
+# EPS/EMF는 PDF와 같은 5:4 캔버스 + 터미널별 배율로 PDF와 같은 글자 비율을
+# 맞춘다. 실측(같은 5:4 캔버스, 같은 요청 pt에서 캔버스 대비 글자 크기, PDF=1):
+# pngcairo 1.91, jpeg(libgd) 0.91, svg 1.08, emf 0.96, eps(postscript) 0.75
+# (EPS는 요청 pt의 1/2로 그림) - 배율 = 1.5 / 실측비.
+_3D_FONT_SCALE_BY_TERM = {
+    "pdf": 1.5, "png": 1.5 / 1.91, "jpg": 1.5 / 0.91, "svg": 1.5 / 1.08,
+    "emf": 1.5, "eps": 2.0,
+}
 
 
 def _3d_fonts_resolved(fonts):
@@ -10314,6 +10327,31 @@ class GnuplotGenerator:
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
 
+        # [수정 - 사용자 지적] "PDF/PNG/JPG/SVG는 같은 크기" - 2D create_script와
+        # 같이 PNG/JPG/SVG는 PDF로 먼저 그린 뒤 PyMuPDF로 변환해서 PDF와 완전히
+        # 같게 한다(gnuplot pngcairo/jpeg/svg 터미널은 글자 배율이 제각각 -
+        # _3D_FONT_SCALE_BY_TERM 참고). PyMuPDF가 없으면 아래 터미널 직접 방식.
+        _fmt0 = (fmt or "").lower()
+        if _fmt0 in ("png", "jpg", "jpeg", "svg"):
+            _params = self.create_3d_script.__code__.co_varnames[:self.create_3d_script.__code__.co_argcount]
+            _loc = locals()
+            _args = {k: _loc[k] for k in _params if k not in ("self", "outfile", "fmt")}
+            _plot_dir0 = os.path.dirname(os.path.abspath(outfile))
+            os.makedirs(_plot_dir0, exist_ok=True)
+            _tmp_pdf = os.path.join(_plot_dir0, f".cathplot_raster3d_{uuid.uuid4().hex}.pdf")
+            try:
+                self.create_3d_script(outfile=_tmp_pdf, fmt="pdf", **copy.deepcopy(_args))
+                if _fmt0 == "svg":
+                    if _convert_pdf_to_svg(_tmp_pdf, outfile):
+                        return outfile
+                elif _rasterize_pdf_to_image(_tmp_pdf, outfile, _fmt0):
+                    return outfile
+            finally:
+                try:
+                    os.remove(_tmp_pdf)
+                except OSError:
+                    pass
+
         _fmt = (fmt or "interactive").lower()
         is_interactive = _fmt == "interactive"
         title_disp = os.path.splitext(os.path.basename(outfile))[0]
@@ -10330,21 +10368,26 @@ class GnuplotGenerator:
                 continue
             _ann_label_ids.append(_ai + 1)
         _font_cmds_screen = _3d_font_cmds(fonts, _3D_FONT_SCALE_SCREEN, bool(ylabel), _ann_label_ids)
-        _font_cmds_print = _3d_font_cmds(fonts, _3D_FONT_SCALE_PRINT, bool(ylabel), _ann_label_ids)
+        _font_cmds_by_term = {k: _3d_font_cmds(fonts, v, bool(ylabel), _ann_label_ids)
+                              for k, v in _3D_FONT_SCALE_BY_TERM.items()}
         lines = ["set encoding utf8"]
         # [추가] "3D Plot도 저장/인쇄 지원" - 2D create_script처럼 확장자별로
         # 맞는 gnuplot 터미널을 골라야 하는데, 3D 다이얼로그는 2D의 Frame
         # Auto/Width/Height 설정이 없어 크기는 고정값(2D의 A4 기본값과 비슷한
         # 비율)으로 둔다.
         _3D_TERMINAL_MAP = {
-            "png": "set terminal pngcairo enhanced color font 'Malgun Gothic,14' size 11.7in,8.3in",
-            "jpg": "set terminal jpeg size 1600,900 enhanced font 'Malgun Gothic,14'",
-            "jpeg": "set terminal jpeg size 1600,900 enhanced font 'Malgun Gothic,14'",
-            "svg": "set terminal svg enhanced size 1123,797 font 'Malgun Gothic,14'",
-            "eps": "set terminal postscript eps enhanced color font 'Malgun Gothic,14'",
-            "emf": "set terminal emf enhanced size 1680,1200 font 'Malgun Gothic,14'",
+            # png/jpg/svg는 아래에서 PDF로 그린 뒤 변환하므로(PyMuPDF가 없을 때만)
+            # 쓰이는 대체 경로 - 모두 PDF와 같은 5:4 캔버스
+            "png": "set terminal pngcairo enhanced color font 'Malgun Gothic,14' size 10in,8in",
+            "jpg": "set terminal jpeg size 1500,1200 enhanced font 'Malgun Gothic,14'",
+            "jpeg": "set terminal jpeg size 1500,1200 enhanced font 'Malgun Gothic,14'",
+            "svg": "set terminal svg enhanced size 1000,800 font 'Malgun Gothic,14'",
+            "eps": "set terminal postscript eps enhanced color font 'Malgun Gothic,14' size 10in,8in",
+            "emf": "set terminal emf enhanced size 1500,1200 font 'Malgun Gothic,14'",
             "pdf": "set terminal pdfcairo enhanced color font 'Malgun Gothic,14' size 10in,8in",
         }
+        _term_key = {"jpeg": "jpg"}.get(_fmt, _fmt)
+        _font_cmds_print = _font_cmds_by_term.get(_term_key, _font_cmds_by_term["pdf"])
         if is_interactive:
             lines.append(f"set terminal windows title '{title_disp}' font 'Malgun Gothic,11' size 1000,700")
         else:
@@ -10629,8 +10672,8 @@ class GnuplotGenerator:
             # unset해서 저장되는 파일에는 안 나오게 한다.
             _print_cmd = (
                 'unset label 9003; unset label 9004; '
-                'set terminal emf enhanced size 1680,1200 font "Malgun Gothic,14"; '
-                f'{"; ".join(_font_cmds_print)}; '
+                'set terminal emf enhanced size 1500,1200 font "Malgun Gothic,14"; '
+                f'{"; ".join(_font_cmds_by_term["emf"])}; '
                 'set output "PRN"; '
                 'replot; '
                 'set output; '
@@ -10648,10 +10691,10 @@ class GnuplotGenerator:
             # 기능이라 그대로 소문자 유지" 요청 - j/s만 소문자였던 걸 J/S로 변경.
             _view_formats = [
                 ('P', 'pdfcairo enhanced color font "Malgun Gothic,14" size 10in,8in', 'pdf'),
-                ('N', 'pngcairo enhanced color font "Malgun Gothic,14" size 11.7in,8.3in', 'png'),
-                ('J', 'jpeg size 1600,900 enhanced font "Malgun Gothic,14"', 'jpg'),
-                ('E', 'emf enhanced size 1680,1200 font "Malgun Gothic,14"', 'emf'),
-                ('S', 'svg enhanced size 1123,797 font "Malgun Gothic,14"', 'svg'),
+                ('N', 'pngcairo enhanced color font "Malgun Gothic,14" size 10in,8in', 'png'),
+                ('J', 'jpeg size 1500,1200 enhanced font "Malgun Gothic,14"', 'jpg'),
+                ('E', 'emf enhanced size 1500,1200 font "Malgun Gothic,14"', 'emf'),
+                ('S', 'svg enhanced size 1000,800 font "Malgun Gothic,14"', 'svg'),
             ]
             for _key, _term_spec, _ext in _view_formats:
                 # [수정] "FilePath도 상대위치로 적어도 무방함" - gnuplot을 이미
@@ -10664,7 +10707,7 @@ class GnuplotGenerator:
                     'unset label 9003; unset label 9004; '
                     f'fn9004={_outexpr}; '
                     f'set terminal {_term_spec}; '
-                    f'{"; ".join(_font_cmds_print)}; '
+                    f'{"; ".join(_font_cmds_by_term[_ext])}; '
                     f'set output fn9004; '
                     f'replot; '
                     f'set output; '
