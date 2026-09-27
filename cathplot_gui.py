@@ -5714,7 +5714,9 @@ class CathPlotGUI:
             time_min=_parse_opt_float(td3_data.get("time_min", "")), time_max=_parse_opt_float(td3_data.get("time_max", "")),
             y_min=_parse_opt_float(td3_data.get("y_min", "")), y_max=_parse_opt_float(td3_data.get("y_max", "")),
             z_min=_parse_opt_float(td3_data.get("z_min", "")), z_max=_parse_opt_float(td3_data.get("z_max", "")),
-            fonts=self._3d_fonts(data),
+            # 3D Template에 저장된 폰트(저장 시점의 설정) 우선 - 이 필드가 없는
+            # 예전 3D Template만 같이 처리 중인 2D Template 값으로 대체.
+            fonts=self._3d_fonts(self._3d_template_font_src(td3_data) or data),
         )
         return outfile
 
@@ -9553,6 +9555,9 @@ class CathPlotGUI:
                 "marker_shapes": _shapes, "marker_sizes": _sizes, "line_styles": _styles, "titles": _titles,
                 "marker_max_counts": _maxcounts, "checked": _checked, "marker_ons": _marker_ons,
                 "curve_pairs": _curve_pairs,
+                # [추가 - 사용자 지적] 3D 글자 폰트/크기(저장 시점의 메인 화면
+                # 값) - Batch 3D가 2D Template 대신 이 값을 쓴다.
+                "fonts": self._3d_fonts(),
                 "annotations_3d": [
                     {"txt": d['txt'].get(), "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
                      "color": d['color'].get()}
@@ -10479,6 +10484,18 @@ class CathPlotGUI:
             " L  1.5배 ≈ 9pt   XL 2.0배 ≈ 12pt   (XS~XL은 폰트와 무관한 고정값)\n"
             " pt = 저장 이미지의 원 지름(Axis Frame 10x8cm 기준 - Manual로 키우면 비례해 커짐)"
         )
+
+    @staticmethod
+    def _3d_template_font_src(td3_data):
+        """3D Template의 "fonts"(_3d_fonts 형식)를 _3d_fonts(data)가 읽는 2D
+        키 이름으로 바꿔 돌려준다(없으면 None) - 설치 안 된 폰트 대체를
+        같은 경로로 거치게 하려는 것."""
+        f = (td3_data or {}).get("fonts")
+        if not isinstance(f, dict):
+            return None
+        return {"title_font": f.get("title_font"), "title_size": f.get("title_size"),
+                "xlabel_font": f.get("label_font"), "xlabel_size": f.get("label_size"),
+                "legend_font": f.get("legend_font"), "legend_size": f.get("legend_size")}
 
     def _3d_fonts(self, data=None):
         """[추가 - 사용자 요청] "3D도 2D처럼 Title/Axis Title/Tic 폰트를 공유" -
