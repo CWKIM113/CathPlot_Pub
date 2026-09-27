@@ -6319,9 +6319,10 @@ class CathPlotGUI:
                 # 참고), 이 팝업에 처음 뜰 때도 Y2 curve면 Fill 체크박스
                 # 기본값을 True로 맞춰 실제 렌더링과 화면 표시가 어긋나
                 # 보이지 않게 한다.
-                # [수정 - 사용자 요청] Auto의 open/fill은 이제 axis가 아니라
-                # 이 Fill 체크박스로 정하므로(_auto_marker_order 참고) 기본은 open.
-                self.marker_fill_vars[key] = tk.BooleanVar(value=False)
+                # [수정 - 사용자 요청] 기본값은 처음처럼 Y1=해제, Y2=체크 - Auto의
+                # open/fill은 이 체크박스로 정하므로(_auto_marker_order) 사용자가
+                # 바꾸면 그대로 반영된다.
+                self.marker_fill_vars[key] = tk.BooleanVar(value=key not in _y1_set)
             # [추가 - 사용자 요청] Dat list에서 옮겨온 Color/Style - 보통
             # show_variables()가 먼저 이 key를 lazy-init해두지만, 방어적으로
             # 여기서도 동일하게 없으면 만든다(Marker 쪽 변수들과 같은 패턴).
@@ -6403,7 +6404,7 @@ class CathPlotGUI:
             popup,
             text="On 체크 해제 시 이 curve는 마커 없음(Shape는 무관). Shape=Auto면 Fill 해제 curve끼리 open 모양, "
                  "Fill 체크 curve끼리 filled 모양을 각각 Y1->Y2 순서로 Circle부터 서로 다르게 자동 배정. "
-                 "Auto 버튼 = 전체 Shape Auto + On + Fill 해제로 초기화. "
+                 "Auto 버튼 = 전체 Shape Auto + On + Fill 기본값(Y1 해제, Y2 체크)으로 초기화. "
                  "L1/L2는 Legend1/2 박스 포함 여부, Order(▲▼)는 두 Legend가 공유하는 표시 순서. Max#를 비우면 "
                  "자동(대략 20~30개, 데이터가 적으면 전부 표시). M 크기 = pointsize 1.0",
             foreground="#555555", wraplength=680, justify="left"
@@ -6426,12 +6427,12 @@ class CathPlotGUI:
             # 켜져 있지 않던 curve도 이 버튼을 누르면 마커가 보이도록 On을
             # 함께 켠다(예전엔 Shape만 정하면 곧바로 보였던 것과 같은 체감).
             # [수정 - 사용자 요청] 구체적 모양으로 "고정"하던 것을 초기화 버튼으로
-            # 변경 - 전체를 Shape=Auto + On + Fill 해제로 되돌린다. 실제 모양은
-            # 그릴 때 Y1->Y2 순서로 Circle부터 배정(_auto_marker_order), 이후
-            # Fill을 체크한 curve만 filled 모양 순서로 따로 배정된다.
+            # 변경 - 전체를 Shape=Auto + On + Fill 기본값(Y1=해제, Y2=체크)으로
+            # 되돌린다. 실제 모양은 그릴 때 같은 Fill끼리 Y1->Y2 순서로 Circle부터
+            # 배정(_auto_marker_order).
             for key in _ordered_keys:
                 self.marker_shape_vars[key].set("Auto")
-                self.marker_fill_vars[key].set(False)
+                self.marker_fill_vars[key].set(key not in _y1_set)
                 if key not in self.marker_on_vars:
                     self.marker_on_vars[key] = tk.BooleanVar(value=False)
                 self.marker_on_vars[key].set(True)
