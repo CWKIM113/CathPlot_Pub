@@ -804,8 +804,12 @@ def _char_points_to_labels(cmd, term=None, term_font_pt=11.0):
 def _compose_eps_vector_clip(main_path, full_path, geom, opaque):
     """EPS 합성: full(메인+사각형 인셋)의 prolog + main 본문 + (타원 clip 안에서)
     full 본문 + 타원 테두리. geom = (cx, cy, rx, ry) 캔버스 비율(아래->위)."""
-    main_t = open(main_path, encoding="latin-1").read()
-    full_t = open(full_path, encoding="latin-1").read()
+    # 읽은 뒤 바로 닫아 둔다 - 호출부가 곧바로 main 파일을 지우고 full 파일에
+    # 다시 쓰므로, 핸들이 열려 있으면 Windows에서 삭제/쓰기가 실패할 수 있음.
+    with open(main_path, encoding="latin-1") as f:
+        main_t = f.read()
+    with open(full_path, encoding="latin-1") as f:
+        full_t = f.read()
     m = re.search(r"%%BoundingBox:\s*(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", full_t)
     if not m:
         return
@@ -848,8 +852,10 @@ def _emf_records(data):
 def _compose_emf_vector_clip(main_path, full_path, geom, opaque):
     """EMF 합성: [main 레코드] SAVEDC BEGINPATH ELLIPSE ENDPATH SELECTCLIPPATH
     [full 레코드(객체 번호를 main 뒤로 밀어 충돌 방지)] RESTOREDC + 타원 테두리."""
-    main_r = _emf_records(open(main_path, "rb").read())
-    full_r = _emf_records(open(full_path, "rb").read())
+    with open(main_path, "rb") as f:     # 바로 닫음(_compose_eps_vector_clip과 같은 이유)
+        main_r = _emf_records(f.read())
+    with open(full_path, "rb") as f:
+        full_r = _emf_records(f.read())
     if not main_r or not full_r or main_r[0][0] != 1 or full_r[0][0] != 1:
         return
     hdr = bytearray(full_r[0][1])
@@ -10233,6 +10239,7 @@ class GnuplotGenerator:
 
         _tmp_full_gif = os.path.join(plot_dir, f".cathplot_pip_blend_full_{uuid.uuid4().hex}.gif")
         _tmp_main_gif = os.path.join(plot_dir, f".cathplot_pip_blend_main_{uuid.uuid4().hex}.gif")
+        full_im = main_im = None
         try:
             # [2단계] "완전 불투명" 버전(clip_shape는 요청한 그대로 유지 -
             # rect든 원/타원이든 이미 opacity=100에서 네이티브로 저비용 지원됨).
@@ -10310,6 +10317,12 @@ class GnuplotGenerator:
                 "clip_shape": _clip_info.get("clip_shape"),
             }
         finally:
+            # [수정 - 코드 검토] PIL은 여러 프레임 GIF를 seek용으로 열어 둔 채라,
+            # 닫지 않으면 Windows에서 아래 삭제가 PermissionError로 조용히 실패해
+            # 임시 GIF 두 개가 plot 폴더에 계속 쌓였음(실측) - 먼저 닫는다.
+            for _im in (full_im, main_im):
+                if _im is not None:
+                    _im.close()
             for _tmp in (_tmp_full_gif, _tmp_main_gif):
                 try:
                     os.remove(_tmp)

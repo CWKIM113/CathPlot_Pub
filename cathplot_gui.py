@@ -13119,6 +13119,22 @@ class CathPlotGUI:
         except Exception:
             return 0  # 확인 자체가 안 되면 안전하게 "없음"으로 보고 기존처럼 조용히 넘어감
 
+    def _cleanup_pip_fold_tempfiles(self, min_age_sec=0):
+        """[추가 - 사용자 요청] 화면 PIP의 확대/이동 재생용 임시 데이터
+        (.cathplot_pipfold_*.dat, gnu_generator._build_pip_folded_overlay가 plot
+        폴더에 만듦)를 지운다 - 열린 gnuplot 창이 확대/이동할 때마다 다시 읽으므로
+        실행 중에는 못 지우고, 그동안 아무도 지우지 않아 계속 쌓였음.
+        min_age_sec보다 오래된 파일만 지운다(시작 시 정리용)."""
+        import glob
+        import time
+        now = time.time()
+        for path in glob.glob(os.path.join(self.plot_dir, ".cathplot_pipfold_*.dat")):
+            try:
+                if now - os.path.getmtime(path) >= min_age_sec:
+                    os.remove(path)
+            except OSError:
+                pass
+
     def on_closing(self):
         """GUI 창이 닫힐 때 temp_sorted 임시 폴더와 gnuplot 프로세스를 정리하고 프로그램을 종료합니다."""
         # -1. [추가 - 요청] "X 버튼으로 닫기 전에, 백그라운드로 실행 중인 Batch
@@ -13189,6 +13205,16 @@ class CathPlotGUI:
                 if do_kill:
                     subprocess.run(["taskkill", "/F", "/IM", "gnuplot_qt.exe"], capture_output=True, **_no_console_kwargs())
                     subprocess.run(["taskkill", "/F", "/IM", "gnuplot.exe"], capture_output=True, **_no_console_kwargs())
+        except Exception:
+            pass
+
+        # 3. 화면 PIP 확대/이동용 임시 데이터 정리 - gnuplot 창이 하나도 안 남았을
+        #    때만(남긴 창은 확대/이동 시 이 파일을 계속 읽음). 남겨 둔 경우는 다음
+        #    실행 때 하루 지난 것부터 지운다(__main__ 참고).
+        try:
+            if (self._count_running_processes("gnuplot.exe")
+                    + self._count_running_processes("gnuplot_qt.exe")) == 0:
+                self._cleanup_pip_fold_tempfiles()
         except Exception:
             pass
 
@@ -13368,5 +13394,7 @@ if __name__ == "__main__":
     root = tk.Tk()
     _install_global_error_handlers(root)
     app = CathPlotGUI(root)
+    # 지난번 종료 때 gnuplot 창을 남겨 두어 못 지운 PIP 임시 데이터 정리(하루 지난 것만)
+    app._cleanup_pip_fold_tempfiles(min_age_sec=24 * 3600)
     _check_gnuplot_installed(root)  # 백그라운드에서 확인 - 화면은 바로 뜸
     root.mainloop()
