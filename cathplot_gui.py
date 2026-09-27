@@ -1733,6 +1733,19 @@ class CathPlotGUI:
         # 다시 재는 게 아니므로 그 실패를 반복하지 않는다.
         _screen_h = self.root.winfo_screenheight()
         required_height = min(required_height, max(500, _screen_h - 100))
+        # [추가 - 코드 검토] Plot Setting 줄들이 창보다 넓으면 오른쪽 끝(예: Legend
+        # Font 줄 끝의 Curve Features 버튼)이 가로 스크롤해야만 보였음(실측: 버튼
+        # 오른쪽 약 33px 잘림). root 전체가 아니라(위 [되돌림] 참고 - 스크롤 목록
+        # 때문에 실패했던 방식) Plot Setting 내용(plot_frame) 폭만 재서, 창보다
+        # 넓을 때만 그만큼 넓힌다(좁히지는 않음, 화면 폭 상한). 실제 PC 폰트로
+        # 재므로 이미 들어맞으면 기존 폭 그대로.
+        try:
+            _chrome_w = self.root.winfo_width() - self.plot_canvas.winfo_width()
+            _need_w = self.plot_frame.winfo_reqwidth() + max(_chrome_w, 0) + 4
+            if _need_w > self._win_w:
+                self._win_w = min(_need_w, self.root.winfo_screenwidth() - 40)
+        except tk.TclError:
+            pass
         self.root.geometry(f"{self._win_w}x{required_height}")
 
     def _disable_combobox_wheel(self, combo):
