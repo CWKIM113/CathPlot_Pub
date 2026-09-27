@@ -5714,6 +5714,7 @@ class CathPlotGUI:
             time_min=_parse_opt_float(td3_data.get("time_min", "")), time_max=_parse_opt_float(td3_data.get("time_max", "")),
             y_min=_parse_opt_float(td3_data.get("y_min", "")), y_max=_parse_opt_float(td3_data.get("y_max", "")),
             z_min=_parse_opt_float(td3_data.get("z_min", "")), z_max=_parse_opt_float(td3_data.get("z_max", "")),
+            fonts=self._3d_fonts(data),
         )
         return outfile
 
@@ -6431,6 +6432,7 @@ class CathPlotGUI:
                                        values=MARKER_SIZE_LIST, state="readonly")
             size_combo.pack(side="left", fill="both", expand=True)
             self._disable_combobox_wheel(size_combo)
+            self._add_hover_hint(size_combo, self._marker_size_hint_text)
 
             fill_cell = _cell(row_f, FILL_PX)
             _fill_chk = self._mk_check(fill_cell, "", self.marker_fill_vars[key], side="left")
@@ -8753,6 +8755,7 @@ class CathPlotGUI:
                                            values=MARKER_SIZE_LIST, state="readonly")
                 size_combo.pack(side="left", fill="both", expand=True)
                 self._disable_combobox_wheel(size_combo)
+                self._add_hover_hint(size_combo, self._marker_size_hint_text)
                 maxno_cell = _cell(row_f, MAXNO_PX)
                 ttk.Entry(maxno_cell, textvariable=maxno_var, validate="key",
                           validatecommand=_maxno_vcmd).pack(side="left", fill="both", expand=True)
@@ -9907,6 +9910,7 @@ class CathPlotGUI:
                     equal_xyz=equal_xyz, surfaces=surfaces, function_surfaces=function_surfaces,
                     time_min=time_min, time_max=time_max,
                     y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max, duration_sec=_duration_sec,
+                    fonts=self._3d_fonts(),
                 )
             else:
                 generator.create_3d_script(
@@ -9922,7 +9926,7 @@ class CathPlotGUI:
                     rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
                     annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
                     surfaces=surfaces, function_surfaces=function_surfaces, time_min=time_min, time_max=time_max,
-                    y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
+                    y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max, fonts=self._3d_fonts(),
                 )
         except Exception as e:
             messagebox.showerror("3D Plot Error", str(e))
@@ -9990,7 +9994,7 @@ class CathPlotGUI:
                 equal_xyz=equal_xyz, surfaces=surfaces, function_surfaces=function_surfaces,
                 time_min=time_min, time_max=time_max,
                 y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
-                duration_sec=_duration_sec, gif_path=outfile,
+                duration_sec=_duration_sec, gif_path=outfile, fonts=self._3d_fonts(),
             )
             return
         generator.create_3d_script(
@@ -10001,7 +10005,7 @@ class CathPlotGUI:
             rot_x=rot_x, rot_z=rot_z, style=style, palette=palette, colorbox=colorbox,
             annotations_3d=annotations_3d, arrows_3d=arrows_3d, equal_xyz=equal_xyz,
             surfaces=surfaces, function_surfaces=function_surfaces, time_min=time_min, time_max=time_max,
-            y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max,
+            y_min=y_min, y_max=y_max, z_min=z_min, z_max=z_max, fonts=self._3d_fonts(),
         )
 
     def _save_3d_plot(self, curves, rot_x, rot_z, style, palette, colorbox, annotations_3d, arrows_3d,
@@ -10430,6 +10434,74 @@ class CathPlotGUI:
             names = None
         self._installed_font_cache = names
         return names
+
+    def _add_hover_hint(self, widget, text):
+        """마우스를 올리면 노란 툴팁을 띄운다(text는 문자열 또는 호출 시점에
+        내용을 만드는 함수 - 현재 설정값을 반영할 때 사용)."""
+        def _show(event):
+            _hide(None)
+            try:
+                msg = text() if callable(text) else text
+            except Exception:
+                return
+            tw = tk.Toplevel(widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
+            tk.Label(tw, text=msg, background="#ffffe0", relief="solid", borderwidth=1,
+                     font=("Consolas", 9), padx=4, pady=2, justify="left").pack()
+            widget._hint_win = tw
+        def _hide(event):
+            if getattr(widget, "_hint_win", None) is not None:
+                try:
+                    widget._hint_win.destroy()
+                except tk.TclError:
+                    pass
+                widget._hint_win = None
+        widget.bind("<Enter>", _show, add="+")
+        widget.bind("<Leave>", _hide, add="+")
+        widget.bind("<ButtonPress>", _hide, add="+")
+        widget.bind("<Destroy>", _hide, add="+")
+
+    def _marker_size_hint_text(self):
+        """[추가 - 사용자 요청] Marker Size 콤보 툴팁 - 각 크기가 실제로
+        얼마인지(pt), Auto가 지금 Legend Font로 몇 배인지 보여준다.
+        ps 1 = 원 지름 약 6pt(저장 이미지 기준 Frame 10x8cm, 폰트와 무관)."""
+        try:
+            leg = float(self.legend_size_var.get() or 9)
+        except (TypeError, ValueError):
+            leg = 9.0
+        auto = min(max(leg / 9.0, 0.3), 4.0)
+        return (
+            "Marker 크기 (legend 안 마커도 curve와 항상 같은 크기)\n"
+            f" Auto : Legend Font 비례 - 지금 {leg:g}pt → {auto:.2f}배 (≈{6 * auto:.1f}pt)\n"
+            "        (9pt일 때 M과 같음, 3D도 메인 화면 Legend Font 기준)\n"
+            " XS 0.5배 ≈ 3pt   S 0.75배 ≈ 4.5pt   M 1.0배 ≈ 6pt\n"
+            " L  1.5배 ≈ 9pt   XL 2.0배 ≈ 12pt   (XS~XL은 폰트와 무관한 고정값)\n"
+            " pt = 저장 이미지의 원 지름(Axis Frame 10x8cm 기준 - Manual로 키우면 비례해 커짐)"
+        )
+
+    def _3d_fonts(self, data=None):
+        """[추가 - 사용자 요청] "3D도 2D처럼 Title/Axis Title/Tic 폰트를 공유" -
+        3D에는 별도 폰트 입력이 없으므로 메인 화면(2D)의 Title / Axis Title /
+        Legend(Tic·Comment 공용) 폰트·크기를 그대로 넘긴다. data(2D Template
+        dict)를 주면(Batch) 그 값을, 없으면 지금 메인 화면 값을 쓴다. 설치 안
+        된 폰트는 2D와 같은 규칙(_check_and_fix_fonts)으로 대체한다."""
+        if data is not None:
+            get = lambda k, d: data.get(k) or d
+        else:
+            _vars = {"title_font": self.title_font_var, "title_size": self.title_size_var,
+                     "xlabel_font": self.xlabel_font_var, "xlabel_size": self.xlabel_size_var,
+                     "legend_font": self.legend_font_var, "legend_size": self.legend_size_var}
+            get = lambda k, d: _vars[k].get() or d
+        _pd = PlotDefinition(title_font=get("title_font", "Malgun Gothic"),
+                             xlabel_font=get("xlabel_font", "Malgun Gothic"),
+                             legend_font=get("legend_font", "Malgun Gothic"))
+        _pd, _ = self._check_and_fix_fonts(_pd)
+        return {
+            "title_font": _pd.title_font, "title_size": get("title_size", "14"),
+            "label_font": _pd.xlabel_font, "label_size": get("xlabel_size", "11"),
+            "legend_font": _pd.legend_font, "legend_size": get("legend_size", "9"),
+        }
 
     def _check_and_fix_fonts(self, plotdef):
         """plotdef에 지정된 폰트(Title/X/Y/Y2 label, Legend)가 실제로 설치돼
