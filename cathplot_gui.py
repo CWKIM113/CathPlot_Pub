@@ -10469,13 +10469,12 @@ class CathPlotGUI:
 
     def _marker_size_hint_text(self):
         """[추가 - 사용자 요청] Marker Size 콤보 툴팁. [수정 - 사용자 요청]
-        "Auto: M(9pt) 기준, Legend Font 크기 비례"가 더 직관적 - 배율/pt 계산
-        숫자는 빼고 기준과 규칙만 보여준다. ps 1(M) = 원 지름 약 6pt."""
+        "Auto: Legend Font 9pt일 때 M, Font 크기에 비례" - 배율/pt 계산 숫자는
+        빼고 기준과 규칙만 보여준다(M = 원 지름 약 6pt는 사용설명서 3.2.1 참고)."""
         return (
             "Marker 크기 (legend 안 마커도 curve와 항상 같은 크기)\n"
-            " Auto : M(9pt) 기준, Legend Font 크기 비례\n"
-            " XS / S / M / L / XL : M의 0.5 / 0.75 / 1 / 1.5 / 2배 - 폰트와 무관한 고정 크기\n"
-            " (M = 저장 이미지에서 원 지름 약 6pt)"
+            " Auto : Legend Font 9pt일 때 M, Font 크기에 비례\n"
+            " XS / S / M / L / XL : M의 0.5 / 0.75 / 1 / 1.5 / 2배 - 폰트와 무관한 고정 크기"
         )
 
     @staticmethod
