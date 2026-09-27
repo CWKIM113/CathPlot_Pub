@@ -10,6 +10,7 @@ import re
 import shutil
 import struct
 import subprocess
+import threading
 
 # gnuplot.exe(콘솔 프로그램)를 실행할 때마다 배경에서 콘솔창이 잠깐 깜빡이는 것을
 # 막기 위한 플래그 (Windows 전용 - 다른 OS에는 이 속성이 없으므로 getattr로 안전하게 처리)
@@ -437,21 +438,94 @@ MARKER_NATIVE_PS_SCALE = {8: 23 / 29, 9: 23 / 29, 10: 23 / 29, 11: 23 / 29}
 # bbox 중심(1/2 지점)과 어긋남(그 차이는 항상 "높이의 1/6" - 삼각형
 # 기하의 고정 비율) - 좌우 세모(◁▷)는 이 어긋남이 가로 방향이라 세로
 # 중심에는 영향 없음(실측 확인).
-# [수정 - 사용자 재보고] "세모 상하가 중심선과 서로 다름" - 처음 보정
-# (ps와 무관한 고정 축 비율)은 우연히 맞았던 한 ps 값에서만 맞고 다른
-# ps(marker 크기)에서는 어긋남이 재현됨 - 실제 원인은 위 "높이의 1/6"
-# 어긋남이 marker 크기(ps)에 비례하는데, 축 비율만으로는 이 비례관계를
-# 전혀 반영 못 했던 것(같은 축 범위에서도 ps가 커지면 필요한 보정량도
-# 커져야 함). ps=10으로 크게 그려 실측(픽셀로 직접 측정)한 결과 세모
-# 높이는 ps당 약 6px, bbox중심<->무게중심 어긋남은 그 1/6인 ps당 약
-# 1.075px로 확인 - 화면(1000x700 고정 캔버스)의 전형적인 main-plot axis
-# 높이(약 524px, tmargin/bmargin 기본값 기준)로 나눠 "ps와 축 범위 모두에
-# 비례"하는 최종 계수를 얻음(1.075/524 ≈ 0.00205). PIP 인셋처럼 axis
-# 높이가 다른 경우엔 정확도가 다소 떨어질 수 있으나(그래도 인셋 자신의
-# ps도 같이 작아지므로 어느 정도 상쇄됨), 화면 출력(fmt=="interactive")
-# 에만 적용하고 이미지/인쇄 출력에는 적용하지 않는다(그쪽은 캔버스
-# 크기/DPI 가정 자체가 달라 이 계수가 안 맞음 - 별도 검증 필요).
-MARKER_Y_SHIFT_PER_PS = {8: -0.00205, 9: -0.00205, 10: 0.00205, 11: 0.00205}
+# [수정 - 사용자 요청] "세모는 무게중심(=정삼각형의 외접원 중심)을 선에 맞추기"
+# - 원/네모/마름모처럼 모든 도형이 "외접원 중심 = 데이터 점"이 되게 한다.
+#   * 화면(windows 터미널): gnuplot이 세모를 무게중심 기준으로 찍는 것으로
+#     예전 Windows 실측(bbox 중심과 높이의 1/6만큼 어긋남)에서 확인됨 - 보정
+#     없이 그대로 두면 무게중심이 선에 맞음(예전의 bbox 중심 보정은 제거).
+#   * 저장 이미지(pdf/png/jpg = cairo): gnuplot 6.0 cairo는 세모를 높이 중심
+#     근처에 찍어(실측: 선이 꼭짓점에서 61%(ps1)~53%(ps4) 지점), 무게중심이
+#     선보다 아래(▲)/위(▼)로 a*ps+b pt 어긋남. gnuplot 버전·빌드마다 도형
+#     좌표가 다를 수 있어 상수로 박지 않고, 처음 필요할 때 사용자의 gnuplot으로
+#     세모를 두 크기로 그려 한 번 측정(캘리브레이션)해 a, b를 구한다(실패하면
+#     이 환경 실측값 a=1.01, b=-0.66 사용).
+#   * EMF/SVG/EPS는 터미널마다 점 그리기 코드가 달라 미측정 - 보정 생략.
+# curve 위 세모는 데이터 좌표로 옮겨야 해서 Y 범위를 직접 입력했을 때만
+# 보정하고(Auto는 범위가 아직 확정 전이라 생략 - 사용자 확인: "auto는 약간
+# 어긋나더라도"), legend 마커는 graph 좌표라 항상 보정한다.
+_TRIANGLE_UP = (8, 9)
+_TRIANGLE_DOWN = (10, 11)
+_TRI_CAIRO_FALLBACK = (1.01, -0.66)
+_tri_cairo_cal = None
+_tri_cairo_lock = threading.Lock()
+
+
+def _calibrate_cairo_triangle():
+    """pdfcairo로 pt 8을 ps 2, 4로 그려 (무게중심 - 데이터 점) 세로 차이(pt,
+    +면 무게중심이 아래)를 재고 ps에 대한 직선(a, b)을 돌려준다."""
+    import tempfile, shutil
+    tmp = tempfile.mkdtemp(prefix="cathplot_tri_")
+    try:
+        import pymupdf as fitz
+        exe = _resolve_gnuplot_exe()
+        pts = []
+        for ps in (2.0, 4.0):
+            pdf = os.path.join(tmp, f"t{int(ps)}.pdf").replace("\\", "/")
+            script = (
+                "set terminal pdfcairo size 3in,3in\n"
+                f"set output '{pdf}'\n"
+                "unset border; unset tics; unset key; set margins 0,0,0,0\n"
+                "set xrange [0:10]; set yrange [0:10]\n"
+                f'plot "-" using 1:2 with points pt 8 ps {ps} lc rgb "#FF0000"\n5 5\ne\n'
+                "set output\n"
+            )
+            subprocess.run([exe], input=script, text=True, capture_output=True,
+                           cwd=tmp, timeout=20, **_no_console_kwargs())
+            doc = fitz.open(pdf)
+            _pg = doc[0]
+            _cx, _cy = _pg.rect.width / 2.0, _pg.rect.height / 2.0
+            # 세모 주변(±20pt)만 래스터화 - 전체 페이지는 느림(1200dpi)
+            pix = _pg.get_pixmap(dpi=1200, clip=fitz.Rect(_cx - 20, _cy - 20, _cx + 20, _cy + 20))
+            doc.close()
+            w, h, n = pix.width, pix.height, pix.n
+            buf = pix.samples
+            top = bot = None
+            for y in range(h):
+                row = buf[y * w * n:(y + 1) * w * n]
+                if any(row[i] > 150 and row[i + 1] < 120 and row[i + 2] < 120 for i in range(0, len(row), n)):
+                    if top is None:
+                        top = y
+                    bot = y
+            if top is None:
+                return None
+            cen = top + 2.0 * (bot - top) / 3.0
+            pts.append((ps, (cen - h / 2.0) * 72.0 / 1200.0))
+        (p1, e1), (p2, e2) = pts
+        a = (e2 - e1) / (p2 - p1)
+        b = e1 - a * p1
+        if not (0.3 < a < 2.0 and -3.0 < b < 3.0):
+            return None
+        return (a, b)
+    except Exception:
+        return None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _triangle_centroid_up_pt(marker_shape, ps, fmt):
+    """세모 무게중심을 데이터 점에 맞추려면 마커를 "위로" 몇 pt 옮겨야
+    하는지(▼는 음수 = 아래로). 보정 대상이 아니면 0."""
+    global _tri_cairo_cal
+    if marker_shape not in _TRIANGLE_UP + _TRIANGLE_DOWN:
+        return 0.0
+    if (fmt or "").lower() not in ("pdf", "png", "jpg", "jpeg"):
+        return 0.0
+    with _tri_cairo_lock:
+        if _tri_cairo_cal is None:
+            _tri_cairo_cal = _calibrate_cairo_triangle() or _TRI_CAIRO_FALLBACK
+        a, b = _tri_cairo_cal
+    err = a * float(ps) + b
+    return err if marker_shape in _TRIANGLE_UP else -err
 
 #----------------------------------------------------------
 # Interactive
@@ -1477,33 +1551,33 @@ class GnuplotGenerator:
                 best_j, best_dev = j, dev
         return best_j if best_j is not None else idx
 
-    def _marker_y_shift_for_curve(self, plotdef, marker_shape, is_y2, ps, fmt):
-        """[추가 - 사용자 보고 버그, 재보고로 재보정] 위 MARKER_Y_SHIFT_PER_PS
-        참고 - 세모류 marker(8/9/10/11)를 실제 데이터 좌표보다 살짝 위/아래로
-        옮겨 찍어서 bbox 중심이 눈에 보이는 "중심"이 되게 보정한다. 어긋남은
-        실제 렌더링되는 marker 크기(ps)에 비례하므로 ps를 반드시 받아 곱해야
-        하고(안 그러면 "한 ps에서만 우연히 맞는" 재현된 버그가 다시 생김),
-        이 curve가 속한 축(Y1/Y2)의 "구체적인 숫자" 범위도 알아야 하는데
-        (Auto Range면 이 시점엔 아직 확정되지 않음) - plotdef가 수동으로
-        지정해둔 범위(yauto/y2auto=False일 때의 ymin/ymax)가 있을 때만
-        보정하고, Auto면 안전하게 보정을 생략한다(잘못된 추정치로 마커가
-        더 어긋나는 것보다 "보정 없음"이 항상 더 안전함). 화면(interactive)
-        전용 계수라 그 외 포맷은 보정을 생략한다."""
-        if (fmt or "").lower() != "interactive":
-            return 0.0
-        per_ps = MARKER_Y_SHIFT_PER_PS.get(marker_shape)
-        if not per_ps:
-            return 0.0
+    def _marker_y_shift_fn(self, plotdef, marker_shape, is_y2, ps, fmt, axis_h_in):
+        """세모 marker를 무게중심 기준으로 옮기는 데이터 좌표 변환 함수(위
+        _triangle_centroid_up_pt 참고). Y 범위를 직접 입력한 경우만(Auto는
+        범위 미확정이라 None), log 축이면 곱셈으로 옮긴다."""
+        up_pt = _triangle_centroid_up_pt(marker_shape, ps, fmt)
+        if not up_pt or not axis_h_in or axis_h_in <= 0:
+            return None
         if is_y2:
             auto, lo, hi = getattr(plotdef, "y2auto", True), getattr(plotdef, "y2min", ""), getattr(plotdef, "y2max", "")
+            is_log = getattr(plotdef, "y2log", False)
         else:
             auto, lo, hi = getattr(plotdef, "yauto", True), getattr(plotdef, "ymin", ""), getattr(plotdef, "ymax", "")
+            is_log = getattr(plotdef, "y1log", False)
         if auto or not str(lo).strip() or not str(hi).strip():
-            return 0.0
+            return None
         try:
-            return per_ps * ps * (float(hi) - float(lo))
+            lo, hi = float(lo), float(hi)
         except (TypeError, ValueError):
-            return 0.0
+            return None
+        frac = up_pt / (axis_h_in * 72.0)
+        if is_log:
+            if lo <= 0 or hi <= 0:
+                return None
+            k = 10 ** (frac * math.log10(hi / lo))
+            return lambda y: y * k
+        d = frac * (hi - lo)
+        return lambda y: y + d
 
     def _axis_tick_char_count(self, plotdef, axis_name):
         """[추가 - 사용자 요청] "Y/Y2 title<->tic 간격이 tic 숫자가 길어지면
@@ -2908,11 +2982,12 @@ class GnuplotGenerator:
                 if _mk_ps is None:
                     _mk_ps = (_effective_marker_size(curve, legend_size) * line_scale
                               * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0))
-                # curve 위 세모 마커와 같은 화면 전용 중심 보정(MARKER_Y_SHIFT_PER_PS
-                # 는 graph 좌표 비율 기준 계수라 그대로 곱하면 됨).
+                # 세모는 무게중심을 샘플선에 맞춤(_triangle_centroid_up_pt 참고 -
+                # legend는 graph 좌표라 Y 범위 Auto여도 항상 보정 가능).
                 symbol_y = row_y
-                if (fmt or "").lower() == "interactive":
-                    symbol_y += MARKER_Y_SHIFT_PER_PS.get(marker_shape, 0.0) * _mk_ps
+                _up_pt = _triangle_centroid_up_pt(marker_shape, _mk_ps, fmt)
+                if _up_pt and axis_h_in:
+                    symbol_y += _up_pt / (axis_h_in * 72.0)
                 if marker_shape in _CHAR_MARKERS:
                     # curve 쪽(_char_points_to_labels)과 같은 글자·같은 크기
                     lines.append(
@@ -4476,9 +4551,9 @@ class GnuplotGenerator:
                 marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, is_log_x, shared_x_range=effective_shared_range, y_bounds=_y_bounds)
                 if marker_pts:
                     marker_size = _effective_marker_size(curve, getattr(plotdef, "legend_size", None)) * line_scale * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
-                    _y_shift = self._marker_y_shift_for_curve(plotdef, marker_shape, is_y2, marker_size, fmt)
-                    if _y_shift:
-                        marker_pts = [(px, py + _y_shift) for px, py in marker_pts]
+                    _y_shift_fn = self._marker_y_shift_fn(plotdef, marker_shape, is_y2, marker_size, fmt, axis_h_in)
+                    if _y_shift_fn:
+                        marker_pts = [(px, _y_shift_fn(py)) for px, py in marker_pts]
                     dbname = f"$Marker{i}"
                     block = [f"{dbname} << EOD"]
                     block.extend(f"{px:.10g} {py:.10g}" for px, py in marker_pts)
@@ -4614,22 +4689,10 @@ class GnuplotGenerator:
                 marker_pts = self._select_marker_points(curve, x_col_idx, curve.output_no, target, False)
                 if marker_pts:
                     marker_size = _effective_marker_size(curve, legend_size) * MARKER_NATIVE_PS_SCALE.get(marker_shape, 1.0)
-                    # [추가 - 사용자 보고 버그, 재보고로 재보정] 위
-                    # MARKER_Y_SHIFT_PER_PS/_marker_y_shift_for_curve 참고 -
-                    # override curve(PIP 인셋 등)에도 main과 동일한 세모
-                    # marker 중심 보정을 적용한다(y_range/y2_range로
-                    # 넘겨받은 구체적 범위가 있을 때만, 실제 렌더링되는
-                    # ps에 비례해서 - 없으면/생략되면 안전하게 보정 없음).
-                    _rng = y2_range if is_y2 else y_range
-                    _per_ps = MARKER_Y_SHIFT_PER_PS.get(marker_shape)
-                    if (_per_ps and fmt and fmt.lower() == "interactive"
-                            and _rng and _rng[0] not in (None, "") and _rng[1] not in (None, "")):
-                        try:
-                            _y_shift = _per_ps * marker_size * (float(_rng[1]) - float(_rng[0]))
-                        except (TypeError, ValueError):
-                            _y_shift = 0.0
-                        if _y_shift:
-                            marker_pts = [(px, py + _y_shift) for px, py in marker_pts]
+                    # [수정 - 사용자 요청] 세모 무게중심 맞추기(_triangle_centroid_up_pt)
+                    # - 화면은 gnuplot 자체가 무게중심 기준이라 보정 불필요(예전의
+                    # bbox 중심 보정 제거). 저장 이미지용 보정은 이 경로(PIP 인셋의
+                    # 다른 plot 곡선)엔 인셋 축 높이 정보가 없어 생략.
                     dbname = f"$Marker{i}"
                     block = [f"{dbname} << EOD"]
                     block.extend(f"{px:.10g} {py:.10g}" for px, py in marker_pts)
