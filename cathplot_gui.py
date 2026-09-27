@@ -31,6 +31,7 @@ from tkinter import ttk
 from tkinter import filedialog
 from tkinter import messagebox
 from tkinter import font as tkfont
+from tkinter import colorchooser
 from pathlib import Path
 
 # [수정 - 요청] "창은 tkinter만 있으면 바로 뜰 수 있는데 무거운 게 다 로딩된
@@ -152,6 +153,18 @@ MARKER_SIZE_MAP = {
 MARKER_SIZE_LIST = list(MARKER_SIZE_MAP.keys())
 
 COLOR_LIST = list(COLOR_MAP.keys())
+
+
+def _to_gnuplot_color(value):
+    """색 선택 값 -> gnuplot 색 문자열. 이름 색("Red" 등, COLOR_MAP)과 Windows 색 선택
+    창에서 고른 "#RRGGBB"를 모두 받는다. "Auto"/빈 값/알 수 없는 값은 "" - 곡선이면
+    순서대로 자동 배정, 주석(Comment/Arrow/Circle)이면 gnuplot 기본색(검정)."""
+    v = (value or "").strip()
+    if v in COLOR_MAP:
+        return COLOR_MAP[v]
+    if re.fullmatch(r"#[0-9A-Fa-f]{6}", v):
+        return v.lower()
+    return ""
 STYLE_LIST = list(STYLE_MAP.keys())
 
 # [수정] "pm3d 옵션 이름을 'color palette' 또는 '입체채색'으로" - 내부적으로는
@@ -180,7 +193,7 @@ class CathPlotGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/27/2026.")
+        self.root.title("CathPlot V1.0      Developed by Cheolwoo Kim at 09/28/2026.")
         # [수정] 노트북처럼 시스템 DPI가 다른 환경에서 초기 창이 작게 보인다는
         # 피드백으로 창 크기(아래 geometry)만 20% 키움
         # [수정 - 사용자 요청] "가로 길이도 flexible하게(노트북에선 가로를
@@ -1267,7 +1280,7 @@ class CathPlotGUI:
         # 설정이라 다시 이 줄로 되돌리고, Legend Detail 팝업은 그 뒤에 이어
         # 배치한다(Box Thick/Box W/H처럼 정말 저빈도인 것만 팝업에 남김).
         legend_detail_row = ttk.Frame(self.plot_frame)
-        legend_detail_row.grid(row=2, column=3, columnspan=3, sticky="w", padx=3, pady=0)
+        legend_detail_row.grid(row=2, column=3, columnspan=3, sticky="we", padx=3, pady=0)
         ttk.Label(legend_detail_row, text="Legend Font:").pack(side="left", padx=(3, 1))
         legend_font_combo = ttk.Combobox(legend_detail_row, textvariable=self.legend_font_var, values=font_list, width=12, state="readonly")
         legend_font_combo.pack(side="left", padx=1)
@@ -1321,13 +1334,16 @@ class CathPlotGUI:
         # 요청] "버튼이름 Curve 대신 'Curve Features' 등으로" - Shape 우측
         # 체크박스(On/Off)까지 더해지며 역할이 더 넓어져 "Curve Features"로
         # 다시 변경(3D의 "Curve Features" 팝업/버튼과도 이름 통일).
+        # [수정 - 사용자 요청] "Curve Features 버튼을 Legend Detail 뒤 끝에 우측 맞춤으로" -
+        # 팝업에 L1/L2 포함 여부와 Order(범례 순서)까지 들어 있어 Legend와 관련이 커서
+        # Legend Font/Legend Detail 줄 오른쪽 끝으로 옮김(이 줄에는 Function만 남음).
         marker_settings_btn = tk.Button(
-            func_marker_row, text="Curve Features", width=14, font=("Malgun Gothic", 9, "bold"),
+            legend_detail_row, text="Curve Features", width=14, font=("Malgun Gothic", 9, "bold"),
             bg=self.PALETTE["secondary"], fg="white",
             activebackground=self.PALETTE["secondary_dark"], activeforeground="white",
             relief="raised", bd=1, pady=1,
         )
-        marker_settings_btn.pack(side="left", padx=(44, 3))
+        marker_settings_btn.pack(side="right", padx=(8, 3))
         marker_settings_btn.configure(command=self._open_curve_settings_popup)
 
         # [수정] 기본값을 Auto로 변경 - 화면에서는 항상 검증된 scale=1.0 기준으로
@@ -3401,7 +3417,7 @@ class CathPlotGUI:
                         curves.append((f"{rel_path}||{output_no}", CurveDefinition(
                             dat_file=target_dat_file, output_no=output_no, title=legend_text, axis=axis,
                             x_shift=file_x_shift,
-                            color=COLOR_MAP.get(style.get("color", ""), None),
+                            color=_to_gnuplot_color(style.get("color", "")) or None,
                             linestyle=STYLE_MAP.get(_migrate_style_label(style.get("linestyle", "")), None),
                             linewidth=float(style.get("linewidth") or 1.5),
                             x_output_no=x_output_no,
@@ -3512,7 +3528,7 @@ class CathPlotGUI:
             # 안전함).
             annotations=(
                 [{"text": c["txt"], "x": c["x"], "y": c["y"], "angle": c["ang"],
-                  "coord_mode": c.get("coord_mode", "pct"), "color": COLOR_MAP.get(c.get("color", "Auto"), "")}
+                  "coord_mode": c.get("coord_mode", "pct"), "color": _to_gnuplot_color(c.get("color", "Auto"))}
                  for c in data.get("annotations", [])
                  if str(c.get("txt", "")).strip() and str(c.get("x", "")).strip() and str(c.get("y", "")).strip()]
                 if data.get("comment_on", True) else []
@@ -3520,7 +3536,7 @@ class CathPlotGUI:
             arrows=(
                 [{"x1": a["x1"], "y1": a["y1"], "x2": a["x2"], "y2": a["y2"],
                   "head": head_label_map.get(a["type"], "Forward"),
-                  "coord_mode": a.get("coord_mode", "pct"), "color": COLOR_MAP.get(a.get("color", "Auto"), ""),
+                  "coord_mode": a.get("coord_mode", "pct"), "color": _to_gnuplot_color(a.get("color", "Auto")),
                   "head_size": self.ARROW_SIZE_MAP.get(a.get("size", "M"), self.ARROW_SIZE_MAP["M"])}
                  for a in data.get("arrows", [])
                  if str(a.get("x1", "")).strip() and str(a.get("y1", "")).strip()
@@ -3529,7 +3545,7 @@ class CathPlotGUI:
             ),
             circles=(
                 [{"x": e["x"], "y": e["y"], "rx": e["rx"], "ry": e.get("ry", ""),
-                  "coord_mode": e.get("coord_mode", "pct"), "color": COLOR_MAP.get(e.get("color", "Auto"), "")}
+                  "coord_mode": e.get("coord_mode", "pct"), "color": _to_gnuplot_color(e.get("color", "Auto"))}
                  for e in data.get("circles", [])
                  if str(e.get("x", "")).strip() and str(e.get("y", "")).strip() and str(e.get("rx", "")).strip()]
                 if data.get("circle_on", True) else []
@@ -5636,12 +5652,12 @@ class CathPlotGUI:
                 return None
 
         annotations_3d = [
-            {"text": a["txt"], "x": a["x"], "y": a["y"], "z": a["z"], "color": COLOR_MAP.get(a.get("color", "Auto"), "")}
+            {"text": a["txt"], "x": a["x"], "y": a["y"], "z": a["z"], "color": _to_gnuplot_color(a.get("color", "Auto"))}
             for a in td3_data.get("annotations_3d", []) if a.get("txt", "").strip()
         ]
         arrows_3d = [
             {"x1": a["x1"], "y1": a["y1"], "z1": a["z1"], "x2": a["x2"], "y2": a["y2"], "z2": a["z2"],
-             "color": COLOR_MAP.get(a.get("color", "Auto"), ""),
+             "color": _to_gnuplot_color(a.get("color", "Auto")),
              "head_size": self.ARROW_SIZE_MAP.get(a.get("size", "M"), self.ARROW_SIZE_MAP["M"])}
             for a in td3_data.get("arrows_3d", [])
         ]
@@ -6252,7 +6268,7 @@ class CathPlotGUI:
         # 잘려 안 보였다 - 버튼 내부 padx를 줄이고(btn_padx=3) 칸도 넉넉히
         # 넓힌다.
         CURVE_PX, ORD_PX, L1_PX, L2_PX, COLOR_PX, STYLE_PX, SHAPE_PX, ON_PX, SIZE_PX, FILL_PX, MAX_PX = \
-            160, 64, 32, 32, 65, 100, 100, 40, 55, 50, 35
+            160, 64, 32, 32, 95, 100, 100, 40, 55, 50, 35
 
         def _cell(parent, px, height=20):
             f = tk.Frame(parent, width=px, height=height)
@@ -6385,6 +6401,7 @@ class CathPlotGUI:
                                         values=COLOR_LIST, state="readonly")
             color_combo.pack(side="left", fill="both", expand=True)
             self._disable_combobox_wheel(color_combo)
+            self._attach_curve_color_picker(color_combo, self.color_vars[key])
 
             style_cell = _cell(row_f, STYLE_PX)
             style_combo = ttk.Combobox(style_cell, textvariable=self.linestyle_vars[key],
@@ -6503,7 +6520,7 @@ class CathPlotGUI:
         popup.title("Function Curves")
         popup.transient(self.root)
 
-        EXPR_PX, TITLE_PX, AXIS_PX, COLOR_PX, STYLE_PX, LW_PX = 220, 110, 55, 75, 90, 55
+        EXPR_PX, TITLE_PX, AXIS_PX, COLOR_PX, STYLE_PX, LW_PX = 220, 110, 55, 100, 90, 55
 
         def _cell(parent, px, height=22):
             f = tk.Frame(parent, width=px, height=height)
@@ -6585,6 +6602,7 @@ class CathPlotGUI:
                                     values=COLOR_LIST, state="readonly")
         color_combo.pack(side="left", fill="both", expand=True)
         self._disable_combobox_wheel(color_combo)
+        self._attach_curve_color_picker(color_combo, data['color'])
         style_combo = ttk.Combobox(_cell(row_f, STYLE_PX), textvariable=data['linestyle'],
                                     values=STYLE_LIST, state="readonly")
         style_combo.pack(side="left", fill="both", expand=True)
@@ -6614,7 +6632,7 @@ class CathPlotGUI:
                 expression=expr,
                 title=data['title'].get().strip() or expr,
                 axis=data['axis'].get() or "y1",
-                color=COLOR_MAP.get(data['color'].get(), None) or None,
+                color=_to_gnuplot_color(data['color'].get()) or None,
                 linestyle=STYLE_MAP.get(_migrate_style_label(data['linestyle'].get()), None) or None,
                 linewidth=float(data['linewidth'].get() or 1.5),
             ))
@@ -6651,7 +6669,7 @@ class CathPlotGUI:
                 expression=expr,
                 title=item.get("title") or expr,
                 axis=item.get("axis", "y1") or "y1",
-                color=COLOR_MAP.get(item.get("color", "Auto"), None) or None,
+                color=_to_gnuplot_color(item.get("color", "Auto")) or None,
                 linestyle=STYLE_MAP.get(_migrate_style_label(item.get("linestyle", "Auto")), None) or None,
                 linewidth=float(item.get("linewidth") or 1.5),
             ))
@@ -6890,7 +6908,7 @@ class CathPlotGUI:
                     title=legend_text,
                     axis=item["axis"],
                     x_shift=float(item.get("x_shift") or 0.0),
-                    color=COLOR_MAP.get(item["color"], None),
+                    color=_to_gnuplot_color(item["color"]) or None,
                     linestyle=STYLE_MAP.get(_migrate_style_label(item["linestyle"]), None),
                     linewidth=float(item["linewidth"] or 1.5),
                     x_output_no=x_output_no,
@@ -7452,7 +7470,7 @@ class CathPlotGUI:
         self.comment_list.append(data)
 
         ttk.Button(row, text="X", width=3, style="Compact.TButton", command=lambda: self.remove_row(self.comment_list, row)).pack(side="right", padx=5)
-        ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=(2, 5))
+        self._mk_color_box(row, data['color'], padx=(2, 5))
 
         ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
         ttk.Label(row, text="Txt:").pack(side="left")
@@ -7484,6 +7502,70 @@ class CathPlotGUI:
     # 축 크기와 무관하게 항상 같은 시각적 크기로 보이게)이고, 각도는 15도
     # 고정(화살촉 모양이 자연스러운 기본값)으로 자동 적용한다.
     ARROW_SIZE_MAP = {"S": 0.015, "M": 0.03, "L": 0.05, "XL": 0.08}
+
+    def _mk_color_box(self, parent, var, padx=(2, 5)):
+        """[추가 - 사용자 요청] 주석(2D/3D Comment·Arrow·Circle) 색 - 정해진 10색
+        드롭다운 대신 "Color:" 라벨 + 현재 색이 칠해진 네모를 두고, 누르면 Windows
+        색 선택 창(기본 색 48개 + 사용자 지정 색)을 연다. 고른 색은 "#rrggbb"로
+        var에 저장(Template에도 그대로), 예전 이름 색("Red" 등)도 그대로 읽힌다.
+        기본값 "Auto"는 gnuplot 기본색이라 실제로 그려지는 검정으로 보여준다."""
+        box = tk.Label(parent, width=3, relief="solid", bd=1, cursor="hand2")
+
+        def _show(*_):
+            try:
+                box.configure(bg=_to_gnuplot_color(var.get()) or "black")
+            except tk.TclError:
+                pass  # 줄이 이미 지워진 뒤 값이 바뀐 경우
+
+        def _pick(_event=None):
+            _cur = _to_gnuplot_color(var.get()) or "#000000"
+            _rgb, _hex = colorchooser.askcolor(color=_cur, parent=parent.winfo_toplevel(), title="Color")
+            if _hex:
+                var.set(_hex.lower())
+
+        box.bind("<Button-1>", _pick)
+        var.trace_add("write", _show)
+        _show()
+        box.pack(side="right", padx=padx)
+        ttk.Label(parent, text="Color:").pack(side="right")
+        self._add_hover_hint(box, "클릭하면 색 선택 창이 열림(기본: 검정)")
+        return box
+
+    _CUSTOM_COLOR_ITEM = "기타 색…"
+
+    def _attach_curve_color_picker(self, combo, var):
+        """[추가 - 사용자 요청] 곡선 색(Curve Features, Function 곡선) 드롭다운 맨 끝에
+        "기타 색…" - 고르면 Windows 색 선택 창을 열어 고른 색(#rrggbb)을 넣는다(취소하면
+        이전 값 그대로). Auto(순서대로 자동 배정)와 이름 색은 그대로 둔다. 옆 작은 네모에
+        지금 색을 보여 준다(Auto는 곡선 순번으로 정해지므로 비워 둠)."""
+        combo.configure(values=COLOR_LIST + [self._CUSTOM_COLOR_ITEM])
+        swatch = tk.Label(combo.master, width=2, relief="solid", bd=1)
+        swatch.pack(side="right", padx=(2, 0), before=combo)
+        _empty_bg = swatch.cget("bg")
+        prev = {"v": var.get()}
+
+        def _show(*_):
+            v = var.get()
+            if v != self._CUSTOM_COLOR_ITEM:
+                prev["v"] = v
+            try:
+                swatch.configure(bg=_to_gnuplot_color(v) or _empty_bg)
+            except tk.TclError:
+                pass
+
+        def _on_select(_e=None):
+            if var.get() != self._CUSTOM_COLOR_ITEM:
+                return
+            _cur = _to_gnuplot_color(prev["v"]) or "#000000"
+            _rgb, _hex = colorchooser.askcolor(color=_cur, parent=combo.winfo_toplevel(), title="Color")
+            var.set(_hex.lower() if _hex else prev["v"])
+
+        combo.bind("<<ComboboxSelected>>", _on_select, add="+")
+        _tid = var.trace_add("write", _show)
+        # 팝업을 닫으면 이 네모가 사라지는데 var(곡선 설정)는 계속 남으므로 trace도 같이 뗌
+        swatch.bind("<Destroy>", lambda _e: var.trace_remove("write", _tid) if _tid in
+                    [t[1] for t in var.trace_info()] else None)
+        _show()
     ARROW_HEAD_ANGLE = 15
 
     def add_arrow_row(self, initial=None):
@@ -7502,7 +7584,7 @@ class CathPlotGUI:
         self.arrow_list.append(data)
 
         ttk.Button(row, text="X", width=3, style="Compact.TButton", command=lambda: self.remove_row(self.arrow_list, row)).pack(side="right", padx=5)
-        ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=(2, 5))
+        self._mk_color_box(row, data['color'], padx=(2, 5))
         ttk.Combobox(row, textvariable=data['size'], values=list(self.ARROW_SIZE_MAP.keys()), width=4, state="readonly").pack(side="right", padx=(2, 2))
 
         # 저장된 type("head"/"nohead"/...) 값에 맞는 콤보박스 표시 라벨을 역매핑해서 초기값으로 사용
@@ -7555,7 +7637,7 @@ class CathPlotGUI:
         self.circle_list.append(data)
 
         ttk.Button(row, text="X", width=3, style="Compact.TButton", command=lambda: self.remove_row(self.circle_list, row)).pack(side="right", padx=5)
-        ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=(2, 5))
+        self._mk_color_box(row, data['color'], padx=(2, 5))
 
         ttk.Label(row, text="[Circle]", foreground="darkgreen").pack(side="left", padx=(0, 5))
         ttk.Label(row, text="Center(X,Y):").pack(side="left")
@@ -8003,7 +8085,7 @@ class CathPlotGUI:
             y = item['y'].get().strip()
             angle = item['ang'].get().strip() or "0"
             coord_mode = item.get('coord_mode', tk.StringVar(value="pct")).get()
-            color = COLOR_MAP.get(item.get('color', tk.StringVar(value="Auto")).get(), "")
+            color = _to_gnuplot_color(item.get('color', tk.StringVar(value="Auto")).get())
             if text and x and y:
                 annotations.append({"text": text, "x": x, "y": y, "angle": angle, "coord_mode": coord_mode, "color": color})
         return annotations
@@ -8026,7 +8108,7 @@ class CathPlotGUI:
 
             head = head_label_map.get(item['type'].get(), "Forward")
             coord_mode = item.get('coord_mode', tk.StringVar(value="pct")).get()
-            color = COLOR_MAP.get(item.get('color', tk.StringVar(value="Auto")).get(), "")
+            color = _to_gnuplot_color(item.get('color', tk.StringVar(value="Auto")).get())
             head_size = self.ARROW_SIZE_MAP.get(item.get('size', tk.StringVar(value="M")).get(), self.ARROW_SIZE_MAP["M"])
             arrows.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "head": head, "coord_mode": coord_mode, "color": color, "head_size": head_size})
         return arrows
@@ -8043,7 +8125,7 @@ class CathPlotGUI:
             if not (x and y and rx):
                 continue
             coord_mode = item.get('coord_mode', tk.StringVar(value="pct")).get()
-            color = COLOR_MAP.get(item.get('color', tk.StringVar(value="Auto")).get(), "")
+            color = _to_gnuplot_color(item.get('color', tk.StringVar(value="Auto")).get())
             circles.append({"x": x, "y": y, "rx": rx, "ry": ry, "coord_mode": coord_mode, "color": color})
         return circles
 
@@ -9119,7 +9201,7 @@ class CathPlotGUI:
                 if not anno3d_list:
                     add_3d_comment_row()
             ttk.Button(row, text="X", width=2, style="Compact.TButton", command=_remove_3d_comment_row).pack(side="right", padx=3)
-            ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
+            self._mk_color_box(row, data['color'], padx=2)
             ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 3))
             txt3d_entry = ttk.Entry(row, textvariable=data['txt'], width=14)
             txt3d_entry.pack(side="left", padx=2)
@@ -9145,7 +9227,7 @@ class CathPlotGUI:
                 if not arrow3d_list:
                     add_3d_arrow_row()
             ttk.Button(row, text="X", width=2, style="Compact.TButton", command=_remove_3d_arrow_row).pack(side="right", padx=3)
-            ttk.Combobox(row, textvariable=data['color'], values=COLOR_LIST, width=6, state="readonly").pack(side="right", padx=2)
+            self._mk_color_box(row, data['color'], padx=2)
             ttk.Combobox(row, textvariable=data['size'], values=list(self.ARROW_SIZE_MAP.keys()), width=4, state="readonly").pack(side="right", padx=2)
             ttk.Label(row, text="[Arrow]", foreground="darkred").pack(side="left", padx=(0, 3))
             ttk.Label(row, text="(X1,Y1,Z1):").pack(side="left")
@@ -9183,7 +9265,7 @@ class CathPlotGUI:
                 if d['txt'].get().strip() and d['x'].get().strip() and d['y'].get().strip() and d['z'].get().strip():
                     annotations_3d.append({
                         "text": d['txt'].get(), "x": d['x'].get(), "y": d['y'].get(), "z": d['z'].get(),
-                        "color": COLOR_MAP.get(d['color'].get(), ""),
+                        "color": _to_gnuplot_color(d['color'].get()),
                     })
             arrows_3d = []
             for d in arrow3d_list:
@@ -9191,7 +9273,7 @@ class CathPlotGUI:
                     arrows_3d.append({
                         "x1": d['x1'].get(), "y1": d['y1'].get(), "z1": d['z1'].get(),
                         "x2": d['x2'].get(), "y2": d['y2'].get(), "z2": d['z2'].get(),
-                        "color": COLOR_MAP.get(d['color'].get(), ""),
+                        "color": _to_gnuplot_color(d['color'].get()),
                         "head_size": self.ARROW_SIZE_MAP.get(d['size'].get(), self.ARROW_SIZE_MAP["M"]),
                     })
 
@@ -11094,7 +11176,7 @@ class CathPlotGUI:
                     title=title,
                     axis=axis,
                     x_shift=float(self.file_xshift_vars[d_file].get() or 0.0) if d_file in self.file_xshift_vars else 0.0,
-                    color=COLOR_MAP.get(self.color_vars[key].get(), None),
+                    color=_to_gnuplot_color(self.color_vars[key].get()) or None,
                     linestyle=STYLE_MAP.get(self.linestyle_vars[key].get(), None),
                     linewidth=float(self.linewidth_vars[key].get() if key in self.linewidth_vars else 1.5),
                     x_output_no=file_x_output_no,   # ← 추가: 파일별로 선택된 X변수 컬럼을 곡선에도 전달
