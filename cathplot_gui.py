@@ -10468,21 +10468,14 @@ class CathPlotGUI:
         widget.bind("<Destroy>", _hide, add="+")
 
     def _marker_size_hint_text(self):
-        """[추가 - 사용자 요청] Marker Size 콤보 툴팁 - 각 크기가 실제로
-        얼마인지(pt), Auto가 지금 Legend Font로 몇 배인지 보여준다.
-        ps 1 = 원 지름 약 6pt(저장 이미지 기준 Frame 10x8cm, 폰트와 무관)."""
-        try:
-            leg = float(self.legend_size_var.get() or 9)
-        except (TypeError, ValueError):
-            leg = 9.0
-        auto = min(max(leg / 9.0, 0.3), 4.0)
+        """[추가 - 사용자 요청] Marker Size 콤보 툴팁. [수정 - 사용자 요청]
+        "Auto: M(9pt) 기준, Legend Font 크기 비례"가 더 직관적 - 배율/pt 계산
+        숫자는 빼고 기준과 규칙만 보여준다. ps 1(M) = 원 지름 약 6pt."""
         return (
             "Marker 크기 (legend 안 마커도 curve와 항상 같은 크기)\n"
-            f" Auto : Legend Font 비례 - 지금 {leg:g}pt → {auto:.2f}배 (≈{6 * auto:.1f}pt)\n"
-            "        (9pt일 때 M과 같음, 3D도 메인 화면 Legend Font 기준)\n"
-            " XS 0.5배 ≈ 3pt   S 0.75배 ≈ 4.5pt   M 1.0배 ≈ 6pt\n"
-            " L  1.5배 ≈ 9pt   XL 2.0배 ≈ 12pt   (XS~XL은 폰트와 무관한 고정값)\n"
-            " pt = 저장 이미지의 원 지름(Axis Frame 10x8cm 기준 - Manual로 키우면 비례해 커짐)"
+            " Auto : M(9pt) 기준, Legend Font 크기 비례\n"
+            " XS / S / M / L / XL : M의 0.5 / 0.75 / 1 / 1.5 / 2배 - 폰트와 무관한 고정 크기\n"
+            " (M = 저장 이미지에서 원 지름 약 6pt)"
         )
 
     @staticmethod
