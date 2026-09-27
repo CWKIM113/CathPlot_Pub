@@ -682,6 +682,108 @@ def _char_points_to_labels(cmd):
     return _CHAR_POINTS_RE.sub(_repl, cmd)
 
 
+def _compose_eps_vector_clip(main_path, full_path, geom, opaque):
+    """EPS 합성: full(메인+사각형 인셋)의 prolog + main 본문 + (타원 clip 안에서)
+    full 본문 + 타원 테두리. geom = (cx, cy, rx, ry) 캔버스 비율(아래->위)."""
+    main_t = open(main_path, encoding="latin-1").read()
+    full_t = open(full_path, encoding="latin-1").read()
+    m = re.search(r"%%BoundingBox:\s*(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", full_t)
+    if not m:
+        return
+    x0, y0, x1, y1 = (float(v) for v in m.groups())
+    def _body(t):
+        a = t.index("%%Page: 1 1")
+        a = t.index("\n", a) + 1
+        b = t.rindex("showpage")
+        return t[a:b]
+    head = full_t[:full_t.index("%%Page: 1 1")]
+    tail = full_t[full_t.rindex("showpage"):]
+    cx, cy, rx, ry = geom
+    W, H = x1 - x0, y1 - y0
+    px, py, prx, pry = x0 + cx * W, y0 + cy * H, rx * W, ry * H
+    ell = (f"matrix currentmatrix {px:.3f} {py:.3f} translate {prx:.3f} {pry:.3f} scale "
+           f"0 0 1 0 360 arc closepath setmatrix")
+    border = ("gsave newpath " + ell + " 0 setgray 0.5 setlinewidth "
+              + ("[] 0 setdash" if opaque else "[0.6 2.4] 0 setdash 1 setlinecap") + " stroke grestore\n")
+    out = (head + "%%Page: 1 1\n" + _body(main_t)
+           + "% CathPlot: PIP vector clip\ngsave newpath " + ell + " clip newpath\n"
+           + _body(full_t) + "grestore\n" + border + tail)
+    with open(full_path, "w", encoding="latin-1") as f:
+        f.write(out)
+
+
+_EMF_OBJ_RECORDS = {37, 38, 39, 40, 48, 49, 82, 93, 94, 95}   # ihObject를 첫 필드로 갖는 레코드
+
+
+def _emf_records(data):
+    out, off = [], 0
+    while off + 8 <= len(data):
+        t, sz = struct.unpack_from("<II", data, off)
+        if sz < 8 or off + sz > len(data):
+            break
+        out.append((t, data[off:off + sz]))
+        off += sz
+    return out
+
+
+def _compose_emf_vector_clip(main_path, full_path, geom, opaque):
+    """EMF 합성: [main 레코드] SAVEDC BEGINPATH ELLIPSE ENDPATH SELECTCLIPPATH
+    [full 레코드(객체 번호를 main 뒤로 밀어 충돌 방지)] RESTOREDC + 타원 테두리."""
+    main_r = _emf_records(open(main_path, "rb").read())
+    full_r = _emf_records(open(full_path, "rb").read())
+    if not main_r or not full_r or main_r[0][0] != 1 or full_r[0][0] != 1:
+        return
+    hdr = bytearray(full_r[0][1])
+    # EMR_HEADER: nBytes@48, nRecords@52, nHandles@56
+    n_main = struct.unpack_from("<H", main_r[0][1], 56)[0]
+    n_full = struct.unpack_from("<H", hdr, 56)[0]
+    ext = None
+    for t, b in full_r:
+        if t == 9:   # EMR_SETWINDOWEXTEX
+            ext = struct.unpack_from("<ii", b, 8)
+            break
+    if ext is None:
+        return
+    W, H = ext
+    cx, cy, rx, ry = geom
+    l, r_ = int(round((cx - rx) * W)), int(round((cx + rx) * W))
+    t_, b_ = int(round((1 - (cy + ry)) * H)), int(round((1 - (cy - ry)) * H))
+    rec = lambda typ, payload: struct.pack("<II", typ, 8 + len(payload)) + payload
+    ellipse = rec(42, struct.pack("<iiii", l, t_, r_, b_))
+
+    def _shift(t, b):
+        if t in _EMF_OBJ_RECORDS:
+            ih = struct.unpack_from("<I", b, 8)[0]
+            if not ih & 0x80000000:
+                b = b[:8] + struct.pack("<I", ih + n_main) + b[12:]
+        return b
+    body = [b for t, b in main_r[1:] if t != 14]
+    body.append(rec(33, b""))                         # SAVEDC
+    body.append(rec(59, b""))                         # BEGINPATH
+    body.append(ellipse)
+    body.append(rec(60, b""))                         # ENDPATH
+    body.append(rec(67, struct.pack("<I", 1)))        # SELECTCLIPPATH RGN_AND
+    body += [_shift(t, b) for t, b in full_r[1:] if t != 14]
+    body.append(rec(34, struct.pack("<i", -1)))       # RESTOREDC
+    pen_ih = n_main + n_full
+    style = 0 if opaque else 2                        # PS_SOLID / PS_DOT
+    width = max(int(round(W * 0.0007)), 1) if opaque else 0
+    body.append(rec(38, struct.pack("<IIiiI", pen_ih, style, width, 0, 0)))   # CREATEPEN 검정
+    body.append(rec(37, struct.pack("<I", pen_ih)))
+    body.append(rec(37, struct.pack("<I", 0x80000005)))                      # NULL_BRUSH
+    body.append(ellipse)
+    body.append(rec(37, struct.pack("<I", 0x80000007)))                      # BLACK_PEN
+    body.append(rec(40, struct.pack("<I", pen_ih)))                          # DELETEOBJECT
+    eof = [b for t, b in full_r if t == 14]
+    records = [bytes(hdr)] + body + (eof[-1:] if eof else [rec(14, struct.pack("<III", 0, 16, 20))])
+    total = sum(len(x) for x in records)
+    struct.pack_into("<II", hdr, 48, total, len(records))   # nBytes, nRecords
+    struct.pack_into("<H", hdr, 56, pen_ih + 1)              # nHandles
+    records[0] = bytes(hdr)
+    with open(full_path, "wb") as f:
+        f.write(b"".join(records))
+
+
 PRINT_FONT_SCALE = 1.60     # [수정 - 버그] "PDF 그림에서 font size가 plot 대비 너무 작음(폰트
 # 크기 입력으로 해결될 사항 아님), Legend box도 너무 작음 - 폰트·legend 모두
 # 2배로" - PDF가 PNG/JPG의 기준(기준 포맷을 PyMuPDF로 래스터화)이 되면서
@@ -7676,6 +7778,43 @@ class GnuplotGenerator:
             except OSError:
                 pass
 
+    def _apply_vector_pip_clip(self, plotdef, out_path, kind, clip_info):
+        """[추가 - 사용자 요청] EPS/EMF의 원/타원 PIP를 벡터 그대로 만든다(PDF의
+        _apply_pip_clip은 페이지 전체를 300dpi 래스터로 합성하지만, PostScript와
+        EMF는 클리핑 경로를 지원해 벡터를 유지할 수 있음).
+        1) 같은 plotdef를 PIP 없이 한 번 더 그려 "메인만" 파일을 만든다.
+        2) 결과 = [메인만] + (원/타원 클리핑) [메인+사각형 인셋(이미 그린 out_path)]
+           + 원/타원 테두리(불투명=실선, 투명=점선). 클리핑 밖은 메인만 보이고,
+           안쪽은 인셋이 보인다. 실패하면 조용히 원래(사각형) 파일을 둔다."""
+        _main_path = os.path.join(os.path.dirname(os.path.abspath(out_path)),
+                                  f".cathplot_vpip_main_{uuid.uuid4().hex}.{kind}")
+        _saved_warnings = list(self.warnings)
+        try:
+            _main_pd = copy.copy(plotdef)
+            _main_pd.pip = {}
+            # EPS는 _eps_out 플래그가 켜진 채로 fmt="pdf"여야 같은 EPS 경로를 탐
+            self.create_script(_main_pd, _main_path, fmt=("pdf" if kind == "eps" else "emf"))
+            self.warnings[:] = _saved_warnings
+            if not os.path.exists(_main_path):
+                return
+            ox, oy = float(clip_info["origin_x"]), float(clip_info["origin_y"])
+            sw, sh = float(clip_info["size_w"]), float(clip_info["size_h"])
+            rxf = max(min(float(clip_info.get("clip_rx", 50.0)), 100.0), 1.0) / 100.0
+            ryf = max(min(float(clip_info.get("clip_ry", 50.0)), 100.0), 1.0) / 100.0
+            opaque = float(clip_info.get("opacity", 100.0)) >= 50.0
+            geom = (ox + sw / 2.0, oy + sh / 2.0, rxf * sw, ryf * sh)   # 캔버스 비율(아래->위)
+            if kind == "eps":
+                _compose_eps_vector_clip(_main_path, out_path, geom, opaque)
+            else:
+                _compose_emf_vector_clip(_main_path, out_path, geom, opaque)
+        except Exception:
+            self.warnings[:] = _saved_warnings
+        finally:
+            try:
+                os.remove(_main_path)
+            except OSError:
+                pass
+
     def _apply_pip_clip(self, plotdef, pdf_path, fmt, clip_info, skip_beneath_if_opaque=False):
         """[수정 구현] "원/타원 PIP를 흰색으로 덮는 게 아니라 실제로
         클리핑" + "배경 불투명도 슬라이더(0~100%)" - gnuplot 자신은 사각형이
@@ -8587,6 +8726,7 @@ class GnuplotGenerator:
                 ]
 
         _pip_clip_info = None
+        _vector_pip_clip = None   # EPS/EMF 원/타원 벡터 클리핑(_apply_vector_pip_clip) 정보
         if _pip_on:
             # [수정 - 버그(사용자 보고)] "PIP 원/타원(또는 사각형)+부분 반투명
             # (1~99%)이 EMF/EPS에서 깨짐" - 이 조합은 PDF 후처리(_apply_pip_clip)
@@ -8883,8 +9023,21 @@ class GnuplotGenerator:
                 except (TypeError, ValueError):
                     _orig_opacity = 100.0
                 _fallback_opacity = 100.0 if _orig_opacity >= 50.0 else 0.0
+                # [추가 - 사용자 요청] "EPS/EMF에서 원/타원 PIP가 사각형으로 대체됨" -
+                # EPS(PostScript)와 EMF는 벡터 클리핑 경로를 지원하므로, 사각형
+                # 인셋으로 그린 결과를 원/타원 모양으로 잘라 메인 위에 합성한다
+                # (_apply_vector_pip_clip - 렌더링 후 처리). 반투명(1~99%)은 두
+                # 형식 모두 알파가 없어 기존처럼 50% 기준 불투명/투명으로 반올림.
+                _shape0 = str(_pip_clip_info.get("clip_shape", "rect")).strip().lower()
+                if (_shape0 in ("circle", "ellipse")
+                        and (fmt.lower() == "emf" or getattr(self, "_eps_out", False))):
+                    _vector_pip_clip = dict(_pip_clip_info, opacity=_fallback_opacity)
                 _fallback_plotdef = copy.copy(plotdef)
-                _fallback_plotdef.pip = dict(plotdef.pip, clip_shape="rect", opacity=_fallback_opacity)
+                if _vector_pip_clip is not None:
+                    # 원/타원 모양 그대로(인셋 안쪽 축 배치가 PDF와 같게) - 반투명도만 반올림
+                    _fallback_plotdef.pip = dict(plotdef.pip, opacity=_fallback_opacity)
+                else:
+                    _fallback_plotdef.pip = dict(plotdef.pip, clip_shape="rect", opacity=_fallback_opacity)
                 _pip_probe_lines = list(lines)
                 _pip_clip_info = self._render_pip_inset(_fallback_plotdef, _pip_probe_lines, _main_cmd_list, fmt)
                 _pip_name = (plotdef.title or "plot").strip() or "plot"
@@ -8908,7 +9061,13 @@ class GnuplotGenerator:
                 # 알려준다.
                 _pip_shape_now = str((plotdef.pip or {}).get("clip_shape", "rect")).strip().lower()
                 _is_partial_opacity = 0.0 + 1e-6 < _orig_opacity < 100.0 - 1e-6
-                if _pip_shape_now in ("circle", "ellipse") and not _is_partial_opacity:
+                if _vector_pip_clip is not None:
+                    if _is_partial_opacity:
+                        self.warnings.append(
+                            f"'{_pip_name}'의 PIP 배경 반투명({_orig_opacity:.0f}%)은 {'EPS' if getattr(self, '_eps_out', False) else fmt.upper()} "
+                            f"형식에서 지원되지 않아 {_fallback_desc}으로 대체했습니다(원/타원 모양은 유지)."
+                        )
+                elif _pip_shape_now in ("circle", "ellipse") and not _is_partial_opacity:
                     self.warnings.append(
                         f"'{_pip_name}'의 PIP 원/타원은 X·Y(Y2 곡선을 쓰면 Y2도) 확대 구간이 "
                         f"구체적인 숫자로 지정되지 않아 사각형으로 대체했습니다(opacity와는 무관 - "
@@ -9062,6 +9221,9 @@ class GnuplotGenerator:
             # create_script 맨 앞의 재귀 호출 구조 참고. eps/emf처럼 이
             # 분기를 그대로 타는 다른 포맷은 fmt가 "pdf"가 아니라 조용히
             # 건너뜀).
+            if _vector_pip_clip is not None:
+                self._apply_vector_pip_clip(plotdef, outfile, "eps" if getattr(self, "_eps_out", False) else "emf",
+                                            _vector_pip_clip)
             if fmt.lower() == "pdf" and _pip_clip_info and not getattr(self, "_eps_out", False):
                 self._apply_pip_clip(plotdef, outfile, fmt, _pip_clip_info, skip_beneath_if_opaque=pip_for_overlay)
             # [추가 - 요청] "정적(비-Animation) 화면 PLOT에서도 PIP 원/타원+
