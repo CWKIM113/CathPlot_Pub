@@ -710,6 +710,23 @@ PRINT_BORDER_SCALE = 1.00   # 기존 1.50
 # SVG의 절대 렌더 크기를 PDF에 맞춰 줄인다(아래 EMF_FONT_RENDER_FIX/
 # SVG_FONT_RENDER_FIX 참고).
 CAIRO_FONT_RENDER_FIX = 1.0
+# [수정 - 사용자 요청] "2D EPS 글자가 PDF의 0.75배" - gnuplot postscript 터미널은
+# 같은 요청값에서 글자를 PDF(cairo)의 0.75배, 마커를 0.51배, 선 굵기를 0.5배로
+# 그리고 점선은 1.83배 길게 그림(실측, 10x8in 같은 캔버스). EPS는 PDF와 같은
+# 레이아웃 계산(legend box/여백/tic 등 이미 검증된 PDF 경로)을 그대로 타고
+# 터미널 줄만 postscript로 바꾸며, 아래 옵션으로 글자·마커·선·점선을 PDF와
+# 같게 맞춘다(실측 결과 제목 0.0606/0.0600, 마커 0.0255/0.0255, 선 0.00267/
+# 0.00267, 점선 0.0053/0.0053 - 캔버스 폭 대비, EPS/PDF).
+EPS_TERM_MATCH_PDF_OPTS = "fontscale 1.3333 linewidth 2 pointscale 1.9 dashlength 0.546"
+# postscript 터미널은 축 테두리(border)만 다른 선보다 기본 굵기가 2.08배
+# (실측: 같은 lw에서 border 1.44pt vs PDF 0.72pt, 곡선·화살표·legend box
+# 테두리는 PDF와 같음) - EPS 스크립트의 "set border ... lw X"만 0.48배로 줄인다.
+_EPS_BORDER_LW_FIX = 0.48
+_EPS_BORDER_LW_RE = re.compile(r"(set border\b[^\n;']*?\blw )([\d.]+)")
+
+
+def _eps_fix_border_lw(script_text):
+    return _EPS_BORDER_LW_RE.sub(lambda m: f"{m.group(1)}{float(m.group(2)) * _EPS_BORDER_LW_FIX:.3f}", script_text)
 # [수정 - 방향 전환, 범위 한정] "EMF가 PDF보다 상대적으로 크게 나온다"
 # 지적으로 실측 재확인(EMF 파일의 EMR_EXTCREATEFONTINDIRECTW.lfHeight를
 # 직접 읽어 pt로 환산 후 PyMuPDF로 잰 PDF 실제 렌더 크기와 비교) -
@@ -1050,7 +1067,9 @@ def _3d_marker_clause(style, item, auto_ps=None):
         if marker_pt is not None:
             clause += f" pt {_fmt_pointtype(marker_pt)}"
         if marker_size:
-            clause += f" ps {float(marker_size):.4g}"
+            # _cp_mk: 저장 형식별 마커 배율(gnuplot 변수 - _3D_EMF_MARKER_MULT 참고,
+            # 스크립트 앞에서 정의, 창의 E/Ctrl+P 키가 저장하는 동안만 바꿈)
+            clause += f" ps {float(marker_size):.4g}*_cp_mk"
     return clause
 
 
@@ -1087,9 +1106,14 @@ _3D_FONT_SCALE_PRINT = 1.5
 # 맞춘다. 실측(같은 5:4 캔버스, 같은 요청 pt에서 캔버스 대비 글자 크기, PDF=1):
 # pngcairo 1.91, jpeg(libgd) 0.91, svg 1.08, emf 0.96, eps(postscript) 0.75
 # (EPS는 요청 pt의 1/2로 그림) - 배율 = 1.5 / 실측비.
+VIEW_SAVE_PENDING_SUFFIX = ".cathplot_pending.pdf"
+# gnuplot emf 터미널은 3D 마커를 PDF의 1.56배로 그림(실측, 같은 5:4 캔버스 -
+# 선·테두리·tic은 PDF와 같음). emf엔 pointscale 옵션이 없어서 마커 ps를
+# gnuplot 변수 _cp_mk로 곱해 두고(_3d_marker_clause) EMF일 때만 1/1.56로 둔다.
+_3D_EMF_MARKER_MULT = 1 / 1.56
 _3D_FONT_SCALE_BY_TERM = {
     "pdf": 1.5, "png": 1.5 / 1.91, "jpg": 1.5 / 0.91, "svg": 1.5 / 1.08,
-    "emf": 1.5, "eps": 2.0,
+    "emf": 1.5, "eps": 1.5,   # eps: 글자 배율은 터미널 fontscale(EPS_TERM_MATCH_PDF_OPTS)로 맞춤
 }
 
 
@@ -8022,6 +8046,10 @@ class GnuplotGenerator:
             # 전용 터미널(windows/emf/jpeg)과 동일하게 픽셀 숫자로 환산해서 넘긴다.
             return f"set terminal svg enhanced {size_clause_px('size 1123,797', px_per_in=96)} font '{_term_font}'"
         elif fmt == "pdf":
+            if getattr(self, "_eps_out", False):
+                # EPS 요청 - PDF 레이아웃 그대로, 터미널만 postscript(EPS_TERM_MATCH_PDF_OPTS 참고)
+                return (f"set terminal postscript eps enhanced color font '{_term_font}' "
+                        f"{size_clause('size 11.7in,8.3in')} {EPS_TERM_MATCH_PDF_OPTS}")
             return f"set terminal pdfcairo enhanced color font '{_term_font}' {size_clause('size 11.7in,8.3in')}"
         elif fmt == "eps":
             return f"set terminal postscript eps enhanced color font '{_term_font}' {size_clause('')}"
@@ -8349,6 +8377,15 @@ class GnuplotGenerator:
         # False를 반환하니 그때만 기존 gnuplot 자체 터미널 방식으로 대체
         # (fallback)한다.
         _fmt_l0 = (fmt or "").lower()
+        if _fmt_l0 == "eps" and not getattr(self, "_eps_out", False):
+            # [수정 - 사용자 요청] EPS는 PDF와 같은 레이아웃 경로로 그리고 터미널
+            # 줄만 postscript로(_get_terminal_cmd, EPS_TERM_MATCH_PDF_OPTS 참고)
+            self._eps_out = True
+            try:
+                return self.create_script(plotdef, outfile, fmt="pdf", annotations=annotations, arrows=arrows,
+                                          circles=circles, pip_for_overlay=pip_for_overlay)
+            finally:
+                self._eps_out = False
         if _fmt_l0 in ("png", "jpg", "jpeg", "svg"):
             plot_dir0 = os.path.dirname(os.path.abspath(outfile))
             os.makedirs(plot_dir0, exist_ok=True)
@@ -8831,7 +8868,7 @@ class GnuplotGenerator:
                           # 그냥 append하면 그 빈 줄 뒤에 붙어 "\" 이어짐이
                           # 중간에 끊기는 문법 오류가 됨.
                           _main_state_snapshot[_last_idx + 1:_last_idx + 1] = _new_clause_lines
-            if _pip_clip_info is not None and fmt.lower() in ("emf", "eps", "interactive"):
+            if _pip_clip_info is not None and (fmt.lower() in ("emf", "eps", "interactive") or getattr(self, "_eps_out", False)):
                 # [수정 - 요청] "반투명이 EMF에 불가능하면 50%를 기준으로
                 # 투명/불투명으로 구분" - 항상 완전불투명으로 대체하면, 사용자가
                 # 낮은 opacity(주로 메인 plot이 비쳐 보이길 원함)를 준 경우
@@ -8993,6 +9030,8 @@ class GnuplotGenerator:
         else: lines.append("set output")
 
         script_text = "\n".join(lines)
+        if getattr(self, "_eps_out", False):
+            script_text = _eps_fix_border_lw(script_text)
         gnuplot_exe = _resolve_gnuplot_exe()
 
         if fmt.lower() == "interactive":
@@ -9023,7 +9062,7 @@ class GnuplotGenerator:
             # create_script 맨 앞의 재귀 호출 구조 참고. eps/emf처럼 이
             # 분기를 그대로 타는 다른 포맷은 fmt가 "pdf"가 아니라 조용히
             # 건너뜀).
-            if fmt.lower() == "pdf" and _pip_clip_info:
+            if fmt.lower() == "pdf" and _pip_clip_info and not getattr(self, "_eps_out", False):
                 self._apply_pip_clip(plotdef, outfile, fmt, _pip_clip_info, skip_beneath_if_opaque=pip_for_overlay)
             # [추가 - 요청] "정적(비-Animation) 화면 PLOT에서도 PIP 원/타원+
             # 부분 반투명이 제대로 보이게" - cathplot_gui가 이 값을 읽어서
@@ -9031,7 +9070,7 @@ class GnuplotGenerator:
             # 상태) 그 PDF에서 PIP 박스 부분만 잘라내 화면(Interactive) 위에
             # 겹치는 오버레이 창을 만드는 데 쓴다(Animation의 라이브 오버레이와
             # 같은 방식, 단 프레임이 하나뿐인 정적 버전).
-            self.last_pip_clip_info = _pip_clip_info if fmt.lower() == "pdf" else None
+            self.last_pip_clip_info = _pip_clip_info if (fmt.lower() == "pdf" and not getattr(self, "_eps_out", False)) else None
 
             _want_texts = []
             for _raw in (plotdef.title, plotdef.xlabel, plotdef.ylabel, plotdef.y2label):
@@ -10038,7 +10077,7 @@ class GnuplotGenerator:
         # [재사용] create_3d_script와 동일한 view/축/palette 설정 - 회전-반응형
         # title 재정렬, 저장/인쇄 단축키 등 정적 3D Plot 전용의 화면-상호작용
         # 편의 기능(위 docstring 범위 제한 참고)은 애니메이션에서는 뺀다.
-        lines = ["set encoding utf8", "set term unknown"]
+        lines = ["set encoding utf8", "set term unknown", "_cp_mk = 1"]
         lines.append(f"set view {rot_x},{rot_z}")
         if equal_xyz:
             lines.append("set view equal xyz")
@@ -10370,7 +10409,8 @@ class GnuplotGenerator:
         _font_cmds_screen = _3d_font_cmds(fonts, _3D_FONT_SCALE_SCREEN, bool(ylabel), _ann_label_ids)
         _font_cmds_by_term = {k: _3d_font_cmds(fonts, v, bool(ylabel), _ann_label_ids)
                               for k, v in _3D_FONT_SCALE_BY_TERM.items()}
-        lines = ["set encoding utf8"]
+        lines = ["set encoding utf8",
+                 f"_cp_mk = {(_3D_EMF_MARKER_MULT if _fmt == 'emf' else 1.0):.4g}"]
         # [추가] "3D Plot도 저장/인쇄 지원" - 2D create_script처럼 확장자별로
         # 맞는 gnuplot 터미널을 골라야 하는데, 3D 다이얼로그는 2D의 Frame
         # Auto/Width/Height 설정이 없어 크기는 고정값(2D의 A4 기본값과 비슷한
@@ -10382,7 +10422,7 @@ class GnuplotGenerator:
             "jpg": "set terminal jpeg size 1500,1200 enhanced font 'Malgun Gothic,14'",
             "jpeg": "set terminal jpeg size 1500,1200 enhanced font 'Malgun Gothic,14'",
             "svg": "set terminal svg enhanced size 1000,800 font 'Malgun Gothic,14'",
-            "eps": "set terminal postscript eps enhanced color font 'Malgun Gothic,14' size 10in,8in",
+            "eps": f"set terminal postscript eps enhanced color font 'Malgun Gothic,14' size 10in,8in {EPS_TERM_MATCH_PDF_OPTS}",
             "emf": "set terminal emf enhanced size 1500,1200 font 'Malgun Gothic,14'",
             "pdf": "set terminal pdfcairo enhanced color font 'Malgun Gothic,14' size 10in,8in",
         }
@@ -10393,6 +10433,8 @@ class GnuplotGenerator:
         else:
             lines.append(_3D_TERMINAL_MAP.get(_fmt, _3D_TERMINAL_MAP["pdf"]))
             lines.append(f"set output '{outfile.replace(chr(92), '/')}'")
+            if _fmt == "eps":
+                lines.append(f"set border lw {_EPS_BORDER_LW_FIX}")   # postscript 테두리만 2.08배 굵음(2D와 같은 보정)
 
         lines.append(f"set view {rot_x},{rot_z}")
         if equal_xyz:
@@ -10674,9 +10716,10 @@ class GnuplotGenerator:
                 'unset label 9003; unset label 9004; '
                 'set terminal emf enhanced size 1500,1200 font "Malgun Gothic,14"; '
                 f'{"; ".join(_font_cmds_by_term["emf"])}; '
+                f'_cp_mk={_3D_EMF_MARKER_MULT:.4g}; '
                 'set output "PRN"; '
                 'replot; '
-                'set output; '
+                'set output; _cp_mk=1; '
                 f'set terminal {_restore_term}; '
                 f'{"; ".join(_font_cmds_screen)}; '
                 'rx=GPVAL_VIEW_ROT_X; rz=GPVAL_VIEW_ROT_Z; '
@@ -10696,7 +10739,24 @@ class GnuplotGenerator:
                 ('E', 'emf enhanced size 1500,1200 font "Malgun Gothic,14"', 'emf'),
                 ('S', 'svg enhanced size 1000,800 font "Malgun Gothic,14"', 'svg'),
             ]
+            # [수정 - 사용자 요청] "N(PNG) 해상도가 낮다, PDF/PNG/JPG/SVG는 같은
+            # 크기여야" - gnuplot pngcairo/jpeg/svg 터미널은 글자뿐 아니라 선 굵기·
+            # 마커·tic 길이·테두리까지 PDF와 배율이 제각각이고(실측: pngcairo 10in
+            # 선 2.6배·tic 2배, jpeg 마커 0.47배·tic 1.56배, svg 선 1.5배·테두리
+            # 2배) jpeg/svg는 마커 배율 옵션도 없음. 그래서 N/J/S 키는 PDF(검증된
+            # pdfcairo)로 "대기 파일"(<이름>.cathplot_pending.pdf)을 저장하고,
+            # 실행 중인 CathPlot이 이를 감지해 팝업 Save와 같은 PyMuPDF 변환으로
+            # 최종 PNG/JPG(300dpi)/SVG를 만든다(cathplot_gui._watch_pending_view_saves).
+            _pdf_term_spec = 'pdfcairo enhanced color font "Malgun Gothic,14" size 10in,8in'
+            _view_formats = [
+                (_k, (_pdf_term_spec if _e in ("png", "jpg", "svg") else _t), _e)
+                for _k, _t, _e in _view_formats
+            ]
             for _key, _term_spec, _ext in _view_formats:
+                _via_pdf = _ext in ("png", "jpg", "svg")
+                _font_key = "pdf" if _via_pdf else _ext
+                _set_out = (f'set output fn9004."{VIEW_SAVE_PENDING_SUFFIX}"; ' if _via_pdf
+                            else 'set output fn9004; ')
                 # [수정] "FilePath도 상대위치로 적어도 무방함" - gnuplot을 이미
                 # plot_dir를 cwd로 고정해 실행하므로(2687줄 부근), 저장 시
                 # 폴더 절대경로를 안 붙이고 파일명만 써도 같은 위치에 저장되고
@@ -10707,10 +10767,11 @@ class GnuplotGenerator:
                     'unset label 9003; unset label 9004; '
                     f'fn9004={_outexpr}; '
                     f'set terminal {_term_spec}; '
-                    f'{"; ".join(_font_cmds_by_term[_ext])}; '
-                    f'set output fn9004; '
-                    f'replot; '
-                    f'set output; '
+                    f'{"; ".join(_font_cmds_by_term[_font_key])}; '
+                    f'{_set_out}'
+                    + (f'_cp_mk={_3D_EMF_MARKER_MULT:.4g}; ' if _ext == "emf" else '')
+                    + f'replot; '
+                    f'set output; _cp_mk=1; '
                     f'set terminal {_restore_term}; '
                     f'{"; ".join(_font_cmds_screen)}; '
                     'rx=GPVAL_VIEW_ROT_X; rz=GPVAL_VIEW_ROT_Z; '
@@ -11041,6 +11102,16 @@ class GnuplotGenerator:
         # 하고, SVG 같은 text-anchor 문제가 실측상 없었음 - print와 직결되는
         # 포맷이라 이번 세션의 M-P 폰트 재보정/margin 수정을 그대로 유지).
         _fmt_l0 = (fmt or "").lower()
+        if _fmt_l0 == "eps" and not getattr(self, "_eps_out", False):
+            # create_script와 같은 방식 - PDF 레이아웃 + postscript 터미널
+            self._eps_out = True
+            try:
+                return self.create_multiplot_script(
+                    plots, outfile, fmt="pdf", layout_option=layout_option, orientation=orientation,
+                    margins=margins, spacing=spacing, keep_script=keep_script, frame_auto=frame_auto,
+                    frame_width=frame_width, frame_height=frame_height, frame_unit=frame_unit, for_print=for_print)
+            finally:
+                self._eps_out = False
         if _fmt_l0 in ("png", "jpg", "jpeg", "svg"):
             plot_dir0 = os.path.dirname(os.path.abspath(outfile))
             os.makedirs(plot_dir0, exist_ok=True)
@@ -12571,6 +12642,8 @@ class GnuplotGenerator:
         lines.append("set output")
 
         script_text = "\n".join(lines)
+        if getattr(self, "_eps_out", False):
+            script_text = _eps_fix_border_lw(script_text)
         gnuplot_exe = _resolve_gnuplot_exe()
 
         if keep_script:

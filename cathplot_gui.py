@@ -46,7 +46,8 @@ from pathlib import Path
 
 from data_parser import CathenaDatParser, save_json, is_comment_or_blank, strip_inline_comment, load_dat_table, split_fields, parse_number
 from gnu_generator import (PlotDefinition, CurveDefinition, FunctionCurveDefinition, GnuplotGenerator,
-                            PIP_OVERLAY_CHROMA_KEY, DASH_PATTERNS)
+                            PIP_OVERLAY_CHROMA_KEY, DASH_PATTERNS, VIEW_SAVE_PENDING_SUFFIX,
+                            _rasterize_pdf_to_image, _convert_pdf_to_svg)
 
 # [추가] Batch Set/Queue - 항목마다 독립적인 gnuplot 프로세스를 순차로 하나씩
 # 기다리던 것을 병렬로 처리해 속도를 높인다. "무제한 동시 실행"은 gnuplot
@@ -9953,6 +9954,7 @@ class CathPlotGUI:
                     messagebox.showwarning("3D Plot", self._gnuplot_crash_message(
                         generator.last_process, "3D 그래프를", "축 설정이나 데이터 범위를 확인해주세요."))
             self._watch_plot_process_start(generator.last_process, _after_static_launch)
+            self._watch_pending_view_saves(generator.last_process)
 
         if animate3d and generator.last_process is not None:
             def _after_launch(_crashed):
@@ -10439,6 +10441,65 @@ class CathPlotGUI:
             names = None
         self._installed_font_cache = names
         return names
+
+    def _watch_pending_view_saves(self, proc):
+        """[추가 - 사용자 요청] 3D 창의 N/J/S 저장 키는 PDF 대기 파일
+        (<이름>.<ext>.cathplot_pending.pdf)을 남긴다(gnu_generator의
+        VIEW_SAVE_PENDING_SUFFIX 참고) - 그 창이 떠 있는 동안 1초마다 plot 폴더를
+        보고, 다 써진 대기 파일을 팝업 Save와 같은 PyMuPDF 변환으로 최종
+        PNG/JPG(300dpi)/SVG로 바꾼 뒤 대기 파일을 지운다(백그라운드 스레드).
+        창(gnuplot)이 닫히면 마지막으로 한 번 더 확인하고 멈춘다."""
+        if not hasattr(self, "_pending_conv_busy"):
+            self._pending_conv_busy = set()
+            self._pending_conv_lock = threading.Lock()
+
+        def _convert(pdf_path):
+            target = pdf_path[:-len(VIEW_SAVE_PENDING_SUFFIX)]
+            ext = os.path.splitext(target)[1].lower().lstrip(".")
+            try:
+                ok = (_convert_pdf_to_svg(pdf_path, target) if ext == "svg"
+                      else _rasterize_pdf_to_image(pdf_path, target, ext))
+                if ok:
+                    os.remove(pdf_path)
+            except Exception:
+                pass
+            finally:
+                with self._pending_conv_lock:
+                    self._pending_conv_busy.discard(pdf_path)
+
+        def _scan():
+            try:
+                names = os.listdir(self.plot_dir)
+            except OSError:
+                return
+            now = time.time()
+            for n in names:
+                if not n.endswith(VIEW_SAVE_PENDING_SUFFIX):
+                    continue
+                path = os.path.join(self.plot_dir, n)
+                try:
+                    if now - os.path.getmtime(path) < 0.8:   # gnuplot이 아직 쓰는 중일 수 있음
+                        continue
+                except OSError:
+                    continue
+                with self._pending_conv_lock:
+                    if path in self._pending_conv_busy:
+                        continue
+                    self._pending_conv_busy.add(path)
+                threading.Thread(target=_convert, args=(path,), daemon=True).start()
+
+        def _tick():
+            try:
+                if not self.root.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            _scan()
+            if proc.poll() is None:
+                self.root.after(1000, _tick)
+            else:
+                self.root.after(1500, _scan)   # 닫기 직전에 누른 저장까지 마무리
+        self.root.after(1000, _tick)
 
     def _add_hover_hint(self, widget, text):
         """마우스를 올리면 노란 툴팁을 띄운다(text는 문자열 또는 호출 시점에
