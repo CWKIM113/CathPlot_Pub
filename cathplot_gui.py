@@ -3388,7 +3388,8 @@ class CathPlotGUI:
                         # curve_order 정렬이 끝난 뒤 "이 curve는 Auto 재계산이
                         # 필요함" 표시(_needs_auto)만 같이 들고 가서 정렬 후
                         # 순서대로 다시 채운다.
-                        _needs_auto = bool(_marker_on and _marker_shape_label == "Auto")
+                        _needs_auto = (bool(_marker_on and _marker_shape_label == "Auto"),
+                                       bool(style.get("marker_fill", False)))
                         _marker_shape, _ = self._resolve_marker_shape(
                             _marker_shape_label, style.get("marker_fill", False), _marker_on, 0,
                         )
@@ -3439,15 +3440,15 @@ class CathPlotGUI:
         # 순번과 fill 여부 둘 다 curve.axis(Y1/Y2) 기준으로 두 그룹을 나눠
         # 각 그룹 안에서 curve_order 상대 순서를 유지한 채 0부터 따로
         # 매긴다(Legend1/2 소속과는 무관).
-        _group_y1 = [(_k, _c, _n) for _k, _c, _n in curves if _c.axis == "y1"]
-        _group_y2 = [(_k, _c, _n) for _k, _c, _n in curves if _c.axis != "y1"]
-        for _grp, _force_fill in ((_group_y1, False), (_group_y2, True)):
-            _rank = 0
-            for _key, _curve, _needs_auto in _grp:
-                if _needs_auto:
-                    _curve.marker_shape, _ = self._resolve_marker_shape(
-                        "Auto", _force_fill, True, _rank, excluded_shapes=_excluded_shapes_2d)
-                    _rank += 1
+        # [수정 - 사용자 요청] axis 대신 각 curve에 저장된 Fill로 open/filled
+        # 그룹을 나누고 같은 Fill끼리 Y1->Y2 순서로 순번(_auto_marker_order).
+        _auto_ranks = self._auto_marker_order([
+            (_i, _c.axis == "y1", _n[1], _n[0]) for _i, (_k, _c, _n) in enumerate(curves)
+        ])
+        for _i, (_key, _curve, _n) in enumerate(curves):
+            if _n[0]:
+                _curve.marker_shape, _ = self._resolve_marker_shape(
+                    "Auto", _n[1], True, _auto_ranks[_i], excluded_shapes=_excluded_shapes_2d)
         curves = [c for _key, c, _needs_auto in curves]
 
         head_label_map = {"nohead": "No head", "head": "Forward", "backhead": "Backhead", "heads": "Both heads"}
@@ -6318,8 +6319,9 @@ class CathPlotGUI:
                 # 참고), 이 팝업에 처음 뜰 때도 Y2 curve면 Fill 체크박스
                 # 기본값을 True로 맞춰 실제 렌더링과 화면 표시가 어긋나
                 # 보이지 않게 한다.
-                _default_fill = key not in _y1_set
-                self.marker_fill_vars[key] = tk.BooleanVar(value=_default_fill)
+                # [수정 - 사용자 요청] Auto의 open/fill은 이제 axis가 아니라
+                # 이 Fill 체크박스로 정하므로(_auto_marker_order 참고) 기본은 open.
+                self.marker_fill_vars[key] = tk.BooleanVar(value=False)
             # [추가 - 사용자 요청] Dat list에서 옮겨온 Color/Style - 보통
             # show_variables()가 먼저 이 key를 lazy-init해두지만, 방어적으로
             # 여기서도 동일하게 없으면 만든다(Marker 쪽 변수들과 같은 패턴).
@@ -6384,27 +6386,11 @@ class CathPlotGUI:
             self._disable_combobox_wheel(size_combo)
             self._add_hover_hint(size_combo, self._marker_size_hint_text)
 
+            # [수정 - 사용자 요청] Shape=Auto여도 Fill을 직접 정한다(예전엔 axis로
+            # 강제하고 잠갔음) - Fill 해제 curve끼리 open 모양을, Fill 체크 curve
+            # 끼리 filled 모양을 각각 Y1->Y2 순서로 Circle부터 배정(_auto_marker_order).
             fill_cell = _cell(row_f, FILL_PX)
-            _fill_chk = self._mk_check(fill_cell, "", self.marker_fill_vars[key], side="left")
-
-            # [수정 - 코드 검토] Shape=Auto인 curve는 fill이 axis(Y1=open,
-            # Y2=fill)로 강제돼(_get_marker_fields의 auto_fill_override) Fill
-            # 체크박스 값이 실제 그림에 반영되지 않는데, 체크박스는 그대로
-            # 눌려서 "수동 조정 가능"처럼 보였음 - Auto인 동안은 체크박스를
-            # 축 기준 값으로 맞추고 잠그며, 특정 모양을 고르면 다시 풀어
-            # curve별로 직접 채움을 정할 수 있게 한다.
-            def _sync_fill_lock(*_, k=key, chk=_fill_chk):
-                try:
-                    if self.marker_shape_vars[k].get() == "Auto":
-                        self.marker_fill_vars[k].set(k not in _y1_set)
-                        chk.configure(state="disabled")
-                    else:
-                        chk.configure(state="normal")
-                except tk.TclError:
-                    pass  # 팝업이 닫혀 위젯이 사라진 뒤의 trace 호출
-            _trace_id = self.marker_shape_vars[key].trace_add("write", _sync_fill_lock)
-            _fill_chk.bind("<Destroy>", lambda e, k=key, t=_trace_id: self._safe_trace_remove(self.marker_shape_vars[k], t), add="+")
-            _sync_fill_lock()
+            self._mk_check(fill_cell, "", self.marker_fill_vars[key], side="left")
 
             max_cell = _cell(row_f, MAX_PX)
             ttk.Entry(max_cell, textvariable=self.marker_maxcount_vars[key],
@@ -6415,8 +6401,9 @@ class CathPlotGUI:
 
         ttk.Label(
             popup,
-            text="On 체크 해제 시 이 curve는 마커 없음(Shape는 무관). Shape=Auto면 Y1/Y2 각각 Circle부터 "
-                 "순서대로 서로 다른 모양을 자동 배정(Y1=open, Y2=fill - Auto인 동안 Fill은 잠김, 채움을 직접 정하려면 Shape를 지정). "
+            text="On 체크 해제 시 이 curve는 마커 없음(Shape는 무관). Shape=Auto면 Fill 해제 curve끼리 open 모양, "
+                 "Fill 체크 curve끼리 filled 모양을 각각 Y1->Y2 순서로 Circle부터 서로 다르게 자동 배정. "
+                 "Auto 버튼 = 전체 Shape Auto + On + Fill 해제로 초기화. "
                  "L1/L2는 Legend1/2 박스 포함 여부, Order(▲▼)는 두 Legend가 공유하는 표시 순서. Max#를 비우면 "
                  "자동(대략 20~30개, 데이터가 적으면 전부 표시). M 크기 = pointsize 1.0",
             foreground="#555555", wraplength=680, justify="left"
@@ -6438,19 +6425,16 @@ class CathPlotGUI:
             # "확정"해두고 싶을 때(예: 이후 일부만 손으로 미세조정) 쓴다.
             # 켜져 있지 않던 curve도 이 버튼을 누르면 마커가 보이도록 On을
             # 함께 켠다(예전엔 Shape만 정하면 곧바로 보였던 것과 같은 체감).
-            shapes = [s for s in MARKER_SHAPE_LIST if s != "Auto"]
-            n_shapes = len(shapes)
-            if n_shapes == 0:
-                return
-            _group1 = [k for k in _ordered_keys if k in _y1_set]
-            _group2 = [k for k in _ordered_keys if k not in _y1_set]
-            for _keys, _fill in ((_group1, False), (_group2, True)):
-                for i, key in enumerate(_keys):
-                    self.marker_shape_vars[key].set(shapes[i % n_shapes])
-                    self.marker_fill_vars[key].set(_fill)
-                    if key not in self.marker_on_vars:
-                        self.marker_on_vars[key] = tk.BooleanVar(value=False)
-                    self.marker_on_vars[key].set(True)
+            # [수정 - 사용자 요청] 구체적 모양으로 "고정"하던 것을 초기화 버튼으로
+            # 변경 - 전체를 Shape=Auto + On + Fill 해제로 되돌린다. 실제 모양은
+            # 그릴 때 Y1->Y2 순서로 Circle부터 배정(_auto_marker_order), 이후
+            # Fill을 체크한 curve만 filled 모양 순서로 따로 배정된다.
+            for key in _ordered_keys:
+                self.marker_shape_vars[key].set("Auto")
+                self.marker_fill_vars[key].set(False)
+                if key not in self.marker_on_vars:
+                    self.marker_on_vars[key] = tk.BooleanVar(value=False)
+                self.marker_on_vars[key].set(True)
 
         # [추가 - 사용자 지적] "L1/L2 한번에 모두 선택해제 버튼은 있나요" -
         # 옛 Legend1/2 Curves 팝업에 있던 "전체 선택"/"전체 해제"가 Curve
@@ -6851,22 +6835,20 @@ class CathPlotGUI:
         # recipe 상대 순서를 유지한 채 auto_rank를 0부터 따로 매기고
         # fill_on도 그룹별로 강제한다(recipe 안 위치=index로 매칭,
         # Legend1/2 소속과는 무관).
-        _group1_indices = [i for i, item in enumerate(recipe) if item.get("axis") == "y1"]
-        _group2_indices = [i for i, item in enumerate(recipe) if item.get("axis") != "y1"]
+        # [수정 - 사용자 요청] axis 대신 각 항목의 Fill로 open/filled 그룹을
+        # 나누고 같은 Fill끼리 Y1->Y2 순서로 순번(_auto_marker_order).
+        _auto_ranks = self._auto_marker_order([
+            (_i, item.get("axis") == "y1", bool(item.get("marker_fill", False)),
+             bool(self._infer_marker_on(item)) and item.get("marker_shape_label", "Auto") == "Auto")
+            for _i, item in enumerate(recipe)
+        ])
         _marker_shape_by_index = {}
-        for _indices, _force_fill in ((_group1_indices, False), (_group2_indices, True)):
-            _rank = 0
-            for _i in _indices:
-                _item = recipe[_i]
-                _shape_label = _item.get("marker_shape_label", "Auto")
-                _fill_in = _force_fill if _shape_label == "Auto" else _item.get("marker_fill", False)
-                _mshape, _mused_auto = self._resolve_marker_shape(
-                    _shape_label, _fill_in,
-                    self._infer_marker_on(_item), _rank, excluded_shapes=_excluded_shapes,
-                )
-                if _mused_auto:
-                    _rank += 1
-                _marker_shape_by_index[_i] = _mshape
+        for _i, _item in enumerate(recipe):
+            _mshape, _ = self._resolve_marker_shape(
+                _item.get("marker_shape_label", "Auto"), _item.get("marker_fill", False),
+                self._infer_marker_on(_item), _auto_ranks.get(_i, 0), excluded_shapes=_excluded_shapes,
+            )
+            _marker_shape_by_index[_i] = _mshape
         for _idx, item in enumerate(recipe):
             var_obj = var_by_no.get(item["output_no"])
             legend_text = var_obj.display_name if var_obj else f"var_{item['output_no']}"
@@ -11021,18 +11003,21 @@ class CathPlotGUI:
             # info, z-order)는 그대로 클릭 순서를 쓰고, Auto 배정 순번만
             # Curve Features와 동일한 통합 순서(_legend_ordered_keys)를
             # axis로 걸러 씀.
+            # [수정 - 사용자 요청] open/fill은 axis가 아니라 각 curve의 Fill
+            # 체크로 정하고, 같은 Fill끼리 Y1->Y2 순서로 순번(_auto_marker_order).
             _unified_order = self._legend_ordered_keys("1", ordered_keys)
-            _group_y1 = [k for k in _unified_order if k in active_y1_set]
-            _group_y2 = [k for k in _unified_order if k not in active_y1_set]
+            _auto_ranks = self._auto_marker_order([
+                (k, k in active_y1_set,
+                 bool(self.marker_fill_vars[k].get()) if k in self.marker_fill_vars else False,
+                 (bool(self.marker_on_vars[k].get()) if k in self.marker_on_vars else False)
+                 and (self.marker_shape_vars[k].get() if k in self.marker_shape_vars else "Auto") == "Auto")
+                for k in _unified_order
+            ])
             _marker_fields_by_key = {}
-            for _grp_keys, _force_fill in ((_group_y1, False), (_group_y2, True)):
-                _rank = 0
-                for _mk in _grp_keys:
-                    _mshape, _msize, _mmax, _mused_auto = self._get_marker_fields(
-                        _mk, _rank, _excluded_shapes, auto_fill_override=_force_fill)
-                    if _mused_auto:
-                        _rank += 1
-                    _marker_fields_by_key[_mk] = (_mshape, _msize, _mmax)
+            for _mk in _unified_order:
+                _mshape, _msize, _mmax, _mused_auto = self._get_marker_fields(
+                    _mk, _auto_ranks.get(_mk, 0), _excluded_shapes)
+                _marker_fields_by_key[_mk] = (_mshape, _msize, _mmax)
             # 1. 각 파일별 선택된 X축을 확인하고 temp_sorted 폴더에 정렬 파일 생성
             for d_file, out_no, title, axis, key in temp_curves_info:
                 file_x_output_no = 0  # 기본값: 0 (선택되지 않았거나 첫 번째 컬럼 가정)
@@ -12425,13 +12410,10 @@ class CathPlotGUI:
         순서대로)으로 자동으로 구체적인 모양을 고른다 - 그래서 Auto를
         선택해두면 매번 버튼을 눌러 값을 "고정"하지 않아도 항상 최신
         curve 구성을 따라간다.
-        [수정 - 사용자 요청, 최종안] "y1은 open, y2는 fill로 각각 circle부터
-        따로 순서대로" - fill_on은 호출부가 axis 기준값(Y1 그룹=False/
-        open, Y2 그룹=True/fill)을 고정으로 넘기고, auto_rank도 그룹별로
-        0부터 따로 매긴다(도형 순서는 두 그룹 모두 정의된 순서 그대로:
-        Circle→Square→...→Star, 다 돌면 fill은 그대로 유지한 채 처음부터
-        반복). Legend1/Legend2 소속(L1/L2 체크)은 이 배정과 무관 - 어느
-        legend 박스에 표시되는지만 결정한다.
+        [수정 - 사용자 요청, 최종안] fill_on은 curve 자신의 Fill 체크 값이고,
+        auto_rank는 호출부가 _auto_marker_order로 "같은 Fill끼리 Y1->Y2
+        순서"로 0부터 매겨 넘긴다(도형 순서: Circle→Square→...→Star, 다 돌면
+        처음부터 반복). Legend1/Legend2 소속(L1/L2 체크)은 이 배정과 무관.
         [수정 - 사용자 요청] "Auto는 사용자가 수동으로 고른 모양을 건너뛰고
         순차적으로" - excluded_shapes(호출부가 미리 한 번 훑어서 모은,
         "이 그림에서 marker_on=True이고 Shape를 Auto가 아닌 특정 모양으로
@@ -12456,21 +12438,33 @@ class CathPlotGUI:
         hollow_pt, filled_pt = MARKER_SHAPE_MAP.get(shape_label, (None, None))
         return (filled_pt if fill_on else hollow_pt), used_auto
 
-    def _get_marker_fields(self, key, auto_rank=0, excluded_shapes=frozenset(), auto_fill_override=None):
+    @staticmethod
+    def _auto_marker_order(items):
+        """[수정 - 사용자 요청] Shape=Auto 순번 규칙 - items는 표시(통합) 순서의
+        (id, is_y1, fill, needs_auto) 목록. Fill 해제 curve끼리(open 모양),
+        Fill 체크 curve끼리(filled 모양) 두 그룹으로 나눠, 각 그룹 안에서
+        Y1 curve 먼저 그다음 Y2 curve 순서로 0부터(=Circle부터) 순번을 매긴다
+        (예전엔 axis로 나눠 Y1=open/Y2=fill로 강제했음). needs_auto인 것만
+        순번을 받으며 {id: rank}를 돌려준다."""
+        ranks = {}
+        ordered = [it for it in items if it[1]] + [it for it in items if not it[1]]
+        for want_fill in (False, True):
+            r = 0
+            for _id, _is_y1, fill, needs_auto in ordered:
+                if needs_auto and bool(fill) == want_fill:
+                    ranks[_id] = r
+                    r += 1
+        return ranks
+
+    def _get_marker_fields(self, key, auto_rank=0, excluded_shapes=frozenset()):
         """CurveDefinition 생성 시 공통으로 쓰는 marker 필드 3종(shape/size/max_count)을
         GUI 변수에서 읽어온다. 값이 없으면 기본(마커 없음/Auto).
         marker_on/Auto 해석은 _resolve_marker_shape에 위임한다(그쪽
         docstring 참고). 반환: (marker_shape, marker_size, marker_max_count,
-        used_auto) - used_auto는 호출부가 auto_rank 카운터를 증가시켜야
-        하는지 알려주는 플래그.
-        [수정 - 사용자 요청] auto_fill_override - Shape=Auto인 curve의 fill
-        여부를 Legend1/2 그룹(호출부가 결정)으로 강제할 때 씀 - None이면
-        기존처럼 사용자가 체크한 Fill 값을 그대로 쓴다(non-Auto는 항상
-        이 경로)."""
+        used_auto). Fill은 Shape=Auto여도 사용자가 체크한 값을 그대로 쓴다
+        (Auto 순번은 호출부가 _auto_marker_order로 Fill별로 매김)."""
         shape_label = self.marker_shape_vars[key].get() if key in self.marker_shape_vars else "Auto"
         fill_on = self.marker_fill_vars[key].get() if key in self.marker_fill_vars else False
-        if shape_label == "Auto" and auto_fill_override is not None:
-            fill_on = auto_fill_override
         marker_on = self.marker_on_vars[key].get() if key in self.marker_on_vars else False
         marker_shape, used_auto = self._resolve_marker_shape(shape_label, fill_on, marker_on, auto_rank, excluded_shapes)
         size_label = self.marker_size_vars[key].get() if key in self.marker_size_vars else "Auto"
