@@ -114,7 +114,7 @@ def _migrate_style_label(label):
 # unchecked)가 맡는다(2D는 marker_on_vars, 3D는 curve_check_vars 등의
 # marker_on_var - _resolve_marker_shape/_get_marker_fields 참고). 대신
 # "Auto"라는 새 선택지를 맨 앞에 두어, 체크박스가 켜져 있고 Shape가
-# Auto면 이미 있던 "Auto(순서대로 배정)" 버튼과 동일한 규칙(도형을
+# Auto면 Curve Features의 Auto 모양 배정 규칙(도형을
 # 순서대로, 다 쓰면 채운 버전으로 이어서)으로 그때그때 자동 배정한다 -
 # 즉 매번 버튼을 눌러 값을 "고정"할 필요 없이 Auto를 선택해두면 항상
 # 최신 curve 순서를 따라간다.
@@ -6404,7 +6404,7 @@ class CathPlotGUI:
             popup,
             text="On 체크 해제 시 이 curve는 마커 없음(Shape는 무관). Shape=Auto면 Fill 해제 curve끼리 open 모양, "
                  "Fill 체크 curve끼리 filled 모양을 각각 Y1->Y2 순서로 Circle부터 서로 다르게 자동 배정. "
-                 "Auto 버튼 = 전체 Shape Auto + On + Fill 기본값(Y1 해제, Y2 체크)으로 초기화. "
+                 "Auto Reset = 선택된 curve 전체를 Shape Auto + On + Fill 기본값(Y1 해제, Y2 체크)으로 초기화. "
                  "L1/L2는 Legend1/2 박스 포함 여부, Order(▲▼)는 두 Legend가 공유하는 표시 순서. Max#를 비우면 "
                  "자동(대략 20~30개, 데이터가 적으면 전부 표시). M 크기 = pointsize 1.0",
             foreground="#555555", wraplength=680, justify="left"
@@ -6457,7 +6457,7 @@ class CathPlotGUI:
         btn_row = ttk.Frame(popup)
         btn_row.pack(fill="x", padx=10, pady=8)
         ttk.Button(btn_row, text="완료", command=popup.destroy).pack(side="right")
-        ttk.Button(btn_row, text="Auto(순서대로 배정)", command=_auto_assign_markers).pack(side="right", padx=(0, 6))
+        ttk.Button(btn_row, text="Auto Reset", command=_auto_assign_markers).pack(side="right", padx=(0, 6))
         ttk.Button(btn_row, text="L1 전체선택", command=lambda: _set_all_l1(True)).pack(side="left")
         ttk.Button(btn_row, text="L1 전체해제", command=lambda: _set_all_l1(False)).pack(side="left", padx=(4, 12))
         ttk.Button(btn_row, text="L2 전체선택", command=lambda: _set_all_l2(True)).pack(side="left")
@@ -12407,7 +12407,7 @@ class CathPlotGUI:
         shape_label이 "Auto"면 auto_rank(0부터 시작하는, "지금 이 그림에서
         marker_on=True고 Shape=Auto인 curve들" 사이의 순번 - 호출부가
         같은 그림 안에서 순서대로 매겨서 넘겨줌)를 이용해 기존
-        "Auto(순서대로 배정)" 버튼과 완전히 동일한 규칙(도형 목록을
+        Curve Features의 Auto 규칙(도형 목록을
         순서대로)으로 자동으로 구체적인 모양을 고른다 - 그래서 Auto를
         선택해두면 매번 버튼을 눌러 값을 "고정"하지 않아도 항상 최신
         curve 구성을 따라간다.
