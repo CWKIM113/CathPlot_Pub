@@ -742,7 +742,12 @@ class CathPlotGUI:
         # 스크롤바/+ 버튼은 그대로 file_frame에 직접 배치 - 얘네까지 가로로
         # 같이 밀려나면 안 되므로).
         self.file_canvas_frame = ttk.Frame(self.file_frame)
-        self.file_canvas = tk.Canvas(self.file_canvas_frame, height=85, width=120)
+        # [수정 - 사용자 요청] "Dat list 4개까지는 보이게" - Color/Style이
+        # 팝업으로 빠지면서 한 줄 높이가 22px로 줄었는데(예전엔 더 높았음),
+        # 기존 85px는 4번째 줄이 겨우 걸치거나 살짝 잘리는 경계값이라(실측:
+        # 22px*4=88px, 85px보다 큼) 4번째 줄이 스크롤 없이 확실히 다 보이게
+        # 여유를 두고 100px로 늘림.
+        self.file_canvas = tk.Canvas(self.file_canvas_frame, height=100, width=120)
         self.file_scrollbar = ttk.Scrollbar(
             self.file_frame, orient="vertical", command=self.file_canvas.yview
         )
@@ -1792,7 +1797,17 @@ class CathPlotGUI:
         # 때문에 실패했던 방식) Plot Setting 내용(plot_frame) 폭만 재서, 창보다
         # 넓을 때만 그만큼 넓힌다(좁히지는 않음, 화면 폭 상한). 실제 PC 폰트로
         # 재므로 이미 들어맞으면 기존 폭 그대로.
+        # [수정 - 사용자 보고 버그] "처음 화면을 띄우면 기본 창의 가로폭이
+        # 너무 큼" - update_idletasks()만으로는 plot_canvas가 아직 실제
+        # 폭을 할당받기 전(winfo_width()가 기본값 1을 그대로 반환)이라,
+        # 바로 아래 chrome_w = root.winfo_width() - plot_canvas.winfo_width()가
+        # (1190-1=1189처럼) 터무니없이 크게 잡혀 need_w가 화면 폭 상한까지
+        # 폭주했었다(실측: Curve Features 줄이 조금만 넓어져도 창이 거의
+        # 전체 화면 폭으로 튐). update_idletasks 대신 update()(레이아웃을
+        # 실제로 완성)를 한 번 먼저 호출해 plot_canvas.winfo_width()가 진짜
+        # 값을 돌려주게 한 뒤 재야 chrome_w가 정상 범위(수십 px)로 나온다.
         try:
+            self.root.update()
             _chrome_w = self.root.winfo_width() - self.plot_canvas.winfo_width()
             _need_w = self.plot_frame.winfo_reqwidth() + max(_chrome_w, 0) + 4
             if _need_w > self._win_w:
