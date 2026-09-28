@@ -1203,8 +1203,10 @@ class CathPlotGUI:
         t_font_frame.grid(row=0, column=2, padx=(5, 0), pady=0, sticky="w")
         ttk.Combobox(t_font_frame, textvariable=self.title_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
         ttk.Combobox(t_font_frame, textvariable=self.title_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
-        ttk.Combobox(t_font_frame, textvariable=self.title_style_var, values=["N", "B", "I"],
-                     width=2, state="readonly").pack(side="left", padx=(2, 0))
+        _style_combo = ttk.Combobox(t_font_frame, textvariable=self.title_style_var, values=["N", "B", "I"],
+                                    width=2, state="readonly")
+        _style_combo.pack(side="left", padx=(2, 0))
+        self._add_hover_hint(_style_combo, self._FONT_STYLE_HINT)
         self._mk_color_box(t_font_frame, self.title_color_var, padx=(4, 0))
 
         def _add_legend_pos_hint(combo):
@@ -1302,8 +1304,10 @@ class CathPlotGUI:
         ttk.Combobox(x_font_frame, textvariable=self.xlabel_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
         ttk.Combobox(x_font_frame, textvariable=self.xlabel_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
         # Y1/Y2 Axis Title도 폰트·크기처럼 이 스타일·색을 그대로 공유(xlabel_style_var 참고)
-        ttk.Combobox(x_font_frame, textvariable=self.xlabel_style_var, values=["N", "B", "I"],
-                     width=2, state="readonly").pack(side="left", padx=(2, 0))
+        _style_combo = ttk.Combobox(x_font_frame, textvariable=self.xlabel_style_var, values=["N", "B", "I"],
+                                    width=2, state="readonly")
+        _style_combo.pack(side="left", padx=(2, 0))
+        self._add_hover_hint(_style_combo, self._FONT_STYLE_HINT)
         self._mk_color_box(x_font_frame, self.xlabel_color_var, padx=(4, 0))
 
         # [수정 - 사용자 요청] "상세 내용은 popup으로" - 원래 이 자리(row=2,
@@ -1325,8 +1329,10 @@ class CathPlotGUI:
         # [추가 - 사용자 요청] "legend, tic은 글꼴 연동해서 정하고" - 이 스타일은
         # Tic 숫자 글꼴에도 그대로 같이 적용된다(gnu_generator.py의 xtics/
         # ytics/y2tics font 참고).
-        ttk.Combobox(legend_detail_row, textvariable=self.legend_style_var, values=["N", "B", "I"],
-                     width=2, state="readonly").pack(side="left", padx=(2, 0))
+        _style_combo = ttk.Combobox(legend_detail_row, textvariable=self.legend_style_var, values=["N", "B", "I"],
+                                    width=2, state="readonly")
+        _style_combo.pack(side="left", padx=(2, 0))
+        self._add_hover_hint(_style_combo, self._FONT_STYLE_HINT)
         # [주의] _mk_color_box는 내부적으로 side="right"로 박스를 붙인다 - 이
         # 줄엔 뒤에서 side="right"로 붙는 Curve Features 버튼(marker_settings_btn)
         # 이 있어서 그대로 부르면 순서가 엇갈려 색 상자가 오히려 더 오른쪽
@@ -7637,6 +7643,12 @@ class CathPlotGUI:
     # [추가 - 사용자 요청] Comment 전용 글꼴 선택 창(_mk_comment_font_box)에서
     # 쓰는 목록 - create_widgets의 Title/Label/Legend Font 콤보와 같은 값.
     COMMENT_FONT_LIST = ["Malgun Gothic", "Arial", "Times New Roman", "Courier New", "Consolas"]
+    # 글꼴 스타일(N/B/I) 선택칸 안내 - I(기울임)는 기울임 글꼴 파일이 있는 영문 글꼴만
+    # PDF에서 기울어짐(실측: Malgun Gothic·굴림 등 한글 글꼴은 PDF/PNG/JPG/SVG/인쇄에서
+    # 똑바로 나오고, 화면·EMF에서만 기울어짐).
+    _FONT_STYLE_HINT = ("N=보통, B=굵게, I=기울임\n"
+                        "I는 Arial/Times New Roman/Courier New/Consolas만 PDF·PNG·인쇄에서 기울어짐 -\n"
+                        "Malgun Gothic 등 한글 글꼴은 화면·EMF에서만 기울어지고 PDF 등에서는 똑바로 나옴")
     COMMENT_FONT_SIZE_LIST = ["6", "8", "9", "10", "11", "12", "14", "16", "18", "20"]
 
     def _mk_comment_font_box(self, parent, data, padx=(2, 5)):
@@ -7688,8 +7700,10 @@ class CathPlotGUI:
             ttk.Combobox(row2, textvariable=_s, values=[""] + self.COMMENT_FONT_SIZE_LIST,
                          width=4, state="readonly").pack(side="left", padx=(4, 0))
             ttk.Label(row2, text="Style:").pack(side="left", padx=(12, 1))
-            ttk.Combobox(row2, textvariable=_st, values=["N", "B", "I"],
-                         width=2, state="readonly").pack(side="left", padx=(1, 0))
+            _style_combo = ttk.Combobox(row2, textvariable=_st, values=["N", "B", "I"],
+                                        width=2, state="readonly")
+            _style_combo.pack(side="left", padx=(1, 0))
+            self._add_hover_hint(_style_combo, self._FONT_STYLE_HINT)
 
             def _apply_default():
                 _f.set(""); _s.set(""); _st.set("N")

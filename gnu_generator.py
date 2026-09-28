@@ -149,17 +149,101 @@ def _font_file_for(font_name, bold=False, italic=False):
 
 
 def _gnuplot_font_name(name, bold=False, italic=False):
-    """gnuplot cairo 계열 터미널의 "FontName:Style" 표기 - set title/xlabel/
-    tics/set label 등 font절의 이름 부분에 그대로 쓴다(크기는 콤마 뒤에
-    별도로 붙임: f'font "{_gnuplot_font_name(name, bold, italic)},{size}"')."""
+    """font절의 이름 부분(크기는 콤마 뒤에 따로: f'font "{...},{size}"').
+    [수정 - 실측] "이름:Bold" 표기는 cairo(PDF)와 화면 창만 알아듣고, EMF는
+    "Malgun Gothic:Bold" 전체를 글꼴 이름으로 기록해(굵기 400) Windows가 다른
+    글꼴로 바꿔 그리고 굵게/기울임도 안 됐음(EMF 레코드 확인). 공백 표기
+    ("이름 Bold"/"이름 Italic"/"이름 Bold Italic")는 PDF/EMF/화면 모두 제대로
+    굵기·기울임으로 적용됨(PDF 글꼴명 Arial-ItalicMT·MalgunGothicBold, EMF
+    굵기 700·기울임 1, 화면 캡처로 확인)."""
     name = name or "Malgun Gothic"
     if bold and italic:
-        return f"{name}:Bold Italic"
+        return f"{name} Bold Italic"
     if bold:
-        return f"{name}:Bold"
+        return f"{name} Bold"
     if italic:
-        return f"{name}:Italic"
+        return f"{name} Italic"
     return name
+
+
+_font_cmap_cache = {}
+
+
+def _font_cmap_ranges(path):
+    """TrueType/OpenType 글꼴 파일의 'cmap'(format 12 또는 4)에서 이 글꼴이 가진
+    유니코드 코드포인트 구간 [(start, end), ...](정렬됨). 읽을 수 없으면 None."""
+    if path in _font_cmap_cache:
+        return _font_cmap_cache[path]
+    ranges = None
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        num_tables = struct.unpack_from(">H", data, 4)[0]
+        cmap = None
+        for i in range(num_tables):
+            tag, _chk, off, _len = struct.unpack_from(">4sIII", data, 12 + 16 * i)
+            if tag == b"cmap":
+                cmap = off
+                break
+        if cmap is not None:
+            best = None
+            for i in range(struct.unpack_from(">H", data, cmap + 2)[0]):
+                pid, eid, sub = struct.unpack_from(">HHI", data, cmap + 4 + 8 * i)
+                fmt = struct.unpack_from(">H", data, cmap + sub)[0]
+                if fmt == 12 and (pid, eid) in ((3, 10), (0, 4), (0, 6)):
+                    best = (12, cmap + sub)
+                    break
+                if fmt == 4 and (pid, eid) in ((3, 1), (0, 3)) and best is None:
+                    best = (4, cmap + sub)
+            if best and best[0] == 12:
+                n = struct.unpack_from(">I", data, best[1] + 12)[0]
+                ranges = [struct.unpack_from(">II", data, best[1] + 16 + 12 * k) for k in range(n)]
+            elif best:
+                seg2 = struct.unpack_from(">H", data, best[1] + 6)[0]
+                ends = struct.unpack_from(f">{seg2 // 2}H", data, best[1] + 14)
+                starts = struct.unpack_from(f">{seg2 // 2}H", data, best[1] + 16 + seg2)
+                ranges = [(s, e) for s, e in zip(starts, ends) if s != 0xFFFF]
+            if ranges is not None:
+                ranges.sort()
+    except Exception:
+        ranges = None
+    _font_cmap_cache[path] = ranges
+    return ranges
+
+
+_font_text_cache = {}
+
+
+def _font_for_text(font_name, text, bold=False, italic=False):
+    """[추가 - 실측으로 발견] 이 PC의 gnuplot(cairo - PDF와 거기서 만드는 PNG/JPG/
+    SVG/인쇄)은 글꼴에 없는 글자(예: Arial/Times New Roman/Courier New/Consolas의
+    한글, Arial의 ℃)를 대체 글꼴로 찾다가 Courier New 848pt짜리 거대한 글자를
+    찍어 그래프를 덮어버림(EMF/화면은 Windows가 알아서 대신 그려 정상). text의
+    모든 글자가 그 글꼴(굵게/기울임 파일 포함)에 있으면 그대로, 하나라도 없으면
+    한글·기호가 다 있는 "Malgun Gothic"을 돌려준다. 글꼴 파일을 모르면(목록에
+    없는 글꼴) 판단할 수 없으므로 그대로 둔다."""
+    name = (font_name or "").strip()
+    if not text or not name or name.lower() == "malgun gothic":
+        return font_name
+    key = (name.lower(), bool(bold), bool(italic), text)
+    if key in _font_text_cache:
+        return _font_text_cache[key]
+    result = font_name
+    path = _font_file_for(name, bold, italic)
+    ranges = _font_cmap_ranges(path) if path and os.path.exists(path) else None
+    if ranges:
+        import bisect
+        starts = [r[0] for r in ranges]
+        for ch in set(text):
+            cp = ord(ch)
+            if cp < 0x80:
+                continue
+            i = bisect.bisect_right(starts, cp) - 1
+            if i < 0 or cp > ranges[i][1]:
+                result = "Malgun Gothic"
+                break
+    _font_text_cache[key] = result
+    return result
 
 
 def _gnuplot_textcolor_clause(color):
@@ -1513,6 +1597,22 @@ def _3d_fonts_resolved(fonts):
     }
 
 
+def _glyph_safe_3d_fonts(fonts, title, labels, legend_texts):
+    """3D 글꼴 묶음(_3d_fonts_resolved 키)에서 Title/Axis Title/Legend(Tic·Comment 공용)
+    글꼴에 실제 텍스트 글자가 없으면 그 글꼴만 Malgun Gothic으로 바꾼다(2D의
+    GnuplotGenerator._glyph_safe_fonts와 같은 이유 - _font_for_text 참고)."""
+    out = dict(fonts or {})
+    res = _3d_fonts_resolved(out)
+    for key, style_key, texts in (("title_font", "title_style", [title]),
+                                  ("label_font", "label_style", labels),
+                                  ("legend_font", "legend_style", legend_texts)):
+        style = res[style_key]
+        fixed = _font_for_text(res[key], "".join(str(t) for t in texts if t), style == "B", style == "I")
+        if fixed != res[key]:
+            out[key] = fixed
+    return out
+
+
 def _3d_font_cmds(fonts, scale, ylabel_on, label_ids=()):
     """3D 글자 요소별 font 설정 명령 목록(텍스트는 안 바꾸고 font만 지정).
     화면에서 저장 키(P/N/…)로 터미널을 바꿀 때도 같은 목록을 저장용 배율로
@@ -1536,8 +1636,12 @@ def _3d_font_cmds(fonts, scale, ylabel_on, label_ids=()):
     ]
     if ylabel_on:
         cmds.append(f'set label 9001 {_label_f}')
+    # 주석(Comment) label에는 Legend 글꼴·크기·스타일만 입히고 색은 넣지 않는다 -
+    # 주석마다 고른 색(textcolor)이 Legend 색으로 덮이던 문제(2D와 같이 주석 색은
+    # Legend 색과 무관).
+    _comment_f = _f(r["legend_font"], r["legend_size"], r["legend_style"], "")
     for i in label_ids:
-        cmds.append(f'set label {i} {_legend_f}')
+        cmds.append(f'set label {i} {_comment_f}')
     return cmds
 
 
@@ -1975,6 +2079,33 @@ class GnuplotGenerator:
             if best_dev is None or dev < best_dev:
                 best_j, best_dev = j, dev
         return best_j if best_j is not None else idx
+
+    def _glyph_safe_fonts(self, plotdef):
+        """Title/Axis Title/Legend 글꼴에 실제 텍스트(PIP 제목 포함)의 글자가 다
+        있는지 보고(_font_for_text), 없으면 그 글꼴만 Malgun Gothic으로 바꾼 사본을
+        돌려준다 - PDF에서 거대한 대체 글자로 깨지는 것 방지. 저장/인쇄 때는 안내."""
+        import dataclasses
+        pip = getattr(plotdef, "pip", None) or {}
+        _legend_texts = [getattr(c, "title", "") for c in (getattr(plotdef, "curves", None) or [])]
+        _legend_texts += [getattr(c, "title", "") for c in (getattr(plotdef, "function_curves", None) or [])]
+        checks = [
+            ("title_font", "Title", [plotdef.title, pip.get("title_text")], "title_bold", "title_italic"),
+            ("xlabel_font", "X Axis Title", [plotdef.xlabel, pip.get("xlabel_text")], "xlabel_bold", "xlabel_italic"),
+            ("ylabel_font", "Y1 Axis Title", [plotdef.ylabel, pip.get("ylabel_text")], "xlabel_bold", "xlabel_italic"),
+            ("y2label_font", "Y2 Axis Title", [plotdef.y2label, pip.get("y2label_text")], "xlabel_bold", "xlabel_italic"),
+            ("legend_font", "Legend", _legend_texts, "legend_bold", "legend_italic"),
+        ]
+        changes = {}
+        for field_name, label, texts, bold_attr, italic_attr in checks:
+            font0 = getattr(plotdef, field_name, "") or ""
+            text = "".join(str(t) for t in texts if t)
+            font1 = _font_for_text(font0, text, getattr(plotdef, bold_attr, False), getattr(plotdef, italic_attr, False))
+            if font1 != font0:
+                changes[field_name] = font1
+                if getattr(plotdef, "is_print_mode", False):
+                    self.warnings.append(f"'{font0}' 글꼴에 없는 글자(한글·기호 등)가 있어 {label}을(를) "
+                                         f"'{font1}'(으)로 그렸습니다(그대로 두면 PDF에서 글자가 크게 깨짐).")
+        return dataclasses.replace(plotdef, **changes) if changes else plotdef
 
     def _char_marker_term(self, fmt):
         """2D 출력 형식 -> (◁◀▷▶ 그리기용 터미널 종류, 터미널 기본 폰트 pt) -
@@ -4140,6 +4271,8 @@ class GnuplotGenerator:
                     _ann_bold = _default_ann_bold
                     _ann_italic = _default_ann_italic
                     _ann_size = int(_default_ann_size * f_scale)
+                # 이 주석 글자가 그 글꼴에 다 있어야 PDF에서 안 깨짐(_font_for_text 참고)
+                _ann_font_name = _font_for_text(_ann_font_name, ann.get("text", ""), _ann_bold, _ann_italic)
                 _ann_font_spec = _gnuplot_font_name(_ann_font_name, _ann_bold, _ann_italic)
                 lines.append(f'set label {i+1} "{ann_text}" at {gx},{gy} {rotate_clause} font "{_ann_font_spec},{_ann_size}"{_color_clause} {ann_enh}')
 
@@ -8794,6 +8927,7 @@ class GnuplotGenerator:
         if _pip_n is not getattr(plotdef, "pip", None):
             plotdef = copy.copy(plotdef)
             plotdef.pip = _pip_n
+        plotdef = self._glyph_safe_fonts(plotdef)
         _fmt_l0 = (fmt or "").lower()
         if _fmt_l0 == "eps" and not getattr(self, "_eps_out", False):
             # [수정 - 사용자 요청] EPS는 PDF와 같은 레이아웃 경로로 그리고 터미널
@@ -9504,6 +9638,7 @@ class GnuplotGenerator:
         if _pip_n is not getattr(plotdef, "pip", None):
             plotdef = copy.copy(plotdef)
             plotdef.pip = _pip_n
+        plotdef = self._glyph_safe_fonts(plotdef)
         plot_dir = os.path.dirname(os.path.abspath(outfile))
         os.makedirs(plot_dir, exist_ok=True)
         is_gif = bool(gif_path)
@@ -10208,6 +10343,10 @@ class GnuplotGenerator:
         os.makedirs(plot_dir, exist_ok=True)
         is_gif = bool(gif_path)
         title_disp = os.path.splitext(os.path.basename(outfile))[0]
+        fonts = _glyph_safe_3d_fonts(
+            fonts, title, [xlabel, ylabel, zlabel],
+            [c.get("title") for c in curves_3d] + [s.get("title") or s.get("label") for s in (surfaces or [])]
+            + [fs.get("title") for fs in (function_surfaces or [])])
         self._3d_auto_ps = _auto_marker_size(_3d_fonts_resolved(fonts)["legend_size"])
 
         def _resolve_style(item):
@@ -10647,6 +10786,11 @@ class GnuplotGenerator:
         is_interactive = _fmt == "interactive"
         title_disp = os.path.splitext(os.path.basename(outfile))[0]
         # [추가 - 사용자 요청] 2D 폰트 공유 + Marker Size Auto(Legend Font 비례)
+        fonts = _glyph_safe_3d_fonts(
+            fonts, title, [xlabel, ylabel, zlabel],
+            [c.get("title") for c in curves_3d] + [s.get("title") or s.get("label") for s in (surfaces or [])]
+            + [fs.get("title") for fs in (function_surfaces or [])]
+            + [a.get("text") for a in (annotations_3d or [])])
         self._3d_auto_ps = _auto_marker_size(_3d_fonts_resolved(fonts)["legend_size"])
         # 아래 annotation 루프와 같은 조건으로, 실제로 만들어질 comment label 번호
         _ann_label_ids = []
@@ -11409,6 +11553,7 @@ class GnuplotGenerator:
         # 주석 참고)로 여기 합류. EMF는 대상 아님(Word에서 벡터+텍스트로 남아야
         # 하고, SVG 같은 text-anchor 문제가 실측상 없었음 - print와 직결되는
         # 포맷이라 이번 세션의 M-P 폰트 재보정/margin 수정을 그대로 유지).
+        plots = [self._glyph_safe_fonts(p) for p in plots]
         _fmt_l0 = (fmt or "").lower()
         if _fmt_l0 == "eps" and not getattr(self, "_eps_out", False):
             # create_script와 같은 방식 - PDF 레이아웃 + postscript 터미널
