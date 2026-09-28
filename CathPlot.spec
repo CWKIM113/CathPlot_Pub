@@ -1,7 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = []
+# [추가 - 사용자 요청] "설명서 등 포함 exe packing" - 사용설명서/변경이력/
+# 발표자료를 exe와 같은 폴더(dist/CathPlot/)에 그대로 복사해 넣는다(exe에
+# 내장하는 게 아니라 곁에 두는 방식 - 사용자가 탐색기에서 바로 열어볼 수
+# 있게). 디버깅용 검증 스냅샷(EMF-SVG 검증, 이미지크기 테스트 등)은
+# 배포용이 아니므로 제외.
+datas = [
+    ('CathPlot_사용설명서(V1.0).docx', '.'),
+    ('CathPlot_변경이력(V1.0).docx', '.'),
+    ('CathPlot_발표.pptx', '.'),
+]
 binaries = []
 # [수정 - 빌드 경고 원인] gnu_generator.py가 PIL(Pillow)을 함수 안 try/except로
 # "delayed, optional" import하는데(legend 폭 실측/PNG 300dpi 업스케일용),
