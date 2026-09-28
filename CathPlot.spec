@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from PyInstaller.utils.hooks import collect_all
 
 # [추가 - 사용자 요청] "설명서 등 포함 exe packing" - 사용설명서/변경이력/
@@ -6,11 +7,17 @@ from PyInstaller.utils.hooks import collect_all
 # 내장하는 게 아니라 곁에 두는 방식 - 사용자가 탐색기에서 바로 열어볼 수
 # 있게). 디버깅용 검증 스냅샷(EMF-SVG 검증, 이미지크기 테스트 등)은
 # 배포용이 아니므로 제외.
-datas = [
-    ('CathPlot_사용설명서(V1.0).docx', '.'),
-    ('CathPlot_변경이력(V1.0).docx', '.'),
-    ('CathPlot_발표.pptx', '.'),
+# [수정 - 사용자 검토로 발견된 버그] 실제 빌드해서 확인해보니, PyInstaller의
+# datas는 (최신 PyInstaller 기본값인) dist/CathPlot/_internal/ 밑에 들어가서
+# "exe와 같은 폴더에 바로 보이게"라는 원래 의도(탐색기에서 바로 열어보기)와
+# 어긋났음 - datas 대신, COLLECT가 끝난 뒤 dist/CathPlot/(exe와 같은 폴더)로
+# 직접 복사하는 후처리로 바꾼다.
+_DOC_FILES = [
+    'CathPlot_사용설명서(V1.0).docx',
+    'CathPlot_변경이력(V1.0).docx',
+    'CathPlot_발표.pptx',
 ]
+datas = []
 binaries = []
 # [수정 - 빌드 경고 원인] gnu_generator.py가 PIL(Pillow)을 함수 안 try/except로
 # "delayed, optional" import하는데(legend 폭 실측/PNG 300dpi 업스케일용),
@@ -92,3 +99,13 @@ coll = COLLECT(
     upx_exclude=[],
     name='CathPlot',
 )
+
+# [추가 - 위 datas 관련 주석 참고] COLLECT 결과물 최상위(exe와 같은 폴더)로
+# 사용설명서/변경이력/발표자료를 직접 복사한다 - _internal 밑이 아니라 여기
+# 있어야 탐색기에서 exe 옆에 바로 보임.
+import shutil as _shutil
+for _doc in _DOC_FILES:
+    try:
+        _shutil.copy2(_doc, os.path.join(DISTPATH, 'CathPlot', _doc))
+    except OSError:
+        pass
