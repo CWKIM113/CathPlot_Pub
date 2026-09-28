@@ -742,12 +742,10 @@ class CathPlotGUI:
         # 스크롤바/+ 버튼은 그대로 file_frame에 직접 배치 - 얘네까지 가로로
         # 같이 밀려나면 안 되므로).
         self.file_canvas_frame = ttk.Frame(self.file_frame)
-        # [수정 - 사용자 요청] "Dat list 4개까지는 보이게" - Color/Style이
-        # 팝업으로 빠지면서 한 줄 높이가 22px로 줄었는데(예전엔 더 높았음),
-        # 기존 85px는 4번째 줄이 겨우 걸치거나 살짝 잘리는 경계값이라(실측:
-        # 22px*4=88px, 85px보다 큼) 4번째 줄이 스크롤 없이 확실히 다 보이게
-        # 여유를 두고 100px로 늘림.
-        self.file_canvas = tk.Canvas(self.file_canvas_frame, height=100, width=120)
+        # [되돌림 - 사용자 요청] "DAT files쪽은 3개 줄만 나와도 됨. 너무
+        # 길면 나머지 내용들이 묻히니까" - 4줄로 늘렸던 걸 원래 높이(85)로
+        # 되돌림(정작 요청하신 건 Variable Selection 쪽 4개 표시였음).
+        self.file_canvas = tk.Canvas(self.file_canvas_frame, height=85, width=120)
         self.file_scrollbar = ttk.Scrollbar(
             self.file_frame, orient="vertical", command=self.file_canvas.yview
         )
@@ -8008,7 +8006,12 @@ class CathPlotGUI:
             _display_name = self._dedup_display_name(datfile)
             frame = ttk.LabelFrame(container, text=_display_name)
 
-            frame.grid(row=valid_file_count // 3, column=valid_file_count % 3, sticky="nw", padx=2, pady=2)
+            # [수정 - 사용자 요청] "Variable Selection에서 파일 3개가 나오고
+            # 4번째는 다음 줄로 내려가는데, 4개까지 보이고 5번째부터
+            # 다음 줄로" - Color/Style이 각 변수 줄에서 팝업으로 빠지면서
+            # 파일당 블록 폭이 줄어 4개를 한 줄에 넣을 여유가 생겼음(가로
+            # 스크롤 가능한 캔버스라 창 폭 자체에는 영향 없음) - 3 -> 4.
+            frame.grid(row=valid_file_count // 4, column=valid_file_count % 4, sticky="nw", padx=2, pady=2)
             valid_file_count += 1
 
             # [추가] gnuplot splot용 CATHENA surface 파일(is_surface)은 일반
