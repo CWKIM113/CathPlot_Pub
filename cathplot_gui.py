@@ -165,6 +165,15 @@ def _to_gnuplot_color(value):
     if re.fullmatch(r"#[0-9A-Fa-f]{6}", v):
         return v.lower()
     return ""
+
+
+def _font_style_to_bi(style):
+    """[추가 - 사용자 요청] "글꼴은 N/B/I 3가지로" - Title/Axis Title/Legend
+    Font 옆의 단일 스타일 선택값("N"/"B"/"I")을 PlotDefinition이 쓰는
+    (bold, italic) bool 쌍으로 바꾼다(Bold+Italic 동시 조합은 없음)."""
+    return (style == "B", style == "I")
+
+
 STYLE_LIST = list(STYLE_MAP.keys())
 
 # [수정] "pm3d 옵션 이름을 'color palette' 또는 '입체채색'으로" - 내부적으로는
@@ -983,8 +992,18 @@ class CathPlotGUI:
         # 추가한다. "Auto"면 기존 방식(x>=50%면 우측 정렬) 그대로 유지.
         self.legend_align_var = tk.StringVar(value="Auto")
         self.legend_thick_var = tk.StringVar(value="1.5")  # legend box 테두리 두께
-        self.legend_font_var = tk.StringVar(value="Malgun Gothic")  # Legend 전용 폰트(Comment도 같이 씀)
-        self.legend_size_var = tk.StringVar(value="9")  # Legend 전용 크기(Comment도 같이 씀)
+        self.legend_font_var = tk.StringVar(value="Malgun Gothic")  # Legend 전용 폰트(Tic 폰트·Comment 기본값도 같이 씀)
+        self.legend_size_var = tk.StringVar(value="9")  # Legend 전용 크기(Tic 크기·Comment 기본값도 같이 씀)
+        # [추가 - 사용자 요청] "legend, tic은 글꼴 연동해서 정하고" - 글꼴
+        # 스타일도 Legend Font/Size와 한 세트로 Tic 숫자에 그대로 적용된다.
+        # [수정 - 사용자 요청] "글꼴은 N/B/I 3가지로" - Bold+Italic 동시 체크
+        # 조합 대신, Normal/Bold/Italic 중 하나만 고르는 단일 선택으로 통일.
+        self.legend_style_var = tk.StringVar(value="N")
+        # [추가 - 사용자 요청] "Title이나 Label에는 글 색상 선택 있나요 -
+        # Comment의 Color 상자와 같은 패턴으로" - "Auto"면 gnuplot 기본색
+        # (검정), 그 외엔 Windows 색 선택 창에서 고른 "#rrggbb". Tic도
+        # 같이 칠해짐(legend_style_var와 동일한 연동).
+        self.legend_color_var = tk.StringVar(value="Auto")
         # [추가] "자동 추정이 안 맞는 경우만 사용자 입력(axis 대비 %)으로 직접
         # 지정" - 비워두면(기본) 기존처럼 폰트 기반 자동 추정을 그대로 쓰고,
         # 값을 넣으면(axis width/height 대비 %) 그 크기로 고정한다. Print/
@@ -1149,10 +1168,18 @@ class CathPlotGUI:
 
         self.title_font_var = tk.StringVar(value="Malgun Gothic")
         self.title_size_var = tk.StringVar(value="14")
+        # [추가 - 사용자 요청] "title 등의 폰트외 bold, italic 등 글꼴도
+        # 선택하게" - Title/Axis Title은 폰트 콤보 옆에 스타일(N/B/I) 콤보를
+        # 둔다. [수정 - 사용자 요청] "글꼴은 N/B/I 3가지로" - Bold/Italic
+        # 개별 체크 대신 Normal/Bold/Italic 중 하나만 고르는 단일 선택.
+        self.title_style_var = tk.StringVar(value="N")
+        self.title_color_var = tk.StringVar(value="Auto")  # legend_color_var 참고(Comment Color 상자와 동일 패턴)
         self.xlabel_font_var = tk.StringVar(value="Malgun Gothic")
         self.xlabel_size_var = tk.StringVar(value="11")
+        self.xlabel_style_var = tk.StringVar(value="N")
+        self.xlabel_color_var = tk.StringVar(value="Auto")
         # X/Y1/Y2 축 제목은 공용 폰트+크기를 씀 (X 것을 그대로 공유) - 별도
-        # 입력칸을 없애고 X 줄의 것 하나로 통일
+        # 입력칸을 없애고 X 줄의 것 하나로 통일 (스타일·색도 동일하게 공유)
         self.ylabel_font_var = self.xlabel_font_var
         self.ylabel_size_var = self.xlabel_size_var
         self.y2label_font_var = self.xlabel_font_var
@@ -1176,6 +1203,9 @@ class CathPlotGUI:
         t_font_frame.grid(row=0, column=2, padx=(5, 0), pady=0, sticky="w")
         ttk.Combobox(t_font_frame, textvariable=self.title_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
         ttk.Combobox(t_font_frame, textvariable=self.title_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
+        ttk.Combobox(t_font_frame, textvariable=self.title_style_var, values=["N", "B", "I"],
+                     width=2, state="readonly").pack(side="left", padx=(2, 0))
+        self._mk_color_box(t_font_frame, self.title_color_var, padx=(4, 0))
 
         def _add_legend_pos_hint(combo):
             def _show(event):
@@ -1271,6 +1301,10 @@ class CathPlotGUI:
         x_font_frame.grid(row=1, column=2, padx=5, pady=0, sticky="w")
         ttk.Combobox(x_font_frame, textvariable=self.xlabel_font_var, values=font_list, width=12, state="readonly").pack(side="left", padx=2)
         ttk.Combobox(x_font_frame, textvariable=self.xlabel_size_var, values=size_list, width=2, state="readonly").pack(side="left", padx=2)
+        # Y1/Y2 Axis Title도 폰트·크기처럼 이 스타일·색을 그대로 공유(xlabel_style_var 참고)
+        ttk.Combobox(x_font_frame, textvariable=self.xlabel_style_var, values=["N", "B", "I"],
+                     width=2, state="readonly").pack(side="left", padx=(2, 0))
+        self._mk_color_box(x_font_frame, self.xlabel_color_var, padx=(4, 0))
 
         # [수정 - 사용자 요청] "상세 내용은 popup으로" - 원래 이 자리(row=2,
         # col=3~5)에 있던 Legend Font/Size/Box Thick 줄(row2_f)을 완전히
@@ -1288,6 +1322,19 @@ class CathPlotGUI:
         legend_size_combo = ttk.Combobox(legend_detail_row, textvariable=self.legend_size_var, values=size_list, width=2, state="readonly")
         legend_size_combo.pack(side="left", padx=1)
         self._disable_combobox_wheel(legend_size_combo)
+        # [추가 - 사용자 요청] "legend, tic은 글꼴 연동해서 정하고" - 이 스타일은
+        # Tic 숫자 글꼴에도 그대로 같이 적용된다(gnu_generator.py의 xtics/
+        # ytics/y2tics font 참고).
+        ttk.Combobox(legend_detail_row, textvariable=self.legend_style_var, values=["N", "B", "I"],
+                     width=2, state="readonly").pack(side="left", padx=(2, 0))
+        # [주의] _mk_color_box는 내부적으로 side="right"로 박스를 붙인다 - 이
+        # 줄엔 뒤에서 side="right"로 붙는 Curve Features 버튼(marker_settings_btn)
+        # 이 있어서 그대로 부르면 순서가 엇갈려 색 상자가 오히려 더 오른쪽
+        # (Curve Features보다 바깥)으로 밀려난다. t_font_frame/x_font_frame처럼
+        # 독립된 작은 Frame에 넣어 side="left"로 이 자리에 고정한다.
+        legend_color_frame = ttk.Frame(legend_detail_row)
+        legend_color_frame.pack(side="left")
+        self._mk_color_box(legend_color_frame, self.legend_color_var, padx=(4, 0))
         legend_detail_btn = tk.Button(
             legend_detail_row, text="Legend Detail", width=13, font=("Malgun Gothic", 9, "bold"),
             bg=self.PALETTE["secondary"], fg="white",
@@ -2236,8 +2283,10 @@ class CathPlotGUI:
             # --- 스타일 (폰트/범례/그리드/프레임) ---
             "title_font": self.title_font_var.get(),
             "title_size": self.title_size_var.get(),
+            "title_style": self.title_style_var.get(), "title_color": self.title_color_var.get(),
             "xlabel_font": self.xlabel_font_var.get(),
             "xlabel_size": self.xlabel_size_var.get(),
+            "xlabel_style": self.xlabel_style_var.get(), "xlabel_color": self.xlabel_color_var.get(),
             "ylabel_font": self.ylabel_font_var.get(),
             "ylabel_size": self.ylabel_size_var.get(),
             "y2label_font": self.y2label_font_var.get(),
@@ -2248,6 +2297,7 @@ class CathPlotGUI:
             "legend_align": self.legend_align_var.get(),
             "legend_thick": self.legend_thick_var.get(),
             "legend_font": self.legend_font_var.get(), "legend_size": self.legend_size_var.get(),
+            "legend_style": self.legend_style_var.get(), "legend_color": self.legend_color_var.get(),
             "legend_box_width_pct": self.legend_box_width_pct_var.get(),
             "legend_box_height_pct": self.legend_box_height_pct_var.get(),
             "legend2_on": self.legend2_on_var.get(),
@@ -2309,7 +2359,9 @@ class CathPlotGUI:
             # 걸러서 저장한다.
             "annotations": [
                 {"txt": c['txt'].get(), "x": c['x'].get(), "y": c['y'].get(), "ang": c['ang'].get(),
-                 "coord_mode": c['coord_mode'].get(), "color": c['color'].get()}
+                 "coord_mode": c['coord_mode'].get(), "color": c['color'].get(),
+                 "font": c.get('font', tk.StringVar(value="")).get(), "fsize": c.get('fsize', tk.StringVar(value="")).get(),
+                 "fstyle": c.get('fstyle', tk.StringVar(value="N")).get()}
                 for c in self.comment_list
                 if c['txt'].get().strip() and c['x'].get().strip() and c['y'].get().strip()
             ],
@@ -2761,8 +2813,12 @@ class CathPlotGUI:
             # 각 항목이 파일에 없어도 에러 없이 기존 값 유지 (구버전 템플릿과도 호환)
             self.title_font_var.set(data.get("title_font", self.title_font_var.get()))
             self.title_size_var.set(data.get("title_size", self.title_size_var.get()))
+            self.title_style_var.set(data.get("title_style", self.title_style_var.get()))
+            self.title_color_var.set(data.get("title_color", self.title_color_var.get()))
             self.xlabel_font_var.set(data.get("xlabel_font", self.xlabel_font_var.get()))
             self.xlabel_size_var.set(data.get("xlabel_size", self.xlabel_size_var.get()))
+            self.xlabel_style_var.set(data.get("xlabel_style", self.xlabel_style_var.get()))
+            self.xlabel_color_var.set(data.get("xlabel_color", self.xlabel_color_var.get()))
             self.ylabel_font_var.set(data.get("ylabel_font", self.ylabel_font_var.get()))
             self.ylabel_size_var.set(data.get("ylabel_size", self.ylabel_size_var.get()))
             self.y2label_font_var.set(data.get("y2label_font", self.y2label_font_var.get()))
@@ -2774,6 +2830,8 @@ class CathPlotGUI:
             self.legend_thick_var.set(data.get("legend_thick", self.legend_thick_var.get()))
             self.legend_font_var.set(data.get("legend_font", self.legend_font_var.get()))
             self.legend_size_var.set(data.get("legend_size", self.legend_size_var.get()))
+            self.legend_style_var.set(data.get("legend_style", self.legend_style_var.get()))
+            self.legend_color_var.set(data.get("legend_color", self.legend_color_var.get()))
             self.legend_box_width_pct_var.set(data.get("legend_box_width_pct", self.legend_box_width_pct_var.get()))
             self.legend_box_height_pct_var.set(data.get("legend_box_height_pct", self.legend_box_height_pct_var.get()))
             self.legend2_on_var.set(data.get("legend2_on", self.legend2_on_var.get()))
@@ -3517,6 +3575,9 @@ class CathPlotGUI:
             legend_align=data.get("legend_align", "Auto"),
             legend_thick=data.get("legend_thick", "1.5"),
             legend_font=data.get("legend_font", "Malgun Gothic"), legend_size=data.get("legend_size", "9"),
+            legend_bold=_font_style_to_bi(data.get("legend_style", "N"))[0],
+            legend_italic=_font_style_to_bi(data.get("legend_style", "N"))[1],
+            legend_color=_to_gnuplot_color(data.get("legend_color", "Auto")),
             legend_box_width_pct=data.get("legend_box_width_pct", ""),
             legend_box_height_pct=data.get("legend_box_height_pct", ""),
             legend2_on=data.get("legend2_on", False), legend2_box=data.get("legend2_box", True),
@@ -3525,7 +3586,13 @@ class CathPlotGUI:
             legend2_box_width_pct=data.get("legend2_box_width_pct", ""),
             legend2_box_height_pct=data.get("legend2_box_height_pct", ""),
             title_font=data.get("title_font", "Malgun Gothic"), title_size=data.get("title_size", "14"),
+            title_bold=_font_style_to_bi(data.get("title_style", "N"))[0],
+            title_italic=_font_style_to_bi(data.get("title_style", "N"))[1],
+            title_color=_to_gnuplot_color(data.get("title_color", "Auto")),
             xlabel_font=data.get("xlabel_font", "Malgun Gothic"), xlabel_size=data.get("xlabel_size", "11"),
+            xlabel_bold=_font_style_to_bi(data.get("xlabel_style", "N"))[0],
+            xlabel_italic=_font_style_to_bi(data.get("xlabel_style", "N"))[1],
+            xlabel_color=_to_gnuplot_color(data.get("xlabel_color", "Auto")),
             ylabel_font=data.get("ylabel_font", "Malgun Gothic"), ylabel_size=data.get("ylabel_size", "11"),
             y2label_font=data.get("y2label_font", "Malgun Gothic"), y2label_size=data.get("y2label_size", "11"),
             frame_auto=data.get("frame_auto", True), frame_width=data.get("frame_width", ""),
@@ -3541,7 +3608,9 @@ class CathPlotGUI:
             # 안전함).
             annotations=(
                 [{"text": c["txt"], "x": c["x"], "y": c["y"], "angle": c["ang"],
-                  "coord_mode": c.get("coord_mode", "pct"), "color": _to_gnuplot_color(c.get("color", "Auto"))}
+                  "coord_mode": c.get("coord_mode", "pct"), "color": _to_gnuplot_color(c.get("color", "Auto")),
+                  "font": c.get("font", ""), "size": c.get("fsize", ""),
+                  "bold": _font_style_to_bi(c.get("fstyle", "N"))[0], "italic": _font_style_to_bi(c.get("fstyle", "N"))[1]}
                  for c in data.get("annotations", [])
                  if str(c.get("txt", "")).strip() and str(c.get("x", "")).strip() and str(c.get("y", "")).strip()]
                 if data.get("comment_on", True) else []
@@ -6833,6 +6902,7 @@ class CathPlotGUI:
             "legend_align": self.legend_align_var.get(),
             "legend_thick": self.legend_thick_var.get(),
             "legend_font": self.legend_font_var.get(), "legend_size": self.legend_size_var.get(),
+            "legend_style": self.legend_style_var.get(), "legend_color": self.legend_color_var.get(),
             "legend_box_width_pct": self.legend_box_width_pct_var.get(),
             "legend_box_height_pct": self.legend_box_height_pct_var.get(),
             "legend2_on": self.legend2_on_var.get(), "legend2_box": self.legend2_box_var.get(),
@@ -6841,7 +6911,9 @@ class CathPlotGUI:
             "legend2_box_width_pct": self.legend2_box_width_pct_var.get(),
             "legend2_box_height_pct": self.legend2_box_height_pct_var.get(),
             "title_font": self.title_font_var.get(), "title_size": self.title_size_var.get(),
+            "title_style": self.title_style_var.get(), "title_color": self.title_color_var.get(),
             "xlabel_font": self.xlabel_font_var.get(), "xlabel_size": self.xlabel_size_var.get(),
+            "xlabel_style": self.xlabel_style_var.get(), "xlabel_color": self.xlabel_color_var.get(),
             "ylabel_font": self.ylabel_font_var.get(), "ylabel_size": self.ylabel_size_var.get(),
             "y2label_font": self.y2label_font_var.get(), "y2label_size": self.y2label_size_var.get(),
             "frame_auto": self.frame_auto_var.get(), "frame_width": self.frame_width_var.get(),
@@ -6967,6 +7039,9 @@ class CathPlotGUI:
             legend_align=settings.get("legend_align", "Auto"),
             legend_thick=settings.get("legend_thick", "1.5"),
             legend_font=settings.get("legend_font", "Malgun Gothic"), legend_size=settings.get("legend_size", "9"),
+            legend_bold=_font_style_to_bi(settings.get("legend_style", "N"))[0],
+            legend_italic=_font_style_to_bi(settings.get("legend_style", "N"))[1],
+            legend_color=_to_gnuplot_color(settings.get("legend_color", "Auto")),
             legend_box_width_pct=settings.get("legend_box_width_pct", ""),
             legend_box_height_pct=settings.get("legend_box_height_pct", ""),
             legend2_on=settings.get("legend2_on", False), legend2_box=settings.get("legend2_box", True),
@@ -6976,7 +7051,13 @@ class CathPlotGUI:
             legend2_box_width_pct=settings.get("legend2_box_width_pct", ""),
             legend2_box_height_pct=settings.get("legend2_box_height_pct", ""),
             title_font=settings["title_font"], title_size=settings["title_size"],
+            title_bold=_font_style_to_bi(settings.get("title_style", "N"))[0],
+            title_italic=_font_style_to_bi(settings.get("title_style", "N"))[1],
+            title_color=_to_gnuplot_color(settings.get("title_color", "Auto")),
             xlabel_font=settings["xlabel_font"], xlabel_size=settings["xlabel_size"],
+            xlabel_bold=_font_style_to_bi(settings.get("xlabel_style", "N"))[0],
+            xlabel_italic=_font_style_to_bi(settings.get("xlabel_style", "N"))[1],
+            xlabel_color=_to_gnuplot_color(settings.get("xlabel_color", "Auto")),
             ylabel_font=settings["ylabel_font"], ylabel_size=settings["ylabel_size"],
             y2label_font=settings["y2label_font"], y2label_size=settings["y2label_size"],
             frame_auto=settings["frame_auto"], frame_width=settings["frame_width"],
@@ -7478,12 +7559,21 @@ class CathPlotGUI:
             'ang': tk.StringVar(value=init.get('ang', "0")),
             'coord_mode': tk.StringVar(value=init.get('coord_mode', "data")),
             'color': tk.StringVar(value=init.get('color', "Auto")),
+            # [추가 - 사용자 요청] "Comment는 글꼴, 크기, 스타일을 따로 주고" -
+            # 비어 있으면(기본) Legend Font/Size(+스타일)를 그대로 물려받는다
+            # (gnu_generator.py _build_plot_commands 참고). [수정 - 사용자
+            # 요청] "글꼴은 N/B/I 3가지로" - fbold/fitalic 두 체크 대신 fstyle
+            # 하나("N"/"B"/"I")로 통일.
+            'font': tk.StringVar(value=init.get('font', "")),
+            'fsize': tk.StringVar(value=init.get('fsize', "")),
+            'fstyle': tk.StringVar(value=init.get('fstyle', "N")),
             'frame': row,
         }
         self.comment_list.append(data)
 
         ttk.Button(row, text="X", width=3, style="Compact.TButton", command=lambda: self.remove_row(self.comment_list, row)).pack(side="right", padx=5)
         self._mk_color_box(row, data['color'], padx=(2, 5))
+        self._mk_comment_font_box(row, data, padx=(2, 5))  # 아래 정의(_mk_comment_font_box) - side="right"
 
         ttk.Label(row, text="[Comment]", foreground="blue").pack(side="left", padx=(0, 5))
         ttk.Label(row, text="Txt:").pack(side="left")
@@ -7543,6 +7633,85 @@ class CathPlotGUI:
         ttk.Label(parent, text="Color:").pack(side="right")
         self._add_hover_hint(box, "클릭하면 색 선택 창이 열림(기본: 검정)")
         return box
+
+    # [추가 - 사용자 요청] Comment 전용 글꼴 선택 창(_mk_comment_font_box)에서
+    # 쓰는 목록 - create_widgets의 Title/Label/Legend Font 콤보와 같은 값.
+    COMMENT_FONT_LIST = ["Malgun Gothic", "Arial", "Times New Roman", "Courier New", "Consolas"]
+    COMMENT_FONT_SIZE_LIST = ["6", "8", "9", "10", "11", "12", "14", "16", "18", "20"]
+
+    def _mk_comment_font_box(self, parent, data, padx=(2, 5)):
+        """[추가 - 사용자 요청] "주석의 Comment는 글꼴, 크기, 스타일을 따로
+        줄 수 있게" - Color 상자(_mk_color_box)와 같은 패턴: 버튼을 누르면
+        작은 선택 창이 뜨고, 여기서 고른 값이 이 Comment 행에만 적용된다.
+        비워두면(기본, 버튼에 "기본"으로 표시) Legend Font/Size(+스타일)를
+        그대로 물려받는다(gnu_generator.py의 _build_plot_commands 주석
+        렌더링 부분 참고). [수정 - 사용자 요청] "글꼴은 N/B/I 3가지로" -
+        Bold/Italic 개별 체크 대신 Normal/Bold/Italic 중 하나만 고른다."""
+        font_var, size_var, style_var = data['font'], data['fsize'], data['fstyle']
+        btn = tk.Button(parent, width=5, relief="raised", bd=1, cursor="hand2",
+                         bg="white", activebackground="#eeeeee")
+
+        def _label_text():
+            if not font_var.get().strip():
+                return "기본"
+            _sz = size_var.get().strip() or "-"
+            _st = style_var.get()
+            return f"{_sz}{_st}" if _st != "N" else f"{_sz}"
+
+        def _refresh(*_):
+            try:
+                btn.configure(text=_label_text())
+            except tk.TclError:
+                pass  # 줄이 이미 지워진 뒤 값이 바뀐 경우
+
+        def _open(_event=None):
+            win = tk.Toplevel(parent)
+            win.title("Comment 글꼴")
+            win.transient(parent.winfo_toplevel())
+            win.resizable(False, False)
+            win.grab_set()
+            _f = tk.StringVar(value=font_var.get())
+            _s = tk.StringVar(value=size_var.get())
+            _st = tk.StringVar(value=style_var.get() or "N")
+
+            row1 = ttk.Frame(win)
+            row1.pack(padx=10, pady=(10, 4), fill="x")
+            ttk.Label(row1, text="Font:").pack(side="left")
+            font_combo = ttk.Combobox(row1, textvariable=_f, values=[""] + self.COMMENT_FONT_LIST,
+                                       width=14, state="readonly")
+            font_combo.pack(side="left", padx=(4, 0))
+            self._add_hover_hint(font_combo, "비워두면(빈 칸) Legend Font를 그대로 따름")
+
+            row2 = ttk.Frame(win)
+            row2.pack(padx=10, pady=4, fill="x")
+            ttk.Label(row2, text="Size:").pack(side="left")
+            ttk.Combobox(row2, textvariable=_s, values=[""] + self.COMMENT_FONT_SIZE_LIST,
+                         width=4, state="readonly").pack(side="left", padx=(4, 0))
+            ttk.Label(row2, text="Style:").pack(side="left", padx=(12, 1))
+            ttk.Combobox(row2, textvariable=_st, values=["N", "B", "I"],
+                         width=2, state="readonly").pack(side="left", padx=(1, 0))
+
+            def _apply_default():
+                _f.set(""); _s.set(""); _st.set("N")
+
+            def _ok():
+                font_var.set(_f.get())
+                size_var.set(_s.get())
+                style_var.set(_st.get())
+                _refresh()
+                win.destroy()
+
+            btn_row = ttk.Frame(win)
+            btn_row.pack(padx=10, pady=(6, 10), fill="x")
+            ttk.Button(btn_row, text="기본값", command=_apply_default).pack(side="left")
+            ttk.Button(btn_row, text="OK", command=_ok).pack(side="right", padx=(4, 0))
+            ttk.Button(btn_row, text="Cancel", command=win.destroy).pack(side="right")
+
+        btn.bind("<Button-1>", _open)
+        _refresh()
+        btn.pack(side="right", padx=padx)  # Color 상자와 나란히 X 버튼 왼쪽에 모아 둠
+        self._add_hover_hint(btn, "Comment 전용 글꼴/크기/Bold/Italic (기본=Legend Font를 따름)")
+        return btn
 
     _CUSTOM_COLOR_ITEM = "기타 색…"
 
@@ -8099,8 +8268,12 @@ class CathPlotGUI:
             angle = item['ang'].get().strip() or "0"
             coord_mode = item.get('coord_mode', tk.StringVar(value="pct")).get()
             color = _to_gnuplot_color(item.get('color', tk.StringVar(value="Auto")).get())
+            font = item.get('font', tk.StringVar(value="")).get().strip()
+            fsize = item.get('fsize', tk.StringVar(value="")).get().strip()
+            fbold, fitalic = _font_style_to_bi(item.get('fstyle', tk.StringVar(value="N")).get())
             if text and x and y:
-                annotations.append({"text": text, "x": x, "y": y, "angle": angle, "coord_mode": coord_mode, "color": color})
+                annotations.append({"text": text, "x": x, "y": y, "angle": angle, "coord_mode": coord_mode, "color": color,
+                                     "font": font, "size": fsize, "bold": fbold, "italic": fitalic})
         return annotations
 
     def _collect_arrows(self):
@@ -9778,14 +9951,26 @@ class CathPlotGUI:
                     self.title_font_var.set(_t3_fonts["title_font"])
                 if _t3_fonts.get("title_size"):
                     self.title_size_var.set(_t3_fonts["title_size"])
+                if _t3_fonts.get("title_style"):
+                    self.title_style_var.set(_t3_fonts["title_style"])
+                if _t3_fonts.get("title_color"):
+                    self.title_color_var.set(_t3_fonts["title_color"])
                 if _t3_fonts.get("label_font"):
                     self.xlabel_font_var.set(_t3_fonts["label_font"])
                 if _t3_fonts.get("label_size"):
                     self.xlabel_size_var.set(_t3_fonts["label_size"])
+                if _t3_fonts.get("label_style"):
+                    self.xlabel_style_var.set(_t3_fonts["label_style"])
+                if _t3_fonts.get("label_color"):
+                    self.xlabel_color_var.set(_t3_fonts["label_color"])
                 if _t3_fonts.get("legend_font"):
                     self.legend_font_var.set(_t3_fonts["legend_font"])
                 if _t3_fonts.get("legend_size"):
                     self.legend_size_var.set(_t3_fonts["legend_size"])
+                if _t3_fonts.get("legend_style"):
+                    self.legend_style_var.set(_t3_fonts["legend_style"])
+                if _t3_fonts.get("legend_color"):
+                    self.legend_color_var.set(_t3_fonts["legend_color"])
 
             # [수정] "Marker Size, Style을 세트별로" - label 기준으로 각 행에
             # 복원(예전 템플릿의 "marker_size"/"style" 전역 키는 없으면 무시됨).
@@ -10656,21 +10841,29 @@ class CathPlotGUI:
         if not isinstance(f, dict):
             return None
         return {"title_font": f.get("title_font"), "title_size": f.get("title_size"),
+                "title_style": f.get("title_style"), "title_color": f.get("title_color"),
                 "xlabel_font": f.get("label_font"), "xlabel_size": f.get("label_size"),
-                "legend_font": f.get("legend_font"), "legend_size": f.get("legend_size")}
+                "xlabel_style": f.get("label_style"), "xlabel_color": f.get("label_color"),
+                "legend_font": f.get("legend_font"), "legend_size": f.get("legend_size"),
+                "legend_style": f.get("legend_style"), "legend_color": f.get("legend_color")}
 
     def _3d_fonts(self, data=None):
         """[추가 - 사용자 요청] "3D도 2D처럼 Title/Axis Title/Tic 폰트를 공유" -
         3D에는 별도 폰트 입력이 없으므로 메인 화면(2D)의 Title / Axis Title /
         Legend(Tic·Comment 공용) 폰트·크기를 그대로 넘긴다. data(2D Template
         dict)를 주면(Batch) 그 값을, 없으면 지금 메인 화면 값을 쓴다. 설치 안
-        된 폰트는 2D와 같은 규칙(_check_and_fix_fonts)으로 대체한다."""
+        된 폰트는 2D와 같은 규칙(_check_and_fix_fonts)으로 대체한다.
+        [추가 - 사용자 요청] "3D에도 반영 되죠?" - Bold/Italic(N/B/I)과 색도
+        2D와 동일하게 그대로 넘긴다(gnu_generator._3d_font_cmds 참고)."""
         if data is not None:
             get = lambda k, d: data.get(k) or d
         else:
             _vars = {"title_font": self.title_font_var, "title_size": self.title_size_var,
+                     "title_style": self.title_style_var, "title_color": self.title_color_var,
                      "xlabel_font": self.xlabel_font_var, "xlabel_size": self.xlabel_size_var,
-                     "legend_font": self.legend_font_var, "legend_size": self.legend_size_var}
+                     "xlabel_style": self.xlabel_style_var, "xlabel_color": self.xlabel_color_var,
+                     "legend_font": self.legend_font_var, "legend_size": self.legend_size_var,
+                     "legend_style": self.legend_style_var, "legend_color": self.legend_color_var}
             get = lambda k, d: _vars[k].get() or d
         _pd = PlotDefinition(title_font=get("title_font", "Malgun Gothic"),
                              xlabel_font=get("xlabel_font", "Malgun Gothic"),
@@ -10678,8 +10871,11 @@ class CathPlotGUI:
         _pd, _ = self._check_and_fix_fonts(_pd)
         return {
             "title_font": _pd.title_font, "title_size": get("title_size", "14"),
+            "title_style": get("title_style", "N"), "title_color": _to_gnuplot_color(get("title_color", "Auto")),
             "label_font": _pd.xlabel_font, "label_size": get("xlabel_size", "11"),
+            "label_style": get("xlabel_style", "N"), "label_color": _to_gnuplot_color(get("xlabel_color", "Auto")),
             "legend_font": _pd.legend_font, "legend_size": get("legend_size", "9"),
+            "legend_style": get("legend_style", "N"), "legend_color": _to_gnuplot_color(get("legend_color", "Auto")),
         }
 
     def _check_and_fix_fonts(self, plotdef):
@@ -11344,6 +11540,9 @@ class CathPlotGUI:
                 legend_align=self.legend_align_var.get(),
                 legend_thick=self.legend_thick_var.get(),
                 legend_font=self.legend_font_var.get(), legend_size=self.legend_size_var.get(),
+                legend_bold=_font_style_to_bi(self.legend_style_var.get())[0],
+                legend_italic=_font_style_to_bi(self.legend_style_var.get())[1],
+                legend_color=_to_gnuplot_color(self.legend_color_var.get()),
                 legend_box_width_pct=self.legend_box_width_pct_var.get(),
                 legend_box_height_pct=self.legend_box_height_pct_var.get(),
                 legend2_on=self.legend2_on_var.get(),
@@ -11355,8 +11554,14 @@ class CathPlotGUI:
                 legend2_box_height_pct=self.legend2_box_height_pct_var.get(),
                 title_font=self.title_font_var.get(),
                 title_size=self.title_size_var.get(),
+                title_bold=_font_style_to_bi(self.title_style_var.get())[0],
+                title_italic=_font_style_to_bi(self.title_style_var.get())[1],
+                title_color=_to_gnuplot_color(self.title_color_var.get()),
                 xlabel_font=self.xlabel_font_var.get(),
                 xlabel_size=self.xlabel_size_var.get(),
+                xlabel_bold=_font_style_to_bi(self.xlabel_style_var.get())[0],
+                xlabel_italic=_font_style_to_bi(self.xlabel_style_var.get())[1],
+                xlabel_color=_to_gnuplot_color(self.xlabel_color_var.get()),
                 ylabel_font=self.ylabel_font_var.get(),
                 ylabel_size=self.ylabel_size_var.get(),
                 y2label_font=self.y2label_font_var.get(),

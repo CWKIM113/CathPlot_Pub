@@ -107,15 +107,77 @@ _FONT_FILE_MAP = {
     # 무관하게 기본 포함되는 시스템 기호 전용 폰트.
     "segoe ui symbol": r"C:\Windows\Fonts\seguisym.ttf",
 }
+# [추가 - 사용자 요청] "Bold/Italic 글꼴도 선택하게" - 굵게/기울임 글자는
+# 정체보다 폭이 넓어서, Legend/Comment box 폭 추정(_measure_text_width_in)도
+# 실제 렌더링에 쓰일 굵게/기울임 파일로 재야 box가 글자보다 좁게 잡히지
+# 않는다. 파일명은 Windows 표준 명명(맑은 고딕은 기울임 전용 파일이 없어
+# 정체로 대체 - 가상 기울임은 폭이 거의 그대로라 정체 폭으로도 충분히 근사).
+_FONT_FILE_MAP_BOLD = {
+    "malgun gothic": r"C:\Windows\Fonts\malgunbd.ttf",
+    "arial": r"C:\Windows\Fonts\arialbd.ttf",
+    "times new roman": r"C:\Windows\Fonts\timesbd.ttf",
+    "courier new": r"C:\Windows\Fonts\courbd.ttf",
+    "consolas": r"C:\Windows\Fonts\consolab.ttf",
+}
+_FONT_FILE_MAP_ITALIC = {
+    "arial": r"C:\Windows\Fonts\ariali.ttf",
+    "times new roman": r"C:\Windows\Fonts\timesi.ttf",
+    "courier new": r"C:\Windows\Fonts\couri.ttf",
+    "consolas": r"C:\Windows\Fonts\consolai.ttf",
+}
+_FONT_FILE_MAP_BOLD_ITALIC = {
+    "arial": r"C:\Windows\Fonts\arialbi.ttf",
+    "times new roman": r"C:\Windows\Fonts\timesbi.ttf",
+    "courier new": r"C:\Windows\Fonts\courbi.ttf",
+    "consolas": r"C:\Windows\Fonts\consolaz.ttf",
+}
 _font_measure_cache = {}
 
-def _measure_text_width_in(text, font_name, font_pt):
-    """text를 font_name(Legend Font 콤보 값) 폰트의 font_pt 크기로 실제
-    렌더링했을 때의 폭을 inch로 반환. 측정 불가능하면 None(호출부가 기존
-    문자 가중치 추정으로 대체해야 함)."""
+
+def _font_file_for(font_name, bold=False, italic=False):
+    """font_name(+Bold/Italic)에 대응하는 실제 .ttf 경로 - 굵게/기울임
+    전용 파일이 없으면(예: 맑은 고딕 기울임) 정체 파일로 폴백한다."""
+    key = (font_name or "").strip().lower()
+    path = None
+    if bold and italic:
+        path = _FONT_FILE_MAP_BOLD_ITALIC.get(key)
+    elif bold:
+        path = _FONT_FILE_MAP_BOLD.get(key)
+    elif italic:
+        path = _FONT_FILE_MAP_ITALIC.get(key)
+    return path or _FONT_FILE_MAP.get(key)
+
+
+def _gnuplot_font_name(name, bold=False, italic=False):
+    """gnuplot cairo 계열 터미널의 "FontName:Style" 표기 - set title/xlabel/
+    tics/set label 등 font절의 이름 부분에 그대로 쓴다(크기는 콤마 뒤에
+    별도로 붙임: f'font "{_gnuplot_font_name(name, bold, italic)},{size}"')."""
+    name = name or "Malgun Gothic"
+    if bold and italic:
+        return f"{name}:Bold Italic"
+    if bold:
+        return f"{name}:Bold"
+    if italic:
+        return f"{name}:Italic"
+    return name
+
+
+def _gnuplot_textcolor_clause(color):
+    """[추가 - 사용자 요청] "Title/Label 글자 색상도 Comment처럼" - color가
+    "#rrggbb"면 그 색으로 칠하는 절을 반환, 비어있으면(기본) gnuplot
+    기본색(검정)을 그대로 쓰도록 빈 문자열을 반환한다. set title/xlabel/
+    tics/set label 등 font절 뒤에 그대로 이어 붙인다."""
+    c = (color or "").strip()
+    return f' textcolor rgb "{c}"' if c else ""
+
+
+def _measure_text_width_in(text, font_name, font_pt, bold=False, italic=False):
+    """text를 font_name(Legend Font 콤보 값) 폰트의 font_pt 크기(+Bold/Italic)로
+    실제 렌더링했을 때의 폭을 inch로 반환. 측정 불가능하면 None(호출부가
+    기존 문자 가중치 추정으로 대체해야 함)."""
     if not text:
         return 0.0
-    path = _FONT_FILE_MAP.get((font_name or "").strip().lower())
+    path = _font_file_for(font_name, bold, italic)
     if not path or not os.path.exists(path):
         return None
     cache_key = (path, round(font_pt, 2))
@@ -1210,8 +1272,19 @@ class PlotDefinition:
     # 요청으로 추가.
     legend_align: str = "Auto"
     legend_thick: str = "1.5"  # legend box 테두리 두께
-    legend_font: str = "Malgun Gothic"  # Legend 전용 폰트 (Comment도 같이 씀)
-    legend_size: str = "9"  # Legend 전용 크기 (Comment도 같이 씀)
+    legend_font: str = "Malgun Gothic"  # Legend 전용 폰트 (Comment 기본값·Tic 폰트도 같이 씀)
+    legend_size: str = "9"  # Legend 전용 크기 (Comment 기본값·Tic 크기도 같이 씀)
+    # [추가 - 사용자 요청] "legend, tic은 글꼴 연동해서 정하고" - Bold/Italic도
+    # Legend Font/Size와 한 세트로 묶어 Tic 숫자에 그대로 같이 적용한다
+    # (Comment 행이 폰트를 비워두면 - 기본 - 이 값도 같이 물려받음).
+    legend_bold: bool = False
+    legend_italic: bool = False
+    # [추가 - 사용자 요청] "Title이나 Label에는 글 색상 선택 있나요 -
+    # Comment의 Color 상자와 같은 패턴으로" - 빈 문자열(기본)이면 gnuplot
+    # 기본색(검정)을 그대로 쓰고, "#rrggbb"면 그 색으로 Tic 숫자도 같이
+    # 칠한다(Legend Font/Size/Style과 동일하게 Tic과 연동).
+    legend_color: str = ""
+
     # [추가] "자동 추정이 안 맞는 경우만 사용자 입력(axis 대비 %)으로" - 비어
     # 있으면(기본) 기존 폰트 기반 자동 추정, 값이 있으면 그 크기(axis width/
     # height 대비 %)로 고정. Print/Save 전용(포맷별 렌더링 차이로 자동
@@ -1229,8 +1302,17 @@ class PlotDefinition:
 
     title_font: str = "Malgun Gothic"
     title_size: str = "14"
+    title_bold: bool = False
+    title_italic: bool = False
+    title_color: str = ""  # 빈 문자열=gnuplot 기본색(검정), "#rrggbb"면 지정색(legend_color 참고)
     xlabel_font: str = "Malgun Gothic"
     xlabel_size: str = "11"
+    # [추가 - 사용자 요청] X/Y1/Y2 Axis Title은 폰트·크기처럼 Bold/Italic·색도
+    # X 것 하나를 공유한다(GUI의 ylabel_font_var=xlabel_font_var와 동일한
+    # 공유 패턴 - cathplot_gui.py의 xlabel_style_var 참고).
+    xlabel_bold: bool = False
+    xlabel_italic: bool = False
+    xlabel_color: str = ""
     ylabel_font: str = "Malgun Gothic"
     ylabel_size: str = "11"
     y2label_font: str = "Malgun Gothic"
@@ -1410,7 +1492,10 @@ _3D_FONT_SCALE_BY_TERM = {
 
 
 def _3d_fonts_resolved(fonts):
-    """fonts(dict 또는 None)를 기본값(2D 기본 폰트)으로 채워 돌려준다."""
+    """fonts(dict 또는 None)를 기본값(2D 기본 폰트)으로 채워 돌려준다.
+    [추가 - 사용자 요청] "3D에도 반영 되죠?" - 2D의 Title/Axis Title/Legend
+    Font 옆 Style(N/B/I)·Color가 3D에도 그대로 적용되도록 style/color
+    키도 같이 받는다(_3d_fonts, cathplot_gui.py 참고)."""
     f = dict(fonts or {})
     def _num(key, default):
         try:
@@ -1420,8 +1505,11 @@ def _3d_fonts_resolved(fonts):
             return default
     return {
         "title_font": f.get("title_font") or "Malgun Gothic", "title_size": _num("title_size", 14.0),
+        "title_style": f.get("title_style") or "N", "title_color": f.get("title_color") or "",
         "label_font": f.get("label_font") or "Malgun Gothic", "label_size": _num("label_size", 11.0),
+        "label_style": f.get("label_style") or "N", "label_color": f.get("label_color") or "",
         "legend_font": f.get("legend_font") or "Malgun Gothic", "legend_size": _num("legend_size", 9.0),
+        "legend_style": f.get("legend_style") or "N", "legend_color": f.get("legend_color") or "",
     }
 
 
@@ -1430,20 +1518,26 @@ def _3d_font_cmds(fonts, scale, ylabel_on, label_ids=()):
     화면에서 저장 키(P/N/…)로 터미널을 바꿀 때도 같은 목록을 저장용 배율로
     다시 보내서, 화면과 저장 파일의 글자 크기 비율이 예전과 같게 유지된다."""
     r = _3d_fonts_resolved(fonts)
-    def _f(name, size):
-        return f'font "{name},{size * scale:.3g}"'
+    def _f(name, size, style, color):
+        _spec = _gnuplot_font_name(name, style == "B", style == "I")
+        return f'font "{_spec},{size * scale:.3g}"{_gnuplot_textcolor_clause(color)}'
+    _title_f = _f(r["title_font"], r["title_size"], r["title_style"], r["title_color"])
+    _label_f = _f(r["label_font"], r["label_size"], r["label_style"], r["label_color"])
+    # [수정 - 사용자 요청] "legend, tic은 글꼴 연동해서 정하고"(2D와 동일 규칙) -
+    # tic 숫자는 Axis Title 폰트가 아니라 Legend Font/Style/Color + Legend 크기.
+    _tic_f = _f(r["legend_font"], r["legend_size"], r["legend_style"], r["legend_color"])
+    _legend_f = _f(r["legend_font"], r["legend_size"], r["legend_style"], r["legend_color"])
     cmds = [
-        f'set title {_f(r["title_font"], r["title_size"])}',
-        f'set xlabel {_f(r["label_font"], r["label_size"])}',
-        f'set zlabel {_f(r["label_font"], r["label_size"])}',
-        # 2D와 동일: tic 숫자는 Axis Title 폰트 + Legend 크기
-        f'set tics {_f(r["label_font"], r["legend_size"])}',
-        f'set key {_f(r["legend_font"], r["legend_size"])}',
+        f'set title {_title_f}',
+        f'set xlabel {_label_f}',
+        f'set zlabel {_label_f}',
+        f'set tics {_tic_f}',
+        f'set key {_legend_f}',
     ]
     if ylabel_on:
-        cmds.append(f'set label 9001 {_f(r["label_font"], r["label_size"])}')
+        cmds.append(f'set label 9001 {_label_f}')
     for i in label_ids:
-        cmds.append(f'set label {i} {_f(r["legend_font"], r["legend_size"])}')
+        cmds.append(f'set label {i} {_legend_f}')
     return cmds
 
 
@@ -2479,7 +2573,8 @@ class GnuplotGenerator:
                             f_scale, line_scale, panel_scale, is_print_mode, curve_index_map, font_name,
                             axis_w_in=5.0, legend_size=None, axis_h_in=4.0, box_w_extra_chars_override=None,
                             align="Auto", fmt=None, box_w_pct_override=None, box_h_pct_override=None,
-                            axis_x_span=None, axis_y_span=None, compact=False, marker_ps_map=None):
+                            axis_x_span=None, axis_y_span=None, compact=False, marker_ps_map=None,
+                            font_bold=False, font_italic=False, font_color=""):
         """gnuplot 네이티브 key 대신, set object(박스)+set arrow(샘플선)+set label(텍스트)를
         직접 조합해서 legend box를 그린다. Legend1/Legend2 둘 다 이 함수로 통일해서
         그린다 (네이티브 key의 정렬/여백이 예측하기 어려워서, 완전히 직접 제어하는
@@ -2950,7 +3045,8 @@ class GnuplotGenerator:
             _t = _c.title or ""
             _capped_titles[id(_c)] = _t if len(_t) <= _LEGEND_MAX_CHARS else _t[:_LEGEND_MAX_CHARS - 1] + "…"
 
-        _measured_widths_in = [_measure_text_width_in(_capped_titles[id(c)], font_name, font_pt) for c in curves]
+        _measured_widths_in = [_measure_text_width_in(_capped_titles[id(c)], font_name, font_pt,
+                                                        bold=font_bold, italic=font_italic) for c in curves]
         if curves and all(w is not None for w in _measured_widths_in):
             max_label_len = max(_measured_widths_in) * _legend_tuning["text_corr"] / char_width_in
         else:
@@ -3368,9 +3464,11 @@ class GnuplotGenerator:
                         f'point pt {_fmt_pointtype(marker_shape)} ps {_mk_ps:.4g} lc rgb "{color}"'
                     )
             lbl_text, lbl_enh = self._render_text(_capped_titles[id(curve)])
+            _leg_font_spec = _gnuplot_font_name(font_name, font_bold, font_italic)
+            _leg_color_clause = _gnuplot_textcolor_clause(font_color)
             lines.append(
                 f'set label {id_offset + row_i + 1} "{lbl_text}" at graph {label_x:.4f},{row_y:.4f} '
-                f'{label_just} front font "{font_name},{max(int(_label_font_pt), 5)}" {lbl_enh}'
+                f'{label_just} front font "{_leg_font_spec},{max(int(_label_font_pt), 5)}"{_leg_color_clause} {lbl_enh}'
             )
 
     @staticmethod
@@ -4007,8 +4105,14 @@ class GnuplotGenerator:
             return f"graph {_pct_to_frac(value, default_frac)}"
 
         if annotations:
-            _ann_font = getattr(plotdef, "legend_font", None) or plotdef.xlabel_font
-            _ann_size = int(float(getattr(plotdef, "legend_size", "9") or 9) * f_scale)
+            # [추가 - 사용자 요청] "주석의 Comment는 글꼴, 크기, Bold/Italic을
+            # 따로 주고" - 각 annotation 행이 font를 지정했으면(비어있지 않으면)
+            # 그 행의 font/size/bold/italic을 쓰고, 비어있으면(기본) 지금까지
+            # 처럼 Legend Font/Size(+Bold/Italic)를 그대로 물려받는다.
+            _default_ann_font = getattr(plotdef, "legend_font", None) or plotdef.xlabel_font
+            _default_ann_size = float(getattr(plotdef, "legend_size", "9") or 9)
+            _default_ann_bold = getattr(plotdef, "legend_bold", False)
+            _default_ann_italic = getattr(plotdef, "legend_italic", False)
             for i, ann in enumerate(annotations):
                 ann_text, ann_enh = self._render_text(ann["text"])
                 _mode = ann.get("coord_mode", "pct")
@@ -4021,7 +4125,23 @@ class GnuplotGenerator:
                 # ("Auto"면 빈 문자열 -> gnuplot 기본색, 그 외엔 lc/textcolor 지정).
                 _color = (ann.get("color") or "").strip()
                 _color_clause = f' textcolor rgb "{_color}"' if _color else ""
-                lines.append(f'set label {i+1} "{ann_text}" at {gx},{gy} {rotate_clause} font "{_ann_font},{_ann_size}"{_color_clause} {ann_enh}')
+                _ann_font_raw = (ann.get("font") or "").strip()
+                if _ann_font_raw:
+                    _ann_font_name = _ann_font_raw
+                    _ann_bold = bool(ann.get("bold", False))
+                    _ann_italic = bool(ann.get("italic", False))
+                    try:
+                        _ann_sz_val = float(ann.get("size") or 0)
+                    except (TypeError, ValueError):
+                        _ann_sz_val = 0
+                    _ann_size = int((_ann_sz_val if _ann_sz_val > 0 else _default_ann_size) * f_scale)
+                else:
+                    _ann_font_name = _default_ann_font
+                    _ann_bold = _default_ann_bold
+                    _ann_italic = _default_ann_italic
+                    _ann_size = int(_default_ann_size * f_scale)
+                _ann_font_spec = _gnuplot_font_name(_ann_font_name, _ann_bold, _ann_italic)
+                lines.append(f'set label {i+1} "{ann_text}" at {gx},{gy} {rotate_clause} font "{_ann_font_spec},{_ann_size}"{_color_clause} {ann_enh}')
 
         if arrows:
             head_map = {"No head": "nohead", "Forward": "head", "Backhead": "backhead", "Both heads": "heads"}
@@ -4113,18 +4233,25 @@ class GnuplotGenerator:
         # (재생 등에서) 이 줄을 다시 실행할 때 "mirror"를 명시하지 않아서
         # gnuplot이 직전 상태(PIP의 nomirror)를 그대로 물려받아 상단 tic이
         # 계속 안 보이는 것으로 보임 - 매번 명시적으로 mirror를 켠다.
-        lines.append(f"set xtics font '{plotdef.xlabel_font},{tic_size}' mirror")
+        # [수정 - 사용자 요청] "legend, tic은 글꼴 연동해서 정하고" - tic 숫자
+        # 폰트를 Axis Title 폰트가 아니라 Legend Font(+Bold/Italic)로 통일한다
+        # (크기는 이미 legend_size를 써 왔음 - 이제 폰트·굵기까지 한 세트).
+        _tic_font_spec = _gnuplot_font_name(
+            getattr(plotdef, "legend_font", None) or plotdef.xlabel_font,
+            getattr(plotdef, "legend_bold", False), getattr(plotdef, "legend_italic", False))
+        _tic_color_clause = _gnuplot_textcolor_clause(getattr(plotdef, "legend_color", ""))
+        lines.append(f"set xtics font '{_tic_font_spec},{tic_size}' mirror{_tic_color_clause}")
         # [수정] set y2tics font와 동일한 이유 - ytics_on이 꺼져 있으면
         # 이 줄(폰트 지정) 자체가 tic을 다시 켜므로 건너뛴다.
         if getattr(plotdef, "ytics_on", True):
-            lines.append(f"set ytics font '{plotdef.ylabel_font},{tic_size}'")
+            lines.append(f"set ytics font '{_tic_font_spec},{tic_size}'{_tic_color_clause}")
         # [수정 - 사용자 보고 버그] "y2tics_on=False로 위에서 unset y2tics를
         # 했는데도 y2 tic이 다시 보임" - "set y2tics font ..."는 폰트만
         # 지정하는 것 같지만 gnuplot에서는 이 명령 자체가 y2tics를 다시
         # 켠다(이 세션에서 여러 번 겪은 "나중 명령이 이전 unset을 되돌리는"
         # 문제와 동일 패턴) - y2tics_on이 꺼져 있으면 이 줄 자체를 건너뛴다.
         if getattr(plotdef, "y2tics_on", True):
-            lines.append(f"set y2tics font '{plotdef.y2label_font},{tic_size}'")
+            lines.append(f"set y2tics font '{_tic_font_spec},{tic_size}'{_tic_color_clause}")
 
         title_size = int(float(plotdef.title_size) * _title_f_scale * _mp_font_fix)
         xlabel_size = int(float(plotdef.xlabel_size) * _title_f_scale * _mp_font_fix)
@@ -4146,9 +4273,11 @@ class GnuplotGenerator:
         # ylabel처럼 "기존 offset에 비율을 곱하는" 방식이 아니라, 축소된 비율
         # (1-title_margin_ratio)에 비례해 새로 음수 offset을 만들어 준다(단일
         # plot·margin 안 줄어든 칸은 비율=1.0이라 offset 0, 기존과 동일).
+        _title_font_spec = _gnuplot_font_name(plotdef.title_font, getattr(plotdef, "title_bold", False), getattr(plotdef, "title_italic", False))
+        _title_color_clause = _gnuplot_textcolor_clause(getattr(plotdef, "title_color", ""))
         if is_multiplot and title_margin_ratio < 0.999:
             _title_gap = -1.0 * (1.0 - title_margin_ratio) * _title_f_scale
-            lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" offset 0,{_title_gap:.3f} {title_enh}')
+            lines.append(f'set title "{title_text}" font "{_title_font_spec},{title_size}"{_title_color_clause} offset 0,{_title_gap:.3f} {title_enh}')
         else:
             # [수정 - 요청] "Plot Title과 top frame 사이에 tic 숫자 없는 만큼
             # 간격을 줄여줘요" - top쪽은 bottom(tic 숫자 있음)과 달리 title
@@ -4167,7 +4296,7 @@ class GnuplotGenerator:
             # -0.18=>41px, -0.01=>48px)해서 찾음 - 당기는 양을 사실상
             # 없앤 값(0에 가까움)이 목표 간격과 정확히 일치했음.
             _title_gap = -0.01 * (title_size / 14.0)
-            lines.append(f'set title "{title_text}" font "{plotdef.title_font},{title_size}" offset 0,{_title_gap:.3f} {title_enh}')
+            lines.append(f'set title "{title_text}" font "{_title_font_spec},{title_size}"{_title_color_clause} offset 0,{_title_gap:.3f} {title_enh}')
 
         # [수정 - 심각한 버그] "Print/Save에서 X title이 캔버스 맨 아래 경계에
         # 걸쳐서 잘림" - ylabel과 같은 원인(위 ylabel 주석 참고): "at screen"
@@ -4243,7 +4372,9 @@ class GnuplotGenerator:
             # xlabel이 들어가도록).
             if xlabel_margin_ratio < 0.999:
                 _xlabel_gap += 1.0 * (1.0 - xlabel_margin_ratio) * _title_f_scale
-        lines.append(f'set xlabel "{xlabel_text}" font "{plotdef.xlabel_font},{xlabel_size}" offset 0,{_xlabel_gap:.3f} {xlabel_enh}')
+        _label_font_spec = _gnuplot_font_name(plotdef.xlabel_font, getattr(plotdef, "xlabel_bold", False), getattr(plotdef, "xlabel_italic", False))
+        _label_color_clause = _gnuplot_textcolor_clause(getattr(plotdef, "xlabel_color", ""))
+        lines.append(f'set xlabel "{xlabel_text}" font "{_label_font_spec},{xlabel_size}"{_label_color_clause} offset 0,{_xlabel_gap:.3f} {xlabel_enh}')
 
         # [수정 - 심각한 버그] "Manual(frame_auto 꺼짐) + png 저장에서 Y1 title이
         # 통째로 안 보임(잘리는 게 아니라 아예 안 그려짐)" - 실측으로 원인을
@@ -4452,7 +4583,9 @@ class GnuplotGenerator:
         # 맞춰 들어가게 한다(single-plot은 항상 1.0이라 회귀 없음).
         _ylabel_offset *= ylabel_margin_ratio
         ylabel_text, ylabel_enh = self._render_text(plotdef.ylabel)
-        lines.append(f'set ylabel "{ylabel_text}" font "{plotdef.ylabel_font},{_ylabel_size_emit}" offset {_ylabel_offset:.2f},0 {ylabel_enh}')
+        _ylabel_font_spec = _gnuplot_font_name(plotdef.ylabel_font, getattr(plotdef, "xlabel_bold", False), getattr(plotdef, "xlabel_italic", False))
+        _ylabel_color_clause = _gnuplot_textcolor_clause(getattr(plotdef, "xlabel_color", ""))
+        lines.append(f'set ylabel "{ylabel_text}" font "{_ylabel_font_spec},{_ylabel_size_emit}"{_ylabel_color_clause} offset {_ylabel_offset:.2f},0 {ylabel_enh}')
 
         # [수정 - 사용자 보고 버그] "Y2 unselect/All Clear 해도 이전 y2
         # title이 그대로 남아있음" - 여기는 지금까지 plotdef.y2label
@@ -4588,7 +4721,9 @@ class GnuplotGenerator:
             # 몰랐음 - 실제 예약 비율(y2label_margin_ratio)만큼 같이 줄인다.
             _y2label_offset *= y2label_margin_ratio
             y2label_text, y2label_enh = self._render_text(plotdef.y2label)
-            lines.append(f'set y2label "{y2label_text}" font "{plotdef.y2label_font},{_y2label_size_emit}" offset {_y2label_offset:.2f},0 {y2label_enh}')
+            _y2label_font_spec = _gnuplot_font_name(plotdef.y2label_font, getattr(plotdef, "xlabel_bold", False), getattr(plotdef, "xlabel_italic", False))
+            _y2label_color_clause = _gnuplot_textcolor_clause(getattr(plotdef, "xlabel_color", ""))
+            lines.append(f'set y2label "{y2label_text}" font "{_y2label_font_spec},{_y2label_size_emit}"{_y2label_color_clause} offset {_y2label_offset:.2f},0 {y2label_enh}')
 
         # [수정 - 사용자 보고 버그] 같은 이유(set Xtics 뒤에 어떤 옵션이든
         # 붙으면 gnuplot이 tic을 다시 켬)로, ytics_on이 꺼져 있으면 이
@@ -4781,6 +4916,8 @@ class GnuplotGenerator:
                 box_w_pct_override=getattr(plotdef, "legend_box_width_pct", ""),
                 box_h_pct_override=getattr(plotdef, "legend_box_height_pct", ""),
                 axis_x_span=_legend_x_span, axis_y_span=_legend_y_span,
+                font_bold=getattr(plotdef, "legend_bold", False), font_italic=getattr(plotdef, "legend_italic", False),
+                font_color=getattr(plotdef, "legend_color", ""),
             )
 
         group2_curves = sorted(
@@ -4801,6 +4938,8 @@ class GnuplotGenerator:
                 box_w_pct_override=getattr(plotdef, "legend2_box_width_pct", ""),
                 box_h_pct_override=getattr(plotdef, "legend2_box_height_pct", ""),
                 axis_x_span=_legend_x_span, axis_y_span=_legend_y_span,
+                font_bold=getattr(plotdef, "legend_bold", False), font_italic=getattr(plotdef, "legend_italic", False),
+                font_color=getattr(plotdef, "legend_color", ""),
             )
 
 
@@ -6975,21 +7114,27 @@ class GnuplotGenerator:
                 # font_scale 계산에 곱해짐) 글자가 뭉개질 정도로 작아질 수
                 # 있었음. tic과 비슷한 눈높이가 되도록 5pt 하한을 둔다.
                 _xl_size = max(float(plotdef.xlabel_size or 11) * font_scale, 5.0)
-                lines.append(f'set xlabel "{_xl_text}" font "{plotdef.xlabel_font},{_xl_size:.1f}" offset 0,{_lbl_ofs_x:.2f} {_xl_enh}')
+                _xl_font_spec = _gnuplot_font_name(plotdef.xlabel_font, getattr(plotdef, "xlabel_bold", False), getattr(plotdef, "xlabel_italic", False))
+                _xl_color_clause = _gnuplot_textcolor_clause(getattr(plotdef, "xlabel_color", ""))
+                lines.append(f'set xlabel "{_xl_text}" font "{_xl_font_spec},{_xl_size:.1f}"{_xl_color_clause} offset 0,{_lbl_ofs_x:.2f} {_xl_enh}')
             else:
                 lines.append("unset xlabel")
             _ylabel_txt = str(pip.get("ylabel_text") or plotdef.ylabel or "").strip()
             if _ylabel_txt:
                 _yl_text, _yl_enh = self._render_text(_ylabel_txt)
                 _yl_size = max(float(plotdef.ylabel_size or 11) * font_scale, 5.0)  # 하한 이유는 위 _xl_size 참고
-                lines.append(f'set ylabel "{_yl_text}" font "{plotdef.ylabel_font},{_yl_size:.1f}" offset {_lbl_ofs_y:.2f},0 {_yl_enh}')
+                _yl_font_spec = _gnuplot_font_name(plotdef.ylabel_font, getattr(plotdef, "xlabel_bold", False), getattr(plotdef, "xlabel_italic", False))
+                _yl_color_clause = _gnuplot_textcolor_clause(getattr(plotdef, "xlabel_color", ""))
+                lines.append(f'set ylabel "{_yl_text}" font "{_yl_font_spec},{_yl_size:.1f}"{_yl_color_clause} offset {_lbl_ofs_y:.2f},0 {_yl_enh}')
             else:
                 lines.append("unset ylabel")
             _y2label_txt = str(pip.get("y2label_text") or plotdef.y2label or "").strip() if _uses_y2 else ""
             if _y2label_txt:
                 _y2l_text, _y2l_enh = self._render_text(_y2label_txt)
                 _y2l_size = max(float(plotdef.y2label_size or 11) * font_scale, 5.0)  # 하한 이유는 위 _xl_size 참고
-                lines.append(f'set y2label "{_y2l_text}" font "{plotdef.y2label_font},{_y2l_size:.1f}" offset -{_lbl_ofs_y2:.2f},0 {_y2l_enh}')
+                _y2l_font_spec = _gnuplot_font_name(plotdef.y2label_font, getattr(plotdef, "xlabel_bold", False), getattr(plotdef, "xlabel_italic", False))
+                _y2l_color_clause = _gnuplot_textcolor_clause(getattr(plotdef, "xlabel_color", ""))
+                lines.append(f'set y2label "{_y2l_text}" font "{_y2l_font_spec},{_y2l_size:.1f}"{_y2l_color_clause} offset -{_lbl_ofs_y2:.2f},0 {_y2l_enh}')
             else:
                 lines.append("unset y2label")
         else:
@@ -7045,7 +7190,9 @@ class GnuplotGenerator:
             # 렌더+픽셀 측정 재조정: 0.4(gap 12px) -> 1.0(gap 7px, 약 58%,
             # 겹침 없이 확인된 범위에서 "절반 정도"에 가장 가까운 값).
             _title_gap = -1.0 * (max(_title_size, 14.0 * 0.6) / 14.0)
-            lines.append(f'set title "{_title_txt}" font "{plotdef.title_font},{_title_size:.1f}" offset 0,{_title_gap:.3f}')
+            _pip_title_font_spec = _gnuplot_font_name(plotdef.title_font, getattr(plotdef, "title_bold", False), getattr(plotdef, "title_italic", False))
+            _pip_title_color_clause = _gnuplot_textcolor_clause(getattr(plotdef, "title_color", ""))
+            lines.append(f'set title "{_title_txt}" font "{_pip_title_font_spec},{_title_size:.1f}"{_pip_title_color_clause} offset 0,{_title_gap:.3f}')
         else:
             lines.append("unset title")
 
@@ -7480,6 +7627,8 @@ class GnuplotGenerator:
                 axis_w_in=_pip_legend_axis_w_in, legend_size=float(plotdef.legend_size or 9),
                 axis_h_in=_pip_legend_axis_h_in, fmt=fmt, compact=True,
                 marker_ps_map=_inset_marker_ps,
+                font_bold=getattr(plotdef, "legend_bold", False), font_italic=getattr(plotdef, "legend_italic", False),
+                font_color=getattr(plotdef, "legend_color", ""),
             )
 
         # [수정 - 버그] 메인 plot이 y2축 미사용시 넣어두는 "NaN axes x1y2
@@ -7834,11 +7983,15 @@ class GnuplotGenerator:
         else:
             _x_tic_clause = f" {_x_tic_step:.6g}" if _x_tic_step else ""
             _y_tic_clause = f" {_y_tic_step:.6g}" if _y_tic_step else ""
-            lines.append(f'set xtics font "{plotdef.xlabel_font},{_tic_size:.1f}" offset 0,{_tic_ofs:.2f} nomirror{_x_tic_clause}')
-            lines.append(f'set ytics font "{plotdef.ylabel_font},{_tic_size:.1f}" offset {_tic_ofs:.2f},0 nomirror{_y_tic_clause}')
+            _pip_tic_font_spec = _gnuplot_font_name(
+                getattr(plotdef, "legend_font", None) or plotdef.xlabel_font,
+                getattr(plotdef, "legend_bold", False), getattr(plotdef, "legend_italic", False))
+            _pip_tic_color_clause = _gnuplot_textcolor_clause(getattr(plotdef, "legend_color", ""))
+            lines.append(f'set xtics font "{_pip_tic_font_spec},{_tic_size:.1f}"{_pip_tic_color_clause} offset 0,{_tic_ofs:.2f} nomirror{_x_tic_clause}')
+            lines.append(f'set ytics font "{_pip_tic_font_spec},{_tic_size:.1f}"{_pip_tic_color_clause} offset {_tic_ofs:.2f},0 nomirror{_y_tic_clause}')
             if _uses_y2:
                 _y2_tic_clause = f" {_y2_tic_step:.6g}" if _y2_tic_step else ""
-                lines.append(f'set y2tics font "{plotdef.y2label_font},{_tic_size:.1f}" offset -{_tic_ofs:.2f},0 nomirror{_y2_tic_clause}')
+                lines.append(f'set y2tics font "{_pip_tic_font_spec},{_tic_size:.1f}"{_pip_tic_color_clause} offset -{_tic_ofs:.2f},0 nomirror{_y2_tic_clause}')
             else:
                 lines.append("unset y2tics")
 
