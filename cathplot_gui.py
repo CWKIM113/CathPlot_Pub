@@ -333,11 +333,13 @@ class CathPlotGUI:
         self.marker_size_vars = {}    # key_str -> StringVar (기본 "Auto")
         self.marker_maxcount_vars = {}  # key_str -> StringVar (빈 문자열 = Auto)
         self.marker_fill_vars = {}      # key_str -> BooleanVar (기본 False = 속 빔)
-        # [추가 - 사용자 요청] "Shape 우측에 마커 표시 on/off 체크박스 추가
-        # (기본 unchecked)" - 지금까지는 "마커 없음"을 marker_shape_vars의
-        # 특수값 "None"으로 표현했는데, 이제 그 역할을 이 독립된 체크박스가
-        # 맡는다(Shape는 순수하게 "켜졌을 때 어떤 모양을 쓸지"만 의미).
-        self.marker_on_vars = {}      # key_str -> BooleanVar (기본 False = 마커 표시 안 함)
+        # [추가 - 사용자 요청] "Shape 우측에 마커 표시 on/off 체크박스 추가" -
+        # 지금까지는 "마커 없음"을 marker_shape_vars의 특수값 "None"으로
+        # 표현했는데, 이제 그 역할을 이 독립된 체크박스가 맡는다(Shape는
+        # 순수하게 "켜졌을 때 어떤 모양을 쓸지"만 의미).
+        # [수정 - 사용자 요청] "Curve Features에서 Shape는 기본 On box check
+        # 되게" - 기본값을 False(꺼짐)에서 True(켜짐)로 변경.
+        self.marker_on_vars = {}      # key_str -> BooleanVar (기본 True = 마커 표시 켜짐)
 
         self.color_vars = {}
         self.linestyle_vars = {}
@@ -796,6 +798,14 @@ class CathPlotGUI:
         # tk.Button, width=3, Tk가 폰트+너비로 자연 계산한 박스 크기)으로
         # 단순화 - 폰트는 사용자가 테스트에서 지목한 Consolas(굵게)로,
         # 크기는 Ω(13pt)보다 조금 더 키워 "+"가 잘 보이게 한다.
+        # [추가 - 사용자 요청] "열린 파일이 너무 많으면 전체 삭제 버튼 -
+        # 개별 X버튼 우측에" - "+" 버튼보다 먼저 side="right"로 pack해서
+        # (뒤에 pack되는 "+"가 그 왼쪽에 놓임) "+" 버튼의 오른쪽(스크롤바
+        # 바로 앞)에 자리잡게 한다.
+        self.delete_all_files_btn = self._mk_btn(
+            self.file_frame, "전체삭제", self.delete_all_dat_files,
+            color="danger", side="right", padx=(1, 3), pady=0,
+        )
         self.add_file_btn = self._mk_btn(
             self.file_frame, "+", self.add_file_row,
             color="secondary", btn_width=2, btn_pady=2, btn_padx=4, side="right", padx=1, pady=0,
@@ -6445,7 +6455,10 @@ class CathPlotGUI:
             if key not in self.marker_shape_vars:
                 self.marker_shape_vars[key] = tk.StringVar(value="Auto")
             if key not in self.marker_on_vars:
-                self.marker_on_vars[key] = tk.BooleanVar(value=False)
+                # [수정 - 사용자 요청] "Curve Features에서 Shape는 기본 On box
+                # check 되게" - 이 팝업에 처음 보이는 curve(아직 저장된 값이
+                # 없는 경우)의 On 기본값을 False에서 True로 변경.
+                self.marker_on_vars[key] = tk.BooleanVar(value=True)
             if key not in self.marker_size_vars:
                 self.marker_size_vars[key] = tk.StringVar(value="Auto")
             if key not in self.marker_maxcount_vars:
@@ -7345,6 +7358,15 @@ class CathPlotGUI:
             color="danger", side="left", padx=3,
         )
 
+        # [추가 - 사용자 요청] "Dat file browse 할 때 파일이 많아지면 자동
+        # scroll 해서 추가 dat 파일 입력 칸이 보이게" - 새 줄을 추가한
+        # 직후엔 이 canvas의 scrollregion이 아직 예전 크기라 yview_moveto가
+        # 바로 먹지 않을 수 있어, 위젯 배치가 끝난 뒤(update_idletasks)
+        # scrollregion을 다시 맞추고 맨 아래로 스크롤한다.
+        self.file_canvas.update_idletasks()
+        self.file_canvas.configure(scrollregion=self.file_canvas.bbox("all"))
+        self.file_canvas.yview_moveto(1.0)
+
     def _purge_file_vars(self, datfile):
         # [추가 - 버그 수정] load_dat_file(파일 교체)과 delete_dat_file_row(행 삭제)가
         # 각자 따로 "{datfile}||"로 시작하는 키를 지우고 있었는데, delete_dat_file_row
@@ -7495,6 +7517,33 @@ class CathPlotGUI:
 
         self.update_title_from_first_file()
         self.show_variables()
+
+        # [수정 - 사용자 보고 버그] "먼저 있던 Dat file을 X버튼으로 삭제하면
+        # 가끔 빈줄이 남는다" - 줄을 지워 목록 전체 높이가 줄어들어도, 이
+        # canvas의 scrollregion과 현재 스크롤 위치(yview)는 그대로 남아있어
+        # (destroy 후의 <Configure> 갱신이 이 시점엔 아직 반영 전일 수 있음),
+        # 남은 줄들보다 아래에 예전 스크롤 위치만큼 빈 공간이 그대로 보일
+        # 수 있었다 - scrollregion을 즉시 다시 맞추고 맨 위로 스크롤해서
+        # 항상 실제 목록과 화면이 일치하게 한다.
+        self.file_canvas.update_idletasks()
+        self.file_canvas.configure(scrollregion=self.file_canvas.bbox("all"))
+        self.file_canvas.yview_moveto(0.0)
+
+    def delete_all_dat_files(self):
+        """[추가 - 사용자 요청] "열린 파일이 너무 많으면 전체 삭제 버튼 -
+        개별 X버튼 우측에" - 개별 X버튼(delete_dat_file_row)을 하나씩 누르는
+        것과 완전히 같은 효과(파일별 Color/Shape 등 설정까지 정리)를 한
+        번에 낸다. 되돌릴 수 없는 동작이라 실행 전 확인 팝업을 띄운다."""
+        if not self.file_rows:
+            return
+        if not messagebox.askyesno(
+            "전체 삭제",
+            f"열려 있는 DAT 파일 {len(self.file_rows)}개를 모두 닫을까요?\n"
+            "(파일별 Color/Shape 등 설정도 함께 사라집니다)"
+        ):
+            return
+        for r_info in list(self.file_rows):
+            self.delete_dat_file_row(r_info)
 
     def update_title_from_first_file(self):
         # [수정] "s-plot dat를 먼저 불러 읽으면 2-D는 2-D관련 첫 dat file로부터
@@ -8914,9 +8963,10 @@ class CathPlotGUI:
             # 참고), marker_on_var(기본 꺼짐)를 새로 추가한다. style_var_row
             # 는 이제 "Line Style"(Lines/None만, Color Palette는 surface
             # 전용)이고, 기본값은 이전과 동일하게 Lines - 기본 On이 꺼져
-            # 있어 이전과 동일하게 markers 없이 시작한다.
+            # [수정 - 사용자 요청] "Curve Features에서 Shape는 기본 On box
+            # check 되게" - 2D와 동일하게 기본값을 True(켜짐)로 변경.
             shape_var = tk.StringVar(value="Auto")
-            marker_on_var = tk.BooleanVar(value=False)
+            marker_on_var = tk.BooleanVar(value=True)
             size_var = tk.StringVar(value="Auto")
             style_var_row = tk.StringVar(value="Auto")
             title_var_row = tk.StringVar(value="")
@@ -8939,9 +8989,10 @@ class CathPlotGUI:
             self._mk_check(srow, f"[Surface] {s['label']} (채널 {s['n_outputs']}개, Z={s['z_label']})", v,
                             color="amber", side="left")
             # [수정 - 사용자 요청] Curve와 동일하게 Line Style/Size/Shape/On/
-            # MaxNo는 Curve Features 팝업으로 이동.
+            # MaxNo는 Curve Features 팝업으로 이동. On 기본값은 위 [Curve]와
+            # 동일하게 True(Shape 기본 On box check).
             shape_var = tk.StringVar(value="Auto")
-            marker_on_var = tk.BooleanVar(value=False)
+            marker_on_var = tk.BooleanVar(value=True)
             size_var = tk.StringVar(value="Auto")
             style_var_row = tk.StringVar(value="Auto")
             title_var_row = tk.StringVar(value="")
@@ -13100,7 +13151,6 @@ class CathPlotGUI:
 
         self.sym_win = tk.Toplevel(self.root)
         self.sym_win.title("Symbols")
-        self.sym_win.geometry("300x300+1000+100")
         self.sym_win.attributes("-topmost", True)
 
         symbols = [
@@ -13121,6 +13171,17 @@ class CathPlotGUI:
                 command=lambda s=sym: self.insert_symbol_to_active(s)
             )
             btn.grid(row=i // 7, column=i % 7, padx=2, pady=2)
+
+        # [수정 - 사용자 보고 버그] "오메가 창을 띄우면 세로길이가 짧아
+        # 아래 줄이 반쯤 잘려요(2D, 3D 공통)" - 고정 "300x300"이 실제
+        # 필요한 높이(기호 62개 -> 7열x9행)보다 작았음. 버튼을 다 배치한
+        # 뒤 실제 필요한 크기(winfo_reqwidth/height)로 창 크기를 맞춘다 -
+        # Plot Setting 창 가로폭 자동 맞춤(3c94337)과 같은 패턴이라, 폰트/
+        # 테마가 달라 버튼 높이가 조금 달라져도 항상 전부 보이게 된다.
+        self.sym_win.update_idletasks()
+        _sym_req_w = self.sym_win.winfo_reqwidth()
+        _sym_req_h = self.sym_win.winfo_reqheight()
+        self.sym_win.geometry(f"{_sym_req_w}x{_sym_req_h}+1000+100")
 
 def _check_gnuplot_installed(root):
     """gnuplot이 설치되어 있는지, 버전 5 이상인지 확인한다. 설치 위치는 PATH 등록
