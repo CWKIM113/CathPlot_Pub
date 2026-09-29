@@ -1222,8 +1222,28 @@ class CathPlotGUI:
         self._add_hover_hint(_style_combo, self._FONT_STYLE_HINT)
         self._mk_color_box(t_font_frame, self.title_color_var, padx=(4, 0))
 
+        # [수정 - 사용자 보고 버그] "Legend의 Pos1/Pos2에 커서를 올리면 tip
+        # box가 뜨는데, 가끔 마우스가 이동해도 창이 떠 있는 경우가 있다" -
+        # 원인: _show가 이전에 이미 떠 있던 tip 창을 확인 없이 매번 새로
+        # 만들었음 - Windows에서 포커스 변화 등으로 <Leave> 없이 <Enter>가
+        # 한 번 더 발생하면(드물지만 실측 재현 가능한 Tk/Windows 특성),
+        # widget._hint_win이 "새로" 만든 창으로 덮어써지면서 "이전" 창은
+        # 더 이상 어디서도 참조되지 않아 destroy될 기회를 영영 잃고 화면에
+        # 그대로 남는다. 같은 패턴을 더 방어적으로 고친 최신 버전
+        # (_add_hover_hint, 아래 참고)과 동일하게 - _show 시작 시 먼저
+        # _hide를 호출해 이전 창이 있으면 확실히 지우고 시작한다(항상 최대
+        # 1개만 존재하도록 보장). ButtonPress/Destroy에도 숨기게 해서
+        # 콤보박스를 눌러 드롭다운을 열 때도 tip이 안 남게 한다.
         def _add_legend_pos_hint(combo):
+            def _hide(event):
+                if getattr(combo, "_hint_win", None) is not None:
+                    try:
+                        combo._hint_win.destroy()
+                    except tk.TclError:
+                        pass
+                    combo._hint_win = None
             def _show(event):
+                _hide(None)
                 tw = tk.Toplevel(combo)
                 tw.wm_overrideredirect(True)
                 tw.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
@@ -1233,18 +1253,26 @@ class CathPlotGUI:
                     padx=4, pady=2, justify="left"
                 ).pack()
                 combo._hint_win = tw
-            def _hide(event):
-                if getattr(combo, "_hint_win", None) is not None:
-                    combo._hint_win.destroy()
-                    combo._hint_win = None
-            combo.bind("<Enter>", _show)
-            combo.bind("<Leave>", _hide)
+            combo.bind("<Enter>", _show, add="+")
+            combo.bind("<Leave>", _hide, add="+")
+            combo.bind("<ButtonPress>", _hide, add="+")
+            combo.bind("<Destroy>", _hide, add="+")
 
         # [추가] "Legend box 크기 직접 입력칸은 screen용이 아님을 팝업으로
         # 알려달라" - _add_legend_pos_hint와 같은 마우스오버 툴팁 패턴을
-        # 위젯 종류에 상관없이 재사용할 수 있게 일반화한 버전.
+        # 위젯 종류에 상관없이 재사용할 수 있게 일반화한 버전. [수정 - 위
+        # _add_legend_pos_hint와 동일한 버그 수정] _show 시작 시 먼저
+        # _hide를 호출해 이전 tip 창이 남지 않게 함.
         def _add_hint(widget, text):
+            def _hide(event):
+                if getattr(widget, "_hint_win", None) is not None:
+                    try:
+                        widget._hint_win.destroy()
+                    except tk.TclError:
+                        pass
+                    widget._hint_win = None
             def _show(event):
+                _hide(None)
                 tw = tk.Toplevel(widget)
                 tw.wm_overrideredirect(True)
                 tw.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
@@ -1253,12 +1281,10 @@ class CathPlotGUI:
                     font=("Consolas", 9), padx=4, pady=2, justify="left"
                 ).pack()
                 widget._hint_win = tw
-            def _hide(event):
-                if getattr(widget, "_hint_win", None) is not None:
-                    widget._hint_win.destroy()
-                    widget._hint_win = None
-            widget.bind("<Enter>", _show)
-            widget.bind("<Leave>", _hide)
+            widget.bind("<Enter>", _show, add="+")
+            widget.bind("<Leave>", _hide, add="+")
+            widget.bind("<ButtonPress>", _hide, add="+")
+            widget.bind("<Destroy>", _hide, add="+")
 
         # --- Legend1 줄 (Plot Title 줄 우측) ---
         legend1_row = ttk.Frame(self.plot_frame)
