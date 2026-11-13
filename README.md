@@ -1,17 +1,20 @@
 # CathPlot
 
-CathPlot is a Windows desktop application for **X-Y plotting**. It allows users to create, customize, compare, and export plots from tabular data files. CATHENA DAT files are among the supported input formats; the application is not limited to CATHENA data.
+CathPlot is a Windows desktop application originally developed to **automate plotting and image generation for CATHENA analysis results**. It helps users turn CATHENA output data into consistently formatted plots and image files with less repetitive manual work.
+
+The application has since been extended to support **general-purpose data files**, so users can also create X-Y plots from other tabular data sources.
 
 ## Main Features
 
-- **X-Y data plotting**: Select data columns for X and Y axes and create one or multiple curves.
-- **Data file handling**: Read tabular data, including CATHENA DAT output. The parser handles signal metadata, numeric values, comment lines, and inline comments.
-- **Curve customization**: Configure curve colors, line styles, markers, and other plot properties.
-- **Plot generation**: Generate plots using the external gnuplot engine.
-- **Batch processing**: Manage multiple plot tasks using Batch Set/Queue, with bounded parallel execution.
+- **CATHENA result plotting**: Read CATHENA output files and use their signal definitions and data columns to prepare plots.
+- **Automated plot and image generation**: Generate plot images and other output files through a repeatable workflow, reducing manual plotting effort.
+- **General data-file support**: Apply the plotting workflow to ordinary tabular data files in addition to CATHENA results.
+- **X-Y curve configuration**: Select X- and Y-axis data and configure multiple curves.
+- **Curve and plot customization**: Configure colors, line styles, markers, labels, axes, and other plot properties.
+- **Batch processing**: Manage multiple plotting tasks using Batch Set/Queue, with bounded parallel execution.
 - **Animation and preview**: Provide plot animation and preview workflows in the desktop GUI.
-- **Export and printing**: Support plot output and conversion workflows involving PDF, PNG/JPG, SVG, and EMF, subject to the installed gnuplot and application environment.
-- **Windows packaging**: Build a distributable application with PyInstaller.
+- **Export and printing**: Support output and conversion workflows involving PDF, PNG/JPG, SVG, and EMF, subject to the installed gnuplot and application environment.
+- **Windows application packaging**: Build a distributable application with PyInstaller.
 
 ## Source Files
 
@@ -61,7 +64,7 @@ Refer to the user manual included in the repository for detailed setup and opera
 
 ## Notes
 
-- CathPlot is a general-purpose X-Y plotting application. CATHENA DAT is one supported data source, not the application's sole purpose.
+- CathPlot was originally designed for plotting CATHENA analysis results and automating plot-image generation. Support for general data files was added as an extension.
 - gnuplot is a separate external program and must be installed independently.
 - Available export, printing, and conversion options may depend on the Windows environment and installed components.
 - For detailed usage and version-specific behavior, consult the included user manual and change history.
